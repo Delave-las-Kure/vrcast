@@ -33,15 +33,19 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "fs", "io
 tokio-util = "0.7.19"
 futures = "0.3.34"
 
-# Доступ к серверу: одно соединение с мультиплексированием каналов (R-04)
-russh = "0.63.1"
+# Доступ к серверу: одно соединение с мультиплексированием каналов (R-04).
+#
+# Криптографический бэкенд — ring, а не умолчательный aws-lc-rs.
+# Причина не вкусовая: aws-lc-rs требует ассемблер NASM на Windows и падает без него
+# (проверено 2026-08-24). ring везёт заранее собранный ассемблер для MSVC и требует
+# только сам компилятор. Приложение под GPL, его будут собирать другие люди — лишний
+# обязательный инструмент в списке требований дороже, чем смена бэкенда.
+# rsa оставлен: у пользователей встречаются ключи RSA, не только ed25519.
+russh = { version = "0.63.1", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.4.0"
 
 # Локальное состояние: задачи, кеш библиотеки, отпечатки (R-09)
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-
-# Секреты только в хранилище ОС (конституция, принцип IV; R-07)
-keyring = { version = "4.1.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 # Гарантированное завершение дерева процессов (конституция, принцип III; R-06)
 command-group = { version = "5.0.1", features = ["with-tokio"] }
@@ -54,6 +58,21 @@ hex = "0.4.3"
 directories = "6.0.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Секреты только в хранилище ОС (конституция, принцип IV; R-07).
+# Хранилище своё на каждой платформе, поэтому зависимость объявлена пер-платформенно:
+# так на Windows не тянется код Secret Service, а на Linux — код Credential Manager.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "4.1.6", features = ["windows-native-keyring-store"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# zbus, а не dbus: чистый Rust, не требует libdbus-1-dev на машине сборки и в CI.
+keyring = { version = "4.1.6", features = ["zbus-secret-service-keyring-store"] }
+
+# macOS не собирается (отложена), но объявление оставлено, чтобы её добавление
+# не требовало переделки — FR-111 запрещает создавать препятствия.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "4.1.6", features = ["apple-native-keyring-store"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "process"] }
