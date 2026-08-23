@@ -1,0 +1,64 @@
+[package]
+name = "vrcast-studio"
+version = "0.1.0"
+description = "Управление стриминг-сервером VRCast: библиотека, конвертация, заливка, зрители"
+authors = ["VRCast Studio"]
+license = "GPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.83"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "vrcast_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+# Сериализация и договор со слоем интерфейса
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+# Асинхронное исполнение длительных задач (FR-080)
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "fs", "io-util", "time", "sync", "process"] }
+tokio-util = "0.7.19"
+futures = "0.3.34"
+
+# Доступ к серверу: одно соединение с мультиплексированием каналов (R-04)
+russh = "0.63.1"
+russh-sftp = "2.4.0"
+
+# Локальное состояние: задачи, кеш библиотеки, отпечатки (R-09)
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+# Секреты только в хранилище ОС (конституция, принцип IV; R-07)
+keyring = { version = "4.1.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+# Гарантированное завершение дерева процессов (конституция, принцип III; R-06)
+command-group = { version = "5.0.1", features = ["with-tokio"] }
+
+# Прочее
+uuid = { version = "1.25.0", features = ["v4", "serde"] }
+time = { version = "0.3.55", features = ["formatting", "parsing", "serde"] }
+sha2 = "0.11.0"
+hex = "0.4.3"
+directories = "6.0.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "process"] }
+
+[features]
+# Интеграционные тесты против одноразового контейнера Ubuntu (T026).
+# Выключены по умолчанию: требуют Docker и не должны запускаться при обычной сборке.
+integration = []

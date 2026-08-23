@@ -1,0 +1,8 @@
+# Единый перевод строки. Скрипты обязаны быть LF: с CRLF bash их не выполнит,
+# а check-isolation.sh запускается и локально, и в CI.
+* text=auto eol=lf
+*.sh   text eol=lf
+*.png  binary
+*.ico  binary
+*.icns binary
+*.svg  text eol=lf
