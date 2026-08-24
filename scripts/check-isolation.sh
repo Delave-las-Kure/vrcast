@@ -5,8 +5,17 @@
 # Всё новое живёт в vrcast-studio/; скиллы, справочник и доступы остаются нетронутыми.
 # Скрипт падает, если в корне проекта изменилось хоть что-то, кроме vrcast-studio/ и specs/.
 #
-# Запуск из корня проекта:  vrcast-studio/scripts/check-isolation.sh
+# Запуск из корня проекта:
+#   vrcast-studio/scripts/check-isolation.sh baseline   — записать эталон (один раз)
+#   vrcast-studio/scripts/check-isolation.sh check      — сверить (перед сдачей фазы, в CI)
+#
+# Эталон хранится ПОФАЙЛОВО, а не одним хешем на каталог. Так проверка, во-первых,
+# называет конкретный изменившийся файл, во-вторых, не зависит от порядка обхода
+# каталога: раньше зависела и давала ложную тревогу при смене локали (поймано 2026-08-24).
 set -euo pipefail
+
+# Локаль фиксирована: от неё зависит порядок сортировки, а значит и воспроизводимость.
+export LC_ALL=C
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -24,50 +33,60 @@ PROTECTED=(
 )
 
 STAMP="vrcast-studio/.isolation-baseline"
-fail=0
 
-hash_of() {
-  # Устойчивый отпечаток пути: содержимое всех файлов + их имена.
-  if [ -d "$1" ]; then
-    find "$1" -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -d' ' -f1
-  elif [ -f "$1" ]; then
-    sha256sum "$1" | cut -d' ' -f1
-  else
-    echo "MISSING"
-  fi
+# Печатает строки "<sha256>  <путь>" по одной на файл, в устойчивом порядке.
+list_hashes() {
+  local target
+  for target in "${PROTECTED[@]}"; do
+    if [ -d "$target" ]; then
+      find "$target" -type f -print0 | sort -z | while IFS= read -r -d '' f; do
+        printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"
+      done
+    elif [ -f "$target" ]; then
+      printf '%s  %s\n' "$(sha256sum "$target" | cut -d' ' -f1)" "$target"
+    else
+      printf '%s  %s\n' "ОТСУТСТВУЕТ" "$target"
+    fi
+  done | sort -k2
 }
 
 case "${1:-check}" in
   baseline)
-    : > "$STAMP"
-    for p in "${PROTECTED[@]}"; do
-      printf '%s  %s
-' "$(hash_of "$p")" "$p" >> "$STAMP"
-    done
-    echo "Эталон записан: $STAMP ($(wc -l < "$STAMP") путей)"
+    list_hashes > "$STAMP"
+    echo "Эталон записан: $STAMP ($(wc -l < "$STAMP") файлов)"
     ;;
+
   check)
     if [ ! -f "$STAMP" ]; then
       echo "ОШИБКА: нет эталона. Сначала: $0 baseline" >&2
       exit 2
     fi
-    while read -r want path; do
-      got="$(hash_of "$path")"
-      if [ "$got" = "MISSING" ] && [ "$want" != "MISSING" ]; then
-        echo "УДАЛЁН вне vrcast-studio/: $path" >&2; fail=1
-      elif [ "$got" != "$want" ]; then
-        echo "ИЗМЕНЁН вне vrcast-studio/: $path" >&2; fail=1
-      fi
-    done < "$STAMP"
 
-    if [ "$fail" -ne 0 ]; then
-      echo "" >&2
-      echo "Нарушен принцип VII конституции: рабочий процесс раздачи изменён." >&2
-      echo "Верните файлы как были — разработка приложения не имеет права их трогать." >&2
-      exit 1
+    current="$(mktemp)"
+    trap 'rm -f "$current"' EXIT
+    list_hashes > "$current"
+
+    if diff -q "$STAMP" "$current" >/dev/null; then
+      echo "Изоляция соблюдена: ни один из $(wc -l < "$STAMP") защищённых файлов не изменён."
+      exit 0
     fi
-    echo "Изоляция соблюдена: ничего вне vrcast-studio/ не изменено."
+
+    echo "НАРУШЕНА ИЗОЛЯЦИЯ. Расхождения с эталоном:" >&2
+    echo "" >&2
+    # Левый столбец эталона, правый — текущее состояние; показываем только пути.
+    join -j 2 -v 1 -o '0' "$STAMP" "$current" 2>/dev/null | sed 's/^/  УДАЛЁН:  /' >&2 || true
+    join -j 2 -v 2 -o '0' "$STAMP" "$current" 2>/dev/null | sed 's/^/  ДОБАВЛЕН: /' >&2 || true
+    join -j 2 -o '0,1.1,2.1' "$STAMP" "$current" 2>/dev/null \
+      | awk '$2 != $3 { print "  ИЗМЕНЁН: " $1 }' >&2 || true
+
+    echo "" >&2
+    echo "Нарушен принцип VII конституции: рабочий процесс раздачи изменён." >&2
+    echo "Верните файлы как были — разработка приложения не имеет права их трогать." >&2
+    exit 1
     ;;
+
   *)
-    echo "Использование: $0 [baseline|check]" >&2; exit 2 ;;
+    echo "Использование: $0 [baseline|check]" >&2
+    exit 2
+    ;;
 esac
