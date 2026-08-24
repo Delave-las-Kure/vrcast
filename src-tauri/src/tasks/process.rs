@@ -45,6 +45,12 @@ pub struct ManagedProcess {
 
 impl ManagedProcess {
     /// Запустить программу в собственной группе процессов.
+    ///
+    /// **Не вызывать из недолговечных потоков.** На Linux защита опирается на сигнал,
+    /// который ядро шлёт при смерти родительского *потока*, а не процесса. Если породить
+    /// ffmpeg из потока, который вскоре завершится, ffmpeg умрёт вместе с ним посреди
+    /// работы. Рабочие потоки исполнителя задач живут всё время работы приложения —
+    /// оттуда вызывать можно; из отдельных потоков для блокирующих операций — нельзя.
     pub fn spawn(program: &str, args: &[String]) -> Result<Self> {
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -55,13 +61,42 @@ impl ManagedProcess {
 
         #[cfg(unix)]
         {
-            // Своя группа процессов: сигнал уйдёт всем потомкам, а не только прямому.
             use std::os::unix::process::CommandExt;
+            // Идентификатор родителя запоминаем ДО порождения: он понадобится потомку,
+            // чтобы закрыть щель, описанную ниже.
+            let parent_pid = std::process::id();
             unsafe {
-                cmd.pre_exec(|| {
+                cmd.pre_exec(move || {
+                    // Своя группа процессов: сигнал уйдёт всем потомкам, а не только прямому.
                     if libc_setsid() == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        // Ядро само убьёт потомка, когда умрёт родитель, — и сделает это,
+                        // даже если никакой наш код уже не выполняется: приложение убито
+                        // сигналом, съедено убийцей при нехватке памяти или упало в панике.
+                        // Это единственный на Linux аналог того, что на Windows даёт
+                        // объект задания.
+                        //
+                        // Два ограничения, о которых надо помнить:
+                        //   1. Действует только на ПРЯМОГО потомка. Внуков закрывает
+                        //      уборка при запуске (см. tasks::registry).
+                        //   2. Срабатывает при смерти родительского ПОТОКА, а не процесса.
+                        //      Поэтому порождать процессы из недолговечных потоков нельзя —
+                        //      см. предупреждение в описании ManagedProcess::spawn.
+                        const PR_SET_PDEATHSIG: i32 = 1;
+                        const SIGKILL: i64 = 9;
+                        libc_prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
+
+                        // Щель: родитель мог умереть между порождением и строкой выше —
+                        // тогда сигнал уже не придёт никогда. Сверяем и уходим сами.
+                        if libc_getppid() != parent_pid as i32 {
+                            std::process::exit(0);
+                        }
+                    }
+
                     Ok(())
                 });
             }
@@ -199,6 +234,47 @@ extern "C" {
     fn libc_setsid() -> i32;
     #[link_name = "killpg"]
     fn libc_killpg(pgrp: i32, sig: i32) -> i32;
+    #[link_name = "kill"]
+    fn libc_kill(pid: i32, sig: i32) -> i32;
+    #[cfg(target_os = "linux")]
+    #[link_name = "getppid"]
+    fn libc_getppid() -> i32;
+    #[cfg(target_os = "linux")]
+    #[link_name = "prctl"]
+    fn libc_prctl(option: i32, a2: i64, a3: i64, a4: i64, a5: i64) -> i32;
+}
+
+/// Завершить процесс по идентификатору — для уборки уцелевших при запуске.
+///
+/// Отдельно от [`ManagedProcess::kill_tree`]: там процесс наш и живой, здесь — чужой
+/// по отношению к текущему запуску приложения, оставшийся от предыдущего.
+pub(crate) fn kill_pid(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc_kill(pid as i32, 9) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        windows_job::terminate_pid(pid)
+    }
+}
+
+/// Имя выполняемого файла процесса, если он ещё жив.
+///
+/// Нужно не для красоты отчёта, а ради безопасности уборки: идентификаторы процессов
+/// переиспользуются, и за старым номером к моменту следующего запуска может стоять
+/// совершенно посторонняя программа. Убивать её недопустимо.
+pub(crate) fn process_name(pid: u32) -> Option<String> {
+    #[cfg(unix)]
+    {
+        std::fs::read_to_string(format!("/proc/{pid}/comm"))
+            .ok()
+            .map(|s| s.trim().to_owned())
+    }
+    #[cfg(windows)]
+    {
+        windows_job::process_name(pid)
+    }
 }
 
 #[cfg(windows)]
@@ -265,6 +341,14 @@ mod windows_job {
         fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> Handle;
         fn Thread32First(snapshot: Handle, entry: *mut ThreadEntry32) -> i32;
         fn Thread32Next(snapshot: Handle, entry: *mut ThreadEntry32) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
+        fn TerminateProcess(process: Handle, exit_code: u32) -> i32;
+        fn QueryFullProcessImageNameW(
+            process: Handle,
+            flags: u32,
+            buf: *mut u16,
+            size: *mut u32,
+        ) -> i32;
     }
 
     #[repr(C)]
@@ -345,6 +429,44 @@ mod windows_job {
             unsafe {
                 CloseHandle(self.0);
             }
+        }
+    }
+
+    /// Завершить процесс по идентификатору. Используется уборкой уцелевших при запуске.
+    pub fn terminate_pid(pid: u32) -> bool {
+        const PROCESS_TERMINATE: u32 = 0x0001;
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if h.is_null() {
+                return false;
+            }
+            let ok = TerminateProcess(h, 1) != 0;
+            CloseHandle(h);
+            ok
+        }
+    }
+
+    /// Имя выполняемого файла живого процесса — для сверки перед убийством.
+    pub fn process_name(pid: u32) -> Option<String> {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut buf = [0u16; 260];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len);
+            CloseHandle(h);
+            if ok == 0 {
+                return None;
+            }
+            let full = String::from_utf16_lossy(&buf[..len as usize]);
+            // Разбор пути штатными средствами: они знают про разделители обеих ОС.
+            std::path::Path::new(&full)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .or(Some(full))
         }
     }
 
