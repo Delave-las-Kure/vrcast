@@ -76,6 +76,8 @@ keyring = { version = "4.1.6", features = ["apple-native-keyring-store"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "process"] }
+# Тестам схемы нужен прямой доступ к SQL-слою, чтобы проверять правила самой базы.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [features]
 # Интеграционные тесты против одноразового контейнера Ubuntu (T026).
