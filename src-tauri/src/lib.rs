@@ -4,16 +4,11 @@
 //! Интерфейс не знает ни про SSH, ни про FFmpeg — он общается с ядром только
 //! через слой команд (см. `specs/001-vrcast-studio/contracts/ipc-commands.md`).
 
+pub mod commands;
 pub mod logging;
 pub mod ssh;
 pub mod store;
 pub mod tasks;
-
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,9 +16,40 @@ pub fn run() {
     // всё, что выведено раньше, пройдёт мимо защиты (конституция, принцип IV).
     logging::init();
 
+    let state = match commands::AppState::bootstrap() {
+        Ok(s) => s,
+        Err(e) => {
+            // Без локального хранилища работать нельзя: задачи не переживут перезапуск,
+            // а профили негде держать. Честнее не запуститься, чем притвориться рабочим.
+            tracing::error!(error = %e, "не удалось подготовить хранилища");
+            eprintln!(
+                "{}
+{}",
+                e.message, e.hint
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let engine = state.tasks.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(state)
+        .setup(move |app| {
+            commands::events::bridge_task_events(app.handle().clone(), &engine);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::ipc::app_versions,
+            commands::ipc::tasks_list,
+            commands::ipc::task_get,
+            commands::ipc::task_cancel,
+            commands::ipc::task_pause,
+            commands::ipc::task_resume,
+            commands::ipc::tasks_on_close,
+            commands::ipc::server_probe_fingerprint,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
