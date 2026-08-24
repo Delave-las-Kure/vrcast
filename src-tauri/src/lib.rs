@@ -7,6 +7,7 @@
 pub mod logging;
 pub mod ssh;
 pub mod store;
+pub mod tasks;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]

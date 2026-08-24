@@ -6,6 +6,9 @@
 #[path = "unit/db.rs"]
 mod db;
 
+#[path = "unit/process.rs"]
+mod process;
+
 #[path = "unit/redact.rs"]
 mod redact;
 
