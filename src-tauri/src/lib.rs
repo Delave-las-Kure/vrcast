@@ -5,6 +5,7 @@
 //! через слой команд (см. `specs/001-vrcast-studio/contracts/ipc-commands.md`).
 
 pub mod logging;
+pub mod ssh;
 pub mod store;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/

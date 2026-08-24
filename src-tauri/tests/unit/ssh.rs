@@ -1,0 +1,143 @@
+//! Тесты слоя доступа к серверу, не требующие сервера (T022–T025).
+//!
+//! Всё, что требует настоящего OpenSSH, проверяется отдельным запуском
+//! `cargo run --example ssh_smoke` — тесты не должны зависеть от чужого сервера и сети.
+//! Здесь остаётся то, что от сети не зависит и потому обязано быть тестом: разбор ключей,
+//! неразглашение секретов при отладочном выводе и хранение отпечатков.
+
+use std::path::{Path, PathBuf};
+use vrcast_studio_lib::ssh::{auth, fingerprint, Credentials, ServerAddress, SshError};
+use vrcast_studio_lib::store::db::Db;
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+const FIXTURE_PASSPHRASE: &str = "тестовая-фраза-1234";
+
+#[test]
+fn ключ_с_парольной_фразой_читается_когда_фраза_дана() {
+    // FR-096: у пользователей встречаются ключи, защищённые фразой, и это должно работать,
+    // а не оборачиваться невнятной ошибкой чтения файла.
+    let key = auth::load_key(&fixture("encrypted_ed25519.key"), Some(FIXTURE_PASSPHRASE))
+        .expect("защищённый ключ не прочитался при верной парольной фразе");
+    assert_eq!(key.algorithm().as_str(), "ssh-ed25519");
+}
+
+#[test]
+fn ключ_без_фразы_даёт_отдельную_понятную_ошибку() {
+    // Именно отдельную: «нужна парольная фраза» и «файл не читается» требуют от пользователя
+    // разных действий, и сливать их в одну ошибку значит заставить его гадать (FR-105).
+    match auth::load_key(&fixture("encrypted_ed25519.key"), None) {
+        Err(SshError::KeyNeedsPassphrase { path }) => {
+            assert!(path.contains("encrypted_ed25519"), "путь потерян: {path}");
+        }
+        Err(other) => panic!("ожидалась KeyNeedsPassphrase, получено: {other}"),
+        Ok(_) => panic!("защищённый ключ прочитался без парольной фразы"),
+    }
+}
+
+#[test]
+fn неверная_фраза_не_выдаётся_за_нечитаемый_файл() {
+    let err = auth::load_key(&fixture("encrypted_ed25519.key"), Some("не-та-фраза"))
+        .expect_err("ключ прочитался с неверной фразой");
+    // Какой бы ни была формулировка, в ней не должно оказаться самой фразы.
+    let text = err.to_string();
+    assert!(
+        !text.contains("не-та-фраза"),
+        "фраза попала в текст ошибки: {text}"
+    );
+}
+
+#[test]
+fn отсутствующий_файл_ключа_даёт_ошибку_чтения() {
+    match auth::load_key(Path::new("нет-такого-файла.key"), None) {
+        Err(SshError::KeyUnreadable { path, .. }) => assert!(path.contains("нет-такого-файла")),
+        Err(other) => panic!("ожидалась KeyUnreadable, получено: {other}"),
+        Ok(_) => panic!("прочитался несуществующий ключ"),
+    }
+}
+
+#[test]
+fn отладочный_вывод_учётных_данных_не_раскрывает_секрет() {
+    // Самый частый способ утечки — не «напечатали пароль», а «структура попала в вывод
+    // целиком». Поэтому Debug у Credentials написан вручную (конституция, принцип IV).
+    let pass = Credentials::Password(String::from("очень-секретный-пароль-1"));
+    let shown = format!("{pass:?}");
+    assert!(
+        !shown.contains("очень-секретный-пароль-1"),
+        "пароль виден: {shown}"
+    );
+
+    let key = Credentials::Key {
+        path: PathBuf::from("/home/u/.ssh/id_ed25519"),
+        passphrase: Some(String::from("секретная-фраза-2")),
+    };
+    let shown = format!("{key:?}");
+    assert!(!shown.contains("секретная-фраза-2"), "фраза видна: {shown}");
+    // Путь при этом должен остаться: он не секрет и нужен для разбора неполадок.
+    assert!(
+        shown.contains("id_ed25519"),
+        "путь к ключу потерян: {shown}"
+    );
+    assert!(
+        shown.contains("задана"),
+        "не видно, что фраза вообще задана: {shown}"
+    );
+}
+
+#[test]
+fn отпечаток_запоминается_и_читается() {
+    let db = Db::open_in_memory().unwrap();
+    let addr = ServerAddress::new("example.test", 22);
+
+    assert_eq!(
+        fingerprint::stored(&db, &addr).unwrap(),
+        None,
+        "отпечаток взялся из ниоткуда"
+    );
+
+    fingerprint::remember(&db, &addr, "SHA256:перваяверсия").unwrap();
+    assert_eq!(
+        fingerprint::stored(&db, &addr).unwrap().as_deref(),
+        Some("SHA256:перваяверсия")
+    );
+
+    // Повторная запись того же — не ошибка: повтор обязан быть безопасным (принцип V).
+    fingerprint::remember(&db, &addr, "SHA256:перваяверсия").unwrap();
+    assert_eq!(
+        fingerprint::stored(&db, &addr).unwrap().as_deref(),
+        Some("SHA256:перваяверсия")
+    );
+
+    // Осознанная замена — например, сервер пересоздан и пользователь это подтвердил.
+    fingerprint::remember(&db, &addr, "SHA256:втораяверсия").unwrap();
+    assert_eq!(
+        fingerprint::stored(&db, &addr).unwrap().as_deref(),
+        Some("SHA256:втораяверсия")
+    );
+
+    fingerprint::forget(&db, &addr).unwrap();
+    assert_eq!(fingerprint::stored(&db, &addr).unwrap(), None);
+}
+
+#[test]
+fn отпечаток_привязан_к_паре_адрес_и_порт() {
+    // Один и тот же хост на разных портах — разные серверы. Смешивать их отпечатки
+    // значит либо ложно тревожить, либо пропустить подмену.
+    let db = Db::open_in_memory().unwrap();
+    let a22 = ServerAddress::new("example.test", 22);
+    let a2222 = ServerAddress::new("example.test", 2222);
+
+    fingerprint::remember(&db, &a22, "SHA256:ключ-двадцать-второго").unwrap();
+    assert_eq!(fingerprint::stored(&db, &a2222).unwrap(), None);
+
+    fingerprint::remember(&db, &a2222, "SHA256:ключ-другого-порта").unwrap();
+    assert_eq!(
+        fingerprint::stored(&db, &a22).unwrap().as_deref(),
+        Some("SHA256:ключ-двадцать-второго"),
+        "запись по другому порту перезаписала чужой отпечаток"
+    );
+}

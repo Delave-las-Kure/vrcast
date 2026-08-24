@@ -8,3 +8,6 @@ mod db;
 
 #[path = "unit/redact.rs"]
 mod redact;
+
+#[path = "unit/ssh.rs"]
+mod ssh;
