@@ -4,5 +4,9 @@
 //! отзывчивым (FR-080, SC-009), задачи — переживать перезапуск приложения (FR-081),
 //! а отмена — гарантированно завершать всё дерево процессов (конституция, принцип III).
 
+pub mod engine;
 pub mod process;
+pub mod progress;
 pub mod registry;
+pub mod state;
+pub mod store;

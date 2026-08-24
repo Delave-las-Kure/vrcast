@@ -1,0 +1,183 @@
+//! T017 — хранение задач: они переживают перезапуск приложения (FR-081).
+//!
+//! В базу пишутся не все подвижки, а только значимые: смена состояния, позиция
+//! возобновления, ошибка. Прогресс, меняющийся сотни раз в секунду, в базу не идёт —
+//! иначе диск станет узким местом у задачи, которая должна упираться в канал.
+
+use super::state::{TaskKind, TaskState};
+use crate::store::db::{now_rfc3339, Db, DbError};
+use serde::{Deserialize, Serialize};
+
+/// Задача в том виде, в каком она хранится и показывается.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRecord {
+    pub id: String,
+    pub kind: TaskKind,
+    pub server_id: Option<String>,
+    pub state: TaskState,
+    pub progress: f64,
+    pub stage: Option<String>,
+    pub speed_bps: Option<i64>,
+    pub eta_s: Option<i64>,
+    /// Позиция возобновления: переданные байты, готовые ступени, выполненные шаги.
+    pub resume_token: Option<String>,
+    /// Человеческая формулировка, уже прошедшая вырезание секретов.
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl TaskRecord {
+    pub fn new(id: impl Into<String>, kind: TaskKind, server_id: Option<String>) -> Self {
+        let now = now_rfc3339();
+        Self {
+            id: id.into(),
+            kind,
+            server_id,
+            state: TaskState::Queued,
+            progress: 0.0,
+            stage: None,
+            speed_bps: None,
+            eta_s: None,
+            resume_token: None,
+            error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+}
+
+fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
+    let kind: String = row.get("kind")?;
+    let state: String = row.get("state")?;
+    Ok(TaskRecord {
+        id: row.get("id")?,
+        kind: TaskKind::parse(&kind).unwrap_or(TaskKind::Probe),
+        server_id: row.get("server_id")?,
+        state: TaskState::parse(&state).unwrap_or(TaskState::Failed),
+        progress: row.get("progress")?,
+        stage: row.get("stage")?,
+        speed_bps: row.get("speed_bps")?,
+        eta_s: row.get("eta_s")?,
+        resume_token: row.get("resume_token")?,
+        error: row.get("error")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+/// Записать задачу: создать или обновить.
+pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO tasks
+                (id, kind, server_id, state, progress, stage, speed_bps, eta_s,
+                 resume_token, error, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT (id) DO UPDATE SET
+                state = excluded.state,
+                progress = excluded.progress,
+                stage = excluded.stage,
+                speed_bps = excluded.speed_bps,
+                eta_s = excluded.eta_s,
+                resume_token = excluded.resume_token,
+                error = excluded.error,
+                updated_at = excluded.updated_at",
+            rusqlite::params![
+                task.id,
+                task.kind.as_str(),
+                task.server_id,
+                task.state.as_str(),
+                task.progress,
+                task.stage,
+                task.speed_bps,
+                task.eta_s,
+                task.resume_token,
+                task.error,
+                task.created_at,
+                task.updated_at,
+            ],
+        )?;
+        Ok(())
+    })
+}
+
+/// Прочитать одну задачу.
+pub fn get(db: &Db, id: &str) -> Result<Option<TaskRecord>, DbError> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare("SELECT * FROM tasks WHERE id = ?1")?;
+        let mut rows = stmt.query([id])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(row_to_record(row)?),
+            None => None,
+        })
+    })
+}
+
+/// Все задачи, свежие первыми.
+pub fn list(db: &Db) -> Result<Vec<TaskRecord>, DbError> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare("SELECT * FROM tasks ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], row_to_record)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    })
+}
+
+/// Итог восстановления после запуска.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RecoveryReport {
+    /// Задачи, застигнутые в работе прошлым запуском. Переведены в приостановленные.
+    pub interrupted: Vec<String>,
+}
+
+/// Разобрать состояние после запуска приложения.
+///
+/// Задачи, оставшиеся в состоянии «выполняется», принадлежат прошлому запуску: их процессов
+/// больше нет. Они переводятся в **приостановленные** — и никогда в завершённые
+/// (конституция, принцип III; SC-010). Разница не косметическая: «завершено» означало бы,
+/// что результат готов, а он оборван на середине.
+pub fn recover_after_start(db: &Db) -> Result<RecoveryReport, DbError> {
+    let interrupted: Vec<String> = db.with_conn(|c| {
+        let mut stmt = c.prepare("SELECT id FROM tasks WHERE state = 'running'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    })?;
+
+    if interrupted.is_empty() {
+        return Ok(RecoveryReport::default());
+    }
+
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET state = 'paused', updated_at = ?1 WHERE state = 'running'",
+            [now_rfc3339()],
+        )?;
+        Ok(())
+    })?;
+
+    tracing::warn!(
+        count = interrupted.len(),
+        "задачи прошлого запуска переведены в приостановленные"
+    );
+
+    Ok(RecoveryReport { interrupted })
+}
+
+/// Убрать давно завершённые задачи.
+pub fn purge_finished_before(db: &Db, before_rfc3339: &str) -> Result<usize, DbError> {
+    db.with_conn(|c| {
+        Ok(c.execute(
+            "DELETE FROM tasks
+             WHERE state IN ('completed', 'failed', 'cancelled') AND updated_at < ?1",
+            [before_rfc3339],
+        )?)
+    })
+}
