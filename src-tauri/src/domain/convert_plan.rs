@@ -136,6 +136,10 @@ pub struct ConvertPlan {
     pub gop: u32,
     /// Приводить ли расширенный динамический диапазон к обычному.
     pub tonemap: bool,
+    /// Requested frame height, as asked for. Kept even when it equals the source
+    /// height: the command builder needs to tell "not asked" from "asked for the
+    /// same", and only the former may skip the scaling filter.
+    pub requested_height: Option<u32>,
     /// Служебные данные в начале файла — иначе зритель ждёт скачивания хвоста (FR-023).
     pub faststart: bool,
 }
@@ -270,6 +274,7 @@ pub fn plan(
         // Опорный кадр раз в секунду при любой частоте кадров.
         gop: source.fps.max(1),
         tonemap,
+        requested_height: request.height,
         faststart: true,
     })
 }

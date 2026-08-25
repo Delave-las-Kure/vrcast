@@ -4,6 +4,7 @@
 //! требует диска и запуска чужих программ, а решения — этажом ниже, в `domain`,
 //! где их можно проверить тестом без единого файла на диске.
 
+pub mod convert;
 pub mod encoders;
 pub mod ffmpeg;
 pub mod probe;

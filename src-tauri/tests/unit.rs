@@ -60,3 +60,6 @@ mod probe;
 
 #[path = "unit/encoders.rs"]
 mod encoders;
+
+#[path = "unit/convert.rs"]
+mod convert;
