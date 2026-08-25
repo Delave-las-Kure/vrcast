@@ -133,3 +133,205 @@ fn имена_событий_совпадают_в_обе_стороны() {
     let ts = declared_strings(&contract_ts(), "export const EVENTS = {");
     assert_same_sets("имена событий", rust, ts);
 }
+
+// ---------- сверка ФОРМ, а не только перечней (T075) ----------
+
+/// Имена полей объявленного в TypeScript интерфейса.
+///
+/// Разбор нарочно простой и опирается на то, как этот файл написан: одно поле
+/// на строку, `имя: тип;`. Полноценный разбор TypeScript здесь был бы средством
+/// не по задаче — а если файл начнут писать иначе, сверка честно упадёт, а не
+/// сделает вид, что всё сошлось.
+fn declared_fields(ts: &str, name: &str) -> HashSet<String> {
+    let marker = format!("export interface {name} {{");
+    let start = ts
+        .find(&marker)
+        .unwrap_or_else(|| panic!("в contract.ts нет интерфейса «{name}»"));
+    let body = &ts[start + marker.len()..];
+    let end = body
+        .find("\n}")
+        .unwrap_or_else(|| panic!("интерфейс «{name}» не закрыт"));
+
+    let mut out = HashSet::new();
+    for line in body[..end].lines() {
+        // Комментарии выбрасываются до разбора: `/** Что-то: и двоеточие */`
+        // иначе дало бы поле с именем «Что-то».
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+            continue;
+        }
+        let Some((left, _)) = line.split_once(':') else {
+            continue;
+        };
+        let field = left.trim().trim_end_matches('?');
+        if !field.is_empty() && field.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            out.insert(field.to_owned());
+        }
+    }
+    assert!(!out.is_empty(), "у интерфейса «{name}» не нашлось полей");
+    out
+}
+
+/// Имена полей, которые ядро на самом деле кладёт в JSON.
+///
+/// Берутся из настоящей сериализации, а не из объявления структуры: значение
+/// имеет только то, что уходит за границу. Переименование через `#[serde(rename)]`
+/// или пропуск через `skip_serializing_if` объявление не меняют — а договор меняют.
+fn serialized_fields<T: serde::Serialize>(value: &T) -> HashSet<String> {
+    let json = serde_json::to_value(value).expect("значение не сериализуется");
+    let map = json
+        .as_object()
+        .expect("ожидался объект: сверять поля у не-объекта нечего");
+    map.keys().cloned().collect()
+}
+
+/// Сверить форму в обе стороны.
+fn same_shape(rust: &HashSet<String>, ts: &HashSet<String>, what: &str) {
+    let missing_in_ts: Vec<_> = rust.difference(ts).cloned().collect();
+    let missing_in_rust: Vec<_> = ts.difference(rust).cloned().collect();
+
+    assert!(
+        missing_in_ts.is_empty(),
+        "{what}: ядро шлёт поля, которых нет в contract.ts: {missing_in_ts:?}. \
+         Интерфейс их не прочитает, и узнается это у пользователя"
+    );
+    assert!(
+        missing_in_rust.is_empty(),
+        "{what}: в contract.ts объявлены поля, которых ядро не шлёт: {missing_in_rust:?}. \
+         Интерфейс будет ждать того, чего не будет"
+    );
+}
+
+#[test]
+fn форма_задачи_совпадает_в_обе_стороны() {
+    // Перечни значений сверялись и раньше, а имена полей — нет. Переименование
+    // поля в serde проходило молча: сборка цела, типы сходятся, а интерфейс
+    // читает `undefined` там, где ждал число (задолженность T075).
+    let record = vrcast_studio_lib::tasks::store::TaskRecord::new(
+        "t1",
+        TaskKind::Upload,
+        Some(String::from("s1")),
+    );
+    same_shape(
+        &serialized_fields(&record),
+        &declared_fields(&contract_ts(), "Task"),
+        "Task",
+    );
+}
+
+#[test]
+fn форма_событий_о_задачах_совпадает_в_обе_стороны() {
+    use vrcast_studio_lib::tasks::engine::TaskEvent;
+
+    let progress = TaskEvent::Progress {
+        id: String::from("t1"),
+        state: TaskState::Running,
+        progress: 0.5,
+        stage: Some(String::from("идём")),
+        speed_bps: Some(1),
+        eta_s: Some(2),
+    };
+    // У события есть ещё поле-метка вида (`event`), объявленное и в TypeScript:
+    // по нему одно событие отличают от другого, и оно обязано совпасть тоже.
+    same_shape(
+        &serialized_fields(&progress),
+        &declared_fields(&contract_ts(), "TaskProgressEvent"),
+        "TaskProgressEvent",
+    );
+
+    let done = TaskEvent::Done {
+        id: String::from("t1"),
+        state: TaskState::Completed,
+        error: None,
+    };
+    same_shape(
+        &serialized_fields(&done),
+        &declared_fields(&contract_ts(), "TaskDoneEvent"),
+        "TaskDoneEvent",
+    );
+}
+
+#[test]
+fn форма_разобранного_исходника_совпадает_в_обе_стороны() {
+    use vrcast_studio_lib::domain::source::{AudioTrack, SourceFile};
+
+    let track = AudioTrack {
+        index: 0,
+        codec: String::from("aac"),
+        channels: 2,
+        bitrate_bps: Some(256_000),
+        language: Some(String::from("rus")),
+        title: None,
+        is_default: true,
+    };
+    same_shape(
+        &serialized_fields(&track),
+        &declared_fields(&contract_ts(), "AudioTrack"),
+        "AudioTrack",
+    );
+
+    let source = SourceFile {
+        path: String::from("/v/a.mp4"),
+        size_bytes: 1,
+        duration_s: 1.0,
+        width: 1920,
+        height: 1080,
+        fps: 24,
+        bitrate_bps: 1,
+        peak_bps: None,
+        video_codec: String::from("h264"),
+        pix_fmt: String::from("yuv420p"),
+        color_transfer: None,
+        audio_tracks: vec![track],
+    };
+    same_shape(
+        &serialized_fields(&source),
+        &declared_fields(&contract_ts(), "SourceFile"),
+        "SourceFile",
+    );
+}
+
+#[test]
+fn форма_проверки_воспроизведения_совпадает_в_обе_стороны() {
+    let verdict = vrcast_studio_lib::media::validate::classify("");
+    same_shape(
+        &serialized_fields(&verdict),
+        &declared_fields(&contract_ts(), "Validation"),
+        "Validation",
+    );
+}
+
+#[test]
+fn форма_сведений_о_ffmpeg_совпадает_в_обе_стороны() {
+    let info = vrcast_studio_lib::media::ffmpeg::FfmpegInfo {
+        version: String::from("ffmpeg version n8"),
+        path: String::from("/x/ffmpeg"),
+        has_x264: true,
+        hardware: vec![String::from("h264_nvenc")],
+    };
+    same_shape(
+        &serialized_fields(&info),
+        &declared_fields(&contract_ts(), "FfmpegInfo"),
+        "FfmpegInfo",
+    );
+}
+
+#[test]
+fn разбор_объявления_не_принимает_комментарий_за_поле() {
+    // Разбор простой, и его собственная ошибка была бы незаметна: лишнее «поле»
+    // из комментария сделало бы сверку вечно красной, а пропущенное — вечно зелёной.
+    let ts = "export interface Проба {\n  /** Что-то: с двоеточием */\n  \
+              // и строчный комментарий: тоже\n  настоящее: number;\n  \
+              необязательное?: string;\n}\n";
+    let fields = declared_fields(ts, "Проба");
+    assert_eq!(
+        fields.len(),
+        2,
+        "разобрано лишнее или пропущено нужное: {fields:?}"
+    );
+    assert!(fields.contains("настоящее"));
+    assert!(
+        fields.contains("необязательное"),
+        "знак вопроса не отброшен"
+    );
+}
