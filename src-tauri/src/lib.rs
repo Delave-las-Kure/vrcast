@@ -9,6 +9,7 @@ use tauri::Manager;
 pub mod commands;
 pub mod domain;
 pub mod logging;
+pub mod media;
 pub mod server;
 pub mod ssh;
 pub mod store;
@@ -77,6 +78,7 @@ pub fn run() {
             commands::ipc::tasks_reorder,
             commands::ipc::tasks_queue_order,
             commands::ipc::tasks_on_close,
+            commands::ipc::ffmpeg_probe_self,
             commands::ipc::server_probe_fingerprint,
             commands::servers::ipc::servers_list,
             commands::servers::ipc::server_add,

@@ -23,7 +23,9 @@
     "check:no-hardcoded": "bash scripts/check-no-hardcoded-server.sh",
     "third-party": "node scripts/gen-third-party.mjs",
     "check:third-party": "node scripts/gen-third-party.mjs --check",
-    "check:all": "bash scripts/check-all.sh"
+    "check:all": "bash scripts/check-all.sh",
+    "ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "check:ffmpeg": "node scripts/fetch-ffmpeg.mjs --check"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

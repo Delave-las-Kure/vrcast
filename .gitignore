@@ -47,3 +47,8 @@ id_*
 # именами в общедоступном репозитории только настораживает.
 src-tauri/tests/fixtures/encrypted_ed25519.key.pub
 src-tauri/tests/fixtures/docker/encrypted_ed25519.key.pub
+
+# Вложенный FFmpeg: сто шестьдесят мегабайт чужих исполняемых файлов, которые
+# кладутся при сборке (scripts/fetch-ffmpeg.mjs). В репозитории им не место —
+# они не наш исходный код, а закреплены слепком в scripts/ffmpeg.json.
+src-tauri/binaries/

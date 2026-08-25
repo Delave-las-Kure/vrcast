@@ -25,6 +25,7 @@ import {
   type TaskDoneEvent,
   type TaskOnClose,
   type TaskProgressEvent,
+  type FfmpegInfo,
   type TestStep,
   type UploadRequest,
   type Versions,
@@ -115,6 +116,14 @@ export const ipc = {
    */
   uploadStart: (request: UploadRequest) => call<string>("upload_start", { request }),
   uploadResume: (taskId: string) => call<void>("upload_resume", { taskId }),
+
+  // --- подготовка файлов ---
+  /**
+   * Проверить вложенный FFmpeg. Зовётся при запуске и перед подготовкой:
+   * узнать о неработающем FFmpeg в начале — значит сказать, что чинить;
+   * узнать в середине двухчасовой подготовки — значит отнять эти два часа.
+   */
+  ffmpegProbeSelf: () => call<FfmpegInfo>("ffmpeg_probe_self"),
 };
 
 // ---------- события ----------

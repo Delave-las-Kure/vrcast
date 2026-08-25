@@ -225,6 +225,33 @@ pub mod api {
         Ok(out)
     }
 
+    /// Проверить вложенный в поставку FFmpeg (FR-112, T115).
+    ///
+    /// Вызывается при запуске и перед подготовкой. Вложенный файл может не запуститься:
+    /// его вырезал антивирус, установщик распаковался наполовину, у файла нет права
+    /// на выполнение. Узнать об этом в начале — значит сказать человеку, что чинить;
+    /// узнать в середине двухчасовой подготовки — значит отнять эти два часа.
+    pub async fn ffmpeg_probe_self() -> Result<crate::media::ffmpeg::FfmpegInfo> {
+        let info = crate::media::ffmpeg::probe_self().await.map_err(|e| {
+            AppError::new(ErrorCode::FfmpegBroken)
+                .with_message(
+                    "Вложенный FFmpeg не работает — готовить файлы нечем.                      Переустановите приложение: возможно, антивирус удалил часть файлов.",
+                )
+                .with_cause(e.to_string())
+        })?;
+
+        // Без программного кодировщика подготовка невозможна на машине без подходящей
+        // видеокарты — то есть у части людей приложение молча оказалось бы бесполезным.
+        if !info.has_x264 {
+            return Err(AppError::new(ErrorCode::FfmpegBroken)
+                .with_message(
+                    "Вложенный FFmpeg собран без программного кодировщика H.264.                      На машине без подходящей видеокарты готовить файлы будет нечем.",
+                )
+                .with_cause(info.version));
+        }
+        Ok(info)
+    }
+
     /// Узнать отпечаток сервера, ничего ему не предъявляя (FR-092).
     pub async fn server_probe_fingerprint(host: &str, port: u16) -> Result<String> {
         let addr = crate::ssh::ServerAddress::new(host, port);
@@ -282,6 +309,11 @@ pub mod ipc {
     #[tauri::command]
     pub fn tasks_on_close(state: State<'_, AppState>) -> Result<Vec<TaskOnClose>> {
         api::tasks_on_close(&state)
+    }
+
+    #[tauri::command]
+    pub async fn ffmpeg_probe_self() -> Result<crate::media::ffmpeg::FfmpegInfo> {
+        api::ffmpeg_probe_self().await
     }
 
     #[tauri::command]

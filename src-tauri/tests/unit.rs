@@ -51,3 +51,6 @@ mod notify;
 
 #[path = "unit/convert_plan.rs"]
 mod convert_plan;
+
+#[path = "unit/ffmpeg.rs"]
+mod ffmpeg;
