@@ -24,7 +24,10 @@ pub mod names {
 /// перекладывает их наружу. Так ядро остаётся проверяемым без запуска окна.
 pub fn bridge_task_events(app: AppHandle, engine: &TaskEngine) {
     let mut rx = engine.subscribe();
-    tokio::spawn(async move {
+    // Исполнитель берётся у оболочки, а не свой. Прямой вызов tokio::spawn здесь роняет
+    // приложение при запуске: подготовка оболочки идёт вне исполнителя, и реактора ещё
+    // нет (поймано запуском 2026-08-25 — сборка и тесты этого не показывали).
+    tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(event) => {

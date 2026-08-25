@@ -1,0 +1,415 @@
+/*
+ * Оформление приложения.
+ *
+ * Цвета заданы переменными и переключаются одним атрибутом на корне документа: так тема
+ * меняется мгновенно и целиком, без перерисовки дерева (FR-100).
+ *
+ * Переходы включены точечно — там, где меняется состояние, а не «на всё подряд»:
+ * анимация ради анимации превращается в шум и мешает читать (FR-101).
+ */
+
+:root {
+  --bg: #f6f7f9;
+  --bg-panel: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-hover: #eef1f5;
+  --bg-active: #e6ecf6;
+
+  --text: #1a1d21;
+  --text-muted: #6b7280;
+  --text-inverse: #ffffff;
+
+  --border: #e2e5ea;
+  --accent: #2f6fd0;
+  --accent-hover: #2559a8;
+  --danger: #c0392b;
+  --danger-bg: #fdeceb;
+  --success: #2e7d4f;
+  --warning: #b4690e;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 5%);
+
+  --speed: 160ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #14171c;
+  --bg-panel: #1b1f26;
+  --bg-sidebar: #191d24;
+  --bg-hover: #232833;
+  --bg-active: #29323f;
+
+  --text: #e8eaed;
+  --text-muted: #9aa2af;
+  --text-inverse: #0f1114;
+
+  --border: #2a303a;
+  --accent: #5a9bf0;
+  --accent-hover: #7bb0f5;
+  --danger: #f07a6d;
+  --danger-bg: #35211f;
+  --success: #6fcf97;
+  --warning: #e0a34a;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 4px 14px rgb(0 0 0 / 25%);
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, "Noto Sans", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  /* Смена темы не должна выглядеть рывком. */
+  transition:
+    background-color var(--speed) var(--ease),
+    color var(--speed) var(--ease);
+}
+
+/* Человек, попросивший систему меньше двигать картинку, получает своё. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- разметка ---------- */
+
+.layout {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  height: 100%;
+}
+
+.content {
+  overflow-y: auto;
+  padding: 28px 32px;
+}
+
+/* ---------- боковая полоса ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 20px 12px 12px;
+}
+
+.sidebar__brand {
+  padding: 0 10px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar__title {
+  font-weight: 650;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.sidebar__version {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    background-color var(--speed) var(--ease),
+    color var(--speed) var(--ease);
+}
+
+.sidebar__link:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar__link--active {
+  background: var(--bg-active);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar__soon {
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.sidebar__footer {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+.sidebar__theme {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sidebar__theme select {
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+/* ---------- содержимое ---------- */
+
+h1 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  margin: 0 0 18px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.panel {
+  max-width: 860px;
+  /* Появление раздела — короткое и однократное, без бесконечного движения. */
+  animation: appear var(--speed) var(--ease);
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.coming-soon {
+  max-width: 560px;
+  animation: appear var(--speed) var(--ease);
+}
+
+.coming-soon__phase {
+  display: inline-block;
+  background: var(--bg-active);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.coming-soon__fallback {
+  border-left: 3px solid var(--border);
+  padding-left: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------- задачи ---------- */
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.task__kind {
+  font-weight: 600;
+}
+
+.task__state {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.task--failed .task__state {
+  color: var(--danger);
+}
+
+.task--completed .task__state {
+  color: var(--success);
+}
+
+.task--paused .task__state {
+  color: var(--warning);
+}
+
+.task__meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.task__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.task__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.progress {
+  height: 6px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  /* Ширина сглаживается, иначе полоса дёргается при каждом событии. */
+  transition: width var(--speed) var(--ease);
+}
+
+/* ---------- кнопки ---------- */
+
+button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    background-color var(--speed) var(--ease),
+    border-color var(--speed) var(--ease);
+}
+
+button:hover {
+  background: var(--bg-hover);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.button--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.button--danger:hover {
+  background: var(--danger-bg);
+}
+
+/* ---------- сообщения ---------- */
+
+.notice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  animation: appear var(--speed) var(--ease);
+}
+
+.notice--error {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+}
+
+.notice__body {
+  flex: 1;
+}
+
+.notice__message {
+  display: block;
+}
+
+.notice__hint,
+.notice__cause {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.notice__cause {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.notice__close {
+  border: none;
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 4px;
+  color: var(--text-muted);
+}

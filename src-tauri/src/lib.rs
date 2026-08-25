@@ -4,6 +4,8 @@
 //! Интерфейс не знает ни про SSH, ни про FFmpeg — он общается с ядром только
 //! через слой команд (см. `specs/001-vrcast-studio/contracts/ipc-commands.md`).
 
+use tauri::Manager;
+
 pub mod commands;
 pub mod logging;
 pub mod ssh;
@@ -38,6 +40,12 @@ pub fn run() {
         .manage(state)
         .setup(move |app| {
             commands::events::bridge_task_events(app.handle().clone(), &engine);
+
+            // Окно создано скрытым и показывается, когда есть что показать: иначе
+            // пользователь видит белую вспышку до загрузки интерфейса.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

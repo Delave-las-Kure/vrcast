@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "vrcast-studio",
+  "productName": "VRCast Studio",
   "version": "0.1.0",
   "identifier": "ru.vrcast.studio",
   "build": {
@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "vrcast-studio",
-        "width": 800,
-        "height": 600
+        "title": "VRCast Studio",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 560,
+        "visible": false
       }
     ],
     "security": {
