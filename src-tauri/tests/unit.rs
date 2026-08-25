@@ -48,3 +48,6 @@ mod ssh;
 
 #[path = "unit/notify.rs"]
 mod notify;
+
+#[path = "unit/convert_plan.rs"]
+mod convert_plan;

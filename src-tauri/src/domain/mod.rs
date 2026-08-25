@@ -9,6 +9,7 @@
 //! ссылками: ссылка вычисляется из профиля (`links`), а не хранится рядом с файлом,
 //! где неминуемо устареет при смене домена.
 
+pub mod convert_plan;
 pub mod grouping;
 pub mod links;
 pub mod manifest;
@@ -18,4 +19,5 @@ pub mod progress_estimate;
 pub mod rate_limit;
 pub mod remote_name;
 pub mod server_profile;
+pub mod source;
 pub mod transfer;
