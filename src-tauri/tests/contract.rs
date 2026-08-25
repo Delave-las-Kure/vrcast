@@ -23,3 +23,6 @@ mod secrets_never_returned;
 
 #[path = "contract/servers.rs"]
 mod servers;
+
+#[path = "contract/upload.rs"]
+mod upload;

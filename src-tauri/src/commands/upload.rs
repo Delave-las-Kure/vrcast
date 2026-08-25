@@ -119,14 +119,7 @@ pub mod api {
         conn.close().await;
 
         if let Some(shortage) = checks.not_enough_space {
-            return Err(AppError::new(ErrorCode::RemoteDiskFull)
-                .with_message(format!(
-                    "На сервере не хватает {} — нужно {}, свободно {}.",
-                    human(shortage.short_by),
-                    human(shortage.needed),
-                    human(shortage.free)
-                ))
-                .with_cause(format!("short_by={}", shortage.short_by)));
+            return Err(space_error(shortage));
         }
 
         if checks.has_warnings() && !request.confirmed {
@@ -531,8 +524,25 @@ pub mod api {
     }
 }
 
+/// Отказ по нехватке места на сервере.
+///
+/// Подтверждением не снимается: место от согласия не появится. Отдельно от
+/// [`warning_error`] именно поэтому — спутать запрет с предупреждением значило бы
+/// предложить человеку кнопку «всё равно залить», после которой передача упрётся
+/// в конец диска на середине.
+pub fn space_error(shortage: SpaceShortage) -> AppError {
+    AppError::new(ErrorCode::RemoteDiskFull)
+        .with_message(format!(
+            "На сервере не хватает {} — нужно {}, свободно {}.",
+            human(shortage.short_by),
+            human(shortage.needed),
+            human(shortage.free)
+        ))
+        .with_cause(format!("short_by={}", shortage.short_by))
+}
+
 /// Отказ, который называет последствия и снимается подтверждением.
-fn warning_error(checks: &Preflight, name: &str) -> AppError {
+pub fn warning_error(checks: &Preflight, name: &str) -> AppError {
     let mut parts: Vec<String> = Vec::new();
 
     if checks.name_exists {
