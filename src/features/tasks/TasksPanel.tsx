@@ -68,7 +68,16 @@ export function TasksPanel() {
   // Продвижение приходит потоком; полный список перечитываем только на завершении,
   // когда меняется состав, а не значение показателя.
   useEffect(() => {
+    // Подписка оформляется асинхронно, и размонтирование может случиться раньше,
+    // чем она завершится (в dev это гарантирует StrictMode). Тогда отписку уже
+    // некому вызвать из cleanup — подписку, пришедшую после него, гасим на месте,
+    // иначе обработчики копятся до конца сеанса с каждым заходом в раздел.
+    let cancelled = false;
     const unlisten: Array<() => void> = [];
+    const keep = (fn: () => void) => {
+      if (cancelled) fn();
+      else unlisten.push(fn);
+    };
 
     void onTaskProgress((e) => {
       setTasks((prev) =>
@@ -85,11 +94,14 @@ export function TasksPanel() {
             : t,
         ),
       );
-    }).then((fn) => unlisten.push(fn));
+    }).then(keep);
 
-    void onTaskDone(() => void reload()).then((fn) => unlisten.push(fn));
+    void onTaskDone(() => void reload()).then(keep);
 
-    return () => unlisten.forEach((fn) => fn());
+    return () => {
+      cancelled = true;
+      unlisten.forEach((fn) => fn());
+    };
   }, [reload]);
 
   const act = async (fn: () => Promise<void>) => {

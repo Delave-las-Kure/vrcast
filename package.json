@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "echo \"сквозные тесты появятся в Фазе 1 (tauri-driver)\" && exit 0",
     "format": "prettier --write .",
