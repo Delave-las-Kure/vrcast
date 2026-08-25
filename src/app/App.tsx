@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { LibraryScreen } from "../features/library/LibraryScreen";
 import { ServerList } from "../features/servers/ServerList";
+import { About } from "../features/shared/About";
 import { ComingSoon } from "../features/shared/ComingSoon";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { UploadScreen } from "../features/upload/UploadScreen";
@@ -49,6 +50,7 @@ function AppShell() {
             }
           />
           <Route path="/upload" element={<UploadScreen />} />
+          <Route path="/about" element={<About />} />
           <Route
             path="/ladder"
             element={

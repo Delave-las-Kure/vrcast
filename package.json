@@ -2,6 +2,11 @@
   "name": "vrcast-studio",
   "private": true,
   "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Delave-las-Kure/vrcast"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +20,9 @@
     "test:e2e": "echo \"сквозные тесты появятся в Фазе 1 (tauri-driver)\" && exit 0",
     "format": "prettier --write .",
     "check:isolation": "bash scripts/check-isolation.sh",
-    "check:no-hardcoded": "bash scripts/check-no-hardcoded-server.sh"
+    "check:no-hardcoded": "bash scripts/check-no-hardcoded-server.sh",
+    "third-party": "node scripts/gen-third-party.mjs",
+    "check:third-party": "node scripts/gen-third-party.mjs --check"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -45,7 +52,6 @@
     "vite": "^7.0.4",
     "vitest": "^2.1.8"
   },
-  "license": "GPL-3.0-or-later",
   "description": "Управление стриминг-сервером VRCast: библиотека, конвертация, заливка, зрители",
   "allowScripts": {
     "esbuild@0.28.2": true,

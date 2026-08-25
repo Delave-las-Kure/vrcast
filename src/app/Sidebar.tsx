@@ -6,7 +6,7 @@ export const SECTIONS = [
   { path: "/servers", label: "Серверы", ready: true },
   { path: "/library", label: "Библиотека", ready: true },
   { path: "/convert", label: "Подготовка", ready: false },
-  { path: "/upload", label: "Заливка", ready: false },
+  { path: "/upload", label: "Заливка", ready: true },
   { path: "/ladder", label: "Качества", ready: false },
   { path: "/viewers", label: "Зрители", ready: false },
   { path: "/limits", label: "Ограничения", ready: false },
@@ -27,7 +27,11 @@ export function Sidebar({ version }: { version: string | null }) {
     <nav className="sidebar" aria-label="Разделы">
       <div className="sidebar__brand">
         <span className="sidebar__title">VRCast Studio</span>
-        {version && <span className="sidebar__version">версия {version}</span>}
+        {version && (
+          <NavLink to="/about" className="sidebar__version" title="О программе и лицензии">
+            версия {version}
+          </NavLink>
+        )}
       </div>
 
       <ul className="sidebar__list">
