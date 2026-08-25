@@ -40,3 +40,10 @@ server.env
 *.key
 id_*
 !src/**/key*.ts
+
+# Ключ для одноразового контейнера создаётся при первом запуске интеграционных
+# тестов (tests/integration/fixture.rs) и живёт только на этой машине. Открытая
+# часть здесь тоже лишняя: без приватной она бесполезна, а пара файлов с такими
+# именами в общедоступном репозитории только настораживает.
+src-tauri/tests/fixtures/encrypted_ed25519.key.pub
+src-tauri/tests/fixtures/docker/encrypted_ed25519.key.pub
