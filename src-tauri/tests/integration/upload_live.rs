@@ -55,6 +55,7 @@ fn make_local_file(name: &str, size: usize) -> std::path::PathBuf {
 }
 
 async fn setup() -> (TestServer, AppState, String) {
+    super::fixture::logging_if_requested();
     let server = TestServer::start().expect("контейнер не поднялся");
     let state = app_state();
     let id = add_profile(&state, &server).await;
@@ -79,6 +80,8 @@ async fn add_profile(state: &AppState, server: &TestServer) -> String {
         ipv6_mode: None,
     };
     let id = servers::server_add(state, input, KEY_PASSPHRASE).expect("профиль не создан");
+    // Секрет зарегистрирован — теперь можно проверить, что его действительно вырежут.
+    super::fixture::canary(KEY_PASSPHRASE);
     super::library_ops::confirm_fingerprint(state, &id, server).await;
     id
 }
@@ -533,6 +536,7 @@ struct Подопытный {
 
 /// Поднять сервер, завести базу и профиль — всё, что переживёт убийство приложения.
 async fn подготовить_перезапуск() -> Подопытный {
+    super::fixture::logging_if_requested();
     let server = TestServer::start().expect("контейнер не поднялся");
     let local = make_local_file("film_22.mp4", RESTART_FILE_SIZE);
     let db_dir =

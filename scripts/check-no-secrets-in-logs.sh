@@ -11,32 +11,56 @@
 # в журнале и сообщает только «нашлось» или «не нашлось».
 #
 # Запуск (нужен настоящий сервер и server.env рядом):
-#   bash scripts/check-no-secrets-in-logs.sh
+#   bash scripts/check-no-secrets-in-logs.sh            # настоящий сервер, только чтение
+#   bash scripts/check-no-secrets-in-logs.sh container  # одноразовый сервер, ЗАЛИВКА
+#
+# Второй режим появился потому, что заливка добавила свои пути вывода — соединение
+# держится часами, переподключается, ходит по SFTP, — и ни один из них не задет
+# проверкой, которая только читает библиотеку (T128). Боевой сервер для этого
+# не годится и не нужен: код тот же, а трогать чужие файлы незачем.
 set -euo pipefail
 
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$APP/.." && pwd)"
 ENV_FILE="$ROOT/server.env"
+MODE="${1:-live}"
 
-if [ ! -f "$ENV_FILE" ]; then
+if [ "$MODE" = "container" ]; then
+  # Ключ одноразового сервера тесты создают на месте. Он не даёт доступа никуда,
+  # но в журнале ему всё равно не место: правило про секреты не знает разницы
+  # между ценным и учебным, и проверять надо ровно то, что выполняется.
+  KEY="$APP/src-tauri/tests/fixtures/encrypted_ed25519.key"
+  if [ ! -f "$KEY" ]; then
+    echo "Нет ключа для тестов. Прогоните любой интеграционный тест — он его создаст." >&2
+    exit 2
+  fi
+elif [ ! -f "$ENV_FILE" ]; then
   echo "Нет $ENV_FILE — проверка рассчитана на машину, где настроен настоящий сервер." >&2
+  echo "Для проверки путей вывода заливки: bash $0 container" >&2
   exit 2
-fi
+else
 
 KEY=$(grep -E "^SSH_KEY=" "$ENV_FILE" | sed -E 's/^SSH_KEY="?([^"#]*)"?.*/\1/' | sed "s|\$HOME|$HOME|" | xargs)
 if [ ! -f "$KEY" ]; then
   echo "Файл ключа из server.env не найден." >&2
   exit 2
 fi
+fi
 
 LOG="$(mktemp)"
 trap 'rm -f "$LOG" "$LOG.needles"' EXIT
 
-echo "Прогон приёмочной проверки с подробным журналом…"
+if [ "$MODE" = "container" ]; then
+  echo "Прогон заливки на одноразовом сервере с подробным журналом…"
+  RUN=(--test-threads=1 --nocapture upload_live)
+else
+  echo "Прогон приёмочной проверки с подробным журналом…"
+  RUN=(--ignored --nocapture живой_сервер)
+fi
+
 (
   cd "$APP/src-tauri"
-  VRCAST_LOG=trace cargo test --features integration --test integration \
-    -- --ignored --nocapture живой_сервер
+  VRCAST_LOG=trace cargo test --features integration --test integration -- "${RUN[@]}"
 ) > "$LOG" 2>&1 || {
   echo "Приёмочная проверка не прошла — искать секреты в журнале неудавшегося прогона рано." >&2
   tail -20 "$LOG" >&2
@@ -49,6 +73,9 @@ echo "Прогон приёмочной проверки с подробным �
   sed -n '3,6p' "$KEY"
   echo "BEGIN OPENSSH PRIVATE KEY"
   echo "BEGIN RSA PRIVATE KEY"
+  # В режиме контейнера ищется ещё и парольная фраза: она проходит через те же
+  # пути, что настоящий пароль сервера, и её утечка означала бы утечку и его.
+  [ "$MODE" = "container" ] && echo "тестовая-фраза-1234"
 } > "$LOG.needles"
 
 found=0
@@ -74,4 +101,4 @@ if [ "$found" -ne 0 ]; then
   exit 1
 fi
 
-echo "Секретов в журнале не найдено ($lines строк проверено, уровень trace)."
+echo "Секретов в журнале не найдено ($lines строк проверено, уровень trace, режим $MODE)."
