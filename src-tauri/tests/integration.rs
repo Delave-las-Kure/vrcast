@@ -19,6 +19,13 @@
 #[path = "support/test_key.rs"]
 mod test_key;
 
+/// Проверки состояния процессов — общие с модульными тестами.
+#[path = "support/proc_check.rs"]
+mod proc_check;
+
+#[path = "integration/convert_kill.rs"]
+mod convert_kill;
+
 #[path = "integration/fixture.rs"]
 mod fixture;
 
