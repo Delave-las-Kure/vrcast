@@ -66,7 +66,7 @@ async fn setup() -> (TestServer, AppState, String) {
 ///
 /// Отдельно от [`setup`], потому что проверка перезапуска поднимает состояние
 /// приложения дважды на одной и той же базе, а сервер держит у себя.
-async fn add_profile(state: &AppState, server: &TestServer) -> String {
+pub(crate) async fn add_profile(state: &AppState, server: &TestServer) -> String {
     let input = ServerInput {
         name: String::from("Контейнер"),
         host: server.host().to_owned(),
@@ -103,7 +103,7 @@ async fn wait_done(state: &AppState, task_id: &str, limit: Duration) -> TaskStat
     }
 }
 
-fn request(server_id: &str, local: &std::path::Path, name: &str) -> UploadRequest {
+pub(crate) fn request(server_id: &str, local: &std::path::Path, name: &str) -> UploadRequest {
     UploadRequest {
         server_id: server_id.to_owned(),
         local_path: local.to_string_lossy().into_owned(),
@@ -501,7 +501,7 @@ fn первый_запуск_который_убьют() {
 /// своё хранилище, и без повторной записи он не подключился бы — хотя в жизни
 /// секрет лежит в связке ключей системы и перезапуск переживает. Это разница
 /// между проверкой и жизнью, и она здесь единственная.
-fn attach_secret(state: &AppState) -> String {
+pub(crate) fn attach_secret(state: &AppState) -> String {
     let profile = servers::servers_list(state)
         .expect("список профилей не прочитать")
         .into_iter()
@@ -844,7 +844,7 @@ async fn подменённый_между_запусками_исходник_�
     let _ = std::fs::remove_dir_all(&п.db_dir);
 }
 
-fn sha256_of(path: &std::path::Path) -> String {
+pub(crate) fn sha256_of(path: &std::path::Path) -> String {
     use sha2::{Digest, Sha256};
     let data = std::fs::read(path).expect("файл не читается");
     let mut hasher = Sha256::new();

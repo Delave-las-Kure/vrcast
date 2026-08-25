@@ -50,5 +50,8 @@ mod process_tree;
 #[path = "integration/upload_live.rs"]
 mod upload_live;
 
+#[path = "integration/scenario_upload.rs"]
+mod scenario_upload;
+
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;
