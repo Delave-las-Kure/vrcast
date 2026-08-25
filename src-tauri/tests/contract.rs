@@ -15,6 +15,9 @@ mod contract_sync;
 #[path = "contract/library.rs"]
 mod library;
 
+#[path = "contract/responsiveness.rs"]
+mod responsiveness;
+
 #[path = "contract/secrets_never_returned.rs"]
 mod secrets_never_returned;
 

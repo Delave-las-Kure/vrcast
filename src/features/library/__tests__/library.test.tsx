@@ -59,7 +59,7 @@ function profile(): ServerProfile {
     secret_ref: "server/srv_1",
     key_path: null,
     domain: "stream.example.com",
-    video_dir: "/var/lib/vrcast/videos",
+    video_dir: "/srv/раздача/видео",
     cdn_base: null,
     host_fingerprint: "SHA256:x",
     ipv6_mode: null,

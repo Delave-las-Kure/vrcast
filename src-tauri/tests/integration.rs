@@ -23,6 +23,9 @@ mod library_completeness;
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 
+#[path = "integration/live_readonly.rs"]
+mod live_readonly;
+
 #[path = "integration/manifest_conflict.rs"]
 mod manifest_conflict;
 

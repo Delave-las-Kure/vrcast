@@ -389,24 +389,10 @@ mod probe {
         let mut steps: Vec<TestStep> = Vec::with_capacity(TEST_STEPS.len());
 
         // 1. Сеть.
-        let addr = format!("{}:{}", profile.host, profile.port);
-        match tokio::time::timeout(STEP_TIMEOUT, tokio::net::TcpStream::connect(&addr)).await {
-            Ok(Ok(_)) => steps.push(step(
-                0,
-                StepStatus::Ok,
-                Some(format!("порт {} отвечает", profile.port)),
-            )),
-            Ok(Err(e)) => {
-                steps.push(step(0, StepStatus::Failed, Some(e.to_string())));
-                skip_rest(&mut steps);
-                return steps;
-            }
-            Err(_) => {
-                steps.push(step(
-                    0,
-                    StepStatus::Failed,
-                    Some(format!("сервер не ответил за {} с", STEP_TIMEOUT.as_secs())),
-                ));
+        match reach_ssh(&profile.host, profile.port).await {
+            Ok(banner) => steps.push(step(0, StepStatus::Ok, Some(banner))),
+            Err(detail) => {
+                steps.push(step(0, StepStatus::Failed, Some(detail)));
                 skip_rest(&mut steps);
                 return steps;
             }
@@ -512,11 +498,90 @@ mod probe {
                 return steps;
             }
         }
+
+        // Берём имя настоящего файла из каталога — им и будем проверять отдачу.
+        // Это и есть разница между «веб-сервер отвечает» и «раздача работает».
+        let sample = sample_file(&conn, &profile.video_dir).await;
         conn.close().await;
 
         // 4. Отдача по домену.
-        steps.push(check_domain(&profile.domain).await);
+        steps.push(check_domain(&profile.domain, sample.as_deref()).await);
         steps
+    }
+
+    /// Имя любого видеофайла из каталога раздачи.
+    ///
+    /// Нужно, чтобы проверить отдачу настоящим файлом, а не корнем каталога.
+    /// Отсутствие файлов — не беда: на свежем сервере их и нет, проверка тогда
+    /// сделает что может и честно скажет, чего не проверяла.
+    async fn sample_file(conn: &Connection, video_dir: &str) -> Option<String> {
+        let cmd = format!(
+            "find {} -maxdepth 1 -type f -name '*.mp4' -printf '%f\\n' 2>/dev/null | head -n 1",
+            crate::server::shell_quote(video_dir)
+        );
+        let out = conn.exec(&cmd).await.ok()?;
+        let name = out.trimmed().trim().to_owned();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    }
+
+    /// Достучаться до SSH и убедиться, что там **именно он**.
+    ///
+    /// Установленного соединения мало. У части хостеров перед сервером стоит защита
+    /// от атак, которая сама завершает рукопожатие TCP на **любом** порту — и молчит.
+    /// Проверено на боевом сервере автора 2026-08-25: порты 64999, 12345 и 54321
+    /// «отвечали» ровно так же, как 22, хотя за ними нет ничего.
+    ///
+    /// Поэтому шаг считается пройденным, только если сервер представился: настоящий
+    /// SSH шлёт строку `SSH-2.0-…` сразу после соединения, ничего не дожидаясь.
+    /// Это тот же принцип, что и в проверке отдачи по домену (R-20): открытый порт
+    /// не доказывает ничего, доказывает ответ.
+    async fn reach_ssh(host: &str, port: u16) -> std::result::Result<String, String> {
+        use tokio::io::AsyncReadExt;
+
+        let addr = format!("{host}:{port}");
+        let mut stream =
+            match tokio::time::timeout(STEP_TIMEOUT, tokio::net::TcpStream::connect(&addr)).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => return Err(e.to_string()),
+                Err(_) => return Err(format!("сервер не ответил за {} с", STEP_TIMEOUT.as_secs())),
+            };
+
+        // Баннера хватает первых нескольких десятков байт; ждать его долго незачем —
+        // настоящий SSH шлёт его немедленно.
+        let mut buf = [0u8; 128];
+        let read = tokio::time::timeout(STEP_TIMEOUT, stream.read(&mut buf)).await;
+
+        let bytes = match read {
+            Ok(Ok(0)) => {
+                return Err(String::from(
+                    "соединение принято и тут же закрыто: на этом порту SSH не отвечает",
+                ))
+            }
+            Ok(Ok(n)) => &buf[..n],
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => {
+                return Err(String::from(
+                    "соединение принимается, но SSH молчит. Так ведёт себя защита от атак \
+                     у части хостеров: она отвечает на любом порту, даже если за ним ничего нет. \
+                     Проверьте номер порта — возможно, SSH слушает на другом",
+                ))
+            }
+        };
+
+        let banner = String::from_utf8_lossy(bytes);
+        let first_line = banner.lines().next().unwrap_or("").trim();
+        if first_line.starts_with("SSH-") {
+            Ok(format!("отвечает {first_line}"))
+        } else {
+            Err(format!(
+                "на порту {port} отвечает не SSH, а что-то другое: «{}»",
+                first_line.chars().take(40).collect::<String>()
+            ))
+        }
     }
 
     /// Проверить, что раздача отвечает по домену — **с машины пользователя**.
@@ -524,28 +589,84 @@ mod probe {
     /// Проверять изнутри сервера бессмысленно: оттуда «работает» и то, что снаружи
     /// недоступно из-за доменной записи или сетевого фильтра.
     ///
-    /// Что этот шаг доказывает: домен разрешается, ведёт сюда, сертификат для него
-    /// действителен, веб-сервер отвечает. Чего не доказывает: что раздаётся именно
-    /// ожидаемое содержимое. Для этого нужен известный файл, и такая проверка —
-    /// шаг `verify` при развёртывании (R-20, FR-125).
-    async fn check_domain(domain: &str) -> TestStep {
-        let url = format!("https://{domain}/{}/", crate::domain::links::VIDEOS_PREFIX);
-
+    /// Что этот шаг доказывает, когда в каталоге есть хотя бы один файл: домен
+    /// разрешается, ведёт сюда, сертификат действителен, **и раздача действительно
+    /// отдаёт содержимое этого файла**. Ради последнего запрашивается ровно один
+    /// байт настоящего файла: без него проверка сводилась бы к «веб-сервер отвечает»,
+    /// а это, как и открытый порт, не доказывает ничего (R-20).
+    ///
+    /// Когда файлов нет, проверяется только доступность домена — и об этом сказано
+    /// в подробности шага, чтобы успех не выглядел полнее, чем он есть.
+    async fn check_domain(domain: &str, sample: Option<&str>) -> TestStep {
         let client = match reqwest::Client::builder().timeout(STEP_TIMEOUT).build() {
             Ok(c) => c,
             Err(e) => return step(3, StepStatus::Failed, Some(e.to_string())),
         };
 
-        match client.get(&url).send().await {
+        let (url, checking_file) = match sample {
+            // Имя файла проходит то же кодирование, что и зрительские ссылки:
+            // иначе пробел или кириллица в имени сломают проверку там, где
+            // сама раздача работает.
+            Some(name) => (
+                crate::domain::links::for_path(domain, None, name).origin,
+                true,
+            ),
+            None => (
+                format!("https://{domain}/{}/", crate::domain::links::VIDEOS_PREFIX),
+                false,
+            ),
+        };
+
+        // Просим один байт: этого хватает, чтобы убедиться в отдаче, и не тянет
+        // с сервера гигабайты ради проверки.
+        let request = if checking_file {
+            client.get(&url).header("Range", "bytes=0-0")
+        } else {
+            client.get(&url)
+        };
+
+        match request.send().await {
             Ok(response) => {
-                // Ответ веб-сервера — уже успех: каталог может быть закрыт для
-                // перечисления, и это правильная его настройка, а не поломка.
                 let code = response.status().as_u16();
-                step(
-                    3,
-                    StepStatus::Ok,
-                    Some(format!("{domain} отвечает по HTTPS (код {code})")),
-                )
+                if !checking_file {
+                    // Ответ веб-сервера — успех, но неполный: каталог может быть
+                    // закрыт для перечисления, и это правильная настройка.
+                    return step(
+                        3,
+                        StepStatus::Ok,
+                        Some(format!(
+                            "{domain} отвечает по HTTPS (код {code}); файлов в каталоге нет, \
+                             саму отдачу проверить пока нечем"
+                        )),
+                    );
+                }
+                if !response.status().is_success() {
+                    return step(
+                        3,
+                        StepStatus::Failed,
+                        Some(format!(
+                            "домен отвечает, но файл не отдаётся: на {url} пришёл код {code}. \
+                             Файл на сервере есть — значит, дело в настройках раздачи"
+                        )),
+                    );
+                }
+                match response.bytes().await {
+                    Ok(body) if !body.is_empty() => step(
+                        3,
+                        StepStatus::Ok,
+                        Some(format!("раздача отдаёт файлы: проверено на {url}")),
+                    ),
+                    Ok(_) => step(
+                        3,
+                        StepStatus::Failed,
+                        Some(format!("на {url} пришёл код {code}, но тело ответа пустое")),
+                    ),
+                    Err(e) => step(
+                        3,
+                        StepStatus::Failed,
+                        Some(crate::store::redact::safe_display(&e)),
+                    ),
+                }
             }
             Err(e) => {
                 let detail = if e.is_timeout() {

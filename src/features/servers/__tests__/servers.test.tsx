@@ -54,7 +54,7 @@ function makeProfile(over: Partial<ServerProfile> = {}): ServerProfile {
     secret_ref: "server/srv_1",
     key_path: "/home/u/.ssh/id_ed25519",
     domain: "stream.example.com",
-    video_dir: "/var/lib/vrcast/videos",
+    video_dir: "/srv/раздача/видео",
     cdn_base: null,
     host_fingerprint: "SHA256:тестовыйОтпечаток",
     ipv6_mode: null,
