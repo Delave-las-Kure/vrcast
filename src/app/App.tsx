@@ -11,6 +11,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { LibraryScreen } from "../features/library/LibraryScreen";
 import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
+import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { ComingSoon } from "../features/shared/ComingSoon";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { UploadScreen } from "../features/upload/UploadScreen";
@@ -38,17 +39,7 @@ function AppShell() {
           <Route path="/tasks" element={<TasksPanel />} />
           <Route path="/servers" element={<ServerList />} />
           <Route path="/library" element={<LibraryScreen />} />
-          <Route
-            path="/convert"
-            element={
-              <ComingSoon
-                title="Подготовка"
-                phase="Фаза 3"
-                what="Разбор исходника, выбор звуковой дорожки, перенос совместимого без пересжатия и обязательная проверка воспроизведения."
-                fallback="скилл vrcast-convert"
-              />
-            }
-          />
+          <Route path="/convert" element={<ConvertScreen />} />
           <Route path="/upload" element={<UploadScreen />} />
           <Route path="/about" element={<About />} />
           <Route

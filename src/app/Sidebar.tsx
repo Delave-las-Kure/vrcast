@@ -5,7 +5,7 @@ import { useTheme, type ThemeChoice } from "./theme";
 export const SECTIONS = [
   { path: "/servers", label: "Серверы", ready: true },
   { path: "/library", label: "Библиотека", ready: true },
-  { path: "/convert", label: "Подготовка", ready: false },
+  { path: "/convert", label: "Подготовка", ready: true },
   { path: "/upload", label: "Заливка", ready: true },
   { path: "/ladder", label: "Качества", ready: false },
   { path: "/viewers", label: "Зрители", ready: false },

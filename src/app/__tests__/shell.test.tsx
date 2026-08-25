@@ -121,11 +121,14 @@ describe("оболочка", () => {
 describe("незаконченные разделы", () => {
   it("называют фазу и чем пользоваться до неё", async () => {
     // Пустой экран без объяснения выглядит поломкой, а «скоро будет» ничего не сообщает.
-    window.location.hash = "#/convert";
+    // Взят раздел САМОЙ ДАЛЬНЕЙ фазы. Проверка уже дважды падала оттого, что
+    // раздел, на который она смотрела, доделали, — а падать она должна от поломки,
+    // а не от успеха.
+    window.location.hash = "#/diagnostics";
     render(<App />);
 
-    expect(await screen.findByText("Фаза 3")).toBeInTheDocument();
-    expect(await screen.findByText(/vrcast-convert/)).toBeInTheDocument();
+    expect(await screen.findByText("Фаза 8")).toBeInTheDocument();
+    expect(await screen.findByText(/vrcast-diagnose/)).toBeInTheDocument();
   });
 });
 
