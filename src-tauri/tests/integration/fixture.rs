@@ -24,80 +24,21 @@ use std::time::{Duration, Instant};
 /// Та же метка стоит в шаге уборки в .github/workflows/build.yml.
 pub const IMAGE: &str = "vrcast-test-sshd:2";
 
-/// Парольная фраза ключа. Не секрет: ключ создаётся здесь же, живёт только на этой
+/// Парольная фраза ключа. Не секрет: ключ создаётся на месте, живёт только на этой
 /// машине и не даёт доступа никуда, кроме одноразового контейнера.
-pub const KEY_PASSPHRASE: &str = "тестовая-фраза-1234";
+pub const KEY_PASSPHRASE: &str = super::test_key::PASSPHRASE;
 
 /// Пароль внутри контейнера — для проверки второго способа входа.
 pub const ROOT_PASSWORD: &str = "тестовый-пароль-контейнера";
 
 fn fixtures_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    super::test_key::fixtures_dir()
 }
 
 /// Приватный ключ для входа в контейнер. Создаётся при первом запуске тестов
-/// и в репозиторий не попадает (см. [`ensure_key`]).
+/// и в репозиторий не попадает — см. `tests/support/test_key.rs`.
 pub fn key_path() -> std::path::PathBuf {
-    fixtures_dir().join("encrypted_ed25519.key")
-}
-
-/// Открытая часть ключа — внутри каталога сборки образа, чтобы попасть в контейнер.
-fn public_key_path() -> std::path::PathBuf {
-    fixtures_dir().join("docker/encrypted_ed25519.key.pub")
-}
-
-/// Создать ключ для входа в контейнер, если его ещё нет.
-///
-/// Ключ **не хранится в репозитории** намеренно. Дело не в том, что он ценен —
-/// он не даёт доступа никуда, кроме одноразового контейнера на этой же машине.
-/// Дело в том, что приложение раздаётся людям под открытой лицензией: файл с
-/// заголовком «BEGIN OPENSSH PRIVATE KEY» в общедоступном репозитории поднимает
-/// тревогу у поисковиков секретов и справедливо настораживает всякого, кто склонирует.
-/// Сгенерировать его на месте стоит доли секунды и снимает вопрос целиком.
-fn ensure_key() -> Result<(), String> {
-    if key_path().exists() && public_key_path().exists() {
-        return Ok(());
-    }
-
-    // Убираем половинчатое состояние: если остался только один из двух файлов,
-    // ssh-keygen откажется перезаписывать и тесты встанут с невнятной ошибкой.
-    let _ = std::fs::remove_file(key_path());
-    let _ = std::fs::remove_file(fixtures_dir().join("encrypted_ed25519.key.pub"));
-    let _ = std::fs::remove_file(public_key_path());
-
-    let out = Command::new("ssh-keygen")
-        .args([
-            "-t",
-            "ed25519",
-            "-q",
-            "-N",
-            KEY_PASSPHRASE,
-            "-C",
-            "vrcast-studio: одноразовый ключ для тестов",
-            "-f",
-        ])
-        .arg(key_path())
-        .output()
-        .map_err(|e| {
-            format!(
-                "не запустить ssh-keygen: {e}. Он нужен, чтобы создать ключ для тестового \
-                 контейнера; на Windows входит в состав OpenSSH, на Linux — в openssh-client."
-            )
-        })?;
-
-    if !out.status.success() {
-        return Err(format!(
-            "ключ для тестов не создался:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-
-    // Открытую часть кладём в каталог сборки образа: оттуда её забирает Dockerfile.
-    let generated_pub = fixtures_dir().join("encrypted_ed25519.key.pub");
-    std::fs::copy(&generated_pub, public_key_path())
-        .map_err(|e| format!("открытую часть ключа не положить в каталог сборки: {e}"))?;
-
-    Ok(())
+    super::test_key::key_path()
 }
 
 fn docker(args: &[&str]) -> std::io::Result<std::process::Output> {
@@ -162,7 +103,7 @@ impl TestServer {
                 "Docker не запущен. Откройте Docker Desktop и повторите: интеграционные тесты поднимают одноразовый сервер в контейнере.",
             ));
         }
-        ensure_key()?;
+        super::test_key::ensure()?;
         ensure_image()?;
 
         // Порт выбирает система: тесты могут идти одновременно с чем угодно,

@@ -14,4 +14,8 @@ pub mod links;
 pub mod manifest;
 pub mod media;
 pub mod moov;
+pub mod progress_estimate;
+pub mod rate_limit;
+pub mod remote_name;
 pub mod server_profile;
+pub mod transfer;

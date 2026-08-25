@@ -14,6 +14,11 @@
 
 #![cfg(feature = "integration")]
 
+/// Общая оснастка: ключ для тестов создаётся на месте и нужен и здесь,
+/// и модульным тестам.
+#[path = "support/test_key.rs"]
+mod test_key;
+
 #[path = "integration/fixture.rs"]
 mod fixture;
 

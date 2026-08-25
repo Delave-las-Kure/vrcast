@@ -61,7 +61,11 @@ impl ManagedProcess {
 
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
+            // Типаж `std::os::unix::process::CommandExt` здесь НЕ нужен: `pre_exec`
+            // у `tokio::process::Command` собственный. Лишний импорт компилируется
+            // только под Unix — под Windows этот кусок не собирается вовсе, — и
+            // поймал его лишь прогон в непрерывной интеграции под Linux.
+            //
             // Идентификатор родителя запоминаем ДО порождения: он понадобится потомку,
             // чтобы закрыть щель, описанную ниже.
             let parent_pid = std::process::id();

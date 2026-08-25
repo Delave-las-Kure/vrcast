@@ -181,7 +181,7 @@ fn has_unclosed_key_block(text: &str) -> bool {
     };
     let tail = &text[start..];
     match tail.find(KEY_END) {
-        Some(e) => tail[e + KEY_END.len()..].find("-----").is_none(),
+        Some(e) => !tail[e + KEY_END.len()..].contains("-----"),
         None => true,
     }
 }

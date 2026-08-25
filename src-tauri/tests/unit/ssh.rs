@@ -9,13 +9,14 @@ use std::path::{Path, PathBuf};
 use vrcast_studio_lib::ssh::{auth, fingerprint, Credentials, ServerAddress, SshError};
 use vrcast_studio_lib::store::db::Db;
 
-fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
+/// Ключ создаётся на месте и в репозиторий не попадает — см. `tests/support/test_key.rs`.
+/// Раньше эти тесты брали готовый файл, и на машине разработчика он был от прошлых
+/// прогонов; в непрерывной интеграции его не оказалось, и тесты упали.
+fn fixture(_name: &str) -> PathBuf {
+    super::test_key::ensure().expect("ключ для тестов не создался")
 }
 
-const FIXTURE_PASSPHRASE: &str = "тестовая-фраза-1234";
+const FIXTURE_PASSPHRASE: &str = super::test_key::PASSPHRASE;
 
 #[test]
 fn ключ_с_парольной_фразой_читается_когда_фраза_дана() {

@@ -3,6 +3,11 @@
 //! Файлы лежат в `tests/unit/`, а не рядом с этим файлом: путь указан явно, потому что
 //! корень тестовой цели ищет модули в своём каталоге, а не в одноимённой папке.
 
+/// Общая оснастка: ключ для тестов создаётся на месте и нужен и здесь,
+/// и интеграционным тестам.
+#[path = "support/test_key.rs"]
+mod test_key;
+
 #[path = "unit/db.rs"]
 mod db;
 
@@ -29,6 +34,9 @@ mod reconcile;
 
 #[path = "unit/redact.rs"]
 mod redact;
+
+#[path = "unit/transfer.rs"]
+mod transfer;
 
 #[path = "unit/ssh.rs"]
 mod ssh;
