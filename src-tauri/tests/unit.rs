@@ -57,3 +57,6 @@ mod ffmpeg;
 
 #[path = "unit/probe.rs"]
 mod probe;
+
+#[path = "unit/encoders.rs"]
+mod encoders;
