@@ -46,6 +46,45 @@ fn переходы_состояний_подчиняются_таблице() {
 
     // Переход в себя разрешён: повторная отмена не ошибка (принцип V).
     assert!(Cancelled.can_transition_to(Cancelled));
+
+    // Из приостановленной можно и завершиться. Приостановка вступает в силу
+    // на ближайшей точке остановки, и работа успевает дойти до конца, пока задача
+    // уже помечена приостановленной: передача дописывает последнее окно.
+    // Раньше таблица это запрещала, а движок делал всё равно — и расхождение
+    // молчало (задолженность T072).
+    assert!(Paused.can_transition_to(Completed));
+    assert!(Paused.can_transition_to(Failed));
+}
+
+#[tokio::test]
+async fn задача_завершившаяся_на_паузе_записывается_завершённой() {
+    // Проверяется не таблица, а движок: он и раньше писал сюда «завершена»,
+    // но таблица это запрещала, и никто не знал, кто из них прав.
+    let e = engine();
+    let дошла = Arc::new(AtomicUsize::new(0));
+    let d = дошла.clone();
+
+    let id = e
+        .submit(TaskKind::Upload, None, move |ctx| async move {
+            // Работа успевает закончиться, хотя приостановку уже попросили:
+            // сама точка остановки — впереди, и до неё дело не дойдёт.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            d.fetch_add(1, Ordering::SeqCst);
+            let _ = ctx;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    assert!(wait_for_state(&e, &id, TaskState::Running, Duration::from_secs(3)).await);
+    e.pause(&id).expect("задача не приостановилась");
+
+    assert!(
+        wait_for_state(&e, &id, TaskState::Completed, Duration::from_secs(5)).await,
+        "работа дошла до конца, но записана не завершённой: {:?}",
+        e.get(&id).unwrap().unwrap().state
+    );
+    assert_eq!(дошла.load(Ordering::SeqCst), 1);
 }
 
 #[test]
