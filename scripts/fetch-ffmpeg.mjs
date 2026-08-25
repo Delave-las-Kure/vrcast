@@ -18,9 +18,15 @@
  * того, что уже стоит в системе.
  *
  * Запуск:
- *   node scripts/fetch-ffmpeg.mjs          — скачать, если ещё нет
- *   node scripts/fetch-ffmpeg.mjs --force  — скачать заново
- *   node scripts/fetch-ffmpeg.mjs --check  — только проверить, что на месте
+ *   node scripts/fetch-ffmpeg.mjs                    — скачать под эту систему
+ *   node scripts/fetch-ffmpeg.mjs --for linux-x64    — скачать под другую
+ *   node scripts/fetch-ffmpeg.mjs --force            — скачать заново
+ *   node scripts/fetch-ffmpeg.mjs --check            — только проверить, что на месте
+ *
+ * `--for` нужен не для удобства. Проверка сборки под Linux с машины разработчика
+ * идёт в контейнере, где Node нет, а сборщик Tauri отказывается собирать без
+ * вложенных программ. Без возможности положить чужие заранее эта проверка
+ * перестала бы работать вовсе — и перестала бы ловить то, ради чего заведена.
  */
 
 import { execFileSync } from "node:child_process";
@@ -47,32 +53,51 @@ const OUT_DIR = join(APP, "src-tauri", "binaries");
 const FORCE = process.argv.includes("--force");
 const CHECK = process.argv.includes("--check");
 
+/** Под какую систему класть. По умолчанию — под эту. */
+const FOR = (() => {
+  const i = process.argv.indexOf("--for");
+  return i >= 0 ? process.argv[i + 1] : `${process.platform}-${process.arch}`;
+})();
+
+/** Тройки платформ по ключам описания: сборщик ищет программы именно по ним. */
+const TRIPLES = {
+  "win32-x64": "x86_64-pc-windows-msvc",
+  "linux-x64": "x86_64-unknown-linux-gnu",
+};
+
 /** Программы, которые нам нужны. Проигрыватель из архива не берём — он лишние сто мегабайт. */
 const WANTED = ["ffmpeg", "ffprobe"];
 
 /**
  * Тройка целевой платформы: Tauri ищет вложенные программы именно по такому имени.
  *
- * Берётся у самого компилятора, а не собирается из догадок: имя обязано совпасть
- * с тем, что подставит сборщик, иначе программа просто не попадёт в установщик —
- * молча, без единой жалобы.
+ * Для СВОЕЙ системы спрашивается у самого компилятора: имя обязано совпасть с тем,
+ * что подставит сборщик, иначе программа просто не попадёт в установщик — молча,
+ * без единой жалобы. Для чужой берётся из таблицы: `rustc` о ней не спросишь,
+ * а класть под неё всё равно надо.
  */
-function targetTriple() {
-  const out = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
-  const line = out.split("\n").find((l) => l.startsWith("host:"));
-  if (!line) throw new Error("rustc не сказал, под какую платформу собирает");
-  return line.slice("host:".length).trim();
+function targetTriple(key) {
+  const own = `${process.platform}-${process.arch}`;
+  if (key !== own) return TRIPLES[key];
+
+  try {
+    const out = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
+    const line = out.split("\n").find((l) => l.startsWith("host:"));
+    if (line) return line.slice("host:".length).trim();
+  } catch {
+    /* компилятора рядом нет — обойдёмся таблицей */
+  }
+  return TRIPLES[key];
 }
 
 function platformKey() {
-  const key = `${process.platform}-${process.arch}`;
-  if (!MANIFEST.platforms[key]) {
+  if (!MANIFEST.platforms[FOR] || !TRIPLES[FOR]) {
     throw new Error(
-      `для ${key} сборка FFmpeg не закреплена. Поддерживаются: ${Object.keys(MANIFEST.platforms).join(", ")}. ` +
+      `для ${FOR} сборка FFmpeg не закреплена. Поддерживаются: ${Object.keys(MANIFEST.platforms).join(", ")}. ` +
         "Целевые системы — Windows и Linux (macOS отложена решением владельца).",
     );
   }
-  return key;
+  return FOR;
 }
 
 function outputPath(name, triple, suffix) {
@@ -100,6 +125,38 @@ async function download(url, to) {
   const data = Buffer.concat(chunks);
   writeFileSync(to, data);
   return createHash("sha256").update(data).digest("hex");
+}
+
+/**
+ * Распаковать архив.
+ *
+ * Просто `tar` не годится, и это не придирка. Под именем `tar` в системе может
+ * оказаться разное: в оболочке Git это GNU tar, который **не читает zip вовсе**
+ * и требует отдельной программы для сжатия xz, а в самой Windows — bsdtar,
+ * который читает оба наших вида. Какая из них попадётся, зависит от того, из какой
+ * оболочки запущено, — то есть от случая.
+ *
+ * Поэтому перебираем по очереди и берём ту, что справилась. Windows-овская идёт
+ * первой по полному пути: искать её по имени бессмысленно, ровно из-за этой путаницы.
+ */
+function extract(archive, into) {
+  const candidates =
+    process.platform === "win32"
+      ? [`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`, "tar"]
+      : ["tar"];
+
+  const problems = [];
+  for (const tar of candidates) {
+    try {
+      execFileSync(tar, ["-xf", archive, "-C", into], { stdio: "pipe" });
+      return;
+    } catch (e) {
+      problems.push(`${tar}: ${(e.stderr?.toString() || e.message).trim()}`);
+    }
+  }
+  throw new Error(
+    `архив не распаковать ни одной из доступных программ.\n  ${problems.join("\n  ")}`,
+  );
 }
 
 /** Найти в распакованном дереве файл с нужным именем. */
@@ -133,7 +190,7 @@ function report(triple, suffix) {
 async function main() {
   const key = platformKey();
   const entry = MANIFEST.platforms[key];
-  const triple = targetTriple();
+  const triple = targetTriple(key);
 
   if (CHECK) {
     console.log(`FFmpeg ${MANIFEST.version} для ${triple}:`);
@@ -168,7 +225,7 @@ async function main() {
     }
     console.log("  слепок сошёлся");
 
-    execFileSync("tar", ["-xf", archive, "-C", work], { stdio: "inherit" });
+    extract(archive, work);
 
     mkdirSync(OUT_DIR, { recursive: true });
     for (const name of WANTED) {

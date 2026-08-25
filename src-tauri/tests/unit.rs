@@ -54,3 +54,6 @@ mod convert_plan;
 
 #[path = "unit/ffmpeg.rs"]
 mod ffmpeg;
+
+#[path = "unit/probe.rs"]
+mod probe;

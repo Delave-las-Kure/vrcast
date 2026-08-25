@@ -330,3 +330,33 @@ export interface FfmpegInfo {
    */
   hardware: string[];
 }
+
+/** Звуковая дорожка исходника (FR-020, FR-021). */
+export interface AudioTrack {
+  /** Номер среди звуковых дорожек, с нуля. Именно его понимает ffmpeg. */
+  index: number;
+  codec: string;
+  channels: number;
+  bitrate_bps: number | null;
+  /** Язык. Часто отсутствует — это обычное дело, а не поломка. */
+  language: string | null;
+  title: string | null;
+  is_default: boolean;
+}
+
+/** Разобранный исходник (data-model §6). */
+export interface SourceFile {
+  path: string;
+  size_bytes: number;
+  duration_s: number;
+  width: number;
+  height: number;
+  /** Кадров в секунду, округлённых вверх: 47.952 — это 48-кадровый материал. */
+  fps: number;
+  bitrate_bps: number;
+  peak_bps: number | null;
+  video_codec: string;
+  pix_fmt: string;
+  color_transfer: string | null;
+  audio_tracks: AudioTrack[];
+}

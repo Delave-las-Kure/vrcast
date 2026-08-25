@@ -59,6 +59,24 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # FFmpeg нужен уже на СБОРКЕ, а не только при упаковке: сборщик Tauri проверяет
+      # наличие вложенных программ и отказывается собирать без них. Поэтому шаг стоит
+      # во всех заданиях, где вообще собирается ядро, — иначе падает даже `cargo test`.
+      #
+      # Кладётся в тайник по слепку из scripts/ffmpeg.json: двести восемьдесят мегабайт
+      # качаются один раз на версию, дальше берутся готовыми. Заодно это единственное
+      # место, где сам сценарий получения проверяется под обе целевые системы.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Тайник вложенного FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
+      - name: Положить вложенный FFmpeg
+        run: node scripts/fetch-ffmpeg.mjs
+
       - name: Формат
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
@@ -81,6 +99,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      # FFmpeg нужен уже на СБОРКЕ, а не только при упаковке: сборщик Tauri проверяет
+      # наличие вложенных программ и отказывается собирать без них. Поэтому шаг стоит
+      # во всех заданиях, где вообще собирается ядро, — иначе падает даже `cargo test`.
+      #
+      # Кладётся в тайник по слепку из scripts/ffmpeg.json: двести восемьдесят мегабайт
+      # качаются один раз на версию, дальше берутся готовыми. Заодно это единственное
+      # место, где сам сценарий получения проверяется под обе целевые системы.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Тайник вложенного FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
+      - name: Положить вложенный FFmpeg
+        run: node scripts/fetch-ffmpeg.mjs
+
       # Однопоточность обязательна: каждый тест поднимает свой контейнер, и десяток
       # одновременно только замедляет дело.
       - name: Тесты против настоящего OpenSSH

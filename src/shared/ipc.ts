@@ -26,6 +26,7 @@ import {
   type TaskOnClose,
   type TaskProgressEvent,
   type FfmpegInfo,
+  type SourceFile,
   type TestStep,
   type UploadRequest,
   type Versions,
@@ -124,6 +125,8 @@ export const ipc = {
    * узнать в середине двухчасовой подготовки — значит отнять эти два часа.
    */
   ffmpegProbeSelf: () => call<FfmpegInfo>("ffmpeg_probe_self"),
+  /** Разобрать исходник. Быстрая операция, а не задача (FR-020). */
+  sourceProbe: (path: string) => call<SourceFile>("source_probe", { path }),
 };
 
 // ---------- события ----------

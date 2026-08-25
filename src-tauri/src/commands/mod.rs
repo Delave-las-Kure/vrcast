@@ -252,6 +252,33 @@ pub mod api {
         Ok(info)
     }
 
+    /// Разобрать исходник: что за файл нам дали (FR-020).
+    ///
+    /// Быстрая операция, а не задача: разбор занимает доли секунды и человек ждёт
+    /// ответа прямо сейчас. Заводить ради него запись в очереди значило бы засорить
+    /// список задач тем, что кончается раньше, чем успевает в нём появиться.
+    pub async fn source_probe(path: &str) -> Result<crate::domain::source::SourceFile> {
+        use crate::media::probe::ProbeError;
+
+        crate::media::probe::probe(std::path::Path::new(path))
+            .await
+            .map_err(|e| match e {
+                ProbeError::Ffmpeg(_) => AppError::new(ErrorCode::FfmpegBroken)
+                    .with_message(
+                        "Вложенный FFmpeg не работает — разбирать файлы нечем.                          Переустановите приложение: возможно, антивирус удалил часть файлов.",
+                    )
+                    .with_cause(e.to_string()),
+                ProbeError::NoVideo => AppError::new(ErrorCode::InvalidInput)
+                    .with_message("В этом файле нет видео — возможно, выбран не тот файл.")
+                    .with_cause(path),
+                ProbeError::Unreadable(_) => AppError::new(ErrorCode::InvalidInput)
+                    .with_message("Файл не удалось разобрать: он повреждён или это не видео.")
+                    // Жалоба разборщика оставлена как есть: «moov atom not found»
+                    // непонятно, но её можно найти поиском, а «файл плохой» — нельзя.
+                    .with_cause(e.to_string()),
+            })
+    }
+
     /// Узнать отпечаток сервера, ничего ему не предъявляя (FR-092).
     pub async fn server_probe_fingerprint(host: &str, port: u16) -> Result<String> {
         let addr = crate::ssh::ServerAddress::new(host, port);
@@ -314,6 +341,11 @@ pub mod ipc {
     #[tauri::command]
     pub async fn ffmpeg_probe_self() -> Result<crate::media::ffmpeg::FfmpegInfo> {
         api::ffmpeg_probe_self().await
+    }
+
+    #[tauri::command]
+    pub async fn source_probe(path: String) -> Result<crate::domain::source::SourceFile> {
+        api::source_probe(&path).await
     }
 
     #[tauri::command]
