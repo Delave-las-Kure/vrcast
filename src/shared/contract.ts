@@ -63,6 +63,9 @@ export type ErrorCode =
   | "TASK_NOT_FOUND"
   | "TASK_BAD_TRANSITION"
   | "TASK_NOT_PAUSABLE"
+  // ввод и подтверждение
+  | "INVALID_INPUT"
+  | "CONFIRMATION_REQUIRED"
   // прочее
   | "STORAGE_FAILED"
   | "INTERNAL";

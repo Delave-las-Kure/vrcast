@@ -11,7 +11,7 @@
 pub const VIDEOS_PREFIX: &str = "videos";
 
 /// Готовые ссылки на один файл.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Links {
     /// Ссылка через сам сервер. Есть всегда.
     pub origin: String,

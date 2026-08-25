@@ -9,6 +9,7 @@ use tauri::Manager;
 pub mod commands;
 pub mod domain;
 pub mod logging;
+pub mod server;
 pub mod ssh;
 pub mod store;
 pub mod tasks;

@@ -17,6 +17,12 @@
 #[path = "integration/fixture.rs"]
 mod fixture;
 
+#[path = "integration/library_completeness.rs"]
+mod library_completeness;
+
+#[path = "integration/manifest_conflict.rs"]
+mod manifest_conflict;
+
 #[path = "integration/process_tree.rs"]
 mod process_tree;
 

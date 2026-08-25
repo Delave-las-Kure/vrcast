@@ -102,6 +102,10 @@ error_codes! {
     TaskBadTransition => "TASK_BAD_TRANSITION",
     TaskNotPausable => "TASK_NOT_PAUSABLE",
 
+    // --- ввод и подтверждение ---
+    InvalidInput => "INVALID_INPUT",
+    ConfirmationRequired => "CONFIRMATION_REQUIRED",
+
     // --- прочее ---
     StorageFailed => "STORAGE_FAILED",
     Internal => "INTERNAL",
@@ -151,6 +155,8 @@ impl ErrorCode {
             Self::TaskNotFound => "Задача не найдена",
             Self::TaskBadTransition => "Задача сейчас в состоянии, из которого это невозможно",
             Self::TaskNotPausable => "Задачу этого вида нельзя приостановить",
+            Self::InvalidInput => "Введённые данные не подходят",
+            Self::ConfirmationRequired => "Нужно подтверждение",
             Self::StorageFailed => "Не удалось обратиться к локальному хранилищу",
             Self::Internal => "Внутренняя ошибка приложения",
         }
@@ -269,6 +275,12 @@ impl ErrorCode {
             Self::TaskBadTransition => "Обновите список задач: их состояние изменилось.",
             Self::TaskNotPausable => {
                 "Короткие задачи не приостанавливают — их проще отменить и выполнить заново."
+            }
+            Self::InvalidInput => {
+                "Исправьте отмеченные поля и повторите. Что именно не так — сказано в сообщении."
+            }
+            Self::ConfirmationRequired => {
+                "Прочитайте, что именно произойдёт, и подтвердите. Отменить это будет нельзя."
             }
             Self::StorageFailed => {
                 "Проверьте, что на диске есть место и у приложения есть права на свой каталог данных."
