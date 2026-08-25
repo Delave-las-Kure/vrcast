@@ -157,6 +157,27 @@ pub mod api {
             })
             .await?;
 
+        // Позиция возобновления записывается **сразу после постановки**, а не когда
+        // задача дойдёт до работы. Разница видна только при перезапуске приложения:
+        // заливка, простоявшая в очереди и ни разу не начавшаяся, без этой записи
+        // не содержит ничего — ни пути к исходнику, ни имени, — и поднять её при
+        // следующем запуске нечем. Она осталась бы в списке навсегда, не двигаясь.
+        //
+        // Задача может успеть записать свою позицию раньше нас: содержимое выйдет
+        // то же самое, потому что берётся из того же запроса и того же файла.
+        if let Some(staging) = remote_name::staging_dir(&profile.video_dir) {
+            let token = ResumeToken {
+                remote_temp: remote_name::staging_file(&staging, &clean_name),
+                remote_name: clean_name.clone(),
+                local_path: Some(request.local_path.clone()),
+                media_id: request.media_id.clone(),
+                limit_bps: request.limit_bps,
+                source_size: total,
+                source_modified: modified_at(&meta),
+            };
+            let _ = crate::tasks::store::save_resume_token(&state.db, &task_id, &token.to_json());
+        }
+
         Ok(task_id)
     }
 
@@ -338,12 +359,19 @@ pub mod api {
         let meta = tokio::fs::metadata(path)
             .await
             .map_err(|e| format!("исходный файл недоступен: {e}"))?;
-        let modified = meta
-            .modified()
+        Ok((meta.len(), modified_at(&meta)))
+    }
+
+    /// Время изменения файла меткой для сравнения.
+    ///
+    /// Не датой для показа: разбирать и печатать её здесь незачем, а сравнивать
+    /// две такие метки можно как есть. Отсутствие времени — законный случай:
+    /// не всякая файловая система его хранит.
+    pub(super) fn modified_at(meta: &std::fs::Metadata) -> Option<String> {
+        meta.modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs().to_string());
-        Ok((meta.len(), modified))
+            .map(|d| d.as_secs().to_string())
     }
 
     /// Сама передача: попытки с переподключением, сверка, ввод в раздачу.
@@ -400,16 +428,18 @@ pub mod api {
 
         // Позиция возобновления записывается сразу: если приложение убьют до первого
         // окна, следующий запуск обязан знать, куда смотреть.
-        let token = ResumeToken {
-            remote_temp: plan.remote_temp.clone(),
-            remote_name: clean_name.clone(),
-            local_path: Some(request.local_path.clone()),
-            media_id: request.media_id.clone(),
-            limit_bps: request.limit_bps,
-            source_size: size_now,
-            source_modified: modified_now,
-        };
-        let _ = ctx.save_resume_token(&token.to_json());
+        if previous.is_none() {
+            let token = ResumeToken {
+                remote_temp: plan.remote_temp.clone(),
+                remote_name: clean_name.clone(),
+                local_path: Some(request.local_path.clone()),
+                media_id: request.media_id.clone(),
+                limit_bps: request.limit_bps,
+                source_size: size_now,
+                source_modified: modified_now,
+            };
+            let _ = ctx.save_resume_token(&token.to_json());
+        }
 
         let mut estimate = ProgressEstimate::default();
         let mut delay = FIRST_RETRY_DELAY;

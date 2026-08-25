@@ -628,6 +628,56 @@ fn единственная_задача(
 }
 
 #[tokio::test]
+async fn заливка_из_очереди_переживает_перезапуск_не_начавшись() {
+    // Задача, простоявшая в очереди и ни разу не начавшаяся, ничего о себе
+    // не записывает: путь к исходнику и имя в раздаче живут только в памяти
+    // приложения. После перезапуска поднять её было бы нечем, и она осталась бы
+    // в списке навсегда, не двигаясь и не поддаваясь. Поэтому позиция
+    // возобновления пишется сразу при постановке, а не когда дойдёт до работы.
+    let (server, state, id) = setup().await;
+    let первый = make_local_file("film_22.mp4", RESTART_FILE_SIZE);
+    let второй = make_local_file("film_23.mp4", FILE_SIZE);
+
+    // Первый занимает полосу передачи — она рассчитана на одну задачу.
+    let mut req = request(&id, &первый, "film_22.mp4");
+    req.limit_bps = Some(RESTART_LIMIT_BPS);
+    let идёт = upload::upload_start(&state, req)
+        .await
+        .expect("первая заливка не поставилась");
+
+    let ждёт = upload::upload_start(&state, request(&id, &второй, "film_23.mp4"))
+        .await
+        .expect("вторая заливка не поставилась");
+
+    assert_eq!(
+        state.tasks.get(&ждёт).unwrap().unwrap().state,
+        TaskState::Queued,
+        "вторая заливка не встала в очередь — проверять нечего"
+    );
+
+    let token = state
+        .tasks
+        .get(&ждёт)
+        .unwrap()
+        .unwrap()
+        .resume_token
+        .expect("у ждущей заливки нет позиции возобновления — после перезапуска её не поднять");
+    let token = vrcast_studio_lib::domain::transfer::ResumeToken::parse(&token)
+        .expect("позиция возобновления не читается");
+
+    assert_eq!(
+        token.local_path.as_deref(),
+        Some(второй.to_string_lossy().as_ref()),
+        "в позиции возобновления не тот исходник"
+    );
+    assert_eq!(token.remote_name, "film_23.mp4");
+
+    let _ = state.tasks.cancel(&ждёт);
+    let _ = state.tasks.cancel(&идёт);
+    let _ = server;
+}
+
+#[tokio::test]
 async fn заливка_переживает_закрытие_и_запуск_приложения_заново() {
     // FR-031, вторая половина: «включая случай, когда приложение было закрыто
     // и запущено заново». Первая половина — продолжение после обрыва связи —

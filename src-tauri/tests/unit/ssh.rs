@@ -26,7 +26,7 @@ fn ключ_создаётся_даже_когда_за_ним_приходят_
     // ни слова. Прогон на Windows поймал это 2026-08-25 — но лишь по везению,
     // и потому гонка проверяется отдельно, а не оставляется на удачу.
     let потоки: Vec<_> = (0..8)
-        .map(|_| std::thread::spawn(|| super::test_key::ensure()))
+        .map(|_| std::thread::spawn(super::test_key::ensure))
         .collect();
 
     for (i, п) in потоки.into_iter().enumerate() {

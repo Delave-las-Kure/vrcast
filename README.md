@@ -52,6 +52,19 @@ npm run tauri build    # установщик под текущую ОС
 
 ## Проверки
 
+Перед отправкой — одной командой всё, что проверяет непрерывная интеграция:
+
+```bash
+npm run check:all          # формат, clippy, тесты, лицензии, стражи
+npm run check:all -- --full  # плюс сборка под Linux и одноразовый сервер
+```
+
+Она существует не для удобства: проверки разбросаны по четырём командам и двум
+языкам, и обойти их все по памяти получается не всегда. Каждый пропущенный круг
+стоит десяти минут ожидания CI и лишнего коммита в истории.
+
+По отдельности:
+
 ```bash
 npm run typecheck && npm run lint && npm run test   # интерфейс
 cargo test --manifest-path src-tauri/Cargo.toml     # ядро
@@ -79,6 +92,10 @@ bash scripts/check-isolation.sh check
 
 # Лицензии зависимостей совместимы с GPL, известные уязвимости разобраны поимённо.
 cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
+
+# Перечень чужих работ (THIRD-PARTY.md) отвечает дереву зависимостей.
+# Собрать заново: npm run third-party
+npm run check:third-party
 ```
 
 Есть ещё две проверки, требующие настоящего сервера, — они не входят в обычный

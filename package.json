@@ -22,7 +22,8 @@
     "check:isolation": "bash scripts/check-isolation.sh",
     "check:no-hardcoded": "bash scripts/check-no-hardcoded-server.sh",
     "third-party": "node scripts/gen-third-party.mjs",
-    "check:third-party": "node scripts/gen-third-party.mjs --check"
+    "check:third-party": "node scripts/gen-third-party.mjs --check",
+    "check:all": "bash scripts/check-all.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
