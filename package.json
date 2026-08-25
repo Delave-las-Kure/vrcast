@@ -25,7 +25,8 @@
     "check:third-party": "node scripts/gen-third-party.mjs --check",
     "check:all": "bash scripts/check-all.sh",
     "ffmpeg": "node scripts/fetch-ffmpeg.mjs",
-    "check:ffmpeg": "node scripts/fetch-ffmpeg.mjs --check"
+    "check:ffmpeg": "node scripts/fetch-ffmpeg.mjs --check",
+    "check:licenses": "license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow \"MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

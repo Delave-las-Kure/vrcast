@@ -70,6 +70,7 @@ step "Интерфейс: тесты" npm test --silent
 step "Лицензии зависимостей ядра" \
   cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
 step "Перечень сторонних компонентов" npm run --silent check:third-party
+step "Лицензии зависимостей интерфейса" npx --yes license-checker-rseidelsohn   --production --excludePrivatePackages --onlyAllow   "MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0"
 
 if [ "$FULL" = "1" ]; then
   step "Сборка и тесты под Linux" bash scripts/check-linux.sh test

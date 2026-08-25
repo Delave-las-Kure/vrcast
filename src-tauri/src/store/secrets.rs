@@ -110,8 +110,19 @@ impl SecretStore for OsSecretStore {
     }
 
     fn delete(&self, reference: &SecretRef) -> Result<()> {
+        // Значение читается ДО удаления, чтобы снять маскировку именно с него.
+        // Иначе оно осталось бы в списке вырезаемых навсегда — не беда сама
+        // по себе, но список растёт с каждым удалённым профилем, а вырезание
+        // проходит по каждой строке журнала.
+        let было = Self::entry(reference)
+            .ok()
+            .and_then(|e| e.get_password().ok());
+
         match Self::entry(reference)?.delete_credential() {
             Ok(()) => {
+                if let Some(value) = было {
+                    redact::forget(&value);
+                }
                 tracing::debug!(reference = %reference, "секрет удалён из хранилища ОС");
                 Ok(())
             }
@@ -158,10 +169,16 @@ impl SecretStore for InMemorySecretStore {
     }
 
     fn delete(&self, reference: &SecretRef) -> Result<()> {
-        self.items
+        let было = self
+            .items
             .write()
             .map_err(|_| SecretError::Backend("хранилище в памяти повреждено".into()))?
             .remove(reference.as_str());
+        // Снимаем маскировку с ИМЕННО ЭТОГО значения, а не со всех сразу:
+        // у остальных профилей секреты живы (T073).
+        if let Some(value) = было {
+            redact::forget(&value);
+        }
         Ok(())
     }
 }
