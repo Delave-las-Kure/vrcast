@@ -94,6 +94,118 @@ export function isAppError(e: unknown): e is AppError {
   );
 }
 
+// ---------- серверы ----------
+
+export type AuthKind = "key" | "password";
+export type Ipv6Mode = "keep" | "disable";
+
+/**
+ * Профиль сервера в том виде, в каком его отдаёт ядро.
+ *
+ * Поля под сам секрет здесь нет и быть не может: наружу уходит только `secret_ref` —
+ * ссылка на запись в хранилище операционной системы (FR-090, FR-091).
+ */
+export interface ServerProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  auth_kind: AuthKind;
+  secret_ref: string;
+  key_path: string | null;
+  domain: string;
+  video_dir: string;
+  cdn_base: string | null;
+  /** `null` = отпечаток ещё не подтверждён, подключаться нельзя (FR-092). */
+  host_fingerprint: string | null;
+  ipv6_mode: Ipv6Mode | null;
+  is_active: boolean;
+}
+
+/** Поля, которые интерфейс отправляет при создании и изменении профиля. */
+export interface ServerInput {
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  auth_kind: AuthKind;
+  key_path: string | null;
+  domain: string;
+  /** `null` = каталог раздачи по умолчанию. */
+  video_dir: string | null;
+  cdn_base: string | null;
+  ipv6_mode: Ipv6Mode | null;
+}
+
+/** `skipped` — до шага не дошли: остановились раньше (FR-003). */
+export type StepStatus = "ok" | "failed" | "skipped";
+
+export interface TestStep {
+  id: string;
+  title: string;
+  status: StepStatus;
+  detail: string | null;
+}
+
+/** Предложение перенести настройки из `server.env` (T043). */
+export interface ImportSuggestion {
+  source: string;
+  needs_passphrase: boolean;
+  input: ServerInput;
+}
+
+// ---------- библиотека ----------
+
+export interface FileView {
+  path: string;
+  size_bytes: number;
+  duration_s: number | null;
+  width: number | null;
+  height: number | null;
+  bitrate_bps: number | null;
+  video_codec: string | null;
+  audio_codec: string | null;
+  /** Ложь = заголовок не в начале файла: зритель будет ждать скачивания хвоста. */
+  faststart_ok: boolean | null;
+  /** Ложь = файл удалён или переименован мимо приложения (FR-018). */
+  exists_on_server: boolean;
+  origin_url: string;
+  cdn_url: string | null;
+}
+
+export interface MediaView {
+  id: string;
+  title: string;
+  slug: string;
+  files: FileView[];
+  ladders: string[];
+  total_bytes: number;
+  created_at: string;
+}
+
+export interface DiskUsage {
+  total_bytes: number;
+  free_bytes: number;
+  used_by_videos_bytes: number;
+}
+
+export interface LibraryView {
+  server_id: string;
+  media: MediaView[];
+  /** Файлы, которые не удалось отнести ни к одному медиа (FR-015). */
+  unrecognized: FileView[];
+  disk: DiskUsage | null;
+  /** Истина = показано последнее известное состояние, сервер сейчас недоступен. */
+  stale: boolean;
+}
+
+/** Зрительские ссылки на файл (FR-016). */
+export interface Links {
+  origin: string;
+  cdn: string | null;
+}
+
 // ---------- задачи ----------
 
 export type TaskKind =
@@ -173,4 +285,10 @@ export interface TaskDoneEvent {
   id: string;
   state: TaskState;
   error: string | null;
+}
+
+/** Библиотека сервера изменилась — её нужно перечитать. */
+export interface LibraryChangedEvent {
+  event: "library_changed";
+  server_id: string;
 }

@@ -15,10 +15,17 @@ import {
   EVENTS,
   isAppError,
   type AppError,
+  type ImportSuggestion,
+  type LibraryChangedEvent,
+  type LibraryView,
+  type Links,
+  type ServerInput,
+  type ServerProfile,
   type Task,
   type TaskDoneEvent,
   type TaskOnClose,
   type TaskProgressEvent,
+  type TestStep,
   type Versions,
 } from "./contract";
 
@@ -55,6 +62,40 @@ export const ipc = {
 
   serverProbeFingerprint: (host: string, port: number) =>
     call<string>("server_probe_fingerprint", { host, port }),
+
+  // --- серверы ---
+  serversList: () => call<ServerProfile[]>("servers_list"),
+  serverAdd: (input: ServerInput, secret: string) =>
+    call<string>("server_add", { input, secret }),
+  serverUpdate: (id: string, input: ServerInput, secret: string | null) =>
+    call<void>("server_update", { id, input, secret }),
+  serverRemove: (id: string) => call<void>("server_remove", { id }),
+  serverSetActive: (id: string) => call<void>("server_set_active", { id }),
+  serverTest: (id: string) => call<TestStep[]>("server_test", { id }),
+  serverFingerprintConfirm: (id: string, fingerprint: string) =>
+    call<void>("server_fingerprint_confirm", { id, fingerprint }),
+  serverImportSuggestion: () =>
+    call<ImportSuggestion | null>("server_import_suggestion"),
+
+  // --- библиотека ---
+  libraryList: (serverId: string, refresh = false) =>
+    call<LibraryView>("library_list", { serverId, refresh }),
+  mediaCreate: (serverId: string, title: string, slug: string | null) =>
+    call<string>("media_create", { serverId, title, slug }),
+  mediaRename: (
+    serverId: string,
+    mediaId: string,
+    title: string | null,
+    slug: string | null,
+  ) => call<void>("media_rename", { serverId, mediaId, title, slug }),
+  mediaDelete: (serverId: string, mediaId: string, confirmed: boolean) =>
+    call<string>("media_delete", { serverId, mediaId, confirmed }),
+  fileMove: (serverId: string, path: string, toMediaId: string, confirmed: boolean) =>
+    call<void>("file_move", { serverId, path, toMediaId, confirmed }),
+  fileDelete: (serverId: string, path: string, confirmed: boolean) =>
+    call<void>("file_delete", { serverId, path, confirmed }),
+  linksFor: (serverId: string, path: string) =>
+    call<Links>("links_for", { serverId, path }),
 };
 
 // ---------- события ----------
@@ -75,6 +116,14 @@ export function onTaskDone(handler: (e: TaskDoneEvent) => void): Promise<Unliste
   return tauriListen<TaskDoneEvent>(EVENTS.taskDone, (ev) => handler(ev.payload));
 }
 
+/**
+ * Библиотека изменилась.
+ *
+ * Полезная нагрузка — объект, а не строка: ядро рассылает событие с меткой вида,
+ * как и события задач, чтобы одно нельзя было принять за другое.
+ */
 export function onLibraryChanged(handler: (serverId: string) => void): Promise<UnlistenFn> {
-  return tauriListen<string>(EVENTS.libraryChanged, (ev) => handler(ev.payload));
+  return tauriListen<LibraryChangedEvent>(EVENTS.libraryChanged, (ev) =>
+    handler(ev.payload.server_id),
+  );
 }

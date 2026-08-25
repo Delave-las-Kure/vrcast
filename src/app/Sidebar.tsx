@@ -3,8 +3,8 @@ import { useTheme, type ThemeChoice } from "./theme";
 
 /** Разделы приложения. Порядок — по ходу работы: сервер, библиотека, дела, разбор. */
 export const SECTIONS = [
-  { path: "/servers", label: "Серверы", ready: false },
-  { path: "/library", label: "Библиотека", ready: false },
+  { path: "/servers", label: "Серверы", ready: true },
+  { path: "/library", label: "Библиотека", ready: true },
   { path: "/convert", label: "Подготовка", ready: false },
   { path: "/upload", label: "Заливка", ready: false },
   { path: "/ladder", label: "Качества", ready: false },

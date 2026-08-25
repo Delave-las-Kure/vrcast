@@ -1,13 +1,15 @@
 /**
  * T027 — оболочка приложения: разделы, оформление, подписка на поток событий.
  *
- * Пока по-настоящему работает только раздел задач: он показывает то, что действительно
- * делает ядро. Остальные разделы честно говорят, в какой фазе появятся и чем пользоваться
- * до тех пор, — пустой экран без объяснения выглядит поломкой.
+ * Работают разделы задач, серверов и библиотеки. Остальные честно говорят, в какой
+ * фазе появятся и чем пользоваться до тех пор, — пустой экран без объяснения
+ * выглядит поломкой.
  */
 
 import { useEffect, useState } from "react";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { LibraryScreen } from "../features/library/LibraryScreen";
+import { ServerList } from "../features/servers/ServerList";
 import { ComingSoon } from "../features/shared/ComingSoon";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { ipc } from "../shared/ipc";
@@ -32,28 +34,8 @@ function AppShell() {
         <Routes>
           <Route path="/" element={<Navigate to="/tasks" replace />} />
           <Route path="/tasks" element={<TasksPanel />} />
-          <Route
-            path="/servers"
-            element={
-              <ComingSoon
-                title="Серверы"
-                phase="Фаза 1"
-                what="Мастер настройки, проверка подключения по шагам, подтверждение отпечатка сервера и переключение между несколькими серверами."
-                fallback="вход по SSH и скрипты в .claude/skills/"
-              />
-            }
-          />
-          <Route
-            path="/library"
-            element={
-              <ComingSoon
-                title="Библиотека"
-                phase="Фаза 1"
-                what="Список медиа по названиям, все файлы каждого медиа с их параметрами, зрительские ссылки и место на диске сервера."
-                fallback="ls на сервере и ссылки, составленные вручную"
-              />
-            }
-          />
+          <Route path="/servers" element={<ServerList />} />
+          <Route path="/library" element={<LibraryScreen />} />
           <Route
             path="/convert"
             element={

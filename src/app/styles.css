@@ -413,3 +413,511 @@ button:focus-visible {
   padding: 0 4px;
   color: var(--text-muted);
 }
+
+/* ---------- заголовок раздела с действиями ---------- */
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.panel__head h1 {
+  margin: 0;
+}
+
+.panel__head-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.button-link {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.button-link:hover {
+  background: var(--bg-hover);
+}
+
+/* ---------- формы ---------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 620px;
+}
+
+.form label,
+.dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form label > span,
+.dialog label > span {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.form input,
+.form select,
+.dialog input,
+.dialog select {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  min-width: 0;
+}
+
+.form input:focus-visible,
+.dialog input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.form__row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.form__grow {
+  flex: 1 1 180px;
+}
+
+.form__narrow {
+  flex: 0 0 110px;
+}
+
+.form__extra summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.form__extra > label {
+  margin-top: 10px;
+}
+
+.form__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* ---------- мастер настройки ---------- */
+
+.wizard__head {
+  margin-bottom: 18px;
+}
+
+.wizard__head h2 {
+  margin: 0 0 10px;
+}
+
+.wizard__steps {
+  display: flex;
+  gap: 20px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  counter-reset: шаг;
+}
+
+.wizard__steps li::before {
+  counter-increment: шаг;
+  content: counter(шаг) ". ";
+}
+
+.wizard__steps .is-current {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.wizard__steps .is-done {
+  color: var(--success);
+}
+
+.wizard__stage {
+  max-width: 620px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fingerprint {
+  display: block;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+  word-break: break-all;
+  user-select: all;
+}
+
+/* ---------- шаги проверки ---------- */
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+
+.step__mark {
+  width: 18px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.step--ok .step__mark {
+  color: var(--success);
+}
+
+.step--failed .step__mark {
+  color: var(--danger);
+}
+
+.step--skipped {
+  opacity: 0.6;
+}
+
+.step__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.step__detail {
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+/* ---------- серверы ---------- */
+
+.server-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.server {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.server--active {
+  border-color: var(--accent);
+}
+
+.server__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.server__name {
+  font-weight: 600;
+  margin-right: 10px;
+}
+
+.server__addr {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.server__badge {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg-active);
+  color: var(--accent);
+}
+
+.server__facts {
+  display: flex;
+  gap: 22px;
+  margin: 0;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.server__facts dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.server__facts dd {
+  margin: 2px 0 0;
+  word-break: break-all;
+}
+
+.server__warning,
+.file__warning,
+.dialog__warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.server__actions,
+.media__actions,
+.file__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.server__confirm {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+/* ---------- библиотека ---------- */
+
+.library__server {
+  margin: 4px 0 14px;
+}
+
+.disk {
+  margin-bottom: 18px;
+}
+
+.disk__facts {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.progress__fill--alarm {
+  background: var(--danger);
+}
+
+.media-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.media {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.media--unrecognized {
+  border-style: dashed;
+}
+
+.media__head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 16px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  flex-wrap: wrap;
+}
+
+.media__head:hover {
+  background: var(--bg-hover);
+}
+
+.media__title {
+  font-weight: 600;
+}
+
+.media__facts {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.media__missing {
+  color: var(--warning);
+  font-style: normal;
+}
+
+.media__note {
+  margin: 0 16px 10px;
+  font-size: 13px;
+}
+
+.media__actions {
+  padding: 0 16px 14px;
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file--missing {
+  opacity: 0.75;
+  border-style: dashed;
+}
+
+.file__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.file__name {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.file__size {
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.file__meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.copy-link {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.copy-link__done {
+  font-size: 12px;
+  color: var(--success);
+}
+
+.copy-link__dead {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.unrecognized__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.unrecognized__assign {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-left: 12px;
+}
+
+/* ---------- диалоги ---------- */
+
+.dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  animation: appear var(--speed) var(--ease);
+}
+
+.dialog h3 {
+  margin: 0;
+}
+
+.dialog__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.notice--stale {
+  background: var(--bg-hover);
+  border: 1px solid var(--warning);
+}
+
+/* Поле с пояснением: пояснение стоит рядом с меткой, а не внутри неё. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
