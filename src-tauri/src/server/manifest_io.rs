@@ -49,7 +49,7 @@ pub async fn read(conn: &Connection, video_dir: &str) -> Result<Manifest> {
                 .await?
                 .ok();
             if exists {
-                return Err(ManifestIoError::Ssh(crate::ssh::SshError::Sftp(
+                return Err(ManifestIoError::Ssh(crate::ssh::SshError::sftp(
                     crate::store::redact::safe_display(&e),
                 )));
             }
@@ -109,7 +109,7 @@ pub async fn write(
         // Убираем за собой сами: временный файл в каталоге раздачи попадёт
         // пользователю в группу «не распознано» и будет его пугать.
         let _ = sftp.remove_file(temp.clone()).await;
-        return Err(ManifestIoError::Ssh(crate::ssh::SshError::Sftp(
+        return Err(ManifestIoError::Ssh(crate::ssh::SshError::sftp(
             crate::store::redact::safe_display(&*e),
         )));
     }

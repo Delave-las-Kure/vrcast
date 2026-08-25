@@ -40,7 +40,7 @@ impl Connection {
 
         let session = SftpSession::new(channel.into_stream())
             .await
-            .map_err(|e| SshError::Sftp(redact::safe_display(&e)))?;
+            .map_err(|e| SshError::sftp(redact::safe_display(&e)))?;
 
         Ok(Sftp {
             session,

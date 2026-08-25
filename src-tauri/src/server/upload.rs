@@ -72,7 +72,7 @@ impl From<SshError> for UploadError {
         let text = crate::store::redact::safe_display(&e);
         match e {
             // Обрыв и всё, что с ним связано, — повод повторить.
-            SshError::Unreachable { .. } | SshError::Protocol(_) | SshError::Sftp(_) => {
+            SshError::Unreachable { .. } | SshError::Protocol(_) | SshError::Sftp { .. } => {
                 Self::Interrupted(text)
             }
             _ => Self::Failed(text),

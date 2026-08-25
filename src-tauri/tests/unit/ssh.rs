@@ -160,3 +160,57 @@ fn отпечаток_привязан_к_паре_адрес_и_порт() {
         "запись по другому порту перезаписала чужой отпечаток"
     );
 }
+
+// ---------- отчего не удалась файловая операция (T071) ----------
+
+#[test]
+fn full_disk_is_not_reported_as_a_permission_problem() {
+    // Прежде любая файловая беда объявлялась нехваткой прав с подсказкой
+    // «проверьте владельца каталога». При полном диске человек шёл чинить то,
+    // что не сломано, а настоящая причина лежала на виду в тексте ошибки.
+    use vrcast_studio_lib::commands::error::ErrorCode;
+    use vrcast_studio_lib::ssh::SshError;
+
+    let err = SshError::sftp("write failed: No space left on device");
+    let app: vrcast_studio_lib::commands::error::AppError = err.into();
+    assert_eq!(app.code, ErrorCode::RemoteDiskFull);
+    assert!(
+        app.hint.to_lowercase().contains("мест"),
+        "подсказка не про место: {}",
+        app.hint
+    );
+}
+
+#[test]
+fn each_file_failure_leads_to_its_own_answer() {
+    use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
+    use vrcast_studio_lib::ssh::SshError;
+
+    let cases = [
+        ("Permission denied", ErrorCode::VideoDirDenied),
+        ("No such file or directory", ErrorCode::FileMissingOnServer),
+        ("connection reset by peer", ErrorCode::SshUnreachable),
+        ("disk quota exceeded", ErrorCode::RemoteDiskFull),
+    ];
+    for (text, expected) in cases {
+        let app: AppError = SshError::sftp(text).into();
+        assert_eq!(app.code, expected, "неверно опознано: {text}");
+    }
+}
+
+#[test]
+fn an_unfamiliar_failure_is_not_guessed_at() {
+    // Неверная догадка хуже честного «не знаю»: она уводит чинить не то.
+    // Текст при этом обязан сохраниться — его можно найти поиском.
+    use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
+    use vrcast_studio_lib::ssh::SshError;
+
+    let app: AppError = SshError::sftp("SFTP status 4: something nobody has seen").into();
+    assert_eq!(app.code, ErrorCode::Internal);
+    assert!(
+        app.cause
+            .unwrap_or_default()
+            .contains("something nobody has seen"),
+        "потерян текст, по которому только и можно разобраться"
+    );
+}

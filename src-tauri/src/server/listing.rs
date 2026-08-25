@@ -27,7 +27,7 @@ pub async fn list(conn: &Connection, video_dir: &str) -> Result<Vec<Entry>> {
     let entries = sftp
         .read_dir(video_dir)
         .await
-        .map_err(|e| SshError::Sftp(crate::store::redact::safe_display(&e)))?;
+        .map_err(|e| SshError::sftp(crate::store::redact::safe_display(&e)))?;
 
     let mut out = Vec::new();
     for e in entries {

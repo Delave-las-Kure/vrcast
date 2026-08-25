@@ -80,11 +80,68 @@ pub enum SshError {
     #[error("команда на сервере не выполнилась: {0}")]
     Exec(String),
 
-    #[error("файловая операция на сервере не удалась: {0}")]
-    Sftp(String),
+    /// Файловая операция на сервере не удалась.
+    ///
+    /// `kind` отделяет причины, которые ведут человека в РАЗНЫЕ стороны. Раньше
+    /// их не было, и любая файловая беда объявлялась нехваткой прав с подсказкой
+    /// «проверьте владельца каталога» — при полном диске человек шёл чинить то,
+    /// что не сломано, а настоящая причина лежала на виду в тексте ошибки
+    /// (задолженность T071).
+    #[error("файловая операция на сервере не удалась: {reason}")]
+    Sftp { kind: SftpFailure, reason: String },
 
     #[error("ошибка протокола SSH: {0}")]
     Protocol(String),
+}
+
+/// Отчего не удалась файловая операция.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SftpFailure {
+    /// Нет прав: не тот владелец, не те права на каталоге.
+    Denied,
+    /// На сервере кончилось место.
+    NoSpace,
+    /// Файла или каталога нет.
+    Missing,
+    /// Связь оборвалась посреди операции — повод повторить, а не чинить сервер.
+    Interrupted,
+    /// Что-то ещё. Текст ошибки сохраняется целиком: он непонятен, но его можно
+    /// найти поиском, а «файловая операция не удалась» — нельзя.
+    Other,
+}
+
+impl SftpFailure {
+    /// Опознать причину по жалобе библиотеки.
+    ///
+    /// Разбор по тексту — не от хорошей жизни: слой SFTP отдаёт код состояния
+    /// вперемешку с сообщениями транспорта, и единственное, что есть всегда, —
+    /// это текст. Незнакомое считается `Other`, а не угадывается: неверная догадка
+    /// здесь хуже честного «не знаю», потому что уводит человека чинить не то.
+    pub fn classify(text: &str) -> Self {
+        let t = text.to_ascii_lowercase();
+        if t.contains("no space") || t.contains("quota") || t.contains("disk full") {
+            Self::NoSpace
+        } else if t.contains("permission denied") || t.contains("access denied") {
+            Self::Denied
+        } else if t.contains("no such file") || t.contains("not found") {
+            Self::Missing
+        } else if t.contains("connection") || t.contains("eof") || t.contains("broken pipe") {
+            Self::Interrupted
+        } else {
+            Self::Other
+        }
+    }
+}
+
+impl SshError {
+    /// Собрать файловую ошибку, опознав причину по тексту.
+    pub fn sftp(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self::Sftp {
+            kind: SftpFailure::classify(&reason),
+            reason,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, SshError>;

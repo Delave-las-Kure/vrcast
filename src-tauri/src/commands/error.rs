@@ -354,6 +354,7 @@ pub type Result<T> = std::result::Result<T, AppError>;
 
 impl From<crate::ssh::SshError> for AppError {
     fn from(e: crate::ssh::SshError) -> Self {
+        use crate::ssh::SftpFailure as F;
         use crate::ssh::SshError as S;
         let code = match &e {
             S::Unreachable { .. } => ErrorCode::SshUnreachable,
@@ -364,7 +365,21 @@ impl From<crate::ssh::SshError> for AppError {
             S::KeyNeedsPassphrase { .. } => ErrorCode::KeyNeedsPassphrase,
             S::KeyUnreadable { .. } => ErrorCode::KeyUnreadable,
             S::Exec(_) | S::Protocol(_) => ErrorCode::Internal,
-            S::Sftp(_) => ErrorCode::VideoDirDenied,
+            // Файловая беда ведёт человека в РАЗНЫЕ стороны в зависимости от причины.
+            // Раньше любая из них объявлялась нехваткой прав с подсказкой «проверьте
+            // владельца каталога» — при полном диске человек шёл чинить то, что
+            // не сломано (задолженность T071).
+            S::Sftp { kind, .. } => match kind {
+                F::NoSpace => ErrorCode::RemoteDiskFull,
+                F::Denied => ErrorCode::VideoDirDenied,
+                F::Missing => ErrorCode::FileMissingOnServer,
+                // Обрыв — не поломка сервера, а повод повторить. Показывать его
+                // как «нет доступа» значило бы послать чинить исправное.
+                F::Interrupted => ErrorCode::SshUnreachable,
+                // Незнакомое не угадываем: неверная догадка хуже честного «не знаю»,
+                // потому что уводит чинить не то. Текст ошибки при этом сохраняется.
+                F::Other => ErrorCode::Internal,
+            },
         };
         // Подробность нижнего слоя сохраняем: она называет конкретику — какой адрес,
         // какие способы входа предложил сервер, какой файл ключа.

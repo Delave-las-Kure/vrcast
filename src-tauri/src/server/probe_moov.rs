@@ -84,13 +84,13 @@ async fn read_head(conn: &Connection, path: &str, bytes: u64) -> Result<Vec<u8>>
     let file = sftp
         .open(path.to_owned())
         .await
-        .map_err(|e| SshError::Sftp(crate::store::redact::safe_display(&e)))?;
+        .map_err(|e| SshError::sftp(crate::store::redact::safe_display(&e)))?;
 
     let mut buf = Vec::with_capacity(bytes as usize);
     file.take(bytes)
         .read_to_end(&mut buf)
         .await
-        .map_err(|e| SshError::Sftp(crate::store::redact::safe_display(&e)))?;
+        .map_err(|e| SshError::sftp(crate::store::redact::safe_display(&e)))?;
     Ok(buf)
 }
 
