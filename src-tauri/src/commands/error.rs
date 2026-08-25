@@ -14,169 +14,100 @@
 
 use serde::Serialize;
 
-/// Код ошибки. Перечень закреплён договором `contracts/ipc-commands.md`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
-#[serde(into = "String")]
-pub enum ErrorCode {
+/// Объявляет коды ошибок ОДНИМ перечнем: из него рождаются и enum, и `ALL`,
+/// и `as_str`.
+///
+/// Раньше `ALL` вёлся руками отдельно от enum, и это была лазейка во всей системе
+/// сверки: код, добавленный в enum, но забытый в `ALL`, выпадал сразу из всех
+/// проверок — из сверки с TS-договором и из требования русского сообщения
+/// с подсказкой. Компилятор при этом молчал: `message`/`hint` он требует,
+/// а полноту рукописного списка — нет. Теперь забыть негде.
+macro_rules! error_codes {
+    ($($(#[$meta:meta])* $name:ident => $code:literal),+ $(,)?) => {
+        /// Код ошибки. Перечень закреплён договором `contracts/ipc-commands.md`.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+        #[serde(into = "String")]
+        pub enum ErrorCode {
+            $($(#[$meta])* $name,)+
+        }
+
+        impl ErrorCode {
+            /// Все коды. Порождён тем же перечнем, что и enum, — разойтись не могут.
+            pub const ALL: &'static [ErrorCode] = &[$(Self::$name),+];
+
+            /// Строковый код, уходящий в интерфейс.
+            pub fn as_str(&self) -> &'static str {
+                match self { $(Self::$name => $code,)+ }
+            }
+        }
+    };
+}
+
+error_codes! {
     // --- доступ к серверу ---
-    SshAuthFailed,
-    SshUnreachable,
-    HostKeyChanged,
-    HostKeyUnconfirmed,
-    HostKeyIsCertificate,
-    KeyNeedsPassphrase,
-    KeyUnreadable,
-    VideoDirDenied,
+    SshAuthFailed => "SSH_AUTH_FAILED",
+    SshUnreachable => "SSH_UNREACHABLE",
+    HostKeyChanged => "HOST_KEY_CHANGED",
+    HostKeyUnconfirmed => "HOST_KEY_UNCONFIRMED",
+    HostKeyIsCertificate => "HOST_KEY_IS_CERTIFICATE",
+    KeyNeedsPassphrase => "KEY_NEEDS_PASSPHRASE",
+    KeyUnreadable => "KEY_UNREADABLE",
+    VideoDirDenied => "VIDEO_DIR_DENIED",
 
     // --- домен ---
-    DomainNotServing,
-    DomainNotPointed,
-    DomainPointsElsewhere,
-    Ipv6Mismatch,
+    DomainNotServing => "DOMAIN_NOT_SERVING",
+    DomainNotPointed => "DOMAIN_NOT_POINTED",
+    DomainPointsElsewhere => "DOMAIN_POINTS_ELSEWHERE",
+    Ipv6Mismatch => "IPV6_MISMATCH",
 
     // --- состояние и развёртывание сервера ---
-    ServerForeign,
-    ServerTooNew,
-    DeployStepFailed,
-    SwapFailed,
+    ServerForeign => "SERVER_FOREIGN",
+    ServerTooNew => "SERVER_TOO_NEW",
+    DeployStepFailed => "DEPLOY_STEP_FAILED",
+    SwapFailed => "SWAP_FAILED",
 
     // --- библиотека ---
-    SlugTaken,
-    ManifestConflict,
-    FileMissingOnServer,
-    FileInUse,
+    SlugTaken => "SLUG_TAKEN",
+    ManifestConflict => "MANIFEST_CONFLICT",
+    FileMissingOnServer => "FILE_MISSING_ON_SERVER",
+    FileInUse => "FILE_IN_USE",
 
     // --- подготовка файлов ---
-    FfmpegBroken,
-    NoAudioTracks,
-    DecodeValidationFailed,
-    NoHwEncoder,
-    LocalDiskFull,
+    FfmpegBroken => "FFMPEG_BROKEN",
+    NoAudioTracks => "NO_AUDIO_TRACKS",
+    DecodeValidationFailed => "DECODE_VALIDATION_FAILED",
+    NoHwEncoder => "NO_HW_ENCODER",
+    LocalDiskFull => "LOCAL_DISK_FULL",
 
     // --- передача ---
-    RemoteDiskFull,
-    ChecksumMismatch,
-    ViewersActive,
-    NameExists,
+    RemoteDiskFull => "REMOTE_DISK_FULL",
+    ChecksumMismatch => "CHECKSUM_MISMATCH",
+    ViewersActive => "VIEWERS_ACTIVE",
+    NameExists => "NAME_EXISTS",
 
     // --- наборы качеств ---
-    RungAboveSource,
-    BufsizeTooLarge,
-    LevelExceeded,
-    LadderIncomplete,
-    NoLadderForMedia,
+    RungAboveSource => "RUNG_ABOVE_SOURCE",
+    BufsizeTooLarge => "BUFSIZE_TOO_LARGE",
+    LevelExceeded => "LEVEL_EXCEEDED",
+    LadderIncomplete => "LADDER_INCOMPLETE",
+    NoLadderForMedia => "NO_LADDER_FOR_MEDIA",
 
     // --- настройки веб-сервера ---
-    CaddyValidateFailed,
-    CaddyReloadFailed,
+    CaddyValidateFailed => "CADDY_VALIDATE_FAILED",
+    CaddyReloadFailed => "CADDY_RELOAD_FAILED",
 
     // --- задачи ---
-    TaskCancelled,
-    TaskNotFound,
-    TaskBadTransition,
-    TaskNotPausable,
+    TaskCancelled => "TASK_CANCELLED",
+    TaskNotFound => "TASK_NOT_FOUND",
+    TaskBadTransition => "TASK_BAD_TRANSITION",
+    TaskNotPausable => "TASK_NOT_PAUSABLE",
 
     // --- прочее ---
-    StorageFailed,
-    Internal,
+    StorageFailed => "STORAGE_FAILED",
+    Internal => "INTERNAL",
 }
 
 impl ErrorCode {
-    /// Все коды. Существует ради теста полноты: он проходит по этому списку и требует
-    /// у каждого кода сообщение и подсказку.
-    pub const ALL: &'static [ErrorCode] = &[
-        Self::SshAuthFailed,
-        Self::SshUnreachable,
-        Self::HostKeyChanged,
-        Self::HostKeyUnconfirmed,
-        Self::HostKeyIsCertificate,
-        Self::KeyNeedsPassphrase,
-        Self::KeyUnreadable,
-        Self::VideoDirDenied,
-        Self::DomainNotServing,
-        Self::DomainNotPointed,
-        Self::DomainPointsElsewhere,
-        Self::Ipv6Mismatch,
-        Self::ServerForeign,
-        Self::ServerTooNew,
-        Self::DeployStepFailed,
-        Self::SwapFailed,
-        Self::SlugTaken,
-        Self::ManifestConflict,
-        Self::FileMissingOnServer,
-        Self::FileInUse,
-        Self::FfmpegBroken,
-        Self::NoAudioTracks,
-        Self::DecodeValidationFailed,
-        Self::NoHwEncoder,
-        Self::LocalDiskFull,
-        Self::RemoteDiskFull,
-        Self::ChecksumMismatch,
-        Self::ViewersActive,
-        Self::NameExists,
-        Self::RungAboveSource,
-        Self::BufsizeTooLarge,
-        Self::LevelExceeded,
-        Self::LadderIncomplete,
-        Self::NoLadderForMedia,
-        Self::CaddyValidateFailed,
-        Self::CaddyReloadFailed,
-        Self::TaskCancelled,
-        Self::TaskNotFound,
-        Self::TaskBadTransition,
-        Self::TaskNotPausable,
-        Self::StorageFailed,
-        Self::Internal,
-    ];
-
-    /// Строковый код, уходящий в интерфейс.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::SshAuthFailed => "SSH_AUTH_FAILED",
-            Self::SshUnreachable => "SSH_UNREACHABLE",
-            Self::HostKeyChanged => "HOST_KEY_CHANGED",
-            Self::HostKeyUnconfirmed => "HOST_KEY_UNCONFIRMED",
-            Self::HostKeyIsCertificate => "HOST_KEY_IS_CERTIFICATE",
-            Self::KeyNeedsPassphrase => "KEY_NEEDS_PASSPHRASE",
-            Self::KeyUnreadable => "KEY_UNREADABLE",
-            Self::VideoDirDenied => "VIDEO_DIR_DENIED",
-            Self::DomainNotServing => "DOMAIN_NOT_SERVING",
-            Self::DomainNotPointed => "DOMAIN_NOT_POINTED",
-            Self::DomainPointsElsewhere => "DOMAIN_POINTS_ELSEWHERE",
-            Self::Ipv6Mismatch => "IPV6_MISMATCH",
-            Self::ServerForeign => "SERVER_FOREIGN",
-            Self::ServerTooNew => "SERVER_TOO_NEW",
-            Self::DeployStepFailed => "DEPLOY_STEP_FAILED",
-            Self::SwapFailed => "SWAP_FAILED",
-            Self::SlugTaken => "SLUG_TAKEN",
-            Self::ManifestConflict => "MANIFEST_CONFLICT",
-            Self::FileMissingOnServer => "FILE_MISSING_ON_SERVER",
-            Self::FileInUse => "FILE_IN_USE",
-            Self::FfmpegBroken => "FFMPEG_BROKEN",
-            Self::NoAudioTracks => "NO_AUDIO_TRACKS",
-            Self::DecodeValidationFailed => "DECODE_VALIDATION_FAILED",
-            Self::NoHwEncoder => "NO_HW_ENCODER",
-            Self::LocalDiskFull => "LOCAL_DISK_FULL",
-            Self::RemoteDiskFull => "REMOTE_DISK_FULL",
-            Self::ChecksumMismatch => "CHECKSUM_MISMATCH",
-            Self::ViewersActive => "VIEWERS_ACTIVE",
-            Self::NameExists => "NAME_EXISTS",
-            Self::RungAboveSource => "RUNG_ABOVE_SOURCE",
-            Self::BufsizeTooLarge => "BUFSIZE_TOO_LARGE",
-            Self::LevelExceeded => "LEVEL_EXCEEDED",
-            Self::LadderIncomplete => "LADDER_INCOMPLETE",
-            Self::NoLadderForMedia => "NO_LADDER_FOR_MEDIA",
-            Self::CaddyValidateFailed => "CADDY_VALIDATE_FAILED",
-            Self::CaddyReloadFailed => "CADDY_RELOAD_FAILED",
-            Self::TaskCancelled => "TASK_CANCELLED",
-            Self::TaskNotFound => "TASK_NOT_FOUND",
-            Self::TaskBadTransition => "TASK_BAD_TRANSITION",
-            Self::TaskNotPausable => "TASK_NOT_PAUSABLE",
-            Self::StorageFailed => "STORAGE_FAILED",
-            Self::Internal => "INTERNAL",
-        }
-    }
-
     /// Что произошло — словами, понятными человеку.
     pub fn message(&self) -> &'static str {
         match self {

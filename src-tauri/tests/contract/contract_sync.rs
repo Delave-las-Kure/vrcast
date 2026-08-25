@@ -5,10 +5,21 @@
 //! никогда не срабатывает, потому что ждёт код, которого больше нет. Обнаружится это
 //! у пользователя, в тот момент, когда ошибка наконец случится.
 //!
-//! Поэтому расхождение ловится здесь — при сборке.
+//! Поэтому расхождение ловится здесь — при сборке. Два правила, выведенные из
+//! ревизии 2026-08-25:
+//!
+//! 1. Каждая сверка — В ОБЕ СТОРОНЫ. Односторонняя ловит «в ядре есть, в TS нет»,
+//!    но пропускает лишнее в TS — обработчик события, которого ядро не шлёт.
+//! 2. Искать значения только ВНУТРИ разобранного объявления, а не по всему файлу:
+//!    `contains` по файлу засчитывал бы код, оставшийся в комментарии или в чужом типе.
+//!
+//! Перечни со стороны Rust берутся из `ALL`, которые порождены тем же макросом,
+//! что и сами enum, — рукописного списка, способного отстать, больше нет.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
 
 fn frontend_file(rel: &str) -> PathBuf {
     // Ядро лежит в src-tauri/, интерфейс — рядом, в src/.
@@ -24,108 +35,101 @@ fn contract_ts() -> String {
         .unwrap_or_else(|e| panic!("не прочитать {}: {e}", path.display()))
 }
 
-#[test]
-fn каждый_код_ошибки_ядра_есть_в_описании_для_интерфейса() {
-    let ts = contract_ts();
-    let mut missing = Vec::new();
-
-    for code in ErrorCode::ALL {
-        let quoted = format!("\"{}\"", code.as_str());
-        if !ts.contains(&quoted) {
-            missing.push(code.as_str());
-        }
-    }
-
-    assert!(
-        missing.is_empty(),
-        "коды есть в ядре, но отсутствуют в src/shared/contract.ts: {missing:?}\n\
-         Добавьте их в тип ErrorCode — иначе интерфейс не сможет их обработать."
-    );
-}
-
-#[test]
-fn в_описании_для_интерфейса_нет_кодов_которых_ядро_не_выдаёт() {
-    // Обратная сверка. Лишний код — обработчик, который никогда не сработает:
-    // тихий мёртвый код, который выглядит как забота о пользователе.
-    let ts = contract_ts();
-
+/// Все строковые литералы из объявления, начинающегося с `marker` и закрытого `;`.
+///
+/// Комментарии выбрасываются построчно ДО поиска кавычек и точки с запятой: кавычка
+/// в комментарии не должна расширять перечень, а `;` в нём — обрезать разбираемый
+/// блок. (В значениях договора не бывает ни `//`, ни `;` — на это разбор и опирается.)
+fn declared_strings(ts: &str, marker: &str) -> HashSet<String> {
     let start = ts
-        .find("export type ErrorCode =")
-        .expect("в contract.ts нет типа ErrorCode");
-    let end = ts[start..]
-        .find(';')
-        .map(|i| start + i)
-        .expect("объявление ErrorCode не закрыто");
-    let block = &ts[start..end];
+        .find(marker)
+        .unwrap_or_else(|| panic!("в contract.ts нет объявления «{marker}»"));
+    let body = &ts[start + marker.len()..];
 
-    let known: std::collections::HashSet<&str> =
-        ErrorCode::ALL.iter().map(|c| c.as_str()).collect();
-
-    let mut extra = Vec::new();
-    for raw in block.split('"').skip(1).step_by(2) {
-        if !known.contains(raw) {
-            extra.push(raw.to_owned());
+    let mut clean = String::new();
+    let mut closed = false;
+    for line in body.lines() {
+        let line = line.split("//").next().unwrap_or("");
+        if let Some(i) = line.find(';') {
+            clean.push_str(&line[..i]);
+            closed = true;
+            break;
         }
+        clean.push_str(line);
+        clean.push('\n');
     }
+    assert!(closed, "объявление «{marker}» не закрыто точкой с запятой");
+
+    clean
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Сверка перечня в обе стороны с понятным отчётом о каждом направлении.
+fn assert_same_sets(what: &str, rust: HashSet<String>, ts: HashSet<String>) {
+    let mut missing: Vec<_> = rust.difference(&ts).collect();
+    let mut extra: Vec<_> = ts.difference(&rust).collect();
+    missing.sort();
+    extra.sort();
 
     assert!(
-        extra.is_empty(),
-        "коды есть в src/shared/contract.ts, но ядро их не выдаёт: {extra:?}"
+        missing.is_empty() && extra.is_empty(),
+        "{what}: договор разошёлся.\n\
+         Есть в ядре, нет в contract.ts: {missing:?}\n\
+         Есть в contract.ts, но ядро не выдаёт: {extra:?}"
     );
 }
 
 #[test]
-fn имена_событий_совпадают_с_описанием_для_интерфейса() {
-    use vrcast_studio_lib::commands::events::names;
-    let ts = contract_ts();
+fn коды_ошибок_совпадают_в_обе_стороны() {
+    let rust: HashSet<String> = ErrorCode::ALL
+        .iter()
+        .map(|c| c.as_str().to_owned())
+        .collect();
+    let ts = declared_strings(&contract_ts(), "export type ErrorCode =");
+    assert_same_sets("коды ошибок", rust, ts);
+}
 
-    for name in [
+#[test]
+fn виды_задач_совпадают_в_обе_стороны() {
+    let rust: HashSet<String> = TaskKind::ALL
+        .iter()
+        .map(|k| k.as_str().to_owned())
+        .collect();
+    let ts = declared_strings(&contract_ts(), "export type TaskKind =");
+    assert_same_sets("виды задач", rust, ts);
+}
+
+#[test]
+fn состояния_задач_совпадают_в_обе_стороны() {
+    let rust: HashSet<String> = TaskState::ALL
+        .iter()
+        .map(|s| s.as_str().to_owned())
+        .collect();
+    let ts = declared_strings(&contract_ts(), "export type TaskState =");
+    assert_same_sets("состояния задач", rust, ts);
+}
+
+#[test]
+fn имена_событий_совпадают_в_обе_стороны() {
+    use vrcast_studio_lib::commands::events::names;
+
+    // Перечень имён здесь рукописный: у модуля names нет своего ALL. Забытое
+    // здесь имя поймает обратная сторона — лишнее значение в EVENTS.
+    let rust: HashSet<String> = [
         names::TASK_PROGRESS,
         names::TASK_DONE,
         names::LIBRARY_CHANGED,
         names::SERVER_STATE,
         names::VIEWERS_UPDATE,
-    ] {
-        assert!(
-            ts.contains(&format!("\"{name}\"")),
-            "имя события {name} отсутствует в src/shared/contract.ts"
-        );
-    }
-}
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
 
-#[test]
-fn состояния_и_виды_задач_совпадают_с_описанием_для_интерфейса() {
-    use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
-    let ts = contract_ts();
-
-    for k in [
-        TaskKind::Probe,
-        TaskKind::Convert,
-        TaskKind::Upload,
-        TaskKind::BuildLadder,
-        TaskKind::Deploy,
-        TaskKind::UpgradeServer,
-        TaskKind::Diagnose,
-    ] {
-        assert!(
-            ts.contains(&format!("\"{}\"", k.as_str())),
-            "вид задачи {} отсутствует в описании для интерфейса",
-            k.as_str()
-        );
-    }
-
-    for s in [
-        TaskState::Queued,
-        TaskState::Running,
-        TaskState::Paused,
-        TaskState::Completed,
-        TaskState::Failed,
-        TaskState::Cancelled,
-    ] {
-        assert!(
-            ts.contains(&format!("\"{}\"", s.as_str())),
-            "состояние задачи {} отсутствует в описании для интерфейса",
-            s.as_str()
-        );
-    }
+    let ts = declared_strings(&contract_ts(), "export const EVENTS = {");
+    assert_same_sets("имена событий", rust, ts);
 }

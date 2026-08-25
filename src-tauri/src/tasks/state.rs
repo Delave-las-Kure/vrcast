@@ -6,52 +6,63 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Вид задачи.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskKind {
-    /// Разбор исходника — быстро, локально.
-    Probe,
-    /// Подготовка файла к раздаче.
-    Convert,
-    /// Передача файла на сервер.
-    Upload,
-    /// Сборка набора качеств на сервере.
-    BuildLadder,
-    /// Развёртывание раздачи на чистом сервере.
-    Deploy,
-    /// Обновление серверной части.
-    UpgradeServer,
-    /// Снятие состояния сервера.
-    Diagnose,
+/// Объявляет перечисление ОДНИМ перечнем: из него рождаются и enum, и `ALL`,
+/// и `as_str`, и `parse`. Рукописный список рядом с enum — лазейка: код,
+/// добавленный в enum и забытый в списке, выпадает из сверки с TS-договором,
+/// и компилятор при этом молчит. Тот же приём — в `commands::error`.
+macro_rules! str_enum {
+    (
+        $(#[$outer:meta])*
+        $vis:vis enum $enum_name:ident {
+            $($(#[$meta:meta])* $name:ident => $code:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$outer])*
+        $vis enum $enum_name {
+            $($(#[$meta])* $name,)+
+        }
+
+        impl $enum_name {
+            /// Все варианты. Порождён тем же перечнем, что и enum, — разойтись не могут.
+            pub const ALL: &'static [$enum_name] = &[$(Self::$name),+];
+
+            pub fn as_str(&self) -> &'static str {
+                match self { $(Self::$name => $code,)+ }
+            }
+
+            pub fn parse(s: &str) -> Option<Self> {
+                match s {
+                    $($code => Some(Self::$name),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+str_enum! {
+    /// Вид задачи.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum TaskKind {
+        /// Разбор исходника — быстро, локально.
+        Probe => "probe",
+        /// Подготовка файла к раздаче.
+        Convert => "convert",
+        /// Передача файла на сервер.
+        Upload => "upload",
+        /// Сборка набора качеств на сервере.
+        BuildLadder => "build_ladder",
+        /// Развёртывание раздачи на чистом сервере.
+        Deploy => "deploy",
+        /// Обновление серверной части.
+        UpgradeServer => "upgrade_server",
+        /// Снятие состояния сервера.
+        Diagnose => "diagnose",
+    }
 }
 
 impl TaskKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Probe => "probe",
-            Self::Convert => "convert",
-            Self::Upload => "upload",
-            Self::BuildLadder => "build_ladder",
-            Self::Deploy => "deploy",
-            Self::UpgradeServer => "upgrade_server",
-            Self::Diagnose => "diagnose",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "probe" => Self::Probe,
-            "convert" => Self::Convert,
-            "upload" => Self::Upload,
-            "build_ladder" => Self::BuildLadder,
-            "deploy" => Self::Deploy,
-            "upgrade_server" => Self::UpgradeServer,
-            "diagnose" => Self::Diagnose,
-            _ => return None,
-        })
-    }
-
     /// Какой ресурс занимает задача.
     pub fn lane(&self) -> Lane {
         match self {
@@ -106,42 +117,21 @@ pub enum PauseKind {
     NotPausable,
 }
 
-/// Состояние задачи.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskState {
-    Queued,
-    Running,
-    Paused,
-    Completed,
-    Failed,
-    Cancelled,
+str_enum! {
+    /// Состояние задачи.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum TaskState {
+        Queued => "queued",
+        Running => "running",
+        Paused => "paused",
+        Completed => "completed",
+        Failed => "failed",
+        Cancelled => "cancelled",
+    }
 }
 
 impl TaskState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Queued => "queued",
-            Self::Running => "running",
-            Self::Paused => "paused",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "queued" => Self::Queued,
-            "running" => Self::Running,
-            "paused" => Self::Paused,
-            "completed" => Self::Completed,
-            "failed" => Self::Failed,
-            "cancelled" => Self::Cancelled,
-            _ => return None,
-        })
-    }
-
     /// Завершённые состояния: из них переходов нет.
     pub fn is_final(&self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
