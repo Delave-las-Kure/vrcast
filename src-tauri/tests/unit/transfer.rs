@@ -70,12 +70,29 @@ fn позиция_возобновления_переживает_запись_�
     let token = ResumeToken {
         remote_temp: String::from("/var/lib/.vrcast-uploads/t1.film.part"),
         remote_name: String::from("film_22.mp4"),
+        local_path: Some(String::from("F:/видео/фильм 22.mp4")),
         source_size: 32_000_000_000,
-        source_modified: Some(String::from("2026-08-25T10:00:00Z")),
-        uploaded_hint: 12_000_000_000,
+        source_modified: Some(String::from("1756108800")),
+        media_id: Some(String::from("m-42")),
+        limit_bps: Some(8_000_000),
     };
     let back = ResumeToken::parse(&token.to_json()).expect("позиция не прочиталась");
     assert_eq!(back, token);
+}
+
+#[test]
+fn позиция_из_прежней_версии_читается_без_пути_к_исходнику() {
+    // Записи, сделанные прежними версиями, лежат в базе у тех, кто уже пользуется
+    // приложением. Уронить на них разбор значило бы потерять незаконченные передачи
+    // при обновлении — молча, потому что разбор возвращает `None`.
+    //
+    // Запись нарочно взята «как есть»: в ней нет полей, появившихся позже,
+    // и есть `uploaded_hint`, которого больше нет. Должно пережить и то и другое.
+    let старая = r#"{"remote_temp":"/tmp/x.part","remote_name":"film.mp4",
+        "source_size":1000,"source_modified":null,"uploaded_hint":500}"#;
+    let back = ResumeToken::parse(старая).expect("прежняя запись перестала читаться");
+    assert_eq!(back.local_path, None);
+    assert_eq!(back.remote_name, "film.mp4");
 }
 
 #[test]
@@ -85,18 +102,20 @@ fn подменённый_исходник_замечается_до_перед�
     let token = ResumeToken {
         remote_temp: String::from("/tmp/x.part"),
         remote_name: String::from("film.mp4"),
+        local_path: Some(String::from("/home/u/film.mp4")),
         source_size: 1_000,
-        source_modified: Some(String::from("2026-08-25T10:00:00Z")),
-        uploaded_hint: 500,
+        source_modified: Some(String::from("1756108800")),
+        media_id: None,
+        limit_bps: None,
     };
 
-    assert!(token.matches_source(1_000, Some("2026-08-25T10:00:00Z")));
+    assert!(token.matches_source(1_000, Some("1756108800")));
     assert!(
-        !token.matches_source(2_000, Some("2026-08-25T10:00:00Z")),
+        !token.matches_source(2_000, Some("1756108800")),
         "другой размер принят за тот же файл"
     );
     assert!(
-        !token.matches_source(1_000, Some("2026-08-25T12:00:00Z")),
+        !token.matches_source(1_000, Some("1756195200")),
         "файл пересобрали в тот же объём, и это не замечено"
     );
     // Время неизвестно — довольствуемся размером, но не выдумываем расхождение.

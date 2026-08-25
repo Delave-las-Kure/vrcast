@@ -249,6 +249,9 @@ fn report(ctx: &TaskContext, plan: &UploadPlan, estimate: &ProgressEstimate, sen
         estimate.speed_bps().unwrap_or(0) as i64,
         estimate.eta(remaining).map_or(0, |d| d.as_secs() as i64),
     );
+    // И отдельно — на диск, много реже. Заливка идёт часами, и после перезапуска
+    // приложения человек должен увидеть, сколько уже передано, а не ноль.
+    ctx.save_progress(progress);
 }
 
 /// Ввести файл в раздачу одним неделимым действием (FR-033).

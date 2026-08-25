@@ -47,6 +47,12 @@ pub enum TaskError {
 
 pub type Result<T> = std::result::Result<T, TaskError>;
 
+/// Как часто продвижение попадает в базу.
+///
+/// Три секунды — это про то, сколько работы не жалко переспросить у человека после
+/// перезапуска, а не про плавность показа: плавность даёт поток событий.
+const PROGRESS_PERSIST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Событие о задаче, уходящее в интерфейс.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -88,6 +94,11 @@ pub struct TaskContext {
     paused: Arc<Mutex<bool>>,
     resume: Arc<Notify>,
     throttle: Arc<ProgressThrottle>,
+    /// Отдельный клапан — для записи продвижения в базу.
+    ///
+    /// Не тот же, что у событий: события идут в память четыре раза в секунду,
+    /// а запись на диск с такой частотой ради показателя не нужна никому.
+    persist_throttle: Arc<ProgressThrottle>,
     events: broadcast::Sender<TaskEvent>,
     db: Arc<Db>,
 }
@@ -171,6 +182,25 @@ impl TaskContext {
             speed_bps,
             eta_s,
         });
+    }
+
+    /// Запомнить продвижение так, чтобы оно пережило закрытие приложения.
+    ///
+    /// Событиями продвижение расходится по интерфейсу четыре раза в секунду, но живёт
+    /// только в памяти. В базу оно пишется много реже — раз в несколько секунд:
+    /// точность до секунды здесь никому не нужна, а держать диск занятым ради неё
+    /// незачем. Задача сама решает, когда звать: слой задач не знает, что считать
+    /// продвижением.
+    ///
+    /// Неудача записи проглатывается намеренно: показатель — не работа, и ронять
+    /// из-за него многочасовую передачу нельзя.
+    pub fn save_progress(&self, progress: f64) {
+        if !self.persist_throttle.allow(false) {
+            return;
+        }
+        if let Err(e) = store::save_progress(&self.db, &self.id, progress) {
+            tracing::debug!(id = %self.id, error = %e, "продвижение не записано");
+        }
     }
 
     /// Записать позицию возобновления.
@@ -264,9 +294,58 @@ impl TaskEngine {
         let id = uuid::Uuid::new_v4().to_string();
         let record = TaskRecord::new(id.clone(), kind, server_id);
         store::upsert(&self.db, &record)?;
+        self.start(id.clone(), kind, TaskState::Queued, work);
+        Ok(id)
+    }
 
+    /// Вернуть к жизни задачу прошлого запуска, не создавая новой.
+    ///
+    /// Нужно ради FR-031: заливка обязана продолжаться после закрытия и повторного
+    /// запуска приложения. Без этого задача видна в списке приостановленной, но
+    /// продолжить её нечем — рабочая часть живёт только в памяти и умирает вместе
+    /// с приложением. Номер сохраняется прежний: у неё та же позиция возобновления,
+    /// та же запись в базе и то же место в глазах человека.
+    ///
+    /// Задача поднимается **приостановленной**: она ждёт, пока человек скажет
+    /// «продолжить». Самовольно возобновлять многочасовую передачу при запуске
+    /// приложения нельзя — человек мог закрыть его именно чтобы она прекратилась.
+    pub fn resubmit_paused<F, Fut>(&self, id: &str, work: F) -> Result<()>
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), String>> + Send + 'static,
+    {
+        let record = store::get(&self.db, id)?.ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
+        if record.state.is_final() {
+            return Err(TaskError::BadTransition {
+                id: id.to_owned(),
+                from: record.state.as_str(),
+                to: TaskState::Paused.as_str(),
+            });
+        }
+        if self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(id)
+        {
+            // Уже жива — поднимать второй раз нельзя: получатся две работы
+            // с одним номером.
+            return Ok(());
+        }
+
+        store::save_state(&self.db, id, TaskState::Paused, None)?;
+        self.start(id.to_owned(), record.kind, TaskState::Paused, work);
+        Ok(())
+    }
+
+    /// Общая часть постановки: завести живую задачу и запустить её работу.
+    fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, work: F)
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), String>> + Send + 'static,
+    {
         let cancel = CancellationToken::new();
-        let paused = Arc::new(Mutex::new(false));
+        let paused = Arc::new(Mutex::new(initial == TaskState::Paused));
         let resume = Arc::new(Notify::new());
         let throttle = Arc::new(ProgressThrottle::default());
 
@@ -276,7 +355,7 @@ impl TaskEngine {
                 id.clone(),
                 LiveTask {
                     kind,
-                    state: TaskState::Queued,
+                    state: initial,
                     cancel: cancel.clone(),
                     paused: paused.clone(),
                     resume: resume.clone(),
@@ -291,13 +370,38 @@ impl TaskEngine {
             paused,
             resume,
             throttle,
+            persist_throttle: Arc::new(ProgressThrottle::new(PROGRESS_PERSIST_INTERVAL)),
             events: self.events.clone(),
             db: self.db.clone(),
         };
 
         let engine = self.clone();
         let task_id = id.clone();
+        let paused_flag = ctx.paused.clone();
+        let resume_signal = ctx.resume.clone();
         tokio::spawn(async move {
+            // Поднятая после перезапуска задача ждёт человека и **не занимает полосу**:
+            // иначе она заняла бы место, ничего не делая, и вторая такая же не смогла
+            // бы начаться. Самовольно продолжать многочасовую передачу при запуске
+            // приложения тоже нельзя — его могли закрыть именно ради её прекращения.
+            loop {
+                let resumed = resume_signal.notified();
+                if cancel.is_cancelled() {
+                    engine.finish(&task_id, TaskState::Cancelled, None);
+                    return;
+                }
+                if !*paused_flag.lock().unwrap_or_else(|e| e.into_inner()) {
+                    break;
+                }
+                tokio::select! {
+                    _ = resumed => {}
+                    _ = cancel.cancelled() => {
+                        engine.finish(&task_id, TaskState::Cancelled, None);
+                        return;
+                    }
+                }
+            }
+
             // Ждём места в полосе. Отмена работает и здесь: стоящую в очереди задачу
             // можно снять, не дожидаясь её запуска.
             loop {
@@ -327,8 +431,6 @@ impl TaskEngine {
                 Err(e) => engine.finish(&task_id, TaskState::Failed, Some(e)),
             }
         });
-
-        Ok(id)
     }
 
     /// Отменить задачу.
@@ -338,15 +440,42 @@ impl TaskEngine {
     pub fn cancel(&self, id: &str) -> Result<()> {
         let token = {
             let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-            let t = live
-                .get(id)
-                .ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
-            // Приостановленная задача не проснётся сама — будим, чтобы она увидела отмену.
-            t.resume.notify_waiters();
-            t.cancel.clone()
+            match live.get(id) {
+                Some(t) => {
+                    // Приостановленная задача не проснётся сама — будим, чтобы она
+                    // увидела отмену.
+                    t.resume.notify_waiters();
+                    Some(t.cancel.clone())
+                }
+                None => None,
+            }
         };
-        token.cancel();
-        Ok(())
+
+        match token {
+            Some(token) => {
+                token.cancel();
+                Ok(())
+            }
+            // Задачи нет среди живых: она осталась от прошлого запуска и никем
+            // не поднята. Останавливать нечего, но решение человека записать надо —
+            // иначе она навсегда останется в списке приостановленной, и снять её
+            // будет нечем.
+            None => {
+                let record =
+                    store::get(&self.db, id)?.ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
+                if record.state.is_final() {
+                    // Повтор безопасен (конституция, принцип V).
+                    return Ok(());
+                }
+                store::save_state(&self.db, id, TaskState::Cancelled, None)?;
+                let _ = self.events.send(TaskEvent::Done {
+                    id: id.to_owned(),
+                    state: TaskState::Cancelled,
+                    error: None,
+                });
+                Ok(())
+            }
+        }
     }
 
     /// Приостановить задачу.
@@ -418,9 +547,14 @@ impl TaskEngine {
             return ClaimOutcome::Gone;
         };
         let lane = t.kind.lane();
+        // Себя в счёт не берём. Задача, поднятая после перезапуска и продолженная
+        // человеком, уже числится выполняющейся — и, считая себя, никогда бы
+        // не дождалась свободного места в собственной полосе.
         let used = live
-            .values()
-            .filter(|x| x.state.occupies_lane() && x.kind.lane() == lane)
+            .iter()
+            .filter(|(other_id, x)| {
+                other_id.as_str() != id && x.state.occupies_lane() && x.kind.lane() == lane
+            })
             .count();
         if used >= self.limits.for_lane(lane) {
             return ClaimOutcome::Busy;

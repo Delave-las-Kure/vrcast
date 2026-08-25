@@ -500,6 +500,117 @@ async fn прерванная_задача_становится_приостан
     );
 }
 
+#[tokio::test]
+async fn задача_прошлого_запуска_поднимается_и_продолжается() {
+    // FR-031. Без этого задача после перезапуска приложения видна в списке
+    // приостановленной, но продолжить её нечем: рабочая часть живёт только в памяти
+    // и умирает вместе с приложением. Человеку это выглядит как «задача есть,
+    // а кнопка не работает».
+    let db = Arc::new(Db::open_in_memory().unwrap());
+
+    // Изображаем прошлый запуск: задача была в работе, приложение умерло.
+    let mut rec = store::TaskRecord::new("t-прошлая", TaskKind::Upload, None);
+    rec.state = TaskState::Running;
+    rec.progress = 0.4;
+    store::upsert(&db, &rec).unwrap();
+
+    let e = TaskEngine::new(db.clone());
+    e.recover_after_start().unwrap();
+    assert_eq!(
+        e.get("t-прошлая").unwrap().unwrap().state,
+        TaskState::Paused,
+        "прерванная задача должна стать приостановленной, а не завершённой"
+    );
+
+    let ran = Arc::new(AtomicUsize::new(0));
+    let r = ran.clone();
+    e.resubmit_paused("t-прошлая", move |ctx| async move {
+        ctx.wait_while_paused().await;
+        r.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+    .expect("задача не поднялась");
+
+    // Поднятая задача ждёт человека и сама не начинается.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        0,
+        "поднятая задача продолжилась самовольно — а приложение могли закрыть \
+         именно ради её прекращения"
+    );
+    assert_eq!(
+        e.get("t-прошлая").unwrap().unwrap().state,
+        TaskState::Paused
+    );
+
+    // И продолжается по слову человека — тем же номером, что был.
+    e.resume("t-прошлая")
+        .expect("поднятая задача не продолжилась");
+    assert!(
+        wait_for_state(
+            &e,
+            "t-прошлая",
+            TaskState::Completed,
+            Duration::from_secs(5)
+        )
+        .await,
+        "продолженная задача не дошла до конца"
+    );
+    assert_eq!(ran.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn поднятая_задача_не_ждёт_собственного_места_в_полосе() {
+    // Она уже числится выполняющейся, и, считая себя, никогда бы не дождалась
+    // свободного места в полосе, где помещается одна.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let mut rec = store::TaskRecord::new("t-одна", TaskKind::Convert, None);
+    rec.state = TaskState::Running;
+    store::upsert(&db, &rec).unwrap();
+
+    let e = TaskEngine::new(db.clone()).with_limits(LaneLimits {
+        compute: 1,
+        network: 1,
+        light: 1,
+    });
+    e.recover_after_start().unwrap();
+
+    e.resubmit_paused("t-одна", |ctx| async move {
+        ctx.wait_while_paused().await;
+        Ok(())
+    })
+    .unwrap();
+    e.resume("t-одна").unwrap();
+
+    assert!(
+        wait_for_state(&e, "t-одна", TaskState::Completed, Duration::from_secs(5)).await,
+        "задача застряла в ожидании места, которое занимает сама"
+    );
+}
+
+#[tokio::test]
+async fn задачу_прошлого_запуска_можно_снять_даже_не_поднимая() {
+    // Иначе она навсегда останется в списке приостановленной, и снять её будет нечем.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let mut rec = store::TaskRecord::new("t-ненужная", TaskKind::Upload, None);
+    rec.state = TaskState::Paused;
+    store::upsert(&db, &rec).unwrap();
+
+    let e = TaskEngine::new(db.clone());
+    e.cancel("t-ненужная").expect("задачу не снять");
+
+    assert_eq!(
+        e.get("t-ненужная").unwrap().unwrap().state,
+        TaskState::Cancelled
+    );
+    // Повтор безопасен (конституция, принцип V).
+    e.cancel("t-ненужная")
+        .expect("повторное снятие считается ошибкой");
+    // А несуществующую снять нельзя — это не то же самое, что уже снятую.
+    assert!(e.cancel("нет-такой").is_err());
+}
+
 #[test]
 fn точечная_запись_не_затирает_чужие_поля() {
     // Дефект, ради которого тест: и токен, и состояние писались через

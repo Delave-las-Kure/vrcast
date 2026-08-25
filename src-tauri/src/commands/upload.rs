@@ -149,7 +149,8 @@ pub mod api {
         }
 
         // Всё проверено — ставим задачу.
-        let state_for_task = state.clone();
+        let db = state.db.clone();
+        let secrets = state.secrets.clone();
         let plan_request = request.clone();
         let name_for_task = clean_name.clone();
         let total = meta.len();
@@ -157,10 +158,9 @@ pub mod api {
         let task_id = state
             .tasks
             .submit(TaskKind::Upload, Some(profile.id.clone()), move |ctx| {
-                let state = state_for_task;
                 let request = plan_request;
                 let name = name_for_task;
-                async move { run_upload(state, ctx, request, name, total).await }
+                async move { run_upload(db, secrets, ctx, request, name, total).await }
             })
             .await?;
 
@@ -170,6 +170,82 @@ pub mod api {
     /// Продолжить приостановленную или прерванную заливку.
     pub fn upload_resume(state: &AppState, task_id: &str) -> Result<()> {
         Ok(state.tasks.resume(task_id)?)
+    }
+
+    /// Вернуть к жизни заливки, оставшиеся от прошлого запуска (FR-031).
+    ///
+    /// Вызывается один раз при старте приложения. Без этого заливка после закрытия
+    /// и повторного запуска видна в списке приостановленной, но продолжить её нечем:
+    /// рабочая часть живёт только в памяти и умирает вместе с приложением. Человеку
+    /// это выглядело бы как «задача есть, а кнопка не работает».
+    ///
+    /// Задачи поднимаются **приостановленными** и ждут решения человека: самовольно
+    /// продолжать многочасовую передачу при запуске нельзя — приложение могли закрыть
+    /// именно ради её прекращения.
+    ///
+    /// Возвращает, сколько заливок поднято.
+    pub fn restore_uploads(state: &AppState) -> Result<usize> {
+        let mut restored = 0;
+
+        for task in state.tasks.list()? {
+            if task.kind != TaskKind::Upload || task.state.is_final() {
+                continue;
+            }
+            let Some(token) = task.resume_token.as_deref().and_then(ResumeToken::parse) else {
+                // Без позиции возобновления продолжать нечего: неизвестно ни куда
+                // передавали, ни под каким именем. Такая задача остаётся в списке,
+                // и её можно снять.
+                tracing::debug!(task = %task.id, "заливка без позиции возобновления не поднята");
+                continue;
+            };
+            let Some(server_id) = task.server_id.clone() else {
+                continue;
+            };
+            let Ok(Some(_)) = profiles::get(&state.db, &server_id) else {
+                tracing::debug!(task = %task.id, "сервер этой заливки удалён, поднимать некуда");
+                continue;
+            };
+
+            // Путь к исходнику знает только позиция возобновления. Записи прежних
+            // версий его не содержат — такую заливку продолжить нечем, но она
+            // остаётся в списке, и её можно снять.
+            let Some(local_path) = token.local_path.clone() else {
+                tracing::warn!(task = %task.id, "в позиции возобновления нет пути к исходнику");
+                continue;
+            };
+
+            let request = UploadRequest {
+                server_id,
+                local_path,
+                remote_name: token.remote_name.clone(),
+                media_id: token.media_id.clone(),
+                limit_bps: token.limit_bps,
+                // Человек согласился на последствия, когда начинал: спрашивать
+                // второй раз о том же файле — значит не помнить его ответ.
+                confirmed: true,
+            };
+
+            let db = state.db.clone();
+            let secrets = state.secrets.clone();
+            let name = token.remote_name.clone();
+            let total = token.source_size;
+
+            let result = state
+                .tasks
+                .resubmit_paused(&task.id, move |ctx| async move {
+                    run_upload(db, secrets, ctx, request, name, total).await
+                });
+
+            match result {
+                Ok(()) => restored += 1,
+                Err(e) => tracing::warn!(task = %task.id, error = %e, "заливку не поднять"),
+            }
+        }
+
+        if restored > 0 {
+            tracing::info!(restored, "заливки прошлого запуска ждут продолжения");
+        }
+        Ok(restored)
     }
 
     /// Есть ли уже незавершённая заливка под этим именем на этот сервер.
@@ -260,15 +336,33 @@ pub mod api {
         })
     }
 
+    /// Отпечаток исходника: размер и время изменения.
+    ///
+    /// Одного размера мало — файл могли пересобрать в тот же объём, и тогда
+    /// продолжение склеило бы две разные версии. Время изменения берётся как есть,
+    /// без разбора: это метка для сравнения, а не дата для показа.
+    async fn source_fingerprint(path: &str) -> std::result::Result<(u64, Option<String>), String> {
+        let meta = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| format!("исходный файл недоступен: {e}"))?;
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs().to_string());
+        Ok((meta.len(), modified))
+    }
+
     /// Сама передача: попытки с переподключением, сверка, ввод в раздачу.
     async fn run_upload(
-        state: AppState,
+        db: std::sync::Arc<crate::store::db::Db>,
+        secrets: std::sync::Arc<dyn crate::store::secrets::SecretStore>,
         ctx: crate::tasks::engine::TaskContext,
         request: UploadRequest,
         clean_name: String,
         total: u64,
     ) -> std::result::Result<(), String> {
-        let profile = match crate::store::profiles::get(&state.db, &request.server_id) {
+        let profile = match crate::store::profiles::get(&db, &request.server_id) {
             Ok(Some(p)) => p,
             Ok(None) => return Err(String::from("Профиль сервера удалён — заливать некуда.")),
             Err(e) => return Err(e.to_string()),
@@ -276,6 +370,33 @@ pub mod api {
 
         let staging = remote_name::staging_dir(&profile.video_dir)
             .ok_or_else(|| String::from("Негде собирать файл рядом с каталогом раздачи."))?;
+
+        // Тот ли это файл, с которого начинали.
+        //
+        // Проверка стоит **до** соединения с сервером: если исходник подменили,
+        // продолжение допишет к началу одного файла хвост другого. Поймала бы это
+        // и сверка контрольных сумм — но уже после того, как передача целиком
+        // закончится, то есть через час работы впустую.
+        let (size_now, modified_now) = source_fingerprint(&request.local_path).await?;
+        let previous = ctx
+            .resume_token()
+            .ok()
+            .flatten()
+            .as_deref()
+            .and_then(ResumeToken::parse);
+        let source_changed = match &previous {
+            // Продолжение прошлой передачи — сверяем с тем, что записали тогда.
+            Some(prev) => !prev.matches_source(size_now, modified_now.as_deref()),
+            // Первый заход — исходник мог измениться между проверками и стартом задачи.
+            None => size_now != total,
+        };
+        if source_changed {
+            return Err(String::from(
+                "Исходный файл изменился с начала заливки. Продолжать нельзя: \
+                 на сервере получилась бы смесь двух файлов. Начните заливку заново.",
+            ));
+        }
+
         let plan = UploadPlan {
             local_path: PathBuf::from(&request.local_path),
             remote_temp: remote_name::staging_file(&staging, &clean_name),
@@ -289,9 +410,11 @@ pub mod api {
         let token = ResumeToken {
             remote_temp: plan.remote_temp.clone(),
             remote_name: clean_name.clone(),
-            source_size: total,
-            source_modified: None,
-            uploaded_hint: 0,
+            local_path: Some(request.local_path.clone()),
+            media_id: request.media_id.clone(),
+            limit_bps: request.limit_bps,
+            source_size: size_now,
+            source_modified: modified_now,
         };
         let _ = ctx.save_resume_token(&token.to_json());
 
@@ -299,7 +422,7 @@ pub mod api {
         let mut delay = FIRST_RETRY_DELAY;
 
         for attempt in 1..=MAX_ATTEMPTS {
-            let conn = match connect(state.secrets.as_ref(), &profile).await {
+            let conn = match connect(secrets.as_ref(), &profile).await {
                 Ok(c) => c,
                 Err(e) => {
                     if attempt == MAX_ATTEMPTS {

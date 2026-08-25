@@ -45,6 +45,16 @@ pub fn run() {
             let state: tauri::State<'_, commands::AppState> = app.state();
             commands::events::bridge_app_events(app.handle().clone(), &state);
 
+            // Заливки прошлого запуска поднимаются здесь, а НЕ в `AppState::bootstrap`:
+            // поднятие порождает работу в исполнителе, а подготовка оболочки идёт
+            // до его появления. Прямой вызов оттуда роняет приложение при запуске —
+            // ровно так уже случалось с потоком событий (T027).
+            match commands::upload::api::restore_uploads(&state) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(restored = n, "заливки прошлого запуска ждут продолжения"),
+                Err(e) => tracing::error!(error = %e, "заливки прошлого запуска не подняты"),
+            }
+
             // Окно создано скрытым и показывается, когда есть что показать: иначе
             // пользователь видит белую вспышку до загрузки интерфейса.
             if let Some(window) = app.get_webview_window("main") {
