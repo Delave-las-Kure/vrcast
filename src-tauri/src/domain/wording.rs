@@ -272,8 +272,9 @@ impl Detail {
 
     /// Add a substitution.
     ///
-    /// Numbers go in raw, not pre-formatted: «22,0 ГБ» and "22.0 GB" are one number
-    /// written by two languages, and choosing which to write belongs to the interface.
+    /// Numbers go in raw, not pre-formatted: one language writes 22.0 GB, another writes
+    /// the same number with a comma and its own unit. Which of the two to write is the
+    /// interface's choice, and it cannot make that choice once the number is a string.
     pub fn with(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
         self.params.insert(name.to_owned(), value.into());
         self

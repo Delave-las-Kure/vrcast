@@ -1,12 +1,12 @@
-//! T040–T042 — команды управления профилями серверов.
+//! T040–T042 — the commands that manage server profiles.
 //!
-//! Договор: `contracts/ipc-commands.md`, раздел «Серверы».
+//! The contract: `contracts/ipc-commands.md`, the "Servers" section.
 //!
-//! Главное правило этого раздела: **секрет пересекает границу ровно один раз** —
-//! когда интерфейс передаёт его при создании или изменении профиля. Обратно секрет
-//! не возвращается никогда, ни одной командой (FR-090, FR-091). Поэтому у ответов
-//! здесь нет и не может быть поля под секрет: возвращается `ServerProfile`, в котором
-//! лежит только ссылка на запись в хранилище ОС.
+//! The main rule of this section: **a secret crosses the boundary exactly once** — when
+//! the interface hands it over while creating or changing a profile. It never comes back,
+//! by any command (FR-090, FR-091). So the answers here have no field for a secret and
+//! cannot have one: what comes back is a `ServerProfile`, holding only a pointer to an entry
+//! in the operating system's store.
 
 use super::error::{AppError, DetailCode, ErrorCode, Result};
 use super::AppState;
@@ -14,12 +14,12 @@ use crate::domain::server_profile::{AuthKind, Ipv6Mode, ServerProfile};
 use crate::domain::wording::Detail;
 use serde::{Deserialize, Serialize};
 
-/// Поля профиля в том виде, в каком их присылает интерфейс.
+/// A profile's fields in the form the interface sends them.
 ///
-/// Отдельный тип от [`ServerProfile`] намеренно: интерфейс не задаёт ни номер
-/// профиля, ни ссылку на секрет, ни отпечаток — их проставляет ядро. Приняв
-/// профиль целиком, мы дали бы интерфейсу возможность подменить ссылку на секрет
-/// чужого профиля.
+/// A type of its own, apart from [`ServerProfile`], deliberately: the interface sets
+/// neither the profile's identifier, nor the pointer to the secret, nor the fingerprint —
+/// the core fills those in. Accepting a whole profile would let the interface substitute
+/// another profile's pointer to a secret.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerInput {
     pub name: String,
@@ -27,27 +27,27 @@ pub struct ServerInput {
     pub port: u16,
     pub user: String,
     pub auth_kind: AuthKind,
-    /// Только при входе по ключу.
+    /// Only when logging in by key.
     pub key_path: Option<String>,
     pub domain: String,
-    /// Пусто = каталог раздачи по умолчанию.
+    /// Empty means the default serving directory.
     pub video_dir: Option<String>,
     pub cdn_base: Option<String>,
     pub ipv6_mode: Option<Ipv6Mode>,
 }
 
-/// Как прошёл отдельный шаг проверки подключения.
+/// How one step of the connection check went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     Ok,
     Failed,
-    /// Шаг не выполнялся: остановились раньше. Показывается наравне с остальными —
-    /// пользователю важно видеть, где именно оборвалось (FR-003).
+    /// The step did not run: we stopped earlier. It is shown alongside the rest — a person
+    /// needs to see exactly where things broke off (FR-003).
     Skipped,
 }
 
-/// Один шаг проверки подключения.
+/// One step of the connection check.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestStep {
     /// Stable step name: `network`, `login`, `video_dir`, `domain`. The interface
@@ -58,26 +58,27 @@ pub struct TestStep {
     pub detail: Option<Detail>,
 }
 
-/// Порядок шагов проверки. Он же — порядок показа.
+/// The order of the check's steps. Also the order they are shown in.
 ///
-/// Порядок не произволен: каждый следующий шаг имеет смысл только при успехе
-/// предыдущего. Проверять отдачу по домену, не сумев войти на сервер, — значит
-/// сообщить пользователю вторую беду, не назвав первую.
+/// The order is not arbitrary: each step makes sense only when the one before it succeeded.
+/// Checking that a domain serves content without having managed to log in to the server
+/// would tell a person about the second trouble without naming the first.
 pub const TEST_STEPS: [&str; 4] = ["network", "login", "video_dir", "domain"];
 
-/// Предложение перенести настройки из `server.env` (T043).
+/// A suggestion to carry the settings over from `server.env` (T043).
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportSuggestion {
-    /// Откуда взято — человек должен понимать, что ему подставили и откуда.
+    /// Where it came from — a person must understand what was filled in and from where.
     pub source: String,
-    /// Ключ есть, а парольной фразы в файле нет: её придётся ввести.
+    /// There is a key but no passphrase in the file: it will have to be typed in.
     pub needs_passphrase: bool,
     pub input: ServerInput,
 }
 
-/// Собрать профиль из присланных полей.
+/// Build a profile out of the fields that were sent.
 ///
-/// Номер, ссылка на секрет и отметка активности не приходят снаружи: их ставит ядро.
+/// The identifier, the pointer to the secret and the active mark do not come from outside:
+/// the core sets those.
 fn profile_from(input: ServerInput, id: String, secret_ref: String) -> ServerProfile {
     let mut p = ServerProfile::new(id, input.name);
     p.host = input.host;
@@ -96,10 +97,10 @@ fn profile_from(input: ServerInput, id: String, secret_ref: String) -> ServerPro
     p
 }
 
-/// Проверить профиль и превратить замечания в ошибку договора.
+/// Check a profile and turn the objections into a contract error.
 ///
-/// Замечания склеиваются в одно сообщение, а не теряются: их бывает несколько,
-/// и человеку нужно увидеть все сразу, а не по одному за круг.
+/// The objections are joined into one message rather than lost: there are often several,
+/// and a person needs to see them all at once rather than one per round.
 fn check(profile: &ServerProfile) -> Result<()> {
     profile.validate().map_err(|problems| {
         AppError::new(ErrorCode::InvalidInput)
@@ -116,8 +117,8 @@ fn check(profile: &ServerProfile) -> Result<()> {
     })
 }
 
-/// Отказ на ссылку в пустоту. Отдельная функция — чтобы формулировка была одна
-/// на все команды: пользователь не должен гадать, одно ли это и то же.
+/// A refusal for a pointer into nothing. A function of its own so that the wording is one
+/// and the same across every command: a person should not have to guess whether it is.
 pub(crate) fn no_such_server(id: &str) -> AppError {
     AppError::new(ErrorCode::InvalidInput)
         .detail(DetailCode::ProfileNotFound)
@@ -129,12 +130,13 @@ pub mod api {
     use crate::store::profiles;
     use crate::store::secrets::SecretRef;
 
-    /// Список профилей. Без секретов — их здесь физически нет.
+    /// The list of profiles. Without the secrets — they are physically not here.
     pub fn servers_list(state: &AppState) -> Result<Vec<ServerProfile>> {
         Ok(profiles::list(&state.db)?)
     }
 
-    /// Добавить профиль. Секрет уходит в хранилище ОС, в профиль пишется только ссылка.
+    /// Add a profile. The secret goes to the operating system store; only a pointer is
+    /// written into the profile.
     pub fn server_add(state: &AppState, input: ServerInput, secret: &str) -> Result<String> {
         let id = format!("srv_{}", uuid::Uuid::new_v4().simple());
         let reference = SecretRef::for_server(&id);
@@ -153,21 +155,21 @@ pub mod api {
 
         profiles::insert(&state.db, &profile)?;
 
-        // Секрет — после записи профиля, и с уборкой при неудаче: иначе в системном
-        // менеджере паролей осталась бы запись, на которую ничто не ссылается,
-        // и удалить её пользователю было бы нечем.
+        // The secret goes after the profile is written, and is cleaned up on failure:
+        // otherwise an entry nothing points at would be left in the system password
+        // manager, and a person would have nothing to delete it with.
         if let Err(e) = state.secrets.set(&reference, secret) {
             let _ = profiles::remove(&state.db, &id);
             return Err(e.into());
         }
 
-        tracing::info!(server = %id, "профиль сервера создан");
+        tracing::info!(server = %id, "the server profile was created");
         Ok(id)
     }
 
-    /// Изменить профиль. Секрет заменяется, **только если передан**: иначе изменение
-    /// имени профиля стирало бы пароль, и узнал бы об этом пользователь только
-    /// при следующем подключении.
+    /// Change a profile. The secret is replaced **only when one is passed**: otherwise
+    /// changing a profile's name would wipe out the password, and a person would learn of it
+    /// only at the next connection.
     pub fn server_update(
         state: &AppState,
         id: &str,
@@ -177,8 +179,8 @@ pub mod api {
         let existing = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
 
         let mut profile = profile_from(input, existing.id.clone(), existing.secret_ref.clone());
-        // Отметку активности и подтверждённый отпечаток правка полей не трогает:
-        // и то и другое — отдельные осознанные действия пользователя.
+        // Editing the fields leaves the active mark and the confirmed fingerprint alone:
+        // both of those are deliberate acts of a person's own.
         profile.is_active = existing.is_active;
         profile.host_fingerprint = existing.host_fingerprint.clone();
         profile.normalize();
@@ -202,13 +204,13 @@ pub mod api {
         Ok(())
     }
 
-    /// Удалить профиль вместе с записью секрета в хранилище ОС.
+    /// Delete a profile along with its secret's entry in the operating system store.
     ///
-    /// Оставленный секрет — это доступ к чужому серверу, о котором пользователь
-    /// уже не помнит (FR-005).
+    /// A secret left behind is access to somebody else's server that a person no longer
+    /// remembers (FR-005).
     pub fn server_remove(state: &AppState, id: &str) -> Result<()> {
-        // Отсутствие профиля не ошибка: повтор обязан быть безопасным
-        // (договор, правило 5).
+        // A missing profile is not an error: repeating must be safe (the contract,
+        // rule 5).
         let Some(profile) = profiles::get(&state.db, id)? else {
             return Ok(());
         };
@@ -218,16 +220,16 @@ pub mod api {
             .secrets
             .delete(&SecretRef::from_stored(&profile.secret_ref))
         {
-            // Профиль уже удалён. Сообщить о повисшем секрете важнее, чем промолчать,
-            // но возвращать ошибку нельзя: тогда повторное удаление стало бы
-            // невозможным, а профиля уже нет.
-            tracing::error!(server = %id, error = %e, "секрет удалённого профиля остался в хранилище");
+            // The profile is already deleted. Reporting the dangling secret matters more
+            // than keeping quiet, but an error must not be returned: deleting again would
+            // then be impossible, and the profile is already gone.
+            tracing::error!(server = %id, error = %e, "the deleted profile's secret stayed in the store");
         }
-        tracing::info!(server = %id, "профиль сервера удалён");
+        tracing::info!(server = %id, "the server profile was deleted");
         Ok(())
     }
 
-    /// Сделать профиль активным. Активен ровно один (FR-002).
+    /// Make a profile the active one. Exactly one is active (FR-002).
     pub fn server_set_active(state: &AppState, id: &str) -> Result<()> {
         if profiles::set_active(&state.db, id)? {
             Ok(())
@@ -236,27 +238,27 @@ pub mod api {
         }
     }
 
-    /// Пошаговая проверка подключения (FR-003).
+    /// The step-by-step connection check (FR-003).
     ///
-    /// Возвращает **все** шаги, а не только сломавшийся: пользователю нужно видеть,
-    /// что успело пройти. Ошибкой команда не завершается — неудача шага это данные,
-    /// а не отказ команды.
+    /// It returns **every** step, not only the one that broke: a person needs to see what
+    /// managed to pass. The command does not end in an error — a failed step is data rather
+    /// than a refusal of the command.
     pub async fn server_test(state: &AppState, id: &str) -> Result<Vec<TestStep>> {
         let profile = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
         Ok(super::probe::run(state, &profile).await)
     }
 
-    /// Предложить перенос настроек из `server.env` (T043).
+    /// Offer to carry the settings over from `server.env` (T043).
     ///
-    /// Отсутствие файла — не ошибка, а обычное дело: у большинства пользователей
-    /// приложения его нет и не будет. Возвращается `None`, и мастер просто
-    /// не показывает это предложение.
+    /// A missing file is not an error but an ordinary thing: most people using the
+    /// application have none and never will. `None` comes back, and the wizard simply does
+    /// not show the offer.
     ///
-    /// Ничего не создаётся и не записывается: это только заполнение формы, которую
-    /// человек увидит и сможет поправить.
+    /// Nothing is created and nothing is written: this only fills in a form a person will
+    /// see and be able to correct.
     pub fn server_import_suggestion(state: &AppState) -> Result<Option<ImportSuggestion>> {
-        // Предложение имеет смысл только для первого профиля: дальше пользователь
-        // заводит серверы сам, и подставлять ему один и тот же файл незачем.
+        // The offer makes sense only for a first profile: after that a person sets up
+        // their servers themselves, and there is no point filling in the same file again.
         if !profiles::list(&state.db)?.is_empty() {
             return Ok(None);
         }
@@ -270,14 +272,14 @@ pub mod api {
             }))
     }
 
-    /// Подтвердить отпечаток сервера (FR-092).
+    /// Confirm a server's fingerprint (FR-092).
     pub fn server_fingerprint_confirm(state: &AppState, id: &str, fingerprint: &str) -> Result<()> {
         let fingerprint = fingerprint.trim();
         if fingerprint.is_empty() {
             return Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::FingerprintEmpty));
         }
         if profiles::set_fingerprint(&state.db, id, fingerprint)? {
-            tracing::info!(server = %id, "отпечаток сервера подтверждён пользователем");
+            tracing::info!(server = %id, "the server's fingerprint was confirmed by the person");
             Ok(())
         } else {
             Err(no_such_server(id))
@@ -285,7 +287,7 @@ pub mod api {
     }
 }
 
-/// Тонкие обёртки для оболочки. Логики здесь нет — только вызов `api`.
+/// The thin wrappers for the shell. There is no logic here — only calls into `api`.
 pub mod ipc {
     use super::*;
     use tauri::State;
@@ -346,7 +348,7 @@ pub mod ipc {
     }
 }
 
-/// T041 — пошаговая проверка подключения.
+/// T041 — the step-by-step connection check.
 mod probe {
     use super::*;
     use crate::domain::server_profile::AuthKind;
@@ -354,10 +356,10 @@ mod probe {
     use crate::store::secrets::SecretRef;
     use std::time::Duration;
 
-    /// Сколько ждём отклика на каждом шаге.
+    /// How long each step waits for an answer.
     ///
-    /// Проверка идёт по нажатию кнопки, и человек смотрит на неё. Полминуты молчания
-    /// он воспримет как зависшее приложение, а не как медленный сервер.
+    /// The check runs on a button press, with a person watching it. Half a minute of silence
+    /// reads to them as a frozen application rather than a slow server.
     const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 
     fn step(index: usize, status: StepStatus, detail: Option<Detail>) -> TestStep {
@@ -378,10 +380,11 @@ mod probe {
         Detail::new(DetailCode::SystemError).with("text", crate::store::redact::safe_display(&e))
     }
 
-    /// Достроить остаток шагов как невыполнявшиеся.
+    /// Fill the remaining steps in as not run.
     ///
-    /// Именно это отличает отчёт о проверке от сообщения об ошибке: человек видит
-    /// не «что-то не так», а «прошло вот это, оборвалось здесь, дальше не смотрели».
+    /// This is exactly what separates a check's report from an error message: a person sees
+    /// not "something is wrong" but "this passed, it broke off here, and we looked no
+    /// further".
     fn skip_rest(steps: &mut Vec<TestStep>) {
         while steps.len() < TEST_STEPS.len() {
             steps.push(step(steps.len(), StepStatus::Skipped, None));
@@ -391,7 +394,7 @@ mod probe {
     pub async fn run(state: &AppState, profile: &ServerProfile) -> Vec<TestStep> {
         let mut steps: Vec<TestStep> = Vec::with_capacity(TEST_STEPS.len());
 
-        // 1. Сеть.
+        // 1. The network.
         match reach_ssh(&profile.host, profile.port).await {
             Ok(banner) => steps.push(said(0, StepStatus::Ok, banner)),
             Err(detail) => {
@@ -401,9 +404,9 @@ mod probe {
             }
         }
 
-        // 2. Вход. Учётные данные не отправляются серверу, отпечаток которого
-        // не подтверждён, — поэтому неподтверждённый отпечаток останавливает
-        // проверку здесь, а не превращается в загадочную неудачу входа.
+        // 2. Logging in. Credentials are never sent to a server whose fingerprint has not
+        // been confirmed — so an unconfirmed fingerprint stops the check here rather than
+        // turning into a mysterious login failure.
         let Some(expected) = profile.host_fingerprint.clone() else {
             steps.push(said(
                 1,
@@ -451,16 +454,17 @@ mod probe {
                 c
             }
             Err(e) => {
-                // Подробность проходит вырезание секретов: она приходит от чужой
-                // библиотеки, которая о наших правилах ничего не знает.
+                // The detail goes through secret redaction: it comes from somebody else's
+                // library, which knows nothing of our rules.
                 steps.push(said(1, StepStatus::Failed, system(&e)));
                 skip_rest(&mut steps);
                 return steps;
             }
         };
 
-        // 3. Каталог с видео. Проверяем и чтение, и запись: узнать о нехватке прав
-        // на первой же заливке — поздно, файл к тому времени уже качается.
+        // 3. The video directory. Both reading and writing are checked: learning about
+        // missing permissions at the first upload is too late — the file is already on its
+        // way by then.
         let probe_cmd = format!(
             "test -d '{dir}' && test -r '{dir}' && test -w '{dir}'",
             dir = profile.video_dir
@@ -491,21 +495,22 @@ mod probe {
             }
         }
 
-        // Берём имя настоящего файла из каталога — им и будем проверять отдачу.
-        // Это и есть разница между «веб-сервер отвечает» и «раздача работает».
+        // The name of a real file from the directory is taken — that is what serving will
+        // be checked with. This is the difference between "the web server answers" and
+        // "the serving works".
         let sample = sample_file(&conn, &profile.video_dir).await;
         conn.close().await;
 
-        // 4. Отдача по домену.
+        // 4. Serving over the domain.
         steps.push(check_domain(&profile.domain, sample.as_deref()).await);
         steps
     }
 
-    /// Имя любого видеофайла из каталога раздачи.
+    /// The name of any video file from the serving directory.
     ///
-    /// Нужно, чтобы проверить отдачу настоящим файлом, а не корнем каталога.
-    /// Отсутствие файлов — не беда: на свежем сервере их и нет, проверка тогда
-    /// сделает что может и честно скажет, чего не проверяла.
+    /// Needed so that serving is checked with a real file rather than with the directory
+    /// root. Having no files is no disaster: a fresh server has none, and the check then
+    /// does what it can and says honestly what it did not check.
     async fn sample_file(conn: &Connection, video_dir: &str) -> Option<String> {
         let cmd = format!(
             "find {} -maxdepth 1 -type f -name '*.mp4' -printf '%f\\n' 2>/dev/null | head -n 1",
@@ -520,17 +525,17 @@ mod probe {
         }
     }
 
-    /// Достучаться до SSH и убедиться, что там **именно он**.
+    /// Reach SSH and make sure it is **really it** there.
     ///
-    /// Установленного соединения мало. У части хостеров перед сервером стоит защита
-    /// от атак, которая сама завершает рукопожатие TCP на **любом** порту — и молчит.
-    /// Проверено на боевом сервере автора 2026-08-25: порты 64999, 12345 и 54321
-    /// «отвечали» ровно так же, как 22, хотя за ними нет ничего.
+    /// An established connection is not enough. Some hosting providers put attack protection
+    /// in front of a server, and it completes the TCP handshake itself on **any** port — and
+    /// says nothing. Checked against the author's live server on 2026-08-25: ports 64999,
+    /// 12345 and 54321 "answered" exactly as 22 did, with nothing behind them.
     ///
-    /// Поэтому шаг считается пройденным, только если сервер представился: настоящий
-    /// SSH шлёт строку `SSH-2.0-…` сразу после соединения, ничего не дожидаясь.
-    /// Это тот же принцип, что и в проверке отдачи по домену (R-20): открытый порт
-    /// не доказывает ничего, доказывает ответ.
+    /// So the step counts as passed only when the server introduced itself: a real SSH sends
+    /// an `SSH-2.0-…` line right after connecting, waiting for nothing. It is the same
+    /// principle as in checking serving over a domain (R-20): an open port proves nothing,
+    /// an answer does.
     async fn reach_ssh(host: &str, port: u16) -> std::result::Result<Detail, Detail> {
         use tokio::io::AsyncReadExt;
 
@@ -545,8 +550,8 @@ mod probe {
                 }
             };
 
-        // Баннера хватает первых нескольких десятков байт; ждать его долго незачем —
-        // настоящий SSH шлёт его немедленно.
+        // The first few dozen bytes are enough for the banner; there is no point waiting
+        // long for it — a real SSH sends it immediately.
         let mut buf = [0u8; 128];
         let read = tokio::time::timeout(STEP_TIMEOUT, stream.read(&mut buf)).await;
 
@@ -568,19 +573,19 @@ mod probe {
         }
     }
 
-    /// Проверить, что раздача отвечает по домену — **с машины пользователя**.
+    /// Check that the serving answers over the domain — **from the person's own machine**.
     ///
-    /// Проверять изнутри сервера бессмысленно: оттуда «работает» и то, что снаружи
-    /// недоступно из-за доменной записи или сетевого фильтра.
+    /// Checking from inside the server is pointless: from there "it works" even when the
+    /// outside cannot reach it because of a domain record or a network filter.
     ///
-    /// Что этот шаг доказывает, когда в каталоге есть хотя бы один файл: домен
-    /// разрешается, ведёт сюда, сертификат действителен, **и раздача действительно
-    /// отдаёт содержимое этого файла**. Ради последнего запрашивается ровно один
-    /// байт настоящего файла: без него проверка сводилась бы к «веб-сервер отвечает»,
-    /// а это, как и открытый порт, не доказывает ничего (R-20).
+    /// What this step proves when the directory holds at least one file: the domain
+    /// resolves, leads here, the certificate is valid, **and the serving really does hand
+    /// out that file's contents**. For the last of those exactly one byte of a real file is
+    /// requested: without it the check would come down to "the web server answers", which,
+    /// like an open port, proves nothing (R-20).
     ///
-    /// Когда файлов нет, проверяется только доступность домена — и об этом сказано
-    /// в подробности шага, чтобы успех не выглядел полнее, чем он есть.
+    /// When there are no files, only the domain's reachability is checked — and the step's
+    /// detail says so, lest the success look fuller than it is.
     async fn check_domain(domain: &str, sample: Option<&str>) -> TestStep {
         let client = match reqwest::Client::builder().timeout(STEP_TIMEOUT).build() {
             Ok(c) => c,
@@ -588,9 +593,9 @@ mod probe {
         };
 
         let (url, checking_file) = match sample {
-            // Имя файла проходит то же кодирование, что и зрительские ссылки:
-            // иначе пробел или кириллица в имени сломают проверку там, где
-            // сама раздача работает.
+            // The file name goes through the same encoding as the viewers' links:
+            // otherwise a space or a non-Latin character in a name breaks the check where
+            // the serving itself works.
             Some(name) => (
                 crate::domain::links::for_path(domain, None, name).origin,
                 true,
@@ -601,8 +606,8 @@ mod probe {
             ),
         };
 
-        // Просим один байт: этого хватает, чтобы убедиться в отдаче, и не тянет
-        // с сервера гигабайты ради проверки.
+        // One byte is asked for: that is enough to be sure of the serving, and it does not
+        // pull gigabytes off the server for a check.
         let request = if checking_file {
             client.get(&url).header("Range", "bytes=0-0")
         } else {
@@ -613,8 +618,8 @@ mod probe {
             Ok(response) => {
                 let code = response.status().as_u16();
                 if !checking_file {
-                    // Ответ веб-сервера — успех, но неполный: каталог может быть
-                    // закрыт для перечисления, и это правильная настройка.
+                    // The web server's answer is a success, but not a full one: the
+                    // directory may be closed to listing, and that is the right setting.
                     return said(
                         3,
                         StepStatus::Ok,

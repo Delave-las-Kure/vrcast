@@ -1,25 +1,26 @@
-//! T010 — вырезание секретов из всего, что приложение выводит наружу.
+//! T010 — cutting secrets out of everything the application puts outside.
 //!
-//! Конституция, принцип IV: «Секреты MUST NOT попадать в журналы, отчёты об ошибках и
-//! диагностические выгрузки». Полагаться на аккуратность каждой строчки кода здесь нельзя:
-//! достаточно одного `tracing::debug!("{:?}", profile)` где-нибудь в глубине, чтобы пароль
-//! от чужого сервера оказался в файле журнала. Поэтому защита стоит не в местах вывода,
-//! а на самом выходе — через него проходит всё.
+//! Constitution, principle IV: "Secrets MUST NOT reach logs, error reports or diagnostic
+//! dumps." Relying on every line of code being careful will not do here: one
+//! `tracing::debug!("{:?}", profile)` somewhere deep is enough to put a password to
+//! someone else's server into a log file. So the protection does not stand at the places
+//! that print — it stands at the exit itself, which everything passes through.
 //!
-//! Работает это так: любой секрет, попадающий в приложение, регистрируется здесь (это делает
-//! `store::secrets`, а не вызывающий код), и дальше любая строка, уходящая в журнал, проходит
-//! замену перед записью.
+//! It works like this: every secret that enters the application is registered here (by
+//! `store::secrets`, not by the calling code), and from then on every line going to the log
+//! is put through the substitution before it is written.
 
 use std::borrow::Cow;
 use std::io::{self, Write};
 use std::sync::{OnceLock, RwLock};
 
-/// Чем заменяется найденный секрет. Намеренно заметно: если это появилось в журнале,
-/// значит защита сработала, а не «строка просто выглядит странно».
-pub const MASK: &str = "[секрет скрыт]";
+/// What a secret found in the text is replaced with. Deliberately conspicuous: if this
+/// turned up in a log, the protection worked — the line does not merely "look odd".
+pub const MASK: &str = "[secret hidden]";
 
-/// Короче этого не регистрируем. Секрет из трёх символов встретится в журнале случайно
-/// сотни раз и превратит его в решето из масок, скрыв заодно всё полезное.
+/// Nothing shorter than this is registered. A three-character secret would turn up in a
+/// log by chance hundreds of times and riddle it with masks, hiding everything useful along
+/// with it.
 const MIN_SECRET_LEN: usize = 8;
 
 fn registry() -> &'static RwLock<Vec<String>> {
@@ -27,33 +28,33 @@ fn registry() -> &'static RwLock<Vec<String>> {
     REGISTRY.get_or_init(|| RwLock::new(Vec::new()))
 }
 
-/// Запомнить значение, которое не должно появляться в выводе.
+/// Remember a value that must never appear in the output.
 ///
-/// Вызывается там, где секрет входит в приложение, — не там, где он выводится.
-/// Слишком короткие значения игнорируются намеренно (см. `MIN_SECRET_LEN`).
+/// Called where a secret enters the application — not where it is printed. Values that are
+/// too short are ignored on purpose (see `MIN_SECRET_LEN`).
 pub fn register(secret: &str) {
     if secret.len() < MIN_SECRET_LEN {
         return;
     }
     let Ok(mut list) = registry().write() else {
-        return; // отравленная блокировка: молча не регистрируем, но и не роняем приложение
+        return; // a poisoned lock: quietly skip registering, but do not bring the app down
     };
     if list.iter().any(|s| s == secret) {
         return;
     }
     list.push(secret.to_owned());
-    // Длинные вперёд: если один секрет содержит другой, замена начнётся с длинного,
-    // иначе от него останется хвост.
+    // The long ones first: if one secret contains another, the substitution starts with
+    // the long one, or a tail of it would be left behind.
     list.sort_by_key(|b| std::cmp::Reverse(b.len()));
 }
 
-/// Забыть ОДИН секрет — тот, что больше не существует.
+/// Forget ONE secret — the one that no longer exists.
 ///
-/// Именно так и надо забывать при удалении профиля. Соблазн позвать здесь
-/// `forget_all` силён и опасен: у остальных профилей секреты живы, и снятая
-/// с них маскировка означала бы, что чужой пароль попадёт в журнал при первой же
-/// ошибке — до перезапуска приложения и без единого признака, что что-то не так
-/// (задолженность T073, принцип IV).
+/// This is how forgetting must go when a profile is deleted. The temptation to call
+/// `forget_all` here is strong and dangerous: the other profiles' secrets are still alive,
+/// and taking the masking off them would mean someone else's password reaching the log on
+/// the very next error — until the application is restarted, and with no sign at all that
+/// anything is wrong (debt T073, principle IV).
 pub fn forget(secret: &str) {
     if secret.len() < MIN_SECRET_LEN {
         return;
@@ -63,21 +64,21 @@ pub fn forget(secret: &str) {
     }
 }
 
-/// Забыть все зарегистрированные секреты.
+/// Forget every registered secret.
 ///
-/// **Только для тестов.** В работающем приложении звать это нельзя: секреты
-/// остальных профилей от этого перестанут вырезаться из вывода. Для удаления
-/// одного профиля есть [`forget`].
+/// **For tests only.** Calling this in a running application is forbidden: the other
+/// profiles' secrets would stop being cut out of the output. For deleting a single profile
+/// there is [`forget`].
 pub fn forget_all() {
     if let Ok(mut list) = registry().write() {
         list.clear();
     }
 }
 
-/// Заменить в тексте все зарегистрированные секреты и блоки приватных ключей.
+/// Replace every registered secret and every private key block in the text.
 ///
-/// Возвращает `Cow`, чтобы в обычном случае (секретов в тексте нет) не копировать строку:
-/// через эту функцию проходит каждая строка журнала.
+/// It returns a `Cow` so that in the usual case — no secrets in the text — the string is
+/// not copied: every line of the log goes through this function.
 pub fn redact(text: &str) -> Cow<'_, str> {
     let mut out = redact_key_blocks(text);
 
@@ -91,15 +92,16 @@ pub fn redact(text: &str) -> Cow<'_, str> {
     out
 }
 
-/// Метки блока приватного ключа. Общие для замены и для построчного писателя:
-/// он обязан узнавать начатый блок, чтобы не выпустить его тело по частям.
+/// The markers of a private key block. Shared by the substitution and by the line-by-line
+/// writer: it has to recognise a block that has begun so it never lets the body out in
+/// pieces.
 const KEY_BEGIN: &str = "-----BEGIN";
 const KEY_END: &str = "-----END";
 
-/// Приватный ключ узнаётся по форме, а не по регистрации.
+/// A private key is recognised by its shape rather than by its registration.
 ///
-/// Это подстраховка на случай, когда ключ прочитан из файла и попал в вывод, минуя
-/// хранилище секретов — то есть ровно в том случае, когда регистрация не сработала.
+/// This is the safety net for when a key was read from a file and reached the output past
+/// the secret store — that is, in exactly the case where registration did not happen.
 fn redact_key_blocks(text: &str) -> Cow<'_, str> {
     const BEGIN: &str = KEY_BEGIN;
     const END_MARK: &str = KEY_END;
@@ -115,7 +117,7 @@ fn redact_key_blocks(text: &str) -> Cow<'_, str> {
         out.push_str(&rest[..start]);
         let tail = &rest[start..];
 
-        // Ищем конец блока: "-----END ... -----"
+        // Looking for the end of the block: "-----END ... -----"
         match tail.find(END_MARK).and_then(|e| {
             tail[e + END_MARK.len()..]
                 .find("-----")
@@ -126,8 +128,8 @@ fn redact_key_blocks(text: &str) -> Cow<'_, str> {
                 rest = &tail[end..];
             }
             None => {
-                // Начало блока есть, конца нет — обрезанный вывод. Прячем весь остаток:
-                // лучше потерять хвост журнала, чем показать половину ключа.
+                // The block begins and never ends — truncated output. Everything left is
+                // hidden: better to lose the tail of the log than to show half a key.
                 out.push_str(MASK);
                 rest = "";
             }
@@ -137,18 +139,18 @@ fn redact_key_blocks(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// Безопасное представление ошибки для показа и записи.
+/// A safe rendering of an error, for showing and for writing down.
 ///
-/// Ошибки — второй по частоте путь утечки после журнала: секрет попадает в сообщение
-/// через `{}` от нижележащей библиотеки, которая о наших правилах ничего не знает.
+/// Errors are the second most common path for a leak after the log: a secret reaches the
+/// message through a `{}` from an underlying library that knows nothing of our rules.
 pub fn safe_display<E: std::fmt::Display + ?Sized>(err: &E) -> String {
     redact(&err.to_string()).into_owned()
 }
 
-/// Обёртка над потоком вывода, вырезающая секреты перед записью.
+/// A wrapper over an output stream that cuts secrets out before writing.
 ///
-/// Накапливает вывод построчно: запись может прийти по частям, и секрет, разорванный
-/// между двумя вызовами, иначе прошёл бы мимо замены.
+/// It gathers the output line by line: a write can arrive in pieces, and a secret torn
+/// between two calls would otherwise slip past the substitution.
 pub struct RedactingWriter<W: Write> {
     inner: W,
     buf: Vec<u8>,
@@ -176,16 +178,18 @@ impl<W: Write> RedactingWriter<W> {
                 continue;
             }
 
-            // Строка начинает блок приватного ключа. Выпускать его построчно нельзя:
-            // тело ключа — строки чистого base64, по отдельности неотличимые от
-            // безобидного вывода, и узнать блок можно только целиком. Пока конец блока
-            // не пришёл — держим буфер (flush замаскирует остаток как обрезанный блок).
+            // The line begins a private key block. Letting it out line by line will not
+            // do: the body of a key is lines of plain base64, each indistinguishable on its
+            // own from harmless output, and a block can only be recognised whole. Until the
+            // end of the block arrives the buffer is held (flush masks the remainder as a
+            // truncated block).
             if has_unclosed_key_block(&String::from_utf8_lossy(&self.buf)) {
                 return Ok(());
             }
 
-            // Конец блока в буфере: выпускаем все накопленные полные строки одним
-            // куском через одну замену — она видит блок целиком и маскирует его.
+            // The end of the block is in the buffer: every gathered complete line goes out
+            // as one piece through one substitution — it sees the whole block and masks
+            // it.
             let last_nl = self.buf.iter().rposition(|b| *b == b'\n').unwrap_or(pos);
             let chunk: Vec<u8> = self.buf.drain(..=last_nl).collect();
             let text = String::from_utf8_lossy(&chunk);
@@ -194,7 +198,7 @@ impl<W: Write> RedactingWriter<W> {
     }
 }
 
-/// Есть ли в тексте начатый, но ещё не закрытый блок приватного ключа.
+/// Whether the text holds a private key block that has begun but not yet closed.
 fn has_unclosed_key_block(text: &str) -> bool {
     let Some(start) = text.rfind(KEY_BEGIN) else {
         return false;
@@ -230,7 +234,7 @@ impl<W: Write> Drop for RedactingWriter<W> {
     }
 }
 
-/// Источник потоков вывода для `tracing`, оборачивающий каждый в вырезание секретов.
+/// A source of output streams for `tracing` that wraps each one in secret redaction.
 pub struct RedactingMakeWriter<M> {
     inner: M,
 }

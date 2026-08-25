@@ -1,30 +1,32 @@
-//! T031 — опись библиотеки `library.json` со счётчиком поколения
-//! (`contracts/server-contract.md`, раздел «Опись библиотеки»).
+//! T031 — the library catalogue `library.json` with its generation counter
+//! (`contracts/server-contract.md`, the library catalogue section).
 //!
-//! Счётчик поколения существует ради одного случая: два экземпляра приложения,
-//! работающие с одним сервером. Порядок записи обязателен (R-10): прочитать
-//! с поколением → изменить → записать рядом → атомарно заменить. Если поколение
-//! на сервере успело измениться, запись **не выполняется** — иначе второй экземпляр
-//! молча сотрёт работу первого.
+//! The generation counter exists for one case: two copies of the application working
+//! with one server. The order of writing is not optional (R-10): read with the
+//! generation, change, write beside it, replace atomically. If the generation on the
+//! server has changed in the meantime the write **does not happen** — otherwise the
+//! second copy quietly wipes out the first one's work.
 //!
-//! Здесь только разбор, сборка и правила. Сама запись на сервер — в `server::manifest_io`.
+//! Only parsing, assembling and the rules live here. Writing to the server itself is
+//! in `server::manifest_io`.
 
 use super::media::{validate_slug, Media};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Опись библиотеки.
+/// The library catalogue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// Растёт на единицу при каждой записи. Ноль = описи ещё не было.
+    /// Goes up by one on every write. Zero means there was no catalogue yet.
     pub generation: u64,
     #[serde(default)]
     pub media: Vec<Media>,
-    /// Поля, которых это приложение не знает.
+    /// Fields this application does not know about.
     ///
-    /// Сохраняются при перезаписи намеренно: опись могла быть написана более новой
-    /// версией приложения, и терять её данные нельзя (FR-131). Молча выбрасывать
-    /// непонятое — самый тихий способ испортить чужие сведения.
+    /// Deliberately kept when rewriting: the catalogue may have been written by a
+    /// newer version of the application, and its data must not be lost (FR-131).
+    /// Quietly discarding what is not understood is the quietest way of ruining
+    /// somebody else's records.
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, serde_json::Value>,
 }
@@ -35,19 +37,20 @@ impl Default for Manifest {
     }
 }
 
-/// Почему опись не удалось прочитать.
+/// Why the catalogue could not be read.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("catalogue could not be parsed: {0}")]
     Malformed(String),
 }
 
-/// Что не так внутри описи. Опись живёт на сервере, её мог править человек.
+/// What is wrong inside the catalogue. It lives on the server and a person may have
+/// edited it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestProblem {
     DuplicateId(String),
     DuplicateSlug(String),
-    /// Один файл числится за двумя медиа — при удалении одного пропадёт и у другого.
+    /// One file belongs to two media — deleting one would take it from the other.
     FileClaimedTwice {
         path: String,
         media: Vec<String>,
@@ -62,25 +65,25 @@ pub enum ManifestProblem {
 impl std::fmt::Display for ManifestProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DuplicateId(id) => write!(f, "два медиа с одинаковым номером «{id}»"),
+            Self::DuplicateId(id) => write!(f, "two media with the same id {id:?}"),
             Self::DuplicateSlug(slug) => {
-                write!(f, "два медиа с одинаковым коротким именем «{slug}»")
+                write!(f, "two media with the same short name {slug:?}")
             }
             Self::FileClaimedTwice { path, media } => write!(
                 f,
-                "файл «{path}» числится сразу за несколькими медиа: {}",
+                "the file {path:?} belongs to several media at once: {}",
                 media.join(", ")
             ),
-            Self::EmptyId => f.write_str("у медиа пустой номер"),
+            Self::EmptyId => f.write_str("a medium has an empty id"),
             Self::BadSlug { slug, reason } => {
-                write!(f, "короткое имя «{slug}» недопустимо: {reason}")
+                write!(f, "the short name {slug:?} is not allowed: {reason}")
             }
         }
     }
 }
 
 impl Manifest {
-    /// Пустая опись — то, с чего начинается сервер без библиотеки.
+    /// An empty catalogue — what a server without a library starts from.
     pub fn empty() -> Self {
         Self {
             generation: 0,
@@ -89,10 +92,11 @@ impl Manifest {
         }
     }
 
-    /// Разобрать содержимое `library.json`.
+    /// Parse the contents of `library.json`.
     ///
-    /// Пустое содержимое — это отсутствующая опись, а не ошибка: на свежем сервере
-    /// файла ещё нет, и падать тут значило бы объявить пустую библиотеку поломкой.
+    /// Empty contents mean an absent catalogue rather than an error: on a fresh server
+    /// the file does not exist yet, and failing here would declare an empty library a
+    /// fault.
     pub fn parse(text: &str) -> Result<Self, ManifestError> {
         if text.trim().is_empty() {
             return Ok(Self::empty());
@@ -100,29 +104,31 @@ impl Manifest {
         serde_json::from_str(text).map_err(|e| ManifestError::Malformed(e.to_string()))
     }
 
-    /// Собрать содержимое для записи на сервер.
+    /// Assemble the contents to write to the server.
     ///
-    /// С отступами, потому что файл читают и правят люди — в том числе когда
-    /// приложение недоступно, а разобраться надо.
+    /// Indented, because people read and edit this file — including when the
+    /// application is unavailable and something has to be worked out.
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_else(|_| String::from("{}"))
     }
 
-    /// Опись для записи поверх прочитанной: поколение на единицу больше.
+    /// A catalogue for writing over the one that was read: the generation is one
+    /// higher.
     ///
-    /// Отдельный шаг, а не `+= 1` где придётся: увеличение поколения — это и есть
-    /// заявка «я записываю поверх того, что прочитал», и делаться она должна в одном
-    /// месте.
+    /// A step of its own rather than a `+= 1` wherever it happens to be convenient:
+    /// raising the generation *is* the claim "I am writing over what I read", and it
+    /// should be made in one place.
     pub fn prepared_for_write(&self) -> Self {
         let mut next = self.clone();
         next.generation = self.generation.saturating_add(1);
         next
     }
 
-    /// Можно ли записывать: то ли поколение сейчас на сервере, что было прочитано.
+    /// Whether writing is allowed: is the generation on the server still the one that
+    /// was read.
     ///
-    /// `base` — поколение, прочитанное перед изменением; `current` — то, что на
-    /// сервере сейчас.
+    /// `base` is the generation read before the change; `current` is what is on the
+    /// server now.
     pub fn write_allowed(base: u64, current: u64) -> bool {
         base == current
     }
@@ -135,7 +141,7 @@ impl Manifest {
         self.media.iter().find(|m| m.id == id)
     }
 
-    /// Все файлы и описания наборов качеств, числящиеся за медиа.
+    /// Every file and quality-ladder description belonging to media.
     pub fn all_claimed_paths(&self) -> Vec<&str> {
         self.media
             .iter()
@@ -144,10 +150,10 @@ impl Manifest {
             .collect()
     }
 
-    /// Свободно ли короткое имя (`slug` уникален в пределах сервера).
+    /// Whether a short name is free (a `slug` is unique within a server).
     ///
-    /// `except_id` позволяет проверять при переименовании: медиа не конфликтует
-    /// с самим собой.
+    /// `except_id` makes the check usable when renaming: a medium does not clash with
+    /// itself.
     pub fn slug_available(&self, slug: &str, except_id: Option<&str>) -> bool {
         !self
             .media
@@ -155,13 +161,13 @@ impl Manifest {
             .any(|m| m.slug == slug && Some(m.id.as_str()) != except_id)
     }
 
-    /// Проверить опись целиком. Возвращает **все** замечания.
+    /// Check the whole catalogue. Returns **every** objection.
     pub fn validate(&self) -> Result<(), Vec<ManifestProblem>> {
         let mut problems = Vec::new();
         let mut seen_ids: HashMap<&str, usize> = HashMap::new();
         let mut seen_slugs: HashMap<&str, usize> = HashMap::new();
-        // Порядок владельцев сохраняем: сообщение об ошибке должно называть их
-        // в том же порядке, что и опись, иначе оно меняется от запуска к запуску.
+        // The owners keep their order: an error message must name them in the same
+        // order as the catalogue, or it changes from run to run.
         let mut owners: Vec<(&str, Vec<&str>)> = Vec::new();
         let mut owner_index: HashMap<&str, usize> = HashMap::new();
 
@@ -214,8 +220,8 @@ impl Manifest {
     }
 }
 
-/// Повторяющиеся ключи в устойчивом порядке: сообщения об ошибках не должны
-/// меняться от запуска к запуску только потому, что обход словаря случаен.
+/// Repeated keys in a stable order: error messages must not change from run to run
+/// merely because walking a map is arbitrary.
 fn sorted_duplicates<'a>(counts: &HashMap<&'a str, usize>) -> Vec<&'a str> {
     let mut dups: Vec<&str> = counts
         .iter()

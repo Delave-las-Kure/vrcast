@@ -1,15 +1,16 @@
-//! T063 — отзывчивость под нагрузкой (SC-009, FR-080).
+//! T063 — responsiveness under load (SC-009, FR-080).
 //!
-//! Требование: реакция на действие не дольше 100 мс, даже когда идут фоновые задачи.
-//! Здесь проверяется его ядерная половина — что читающие команды отвечают быстро,
-//! пока движок занят. Оставшаяся половина (отрисовка) лежит на интерфейсе и меряется
-//! глазами; но именно ядро — то место, где отзывчивость теряют: достаточно, чтобы
-//! читающая команда ждала замок, который держит выполняющаяся задача, и окно
-//! замирает на всё время её работы.
+//! The requirement: a reaction to an action within 100 ms, even while background tasks are
+//! running. What is checked here is its core half — that the reading commands answer quickly
+//! while the engine is busy. The other half (the drawing) belongs to the interface and is
+//! measured by eye; but the core is exactly where responsiveness is lost: it is enough for a
+//! reading command to wait on a lock a running task holds, and the window freezes for as
+//! long as that task runs.
 //!
-//! Порог взят с запасом от заявленного: на машине, занятой сборкой, отдельный вызов
-//! иногда задерживается, и тест, падающий от этого, начали бы перезапускать не глядя.
-//! Разница между «десятки миллисекунд» и «сотни» здесь важнее точной цифры.
+//! The threshold is taken with room to spare over the stated one: on a machine busy with a
+//! build a single call sometimes lags, and a test failing over that would soon be re-run
+//! without a glance. The difference between "tens of milliseconds" and "hundreds" matters
+//! more here than the exact figure.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,8 +21,8 @@ use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::InMemorySecretStore;
 use vrcast_studio_lib::tasks::state::TaskKind;
 
-/// Предел на один вызов. Заявлено 100 мс; берём вдвое, чтобы тест ловил поломку
-/// устройства, а не дрожание загруженной машины.
+/// The limit for one call. 100 ms is stated; twice that is taken so the test catches a
+/// broken design rather than the jitter of a loaded machine.
 const LIMIT: Duration = Duration::from_millis(200);
 
 fn state() -> AppState {
@@ -29,14 +30,14 @@ fn state() -> AppState {
         Arc::new(Db::open_in_memory().unwrap()),
         Arc::new(InMemorySecretStore::new()),
     )
-    .expect("состояние приложения не собралось")
+    .expect("the application state would not assemble")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn читающие_команды_отвечают_быстро_пока_идут_задачи() {
+async fn reading_commands_answer_quickly_while_tasks_run() {
     let s = state();
 
-    // Заполняем очередь работой: и выполняющейся, и ждущей своей полосы.
+    // The queue is filled with work: some running, some waiting for its lane.
     let mut ids = Vec::new();
     for kind in [
         TaskKind::Convert,
@@ -49,8 +50,8 @@ async fn читающие_команды_отвечают_быстро_пока_
         let id = s
             .tasks
             .submit(kind, None, |ctx| async move {
-                // Работа, которая всё время что-то сообщает: события прогресса —
-                // самый плотный поток, какой бывает у приложения.
+                // Work that reports something all the time: progress events are the
+                // densest stream the application ever has.
                 for i in 0..2_000 {
                     ctx.report(i as f64 / 2_000.0, DetailCode::StageConverting);
                     if ctx.is_cancelled() {
@@ -61,12 +62,12 @@ async fn читающие_команды_отвечают_быстро_пока_
                 Ok(())
             })
             .await
-            .expect("задача не поставилась");
+            .expect("the task would not submit");
         ids.push(id);
     }
 
-    // Даём задачам действительно начаться: мерить отзывчивость на пустом движке
-    // значило бы не мерить ничего.
+    // The tasks are given time to really start: measuring responsiveness on an idle
+    // engine would measure nothing.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let mut worst = Duration::ZERO;
@@ -102,10 +103,10 @@ async fn читающие_команды_отвечают_быстро_пока_
 
     assert!(
         worst < LIMIT,
-        "команда {worst_name} отвечала {worst:?} при работающих задачах — \
-         дольше предела {LIMIT:?}. Интерфейс за это время успевает замереть"
+        "the command {worst_name} answered in {worst:?} while tasks were running — \
+         longer than the limit of {LIMIT:?}. The interface freezes in that time"
     );
-    println!("худший вызов под нагрузкой: {worst_name} за {worst:?}");
+    println!("worst call under load: {worst_name} in {worst:?}");
 }
 
 fn measure<F>(f: F) -> Duration
@@ -113,22 +114,22 @@ where
     F: FnOnce() -> vrcast_studio_lib::commands::error::Result<()>,
 {
     let started = Instant::now();
-    f().expect("читающая команда не должна падать");
+    f().expect("a reading command must not fail");
     started.elapsed()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn постановка_задачи_возвращается_сразу_а_не_ждёт_её_конца() {
-    // FR-080, договор слоя команд, правило 1: всё, что дольше секунды, — задача.
-    // Команда обязана вернуть номер немедленно, иначе окно замирает на всё время
-    // работы, и никакие события прогресса этого уже не исправят.
+async fn submitting_a_task_returns_at_once_rather_than_awaiting_its_end() {
+    // FR-080, the command layer's contract, rule 1: anything longer than a second is a
+    // task. The command must return the identifier immediately, or the window freezes for
+    // as long as the work runs, and no progress events will put that right.
     let s = state();
 
     let started = Instant::now();
     let id = s
         .tasks
         .submit(TaskKind::Upload, None, |ctx| async move {
-            // Заведомо дольше любого разумного ожидания ответа.
+            // Certainly longer than any reasonable wait for an answer.
             for _ in 0..600 {
                 if ctx.is_cancelled() {
                     return Ok(());
@@ -138,13 +139,13 @@ async fn постановка_задачи_возвращается_сразу_�
             Ok(())
         })
         .await
-        .expect("задача не поставилась");
+        .expect("the task would not submit");
     let elapsed = started.elapsed();
 
     assert!(
         elapsed < LIMIT,
-        "постановка задачи заняла {elapsed:?} — команда ждала работу вместо того, \
-         чтобы вернуть номер"
+        "submitting the task took {elapsed:?} — the command waited for the work instead \
+         of returning the identifier"
     );
 
     let _ = s.tasks.cancel(&id);

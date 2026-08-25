@@ -1,13 +1,14 @@
-//! T116 — разбор исходника: что за файл нам дали (FR-020, FR-021).
+//! T116 — examining a source: what file we have been given (FR-020, FR-021).
 //!
-//! Спрашивается у `ffprobe` из той же вложенной сборки, что и всё прочее. Своего
-//! разбора контейнеров здесь нет и не будет: их десятки, каждый со своими
-//! странностями, и написать это лучше, чем уже написано, не выйдет.
+//! `ffprobe` from the same bundled build as everything else is asked. There is no
+//! container parsing of our own here and there will not be: there are dozens of them,
+//! each with its own oddities, and writing it better than it has already been written
+//! is not going to happen.
 //!
-//! Разбор ответа отделён от запуска намеренно. Ответ `ffprobe` — это данные,
-//! и все тонкости чтения (числа строками, `und` вместо отсутствующего языка,
-//! частота кадров дробью) проверяются тестом на записанном ответе, без файла
-//! на диске и без самой программы.
+//! Parsing the answer is deliberately separated from running the program. `ffprobe`'s
+//! answer is data, and every subtlety of reading it (numbers as strings, `und` in
+//! place of an absent language, a frame rate as a fraction) is checked by a test
+//! against a recorded answer, with no file on disk and no program at all.
 
 use super::ffmpeg;
 use crate::domain::source::{AudioTrack, SourceFile};
@@ -28,7 +29,7 @@ pub enum ProbeError {
 
 pub type Result<T> = std::result::Result<T, ProbeError>;
 
-/// Разобрать исходник.
+/// Examine a source file.
 pub async fn probe(path: &Path) -> Result<SourceFile> {
     let ffprobe = ffmpeg::locate("ffprobe")?;
 
@@ -48,13 +49,13 @@ pub async fn probe(path: &Path) -> Result<SourceFile> {
         .map_err(|e| ProbeError::Unreadable(format!("{}: {e}", path.display())))?;
 
     if !out.status.success() {
-        // Слово `ffprobe` человеку ничего не говорит, а вот его жалоба говорит:
-        // «moov atom not found», «Invalid data found». Передаём как есть.
-        let жалоба = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-        return Err(ProbeError::Unreadable(if жалоба.is_empty() {
-            format!("{} — разбор не удался без объяснений", path.display())
+        // The word `ffprobe` tells a person nothing, but its complaint does: "moov
+        // atom not found", "Invalid data found". Passed on as it stands.
+        let complaint = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        return Err(ProbeError::Unreadable(if complaint.is_empty() {
+            format!("{} — parsing failed with no explanation", path.display())
         } else {
-            жалоба
+            complaint
         }));
     }
 
@@ -62,12 +63,12 @@ pub async fn probe(path: &Path) -> Result<SourceFile> {
     parse(&text, &path.display().to_string())
 }
 
-// ---------- разбор ответа ----------
+// ---------- parsing the answer ----------
 
-/// Ответ `ffprobe` в том виде, в каком он приходит.
+/// `ffprobe`'s answer in the form it arrives.
 ///
-/// Числа здесь строками не по недосмотру: `ffprobe` так их и печатает. Пытаться
-/// прочитать их как числа значит получить отказ разбора на первом же файле.
+/// Numbers are strings here not by oversight: that is how `ffprobe` prints them.
+/// Trying to read them as numbers means a parse failure on the very first file.
 #[derive(Debug, Deserialize)]
 struct Probed {
     #[serde(default)]
@@ -116,10 +117,11 @@ struct Disposition {
     default: u8,
 }
 
-/// Прочитать ответ `ffprobe`.
+/// Read `ffprobe`'s answer.
 pub fn parse(json: &str, path: &str) -> Result<SourceFile> {
-    let probed: Probed = serde_json::from_str(json)
-        .map_err(|e| ProbeError::Unreadable(format!("ответ разборщика не прочитать: {e}")))?;
+    let probed: Probed = serde_json::from_str(json).map_err(|e| {
+        ProbeError::Unreadable(format!("the prober's answer could not be read: {e}"))
+    })?;
 
     let video = probed
         .streams
@@ -133,9 +135,9 @@ pub fn parse(json: &str, path: &str) -> Result<SourceFile> {
         .filter(|s| s.codec_type.as_deref() == Some("audio"))
         .enumerate()
         .map(|(index, s)| AudioTrack {
-            // Номер среди ЗВУКОВЫХ потоков, а не среди всех: именно его понимает
-            // ffmpeg в `-map 0:a:<N>`. Взять общий номер потока значит промахнуться
-            // дорожкой на любом файле, где звук идёт не первым.
+            // The index among the AUDIO streams, not among all of them: that is what
+            // ffmpeg understands in `-map 0:a:<N>`. Taking the overall stream index
+            // means picking the wrong track on any file where audio is not first.
             index,
             codec: s.codec_name.clone().unwrap_or_default(),
             channels: s.channels.unwrap_or(0),
@@ -169,11 +171,11 @@ pub fn parse(json: &str, path: &str) -> Result<SourceFile> {
     })
 }
 
-/// Частота кадров, округлённая **вверх**.
+/// The frame rate, rounded **up**.
 ///
-/// Приходит дробью: `24/1`, `24000/1001`. Округление вниз превратило бы 47.952
-/// в 47 и занизило уровень совместимости — а занижённый уровень строгий декодер
-/// вправе не принять.
+/// It arrives as a fraction: `24/1`, `24000/1001`. Rounding down would turn 47.952
+/// into 47 and understate the compatibility level — and a strict decoder is entitled
+/// to refuse a file whose level is understated.
 fn fps(video: &Stream) -> u32 {
     let source = video
         .r_frame_rate
@@ -189,8 +191,8 @@ fn fps(video: &Stream) -> u32 {
 
     match (num, den) {
         (Some(n), Some(d)) if d > 0 && n > 0 => n.div_ceil(d) as u32,
-        // Ноль кадров в секунду не бывает. Тридцать — безобидная догадка: она
-        // завышает уровень совместимости, а завышенный безопасен всегда.
+        // Zero frames a second does not happen. Thirty is a harmless guess: it
+        // overstates the compatibility level, and overstating is always safe.
         _ => 30,
     }
 }
@@ -206,11 +208,11 @@ fn not_empty(s: &Option<String>) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Язык дорожки.
+/// The track's language.
 ///
-/// `und` — это «не указано», а не название языка. Показать его человеку значит
-/// предложить выбирать между «und» и «und»; порядковый номер в этом случае
-/// полезнее (граничный случай спеки к FR-020).
+/// `und` means "not specified" rather than being the name of a language. Showing it to
+/// a person means offering them a choice between "und" and "und"; the ordinal number
+/// is more use in that case (the boundary case of the specification for FR-020).
 fn language(raw: &Option<String>) -> Option<String> {
     not_empty(raw).filter(|v| !v.eq_ignore_ascii_case("und"))
 }

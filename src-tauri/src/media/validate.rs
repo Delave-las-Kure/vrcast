@@ -138,24 +138,3 @@ fn is_muxer_timestamp_noise(line: &str) -> bool {
         || line.contains("non-monotonic DTS");
     from_null_muxer && about_timestamps
 }
-
-impl Validation {
-    /// A sentence for the person waiting.
-    pub fn summary(&self) -> String {
-        if self.ok && self.ignored.is_empty() {
-            return String::from("Файл декодируется целиком без единой жалобы.");
-        }
-        if self.ok {
-            return format!(
-                "Файл декодируется целиком. Замечаний от упаковщика: {} — они про метки \
-                 времени в исходнике и на воспроизведение не влияют.",
-                self.ignored.len()
-            );
-        }
-        format!(
-            "Файл не проходит проверку воспроизведения: жалоб от декодера — {}. \
-             Заливать его нельзя: у зрителя он развалится там же, где развалился здесь.",
-            self.problems.len()
-        )
-    }
-}

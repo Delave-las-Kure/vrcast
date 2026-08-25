@@ -1,50 +1,50 @@
-//! T085 — хватит ли места на сервере (FR-036).
+//! T085 — whether there is room on the server (FR-036).
 //!
-//! Проверяется **до** начала передачи. Узнать о нехватке в середине заливки на
-//! тридцать гигабайт — значит потерять час и оставить на диске недокачанный хвост.
+//! Checked **before** the transfer starts. Learning of a shortage halfway through a
+//! thirty-gigabyte upload means losing an hour and leaving a half-transferred tail on
+//! the disk.
 //!
-//! «Хватает» — это не «влезает впритык». Запас нужен по двум причинам, и обе
-//! настоящие: на диске одновременно с временным файлом какое-то время лежит
-//! прежняя версия того же файла (замена происходит переименованием, старый файл
-//! исчезает только в этот миг), а сервер вдобавок пишет журналы и должен иметь
-//! куда. Полностью забитый диск — это не «место кончилось», а сервер, который
-//! перестаёт отвечать.
+//! "Enough" is not "fits exactly". A margin is needed for two reasons, both real: for
+//! a while the previous version of the same file sits on the disk alongside the staged
+//! one (replacement happens by renaming, and the old file disappears only at that
+//! instant), and the server also writes logs and must have somewhere to write them. A
+//! completely full disk is not "out of space" but a server that stops answering.
 
 use crate::commands::library::DiskUsage;
 
-/// Запас сверх размера файла, который обязан остаться свободным.
+/// The margin above the file size that must stay free.
 ///
-/// Доля от объёма диска, а не постоянное число: на диске в сотню гигабайт
-/// пять процентов — это пять гигабайт, чего с запасом хватает; на диске
-/// в терабайт постоянные пять гигабайт были бы уже мало.
+/// A share of the disk rather than a constant: on a hundred-gigabyte disk five per
+/// cent is five gigabytes, which is ample; on a terabyte disk a constant five
+/// gigabytes would already be too little.
 const RESERVE_FRACTION: f64 = 0.05;
 
-/// Нижняя граница запаса: на маленьком диске доля даёт слишком мало, а сервер
-/// перестаёт нормально работать задолго до последнего байта.
+/// The floor for the margin: on a small disk a share comes to too little, and a
+/// server stops working properly long before the last byte.
 const RESERVE_MIN_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Что показал подсчёт места.
+/// What the space calculation found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpaceVerdict {
-    /// Хватает: файл поместится и запас останется.
+    /// Enough: the file fits and the margin remains.
     Fits,
-    /// Не хватает. В отказе названо, сколько не достаёт, — иначе человеку
-    /// придётся считать самому.
+    /// Not enough. The refusal names how much is missing — otherwise a person has to
+    /// work it out themselves.
     NotEnough {
-        /// Сколько нужно всего: файл плюс запас.
+        /// How much is needed in all: the file plus the margin.
         needed: u64,
-        /// Сколько свободно сейчас.
+        /// How much is free now.
         free: u64,
-        /// Сколько не хватает.
+        /// How much is missing.
         short_by: u64,
     },
 }
 
-/// Хватит ли места под файл заданного размера.
+/// Whether there is room for a file of the given size.
 ///
-/// `already_uploaded` — сколько уже лежит во временном файле: при продолжении
-/// прерванной передачи это место уже занято, и требовать его заново значило бы
-/// отказать в докачке файла, который почти дошёл.
+/// `already_uploaded` is how much is in the staged file already: when a broken
+/// transfer resumes, that room is taken, and demanding it again would mean refusing to
+/// finish a file that had almost arrived.
 pub fn check(disk: &DiskUsage, file_size: u64, already_uploaded: u64) -> SpaceVerdict {
     let reserve = reserve_for(disk.total_bytes);
     let remaining = file_size.saturating_sub(already_uploaded);
@@ -61,7 +61,7 @@ pub fn check(disk: &DiskUsage, file_size: u64, already_uploaded: u64) -> SpaceVe
     }
 }
 
-/// Величина запаса для диска такого объёма.
+/// The size of the margin for a disk of this size.
 pub fn reserve_for(total_bytes: u64) -> u64 {
     let fraction = (total_bytes as f64 * RESERVE_FRACTION) as u64;
     fraction.max(RESERVE_MIN_BYTES)

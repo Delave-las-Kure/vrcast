@@ -1,8 +1,8 @@
-//! Общая оснастка договорных тестов.
+//! Shared fixtures for the contract tests.
 //!
-//! Состояние приложения собирается с базой в памяти и хранилищем секретов в памяти:
-//! тест, оставляющий за собой записи в системном менеджере паролей пользователя, —
-//! плохой тест.
+//! The application state is assembled with an in-memory database and an in-memory secret
+//! store: a test that leaves entries behind in a person's system password manager is a bad
+//! test.
 
 use std::sync::Arc;
 use vrcast_studio_lib::commands::servers::ServerInput;
@@ -16,15 +16,16 @@ pub fn state() -> AppState {
         Arc::new(Db::open_in_memory().unwrap()),
         Arc::new(InMemorySecretStore::new()),
     )
-    .expect("состояние приложения не собралось")
+    .expect("the application state would not assemble")
 }
 
-/// Заведомо годные поля профиля. Тесты меняют то, что проверяют, остальное берут отсюда.
+/// Profile fields that are certainly fit. Each test changes what it checks and takes the
+/// rest from here.
 pub fn valid_input(name: &str) -> ServerInput {
     ServerInput {
         name: name.to_owned(),
-        // Адрес из блока, отведённого под примеры в документации: он не ведёт
-        // ни на чей настоящий сервер.
+        // An address from the block set aside for examples in documentation: it leads to
+        // nobody's real server.
         host: String::from("203.0.113.10"),
         port: 22,
         user: String::from("root"),

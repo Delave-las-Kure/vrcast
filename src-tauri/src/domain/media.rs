@@ -1,42 +1,44 @@
-//! T030 — медиа и файл раздачи (`data-model.md` §3–4), включая правила `slug`.
+//! T030 — a medium and a served file (`data-model.md` sections 3–4), the `slug` rules
+//! included.
 //!
-//! Почему у файла нет полей `origin_url` и `cdn_url`, хотя они есть в модели данных:
-//! ссылка **вычисляется** из профиля сервера (см. `links`), а не хранится рядом с
-//! файлом. Сохранённая ссылка молча устареет в тот день, когда пользователь сменит
-//! домен или подключит CDN, — и приложение начнёт выдавать нерабочие адреса, о чём
-//! никто не узнает, пока их не откроет зритель.
+//! Why a file has no `origin_url` and `cdn_url` fields although the data model has them: a
+//! link is **worked out** from the server profile (see `links`) rather than stored beside
+//! the file. A stored link goes quietly stale the day a person changes their domain or puts
+//! a CDN in front — and the application starts handing out addresses that do not work,
+//! which nobody learns until a viewer opens one.
 
 use super::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
-/// Предел длины `slug`. Имя файла складывается как `<slug>_<битрейт>.mp4`, а предел
-/// имени файла в файловых системах — 255 байт; сотня оставляет запас на суффиксы
-/// и на то, что не-латинские имена в кодировке занимают больше одного байта на знак.
+/// The length limit for a `slug`. A file name is put together as `<slug>_<bitrate>.mp4`,
+/// and the file-name limit in file systems is 255 bytes; a hundred leaves room for the
+/// suffixes and for the fact that non-Latin names take more than one byte per character.
 pub const MAX_SLUG_LEN: usize = 100;
 
-/// Медиа — то, что пользователь считает одним произведением.
+/// A medium — what a person considers one work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Media {
     pub id: String,
     pub title: String,
     pub slug: String,
-    /// Имена файлов раздачи, относительно каталога видео.
+    /// The names of the served files, relative to the video directory.
     ///
-    /// Умолчание задано намеренно: опись лежит на сервере и её мог править человек,
-    /// а медиа без единого файла — это законное состояние, а не повод не прочитать
-    /// опись целиком.
+    /// The default is there deliberately: the catalogue lies on the server and a person may
+    /// have edited it, and a medium with not one file is a legitimate state rather than a
+    /// reason to fail to read the catalogue whole.
     #[serde(default)]
     pub files: Vec<String>,
-    /// Описания наборов качеств, относительно каталога видео.
+    /// The quality-ladder descriptions, relative to the video directory.
     #[serde(default)]
     pub ladders: Vec<String>,
     #[serde(default)]
     pub created_at: String,
-    /// Поля, которых это приложение не знает.
+    /// The fields this application does not know.
     ///
-    /// Сохраняются при перезаписи описи намеренно — по той же причине, что и на
-    /// уровне всей описи (см. `manifest::Manifest::extra`): медиа мог завести более
-    /// новый экземпляр приложения, и выбросить его сведения значит их потерять.
+    /// They are kept when the catalogue is rewritten, deliberately — for the same reason as
+    /// at the level of the whole catalogue (see `manifest::Manifest::extra`): a newer copy
+    /// of the application may have created the medium, and throwing away what it recorded
+    /// means losing it.
     #[serde(
         flatten,
         default,
@@ -46,7 +48,7 @@ pub struct Media {
 }
 
 impl Media {
-    /// Новое медиа без файлов.
+    /// A new medium with no files.
     pub fn new(
         id: impl Into<String>,
         title: impl Into<String>,
@@ -64,39 +66,39 @@ impl Media {
         }
     }
 
-    /// Все пути, числящиеся за медиа: и файлы, и описания наборов качеств.
+    /// Every path the medium accounts for: both the files and the ladder descriptions.
     pub fn all_paths(&self) -> impl Iterator<Item = &String> {
         self.files.iter().chain(self.ladders.iter())
     }
 }
 
-/// Файл раздачи: известные о нём факты.
+/// A served file: the facts known about it.
 ///
-/// Всё, кроме `path`, `size_bytes` и `exists_on_server`, может быть неизвестно —
-/// параметры добываются разбором заголовка MP4, и у файла, подготовленного не нашим
-/// процессом, заголовка в начале может не оказаться (см. `moov`).
+/// Everything but `path`, `size_bytes` and `exists_on_server` may be unknown — the
+/// parameters are got by parsing the MP4 header, and a file prepared by something other
+/// than our own process may not have its header at the beginning (see `moov`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaFile {
-    /// Путь относительно каталога видео.
+    /// The path, relative to the video directory.
     pub path: String,
     pub size_bytes: u64,
     pub duration_s: Option<f64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// Средний битрейт.
+    /// The average bitrate.
     pub bitrate_bps: Option<u64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
-    /// `moov` найден в начале файла. Ложь = файл не соответствует целевому формату,
-    /// и зритель будет ждать скачивания хвоста перед началом воспроизведения.
-    /// `None` = ещё не проверяли.
+    /// `moov` was found at the beginning of the file. False means the file does not match
+    /// the target format, and a viewer will wait for its tail to download before playback
+    /// starts. `None` means it has not been checked yet.
     pub faststart_ok: Option<bool>,
-    /// Ложь = файл удалён или переименован мимо приложения (FR-018).
+    /// False means the file was deleted or renamed outside the application (FR-018).
     pub exists_on_server: bool,
 }
 
 impl MediaFile {
-    /// Файл, о котором известно только то, что он есть и сколько весит.
+    /// A file about which only its existence and its size are known.
     pub fn known(path: impl Into<String>, size_bytes: u64) -> Self {
         Self {
             path: path.into(),
@@ -112,13 +114,13 @@ impl MediaFile {
         }
     }
 
-    /// Годится ли ссылка на этот файл к выдаче зрителю (FR-018).
+    /// Whether a link to this file is fit to hand to a viewer (FR-018).
     pub fn link_is_usable(&self) -> bool {
         self.exists_on_server
     }
 }
 
-/// Что не так со `slug`.
+/// What is wrong with a `slug`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlugError {
     Empty,
@@ -158,11 +160,11 @@ impl std::fmt::Display for SlugError {
     }
 }
 
-/// Имена, которые нельзя занимать: они значат для файловой системы или для раздачи
-/// не то, что видно на глаз.
+/// Names that must not be taken: to the file system or to the serving they mean something
+/// other than what they look like.
 const RESERVED_SLUGS: &[&str] = &["_slow", ".", ".."];
 
-/// Проверить `slug`: латинские буквы, цифры, дефис, подчёркивание (`data-model.md` §3).
+/// Check a `slug`: Latin letters, digits, hyphen, underscore (`data-model.md` section 3).
 pub fn validate_slug(slug: &str) -> Result<(), SlugError> {
     if slug.is_empty() {
         return Err(SlugError::Empty);
@@ -173,8 +175,8 @@ pub fn validate_slug(slug: &str) -> Result<(), SlugError> {
     {
         return Err(SlugError::BadChars { first_bad: bad });
     }
-    // Длина считается после проверки знаков: сообщение про недопустимый знак
-    // полезнее, чем про длину, когда неверно и то и другое.
+    // The length is counted after the characters are checked: a message about a
+    // disallowed character is more useful than one about the length when both are wrong.
     if slug.len() > MAX_SLUG_LEN {
         return Err(SlugError::TooLong { len: slug.len() });
     }
@@ -184,12 +186,13 @@ pub fn validate_slug(slug: &str) -> Result<(), SlugError> {
     Ok(())
 }
 
-/// Составить `slug` из названия.
+/// Make a `slug` out of a title.
 ///
-/// Названия у пользователя русские, а `slug` попадает в имя файла и в ссылку, поэтому
-/// кириллица переводится в латиницу. Возвращает `None`, если переводить нечего
-/// (название целиком из знаков, у которых нет латинского соответствия) — тогда
-/// короткое имя обязан задать человек, а не приложение из мусора.
+/// A person's titles are in their own language while a `slug` goes into a file name and
+/// into a link, so Cyrillic is transliterated into Latin. It returns `None` when there is
+/// nothing to transliterate (a title made entirely of characters with no Latin counterpart)
+/// — the short name must then be set by a person rather than by the application out of
+/// rubbish.
 pub fn slugify(title: &str) -> Option<String> {
     let mut out = String::with_capacity(title.len());
     let mut pending_separator = false;
@@ -210,8 +213,8 @@ pub fn slugify(title: &str) -> Option<String> {
             pending_separator = false;
             out.push(ch);
         } else {
-            // Любой прочий знак — разделитель. Разделители не копятся: подряд идущие
-            // пробелы, точки и тире дают один дефис, а не цепочку.
+            // Every other character is a separator. Separators do not pile up: spaces,
+            // dots and dashes in a row give one hyphen rather than a chain.
             pending_separator = true;
         }
     }
@@ -229,24 +232,24 @@ pub fn slugify(title: &str) -> Option<String> {
     }
 }
 
-/// Обрезать до предела, не разрывая слово посередине, если этого можно избежать.
+/// Cut down to the limit without breaking a word in the middle where that can be avoided.
 fn cap_len(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_owned();
     }
     let cut = &s[..max];
     match cut.rfind('-') {
-        // Обрезаем по границе слова, но только если так остаётся хотя бы половина
-        // предела: иначе от длинного названия останется огрызок.
+        // Cut at a word boundary, but only when at least half the limit is left that way:
+        // otherwise a long title is reduced to a stub.
         Some(i) if i >= max / 2 => cut[..i].to_owned(),
         _ => cut.trim_end_matches('-').to_owned(),
     }
 }
 
-/// Латинское соответствие для кириллической буквы.
+/// The Latin counterpart of a Cyrillic letter.
 ///
-/// `Some("")` — буква, которая пишется пустотой (твёрдый и мягкий знаки).
-/// `None` — не кириллица, решает вызывающий.
+/// `Some("")` is a letter written as nothing at all (the hard and soft signs). `None` means
+/// it is not Cyrillic, and the caller decides.
 fn transliterate(c: char) -> Option<&'static str> {
     Some(match c {
         'а' => "a",
@@ -282,7 +285,7 @@ fn transliterate(c: char) -> Option<&'static str> {
         'э' => "e",
         'ю' => "yu",
         'я' => "ya",
-        // Украинские и белорусские буквы: пользователь может назвать так же.
+        // Ukrainian and Belarusian letters: a person may well use them in a title.
         'і' => "i",
         'ї' => "yi",
         'є' => "ye",

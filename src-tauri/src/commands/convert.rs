@@ -1,6 +1,6 @@
 //! T117, T120 — commands for preparing a file (FR-022, FR-026, FR-027).
 //!
-//! Contract: `contracts/ipc-commands.md`, "Подготовка файлов".
+//! Contract: `contracts/ipc-commands.md`, the file preparation section.
 //!
 //! Preparing takes minutes to hours, so it is a task rather than a call that
 //! returns when it is done (FR-080). Everything that can refuse quickly refuses

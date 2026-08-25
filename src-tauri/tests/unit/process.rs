@@ -1,58 +1,64 @@
-//! T021 — проверка того, что дерево процессов действительно завершается.
+//! T021 — a check that a process tree really does get terminated.
 //!
-//! Конституция, принцип III (НЕОБСУЖДАЕМО) и SC-010. Проверяется не то, что вызов
-//! завершения возвращает успех, а то, что **процессов не осталось**: именно осиротевший
-//! `ffmpeg`, продолжающий писать в файл результата, и был исходным происшествием.
+//! Constitution, principle III (NOT NEGOTIABLE) and SC-010. What is checked is not that a
+//! call to terminate returns success but that **no processes are left**: an orphaned
+//! `ffmpeg` going on writing into the result file was the original incident.
 //!
-//! Внук здесь не для полноты картины. `ffmpeg` и `ssh` порождают собственных потомков,
-//! и завершение только прямого потомка оставляет их работать — то есть ровно та ошибка,
-//! от которой защищаемся.
+//! The grandchild here is not for completeness. `ffmpeg` and `ssh` spawn children of their
+//! own, and ending only the direct child leaves those running — that is, exactly the fault
+//! being guarded against.
 
 use std::time::Duration;
 use vrcast_studio_lib::tasks::process::ManagedProcess;
 
-/// Долгая команда, доступная на обеих целевых ОС.
+/// A long-running command available on both target operating systems.
 use super::proc_check::{alive, children_of, long_running};
 
 #[tokio::test]
-async fn отмена_завершает_запущенный_процесс() {
+async fn cancelling_ends_the_started_process() {
     let (prog, args) = long_running();
-    let mut p = ManagedProcess::spawn(prog, &args).expect("процесс не запустился");
-    let pid = p.id().expect("нет идентификатора процесса");
+    let mut p = ManagedProcess::spawn(prog, &args).expect("the process did not start");
+    let pid = p.id().expect("there is no process id");
 
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(
         alive(pid),
-        "процесс не запустился или сразу умер — проверять нечего"
+        "the process did not start, or died at once — there is nothing to check"
     );
 
-    p.kill_tree().await.expect("завершение не удалось");
+    p.kill_tree().await.expect("the termination failed");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    assert!(!alive(pid), "процесс {pid} пережил отмену");
+    assert!(
+        !alive(pid),
+        "the process {pid} lived through the cancellation"
+    );
 }
 
 #[tokio::test]
-async fn отмена_забирает_и_внуков() {
-    // Главная проверка. Именно здесь ломается обычное завершение по идентификатору:
-    // прямой потомок умирает, а его собственные потомки продолжают работать — ровно как
-    // осиротевший ffmpeg, продолжающий портить файл результата.
+async fn cancelling_takes_the_grandchildren_too() {
+    // The main check. This is exactly where an ordinary terminate-by-id breaks: the direct
+    // child dies while its own children go on running — just like an orphaned ffmpeg going
+    // on spoiling the result file.
     let (prog, args) = long_running();
-    let mut p = ManagedProcess::spawn(prog, &args).expect("процесс не запустился");
-    let parent = p.id().expect("нет идентификатора");
+    let mut p = ManagedProcess::spawn(prog, &args).expect("the process did not start");
+    let parent = p.id().expect("there is no id");
 
     tokio::time::sleep(Duration::from_millis(900)).await;
 
     let grandchildren = children_of(parent);
     assert!(
         !grandchildren.is_empty(),
-        "внуков не появилось — тест ничего не проверяет (родитель {parent})"
+        "no grandchildren appeared — the test checks nothing (parent {parent})"
     );
 
-    p.kill_tree().await.expect("завершение не удалось");
+    p.kill_tree().await.expect("the termination failed");
     tokio::time::sleep(Duration::from_millis(900)).await;
 
-    assert!(!alive(parent), "родитель {parent} пережил отмену");
+    assert!(
+        !alive(parent),
+        "the parent {parent} lived through the cancellation"
+    );
     let survivors: Vec<u32> = grandchildren
         .iter()
         .copied()
@@ -60,81 +66,81 @@ async fn отмена_забирает_и_внуков() {
         .collect();
     assert!(
         survivors.is_empty(),
-        "ОСИРОТЕВШИЕ ПРОЦЕССЫ пережили отмену: {survivors:?} (внуки {grandchildren:?})"
+        "ORPHANED PROCESSES lived through the cancellation: {survivors:?} (grandchildren {grandchildren:?})"
     );
 }
 
 #[tokio::test]
-async fn повторное_завершение_не_ошибка() {
-    // Конституция, принцип V: повтор обязан быть безопасным. Отмену могут нажать дважды,
-    // и второй раз не должен превращаться в ошибку.
+async fn terminating_twice_is_not_an_error() {
+    // Constitution, principle V: repeating must be safe. Cancel may be pressed twice, and
+    // the second time must not turn into an error.
     let (prog, args) = long_running();
     let mut p = ManagedProcess::spawn(prog, &args).unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    p.kill_tree().await.expect("первое завершение");
+    p.kill_tree().await.expect("the first termination");
     p.kill_tree()
         .await
-        .expect("повторное завершение не должно быть ошибкой");
+        .expect("terminating a second time must not be an error");
 }
 
 #[cfg(windows)]
 #[tokio::test]
-async fn смерть_приложения_забирает_потомков() {
-    // Свойство, которого нет у обычного завершения: описатель объекта задания закрывает
-    // ядро при смерти процесса-владельца — в том числе когда приложение убито диспетчером
-    // задач и ни одна строчка его кода уже не выполняется (SC-010).
+async fn the_application_dying_takes_its_children_with_it() {
+    // The property an ordinary termination does not have: the kernel closes the job
+    // object's handle when the owning process dies — including when the application is
+    // killed from Task Manager and not one line of its code runs any more (SC-010).
     //
-    // Здесь это воспроизводится закрытием описателя: роняем структуру, не вызывая
-    // завершение явно.
+    // Here that is reproduced by closing the handle: the structure is dropped without
+    // terminating explicitly.
     let (prog, args) = long_running();
     let pid = {
         let p = ManagedProcess::spawn(prog, &args).unwrap();
         let pid = p.id().unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(alive(pid), "процесс не запустился");
+        assert!(alive(pid), "the process did not start");
         pid
-        // p роняется здесь: описатель задания закрывается
+        // p is dropped here: the job handle closes
     };
 
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert!(
         !alive(pid),
-        "процесс {pid} пережил закрытие описателя задания — гарантия не работает"
+        "the process {pid} lived through the job handle closing — the guarantee does not hold"
     );
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn приостановка_и_продолжение_работают() {
-    // FR-083a. На Unix проверяется по состоянию процесса; на Windows состояние потоков
-    // так просто не прочитать, поэтому там это покрывается ручной проверкой.
+async fn pausing_and_carrying_on_work() {
+    // FR-083a. On Unix it is checked by the process state; on Windows the threads' state
+    // cannot be read so simply, so there it is covered by a check made by hand.
     let (prog, args) = long_running();
-    // Изменяемая: заморозка запоминается в самом процессе, чтобы повторная
-    // не сбивала счётчик приостановок (T070).
+    // Mutable: the freeze is remembered in the process itself so a second one does not
+    // throw the pause counter off (T070).
     let mut p = ManagedProcess::spawn(prog, &args).unwrap();
     let pid = p.id().unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    p.suspend().expect("приостановка не удалась");
-    // Повтор обязан быть безобидным: иначе одного «продолжить» не хватит,
-    // и задача останется висеть намертво.
+    p.suspend().expect("pausing failed");
+    // Repeating must be harmless: otherwise one "carry on" would not be enough, and the
+    // task would hang for good.
     p.suspend()
-        .expect("повторная приостановка считается ошибкой");
+        .expect("pausing a second time counted as an error");
     assert!(p.is_suspended());
     tokio::time::sleep(Duration::from_millis(300)).await;
     let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
     assert!(
         state.contains(") T "),
-        "процесс не приостановлен, состояние: {state}"
+        "the process is not paused, state: {state}"
     );
 
-    p.resume().expect("продолжение не удалось");
+    p.resume().expect("carrying on failed");
     tokio::time::sleep(Duration::from_millis(300)).await;
     let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
     assert!(
         !state.contains(") T "),
-        "процесс не продолжил работу, состояние: {state}"
+        "the process did not carry on, state: {state}"
     );
 
     p.kill_tree().await.unwrap();

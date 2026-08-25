@@ -1,24 +1,25 @@
-//! T013 — поток событий из ядра в интерфейс.
+//! T013 — the stream of events from the core to the interface.
 //!
-//! Интерфейс не опрашивает состояние, а слушает. Иначе показать продвижение
-//! многочасовой задачи можно было бы только частым опросом, и он же стал бы причиной
-//! подтормаживания, которого мы избегаем (FR-080, SC-009).
+//! The interface listens rather than polling. Otherwise the progress of a task that
+//! runs for hours could only be shown by frequent polling, and that polling would
+//! itself cause the stuttering we avoid (FR-080, SC-009).
 //!
-//! Имена событий закреплены договором `contracts/ipc-commands.md`.
+//! The event names are fixed by the contract `contracts/ipc-commands.md`.
 
 use crate::commands::{AppEvent, AppState};
 use crate::tasks::engine::{TaskEngine, TaskEvent};
 use crate::tasks::state::{TaskKind, TaskState};
 use tauri::{AppHandle, Emitter, Manager};
 
-/// С какой продолжительности задача считается длительной (FR-084).
+/// How long a task has to run to count as long (FR-084).
 ///
-/// Уведомлять о каждой мелочи — значит приучить закрывать уведомления не читая,
-/// и тогда важное пройдёт мимо вместе с остальными. Полминуты — примерно та граница,
-/// за которой человек успевает переключиться на другое дело и забыть про задачу.
+/// Notifying about every trifle teaches people to dismiss notifications unread, and
+/// then what matters goes past with the rest. Half a minute is roughly the line beyond
+/// which a person has moved on to something else and forgotten the task.
 const LONG_TASK: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Имена событий. Строки закреплены договором — менять их нельзя, не изменив договор.
+/// Event names. The strings are fixed by the contract — changing one means changing
+/// the contract.
 pub mod names {
     pub const TASK_PROGRESS: &str = "task:progress";
     pub const TASK_DONE: &str = "task:done";
@@ -30,15 +31,17 @@ pub mod names {
     pub const VIEWERS_UPDATE: &str = "viewers:update";
 }
 
-/// Начать пересылку событий задач в интерфейс.
+/// Start forwarding task events to the interface.
 ///
-/// Ядро ничего не знает про оболочку: оно рассылает события в свой канал, а этот мост
-/// перекладывает их наружу. Так ядро остаётся проверяемым без запуска окна.
+/// The core knows nothing of the shell: it broadcasts events into its own channel, and
+/// this bridge carries them outwards. That is what keeps the core testable without a
+/// window.
 pub fn bridge_task_events(app: AppHandle, engine: &TaskEngine) {
     let mut rx = engine.subscribe();
-    // Исполнитель берётся у оболочки, а не свой. Прямой вызов tokio::spawn здесь роняет
-    // приложение при запуске: подготовка оболочки идёт вне исполнителя, и реактора ещё
-    // нет (поймано запуском 2026-08-25 — сборка и тесты этого не показывали).
+    // The runtime comes from the shell rather than being our own. Calling tokio::spawn
+    // directly here crashes the application at start-up: the shell is prepared outside
+    // the runtime, and there is no reactor yet (caught by a run on 2026-08-25 — the
+    // build and the tests showed nothing).
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
@@ -48,17 +51,20 @@ pub fn bridge_task_events(app: AppHandle, engine: &TaskEngine) {
                         TaskEvent::Done { .. } => names::TASK_DONE,
                     };
                     if let Err(e) = app.emit(name, &event) {
-                        tracing::debug!(error = %e, "событие не доставлено в интерфейс");
+                        tracing::debug!(error = %e, "event not delivered to the interface");
                     }
                     if let TaskEvent::Done { id, state, error } = &event {
                         notify_if_long(&app, id, *state, error.as_ref());
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    // Интерфейс не поспевает за потоком. Терять события о продвижении
-                    // не страшно — важные (завершение, ошибка) придут следующими и
-                    // приведут показ в соответствие.
-                    tracing::debug!(skipped, "интерфейс отстал, часть событий пропущена");
+                    // The interface cannot keep up with the stream. Losing progress
+                    // events does no harm — the ones that matter (completion, error)
+                    // arrive next and bring the display into line.
+                    tracing::debug!(
+                        skipped,
+                        "the interface fell behind, some events were dropped"
+                    );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
@@ -119,7 +125,7 @@ fn notify_if_long(
         error: error.cloned(),
     };
     if let Err(e) = app.emit(names::TASK_NOTIFY, &request) {
-        tracing::debug!(error = %e, "просьба об уведомлении не доставлена");
+        tracing::debug!(error = %e, "the request for a notification was not delivered");
     }
 }
 
@@ -134,11 +140,12 @@ pub struct NotifyRequest {
     pub error: Option<crate::error::AppError>,
 }
 
-/// Шла ли задача дольше порога.
+/// Whether the task ran longer than the threshold.
 ///
-/// Время берётся из записи: отдельного счёта не нужно, а `created_at` и `updated_at`
-/// уже пишутся. Неразобранное время считается коротким — уведомить лишний раз хуже,
-/// чем промолчать, потому что лишние уведомления учат не читать их вовсе.
+/// The time comes from the record: no separate accounting is needed, and `created_at`
+/// and `updated_at` are written anyway. A time that will not parse counts as short —
+/// notifying once too often is worse than staying quiet, because surplus notifications
+/// teach people not to read them at all.
 pub fn long_enough(created_at: &str, updated_at: &str) -> bool {
     let (Ok(from), Ok(to)) = (
         crate::store::db::parse_rfc3339(created_at),
@@ -149,7 +156,7 @@ pub fn long_enough(created_at: &str, updated_at: &str) -> bool {
     to.saturating_sub(from) >= LONG_TASK.as_secs()
 }
 
-/// Начать пересылку прочих событий ядра в интерфейс.
+/// Start forwarding the core's other events to the interface.
 pub fn bridge_app_events(app: AppHandle, state: &AppState) {
     let mut rx = state.subscribe();
     tauri::async_runtime::spawn(async move {
@@ -160,11 +167,14 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                         AppEvent::LibraryChanged { .. } => names::LIBRARY_CHANGED,
                     };
                     if let Err(e) = app.emit(name, &event) {
-                        tracing::debug!(error = %e, "событие не доставлено в интерфейс");
+                        tracing::debug!(error = %e, "event not delivered to the interface");
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::debug!(skipped, "интерфейс отстал, часть событий пропущена");
+                    tracing::debug!(
+                        skipped,
+                        "the interface fell behind, some events were dropped"
+                    );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }

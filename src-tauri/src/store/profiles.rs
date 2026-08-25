@@ -1,10 +1,11 @@
-//! T040 — хранение профилей серверов в локальной базе.
+//! T040 — keeping server profiles in the local database.
 //!
-//! Здесь нет ни одного поля под секрет: в таблице лежит только ссылка на запись
-//! в хранилище ОС (конституция, принцип IV). Само правило «активен ровно один»
-//! (FR-002) держится частичным уникальным индексом в схеме, а не аккуратностью
-//! этого кода — но переключение всё равно делается транзакцией, иначе индекс
-//! просто не даст снять старый и поставить новый двумя отдельными запросами.
+//! There is not one field for a secret here: the table holds only a reference to an
+//! entry in the OS store (constitution, principle IV). The rule "exactly one is
+//! active" (FR-002) is held by a partial unique index in the schema rather than by the
+//! carefulness of this code — but switching is still done in a transaction, because
+//! otherwise the index simply will not allow clearing the old one and setting the new
+//! one as two separate statements.
 
 use crate::domain::server_profile::{AuthKind, Ipv6Mode, ServerProfile};
 use crate::store::db::{now_rfc3339, Db, DbError};
@@ -19,9 +20,9 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServerProfile> {
         host: row.get("host")?,
         port: row.get::<_, i64>("port")? as u16,
         user: row.get("username")?,
-        // Значения в базе ограничены проверкой схемы, но разбор всё равно должен
-        // иметь ответ на неожиданное: доступ по паролю безопаснее подставить, чем
-        // уронить чтение всего списка из-за одной испорченной строки.
+        // The values in the database are constrained by a schema check, but parsing
+        // still needs an answer for the unexpected: password access is safer to
+        // assume than to fail reading the whole list over one corrupt row.
         auth_kind: AuthKind::parse(&auth_kind).unwrap_or(AuthKind::Password),
         secret_ref: row.get("secret_ref")?,
         key_path: row.get("key_path")?,
@@ -34,7 +35,7 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServerProfile> {
     })
 }
 
-/// Все профили. Порядок — по имени: список видит человек, и он должен быть устойчив.
+/// Every profile, ordered by name: a person sees this list, and it must be stable.
 pub fn list(db: &Db) -> Result<Vec<ServerProfile>, DbError> {
     db.with_conn(|c| {
         let mut stmt = c.prepare("SELECT * FROM server_profiles ORDER BY name")?;
@@ -58,7 +59,7 @@ pub fn get(db: &Db, id: &str) -> Result<Option<ServerProfile>, DbError> {
     })
 }
 
-/// Активный профиль, если он выбран.
+/// The active profile, if one is chosen.
 pub fn active(db: &Db) -> Result<Option<ServerProfile>, DbError> {
     db.with_conn(|c| {
         Ok(c.query_row(
@@ -70,7 +71,7 @@ pub fn active(db: &Db) -> Result<Option<ServerProfile>, DbError> {
     })
 }
 
-/// Занято ли имя другим профилем.
+/// Whether the name is taken by another profile.
 pub fn name_taken(db: &Db, name: &str, except_id: Option<&str>) -> Result<bool, DbError> {
     db.with_conn(|c| {
         let count: i64 = c.query_row(
@@ -82,7 +83,7 @@ pub fn name_taken(db: &Db, name: &str, except_id: Option<&str>) -> Result<bool, 
     })
 }
 
-/// Создать профиль.
+/// Create a profile.
 pub fn insert(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
@@ -113,11 +114,11 @@ pub fn insert(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
     })
 }
 
-/// Изменить профиль.
+/// Change a profile.
 ///
-/// `is_active` и `secret_ref` намеренно не трогаются: активность переключается
-/// отдельной командой, а ссылка на секрет принадлежит ядру и не должна меняться
-/// при обычной правке полей.
+/// `is_active` and `secret_ref` are deliberately left alone: being active is switched
+/// by its own command, and the reference to the secret belongs to the core and must
+/// not move when ordinary fields are edited.
 pub fn update(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
@@ -145,7 +146,7 @@ pub fn update(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
     })
 }
 
-/// Удалить профиль. Отсутствие профиля не ошибка: повтор обязан быть безопасным.
+/// Delete a profile. A missing profile is not an error: repeating must be safe.
 pub fn remove(db: &Db, id: &str) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute("DELETE FROM server_profiles WHERE id = ?1", [id])?;
@@ -153,11 +154,11 @@ pub fn remove(db: &Db, id: &str) -> Result<(), DbError> {
     })
 }
 
-/// Сделать профиль активным, сняв отметку с прежнего.
+/// Make a profile active, clearing the mark from the previous one.
 ///
-/// Обязательно транзакцией и в этом порядке: частичный уникальный индекс не даёт
-/// существовать двум активным даже на миг, поэтому «поставить новый, потом снять
-/// старый» просто не выполнится.
+/// In a transaction and in this order, necessarily: the partial unique index does not
+/// let two active profiles exist even for an instant, so "set the new one, then clear
+/// the old" simply will not run.
 pub fn set_active(db: &Db, id: &str) -> Result<bool, DbError> {
     db.with_conn_mut(|c| {
         let tx = c.transaction()?;
@@ -174,7 +175,7 @@ pub fn set_active(db: &Db, id: &str) -> Result<bool, DbError> {
     })
 }
 
-/// Запомнить подтверждённый отпечаток (FR-092).
+/// Remember a confirmed fingerprint (FR-092).
 pub fn set_fingerprint(db: &Db, id: &str, fingerprint: &str) -> Result<bool, DbError> {
     db.with_conn(|c| {
         let changed = c.execute(

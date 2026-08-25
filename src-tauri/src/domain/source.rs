@@ -1,58 +1,35 @@
-//! T108 — исходный файл и его дорожки (data-model §6, FR-020, FR-021).
+//! T108 — the source file and its tracks (data-model section 6, FR-020, FR-021).
 //!
-//! Здесь только описание того, что нашлось в файле, и правила показа. Ничего
-//! из этого не решает, что с файлом делать: решение живёт в [`super::convert_plan`],
-//! и разделение намеренное — разбор исходника случается один раз, а план пересчитывается
-//! на каждое движение ползунка.
+//! Only a description of what was found in the file lives here. None of it decides
+//! what to do with the file: that decision lives in [`super::convert_plan`], and the
+//! split is deliberate — examining a source happens once, while the plan is worked out
+//! again on every movement of a slider.
+//!
+//! How to caption a track for a person is not here either. It used to be, and nothing
+//! but its own tests called it: the interface builds the caption from its catalogue,
+//! because the words around the numbers differ between languages while the numbers do
+//! not (see `trackLabel` in `ConvertScreen`).
 
 use serde::{Deserialize, Serialize};
 
-/// Звуковая дорожка исходника.
+/// An audio track of the source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioTrack {
-    /// Порядковый номер среди звуковых дорожек, с нуля: именно его понимает ffmpeg
-    /// в `-map 0:a:<N>`.
+    /// The index among audio tracks, from zero: that is what ffmpeg understands in
+    /// `-map 0:a:<N>`. A person is shown it counting from one.
     pub index: usize,
     pub codec: String,
     pub channels: u16,
-    /// Битрейт дорожки, если известен.
+    /// The track's bitrate, when known.
     pub bitrate_bps: Option<u64>,
-    /// Язык. Часто отсутствует — и это обычное дело, а не поломка.
+    /// The language. Often missing — which is ordinary rather than a fault.
     pub language: Option<String>,
-    /// Название дорожки: «Дубляж», «Оригинал», «Комментарии режиссёра».
+    /// The track title: "Dubbed", "Original", "Director's commentary".
     pub title: Option<String>,
     pub is_default: bool,
 }
 
-impl AudioTrack {
-    /// Как назвать дорожку человеку.
-    ///
-    /// Язык есть не всегда — у многих раздач он просто не проставлен. Показывать
-    /// в таком случае пустоту нельзя: выбирать между двумя пустыми строками
-    /// невозможно, а дорожек бывает шесть. Поэтому порядковый номер — не запасной
-    /// вариант, а полноценный ответ (граничный случай спеки к FR-020).
-    pub fn label(&self) -> String {
-        let основа = match (&self.language, &self.title) {
-            (Some(lang), Some(title)) if !lang.is_empty() && !title.is_empty() => {
-                format!("{lang} — {title}")
-            }
-            (Some(lang), _) if !lang.is_empty() => lang.clone(),
-            (_, Some(title)) if !title.is_empty() => title.clone(),
-            // Номер показывается человеку с единицы: «дорожка 0» читается как ошибка.
-            _ => format!("Дорожка {}", self.index + 1),
-        };
-
-        let каналы = match self.channels {
-            0 => String::new(),
-            1 => String::from(", моно"),
-            2 => String::from(", стерео"),
-            n => format!(", {n} каналов"),
-        };
-        format!("{основа}{каналы}")
-    }
-}
-
-/// Разобранный исходник.
+/// A source file that has been examined.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceFile {
     pub path: String,
@@ -60,28 +37,29 @@ pub struct SourceFile {
     pub duration_s: f64,
     pub width: u32,
     pub height: u32,
-    /// Кадров в секунду, округлённых **вверх**: 47.952 — это 48-кадровый материал,
-    /// и округление вниз занизило бы уровень совместимости.
+    /// Frames per second, rounded **up**: 47.952 is 48-frame material, and rounding
+    /// down would understate the compatibility level.
     pub fps: u32,
     pub bitrate_bps: u64,
-    /// Пиковый битрейт, если его мерили. Замер стоит времени и делается отдельно.
+    /// The peak bitrate, if it was measured. Measuring costs time and is done separately.
     pub peak_bps: Option<u64>,
     pub video_codec: String,
     pub pix_fmt: String,
-    /// Характеристика передачи цвета. По ней узнаётся HDR, который надо приводить
-    /// к обычному диапазону, иначе картинка у зрителя выйдет блёклой.
+    /// The colour transfer characteristic. HDR is recognised by it, and HDR has to be
+    /// brought down to the ordinary range or a viewer's picture comes out washed out.
     pub color_transfer: Option<String>,
     pub audio_tracks: Vec<AudioTrack>,
 }
 
-/// Признаки HDR в характеристике передачи цвета.
+/// The marks of HDR in a colour transfer characteristic.
 const HDR_TRANSFERS: [&str; 4] = ["smpte2084", "arib-std-b67", "smpte428", "bt2020-10"];
 
 impl SourceFile {
-    /// Дорожка, которую стоит предложить по умолчанию.
+    /// The track worth offering by default.
     ///
-    /// Помеченная как основная, иначе первая. Пусто — только если звука нет вовсе;
-    /// это отдельный случай, а не «возьмём нулевую» (FR-021, код `NO_AUDIO_TRACKS`).
+    /// The one marked as the main one, otherwise the first. Empty only when there is
+    /// no audio at all; that is a case of its own rather than "we will take track
+    /// zero" (FR-021, code `NO_AUDIO_TRACKS`).
     pub fn default_track(&self) -> Option<&AudioTrack> {
         self.audio_tracks
             .iter()
@@ -93,10 +71,10 @@ impl SourceFile {
         self.audio_tracks.iter().find(|t| t.index == index)
     }
 
-    /// Записан ли исходник в расширенном динамическом диапазоне.
+    /// Whether the source was recorded in high dynamic range.
     ///
-    /// Важно не само по себе: такую картинку нужно приводить к обычному диапазону,
-    /// а значит копировать поток без пересжатия уже нельзя.
+    /// Not important in itself: such a picture has to be brought down to the ordinary
+    /// range, and that means the stream can no longer be copied without re-encoding.
     pub fn is_hdr(&self) -> bool {
         match &self.color_transfer {
             Some(t) => {
@@ -107,7 +85,7 @@ impl SourceFile {
         }
     }
 
-    /// Сколько пикселей в кадре.
+    /// How many pixels there are in a frame.
     pub fn pixels(&self) -> u64 {
         u64::from(self.width) * u64::from(self.height)
     }

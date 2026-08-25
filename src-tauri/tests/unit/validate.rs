@@ -13,7 +13,6 @@ fn a_clean_decode_passes() {
     assert!(v.ok);
     assert!(v.problems.is_empty());
     assert!(v.ignored.is_empty());
-    assert!(v.summary().contains("без единой жалобы"));
 }
 
 #[test]
@@ -28,11 +27,14 @@ fn muxer_timestamp_noise_does_not_condemn_a_good_file() {
 
     let v = validate::classify(stderr);
     assert!(v.ok, "a good file was rejected over muxer noise");
+    // Kept rather than dropped: the complaint is shown to a person as something
+    // deliberately forgiven. Silently swallowing it would leave whoever wonders
+    // later why a warning-laden file was accepted with nothing to answer them.
     assert_eq!(v.ignored.len(), 1, "the complaint was silently dropped");
     assert!(
-        v.summary().contains("не влияют"),
-        "the summary does not explain why it was ignored: {}",
-        v.summary()
+        v.ignored[0].contains("non monotonically increasing dts"),
+        "the muxer's own words were lost: {:?}",
+        v.ignored
     );
 }
 
@@ -51,7 +53,6 @@ fn a_decoder_complaint_fails_the_file() {
         "the decoder's own words were lost: {:?}",
         v.problems
     );
-    assert!(v.summary().contains("Заливать его нельзя"));
 }
 
 #[test]

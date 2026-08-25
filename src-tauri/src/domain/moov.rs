@@ -1,65 +1,69 @@
-//! T033a — разбор атома `moov`: параметры видео прямо из заголовка MP4 (R-19, FR-012).
+//! T033a — parsing the `moov` atom: a video's parameters straight from the MP4 header
+//! (R-19, FR-012).
 //!
-//! Зачем свой разбор вместо FFmpeg. Чтобы показать разрешение, длительность и кодеки
-//! файла, лежащего на сервере, нужно прочитать несколько сотен килобайт его начала —
-//! не скачивать целиком и не гонять внешнюю программу. Для файла, подготовленного
-//! нашим процессом (`-movflags +faststart`), заголовок как раз в начале и лежит.
+//! Why parse it ourselves instead of using FFmpeg. To show the resolution, the duration and
+//! the codecs of a file that lies on the server, a few hundred kilobytes of its beginning
+//! have to be read — not the whole file downloaded, and no external program run. For a file
+//! prepared by our own process (`-movflags +faststart`) the header is right at the
+//! beginning.
 //!
-//! Что делает этот разбор, когда заголовка в начале нет: **не гадает**. Возвращает
-//! «неизвестно» и признак, что файл не соответствует целевому формату (FR-012).
-//! Такой файл зритель начнёт смотреть только после скачивания хвоста, и знать об этом
-//! пользователю важнее, чем увидеть разрешение.
+//! What this parser does when the header is not at the beginning: **it does not guess**. It
+//! answers "unknown" along with the fact that the file does not match the target format
+//! (FR-012). A viewer will only start watching such a file after downloading its tail, and
+//! knowing that matters more to a person than seeing the resolution.
 //!
-//! Разбор идёт по недоверенным данным: файл на сервере мог оказаться каким угодно.
-//! Поэтому здесь нет ни одного обращения по индексу без проверки границ — только
-//! функции, возвращающие `Option`, и ограничение глубины вложенности.
+//! The parsing runs over untrusted data: the file on the server could turn out to be
+//! anything. So there is not one indexing without a bounds check here — only functions that
+//! return `Option`, and a limit on nesting depth.
 
-/// Насколько глубоко готовы спускаться по вложенным атомам.
+/// How deep we are willing to descend through nested atoms.
 ///
-/// Реальная глубина до кодека — `moov/trak/mdia/minf/stbl/stsd` — шесть уровней.
-/// Предел защищает от файла, собранного так, чтобы разбор ушёл вглубь навсегда.
+/// The real depth down to the codec — `moov/trak/mdia/minf/stbl/stsd` — is six levels. The
+/// limit guards against a file put together so that the parsing descends forever.
 const MAX_DEPTH: usize = 8;
 
-/// Сколько байт заголовка просить у сервера при первой попытке.
+/// How many bytes of the header to ask the server for on the first attempt.
 ///
-/// У файла с `moov` в начале заголовок обычно укладывается в сотни килобайт: он
-/// растёт с числом кадров. Если не хватит, разбор скажет, сколько нужно ровно
-/// (см. [`MoovOutcome::NeedMoreBytes`]), и второй попытки хватит наверняка.
+/// In a file with `moov` at the beginning the header usually fits in a few hundred
+/// kilobytes: it grows with the number of frames. Should that not be enough, the parser says
+/// exactly how much is needed (see [`MoovOutcome::NeedMoreBytes`]), and a second attempt is
+/// certain to do.
 pub const SUGGESTED_HEAD_BYTES: u64 = 512 * 1024;
 
-/// Параметры файла, вычитанные из заголовка.
+/// A file's parameters, read out of its header.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MediaParams {
     pub duration_s: Option<f64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
-    /// Средний битрейт: объём файла, делённый на длительность. Считается только
-    /// когда известно и то и другое.
+    /// The average bitrate: the file's size divided by its duration. Worked out only when
+    /// both are known.
     pub bitrate_bps: Option<u64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
 }
 
-/// Чем кончился разбор.
+/// How the parsing ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MoovOutcome {
-    /// Заголовок найден в начале и разобран.
+    /// The header was found at the beginning and parsed.
     Parsed(MediaParams),
-    /// Заголовок есть, но лежит после данных: файл не подготовлен к раздаче.
-    /// Параметры остаются неизвестными — вычитывать их значило бы качать файл целиком.
+    /// The header is there, but it lies after the data: the file is not prepared for
+    /// serving. The parameters stay unknown — reading them out would mean downloading the
+    /// whole file.
     MoovAfterData,
-    /// Прочитанного куска не хватило. `need` — сколько байт от начала файла нужно,
-    /// чтобы продолжить.
+    /// The piece that was read did not suffice. `need` is how many bytes from the start of
+    /// the file are wanted to carry on.
     NeedMoreBytes { need: u64 },
-    /// Это не MP4.
+    /// This is not MP4.
     NotMp4,
 }
 
 impl MoovOutcome {
-    /// Значение поля `faststart_ok` файла раздачи.
+    /// The value of a served file's `faststart_ok` field.
     ///
-    /// `None` — вопрос ещё открыт: данных не хватило или это вообще не MP4,
-    /// и объявлять файл негодным не за что.
+    /// `None` means the question is still open: there was not enough data, or this is not
+    /// MP4 at all, and there are no grounds for declaring the file unfit.
     pub fn faststart_ok(&self) -> Option<bool> {
         match self {
             Self::Parsed(_) => Some(true),
@@ -76,10 +80,11 @@ impl MoovOutcome {
     }
 }
 
-/// Разобрать начало файла MP4.
+/// Parse the beginning of an MP4 file.
 ///
-/// `head` — прочитанные байты от начала файла. `file_size` — полный размер файла,
-/// если известен: без него не посчитать средний битрейт, но всё остальное разберётся.
+/// `head` is the bytes read from the start of the file. `file_size` is the full size of the
+/// file, when it is known: without it the average bitrate cannot be worked out, but
+/// everything else parses.
 pub fn parse(head: &[u8], file_size: Option<u64>) -> MoovOutcome {
     let mut offset: usize = 0;
     let mut looks_like_mp4 = false;
@@ -87,21 +92,21 @@ pub fn parse(head: &[u8], file_size: Option<u64>) -> MoovOutcome {
     loop {
         let header = match BoxHeader::read(head, offset) {
             Ok(h) => h,
-            // Данных не хватило на сам заголовок. Просить ещё имеет смысл только
-            // если начало уже опознано как MP4.
+            // There was not enough data even for the header. Asking for more makes sense
+            // only if the beginning has already been recognised as MP4.
             Err(HeaderError::Truncated) if looks_like_mp4 => {
                 return need_more(offset as u64 + 16, file_size)
             }
-            // Заголовок противоречив: длина меньше его самого. Дозапрос не поможет —
-            // то, что уже прочитано, не сходится само с собой.
+            // The header contradicts itself: its length is less than the header. Asking
+            // for more will not help — what has been read does not add up as it is.
             Err(_) => return MoovOutcome::NotMp4,
         };
 
         if !looks_like_mp4 {
-            // Первый атом обязан быть одним из тех, с которых начинается MP4.
-            // Одной проверки «имя из печатаемых знаков» мало: у страницы с ошибкой
-            // сервера («<!DOCTYPE html>») на месте имени оказывается «CTYP», и без
-            // этого списка она сошла бы за видео с атомом на гигабайт.
+            // The first atom must be one of those an MP4 begins with. A single check that
+            // the name is made of printable characters is not enough: a server's error page
+            // ("<!DOCTYPE html>") has "CTYP" where the name should be, and without this
+            // list it would pass for a video with a gigabyte-long atom.
             if !header.starts_a_file() {
                 return MoovOutcome::NotMp4;
             }
@@ -113,16 +118,16 @@ pub fn parse(head: &[u8], file_size: Option<u64>) -> MoovOutcome {
         match &header.typ {
             b"moov" => {
                 let Some(payload) = header.payload(head) else {
-                    // Атом начался, но кончается за пределами прочитанного. Мы точно
-                    // знаем, сколько нужно, — просим ровно столько.
+                    // The atom began but ends beyond what was read. We know exactly how
+                    // much is needed — so we ask for exactly that much.
                     return need_more(offset as u64 + header.total_len, file_size);
                 };
                 let params = parse_moov(payload, file_size);
                 return MoovOutcome::Parsed(params);
             }
-            // Данные пошли раньше заголовка — файл не подготовлен к раздаче.
-            // Дальше искать незачем: ответ уже известен, а `mdat` может быть
-            // на гигабайты, и дочитывать его ради заголовка бессмысленно.
+            // The data came before the header — the file is not prepared for serving.
+            // There is no point looking further: the answer is already known, and `mdat`
+            // may run to gigabytes, which it is senseless to read through for a header.
             b"mdat" => return MoovOutcome::MoovAfterData,
             _ => {}
         }
@@ -131,7 +136,7 @@ pub fn parse(head: &[u8], file_size: Option<u64>) -> MoovOutcome {
             return MoovOutcome::NotMp4;
         };
         if next <= offset {
-            // Атом нулевой длины: дальше разбор не сдвинется никогда.
+            // An atom of zero length: the parsing would never move on.
             return MoovOutcome::NotMp4;
         }
         if next >= head.len() {
@@ -141,12 +146,12 @@ pub fn parse(head: &[u8], file_size: Option<u64>) -> MoovOutcome {
     }
 }
 
-/// Запросить недостающие байты — но только если они в файле вообще есть.
+/// Ask for the missing bytes — but only if the file holds them at all.
 ///
-/// Без этой проверки разбор просил бы данные за концом файла, читающий слой отдавал
-/// бы тот же кусок, а разбор просил бы снова: вечный круг на файле, у которого
-/// заголовка нет вовсе. Когда просить больше нечего, ответ честный: это не то видео,
-/// с которым мы умеем работать.
+/// Without this check the parser would ask for data past the end of the file, the reading
+/// layer would hand back the same piece, and the parser would ask again: an endless circle
+/// on a file that has no header at all. When there is nothing more to ask for, the answer is
+/// honest: this is not a video we know how to work with.
 fn need_more(need: u64, file_size: Option<u64>) -> MoovOutcome {
     match file_size {
         Some(size) if need > size => MoovOutcome::NotMp4,
@@ -154,14 +159,14 @@ fn need_more(need: u64, file_size: Option<u64>) -> MoovOutcome {
     }
 }
 
-/// Сведения об одной дорожке.
+/// What is known about one track.
 #[derive(Debug, Default)]
 struct Track {
     handler: Option<[u8; 4]>,
     codec: Option<String>,
-    /// Разрешение из описания образца — то, в чём кадр закодирован.
+    /// The resolution from the sample description — what the frame is encoded at.
     coded_size: Option<(u32, u32)>,
-    /// Разрешение из заголовка дорожки — то, как её показывать.
+    /// The resolution from the track header — how it is to be shown.
     display_size: Option<(u32, u32)>,
     timescale: Option<u32>,
     duration: Option<u64>,
@@ -206,9 +211,9 @@ fn parse_moov(payload: &[u8], file_size: Option<u64>) -> MediaParams {
     let audio = tracks.iter().find(|t| t.is_audio());
 
     if let Some(v) = video {
-        // Разрешение берём из описания образца: это то, во что кадр закодирован,
-        // и именно с ним сравниваются ступени набора качеств. Заголовок дорожки
-        // хранит размер для показа, который у анаморфного видео отличается.
+        // The resolution is taken from the sample description: that is what the frame is
+        // encoded at, and it is what the rungs of a quality ladder are compared against.
+        // The track header holds the size for display, which differs on anamorphic video.
         let (w, h) = v.coded_size.or(v.display_size).unwrap_or((0, 0));
         if w > 0 && h > 0 {
             params.width = Some(w);
@@ -220,8 +225,8 @@ fn parse_moov(payload: &[u8], file_size: Option<u64>) -> MediaParams {
         params.audio_codec = a.codec.clone();
     }
 
-    // Длительность фильма — из заголовка фильма; если её там нет (встречается
-    // «неизвестно»), берём самую длинную дорожку.
+    // The movie's duration comes from the movie header; when it is not there (an
+    // "unknown" does turn up), the longest track is taken instead.
     params.duration_s = movie_seconds.or_else(|| {
         tracks
             .iter()
@@ -295,13 +300,13 @@ fn parse_trak(body: &[u8], track: &mut Track, depth: usize) {
 
 fn parse_tkhd_size(body: &[u8]) -> Option<(u32, u32)> {
     let version = *body.first()?;
-    // Поля до матрицы преобразования: у первой версии времена и длительность
-    // по четыре байта, у второй — по восемь.
+    // The fields before the transformation matrix: in version zero the times and the
+    // duration are four bytes each, in version one they are eight.
     let base = if version == 1 { 4 + 32 } else { 4 + 20 };
     let after_matrix = base + 8 + 2 + 2 + 2 + 2 + 36;
     let width = be_u32(body, after_matrix)?;
     let height = be_u32(body, after_matrix + 4)?;
-    // Значения записаны с дробной частью в младших шестнадцати битах.
+    // The values are written with their fractional part in the low sixteen bits.
     let (w, h) = (width >> 16, height >> 16);
     if w == 0 || h == 0 {
         None
@@ -326,9 +331,9 @@ fn parse_hdlr(body: &[u8]) -> Option<[u8; 4]> {
     Some(out)
 }
 
-/// Кодек и, для видео, закодированное разрешение — из первого описания образца.
+/// The codec and, for video, the coded resolution — from the first sample description.
 fn parse_stsd(body: &[u8]) -> Option<(String, Option<(u32, u32)>)> {
-    // version+flags (4), entry_count (4), дальше первая запись.
+    // version+flags (4), entry_count (4), and then the first entry.
     let entry = 8usize;
     let entry_size = be_u32(body, entry)?;
     if entry_size < 8 {
@@ -337,8 +342,8 @@ fn parse_stsd(body: &[u8]) -> Option<(String, Option<(u32, u32)>)> {
     let format = body.get(entry + 4..entry + 8)?;
     let codec = codec_name(format);
 
-    // Внутри записи для видео: reserved(6) + data_reference_index(2) +
-    // pre_defined(2) + reserved(2) + pre_defined(12) = 24 байта до размеров.
+    // Inside a video entry: reserved(6) + data_reference_index(2) + pre_defined(2) +
+    // reserved(2) + pre_defined(12) = 24 bytes before the sizes.
     let size_at = entry + 8 + 24;
     let coded = match (be_u16(body, size_at), be_u16(body, size_at + 2)) {
         (Some(w), Some(h)) if w > 0 && h > 0 => Some((u32::from(w), u32::from(h))),
@@ -348,10 +353,10 @@ fn parse_stsd(body: &[u8]) -> Option<(String, Option<(u32, u32)>)> {
     Some((codec, coded))
 }
 
-/// Человеческое имя кодека по четырёхбуквенному коду формата.
+/// A human name for a codec, from the four-letter format code.
 ///
-/// Незнакомый код возвращается как есть: показать пользователю «hvc1» честнее,
-/// чем промолчать, — по нему хотя бы можно найти, что это.
+/// An unfamiliar code is returned as it stands: showing a person "hvc1" is more honest than
+/// saying nothing — they can at least search for what it is.
 fn codec_name(format: &[u8]) -> String {
     match format {
         b"avc1" | b"avc3" => String::from("h264"),
@@ -368,10 +373,10 @@ fn codec_name(format: &[u8]) -> String {
     }
 }
 
-/// Обойти вложенные атомы, вызывая обработчик для каждого.
+/// Walk the nested atoms, calling the handler for each one.
 ///
-/// Молча останавливается на первом же непонятном месте: испорченный хвост не должен
-/// отменять то, что уже прочитано из начала.
+/// It stops quietly at the first place it cannot make sense of: a corrupted tail must not
+/// cancel what has already been read from the beginning.
 fn walk<F>(data: &[u8], depth: usize, mut visit: F)
 where
     F: FnMut(&[u8; 4], &[u8]),
@@ -397,32 +402,32 @@ where
     }
 }
 
-/// Почему заголовок атома не прочитан.
+/// Why an atom's header could not be read.
 ///
-/// Разница между двумя случаями решает, дозапрашивать ли данные с сервера:
-/// оборванному куску это поможет, противоречивому — нет никогда.
+/// The difference between the two cases decides whether to ask the server for more data: it
+/// helps a truncated piece, and never helps a contradictory one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeaderError {
-    /// Байтов не хватило на сам заголовок.
+    /// There were not enough bytes even for the header.
     Truncated,
-    /// Заголовок не сходится сам с собой: длина меньше его собственной.
+    /// The header does not add up: its length is less than its own size.
     Malformed,
 }
 
-/// Имена атомов, с которых может начинаться файл MP4.
+/// The names of the atoms an MP4 file may begin with.
 ///
-/// По стандарту первым обязан идти `ftyp`, но встречаются файлы и без него,
-/// поэтому список чуть шире — ровно на то, что действительно бывает в начале.
+/// By the standard `ftyp` must come first, but files without it do turn up, so the list is a
+/// little wider — by exactly what really does appear at the beginning.
 const FILE_STARTERS: [&[u8; 4]; 6] = [b"ftyp", b"styp", b"moov", b"free", b"skip", b"mdat"];
 
-/// Заголовок атома: имя и длина вместе с самим заголовком.
+/// An atom's header: the name and the length, the header included.
 struct BoxHeader {
     typ: [u8; 4],
-    /// Длина заголовка: восемь байт обычно, шестнадцать при длине в восемь байт.
+    /// The header's length: eight bytes usually, sixteen when the length is eight bytes.
     header_len: usize,
-    /// Полная длина атома вместе с заголовком.
+    /// The atom's full length, the header included.
     total_len: u64,
-    /// Смещение начала атома в исходных данных.
+    /// The offset of the atom's start within the source data.
     start: usize,
 }
 
@@ -436,12 +441,12 @@ impl BoxHeader {
         );
 
         let (header_len, total_len) = match size32 {
-            // Единица значит, что настоящая длина записана следом восемью байтами.
+            // A one means the real length is written next, in eight bytes.
             1 => (
                 16usize,
                 be_u64(data, offset + 8).ok_or(HeaderError::Truncated)?,
             ),
-            // Ноль значит «до конца файла».
+            // A zero means "to the end of the file".
             0 => (8usize, (data.len() - offset) as u64),
             n if n < 8 => return Err(HeaderError::Malformed),
             n => (8usize, u64::from(n)),
@@ -459,19 +464,19 @@ impl BoxHeader {
         })
     }
 
-    /// Может ли атом с таким именем стоять в начале файла.
+    /// Whether an atom with such a name may stand at the beginning of a file.
     fn starts_a_file(&self) -> bool {
         FILE_STARTERS.contains(&&self.typ)
     }
 
-    /// Похоже ли имя атома на имя, а не на случайные байты.
+    /// Whether an atom's name looks like a name rather than like random bytes.
     fn type_is_plausible(&self) -> bool {
         self.typ.iter().all(
             |b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b' ' | b'-' | b'.' | 0xA9),
         )
     }
 
-    /// Содержимое атома, если оно целиком есть в прочитанном куске.
+    /// An atom's contents, if all of it is inside the piece that was read.
     fn payload<'a>(&self, data: &'a [u8]) -> Option<&'a [u8]> {
         let from = self.start.checked_add(self.header_len)?;
         let to = usize::try_from(self.total_len)

@@ -1,8 +1,8 @@
-//! T051 — сведение описи с содержимым каталога (FR-015, FR-018).
+//! T051 — reconciling the catalogue with the directory's contents (FR-015, FR-018).
 //!
-//! Проверяется без сервера: сведение — чистая функция, и именно в ней легче всего
-//! потерять файл. Такая потеря должна ловиться тестом, а не пользователем, который
-//! однажды не досчитается места на диске.
+//! Checked without a server: reconciling is a pure function, and it is where a file is
+//! easiest to lose. Such a loss must be caught by a test rather than by a person who one
+//! day finds disk space missing.
 
 use vrcast_studio_lib::domain::manifest::Manifest;
 use vrcast_studio_lib::domain::media::Media;
@@ -41,9 +41,9 @@ fn media(id: &str, slug: &str, files: &[&str], ladders: &[&str]) -> Media {
 }
 
 #[test]
-fn файлы_вне_описи_попадают_в_нераспознанные() {
-    // FR-015: прятать их нельзя. Файл, которого не видно в приложении, всё равно
-    // занимает место и всё равно отдаётся по прямой ссылке.
+fn files_outside_the_catalogue_land_among_the_unrecognised() {
+    // FR-015: they must not be hidden. A file invisible in the application still takes up
+    // room and is still served by its direct link.
     let m = manifest_with(vec![media("m1", "film", &["film_22.mp4"], &[])]);
     let entries = vec![
         file("film_22.mp4", 100),
@@ -57,8 +57,8 @@ fn файлы_вне_описи_попадают_в_нераспознанные
 }
 
 #[test]
-fn файл_из_описи_которого_нет_помечается_а_не_исчезает() {
-    // FR-018. Убрать его молча значило бы скрыть от пользователя потерю.
+fn a_catalogued_file_that_is_gone_is_marked_rather_than_vanishing() {
+    // FR-018. Removing it quietly would hide the loss from a person.
     let m = manifest_with(vec![media(
         "m1",
         "film",
@@ -70,7 +70,7 @@ fn файл_из_описи_которого_нет_помечается_а_не
     let r = reconcile(&m, &entries);
     let files = &r.media_files[0].files;
 
-    assert_eq!(files.len(), 2, "пропавший файл исчез из медиа");
+    assert_eq!(files.len(), 2, "the missing file vanished from the medium");
     assert!(
         files
             .iter()
@@ -88,24 +88,25 @@ fn файл_из_описи_которого_нет_помечается_а_не
 }
 
 #[test]
-fn набор_качеств_это_одна_запись_а_не_сотня_отрезков() {
-    // Путь в описи вложенный, а занята им запись верхнего уровня — каталог.
+fn a_quality_ladder_is_one_entry_rather_than_a_hundred_segments() {
+    // The catalogue's path is nested, while what it takes up is a top-level entry — the
+    // directory.
     let m = manifest_with(vec![media("m1", "film", &[], &["film/master.m3u8"])]);
     let entries = vec![dir("film", 5_000_000)];
 
     let r = reconcile(&m, &entries);
     assert!(
         r.unrecognized.is_empty(),
-        "каталог набора качеств объявлен нераспознанным: {:?}",
+        "the quality ladder's directory was declared unrecognised: {:?}",
         r.unrecognized
     );
     assert!(r.media_files[0].ladders[0].exists);
 }
 
 #[test]
-fn служебные_записи_не_показываются_как_видео() {
-    // Иначе пользователь увидит в библиотеке опись собственной библиотеки
-    // и каталог урезанных описаний — и решит, что это его файлы.
+fn housekeeping_entries_are_not_shown_as_video() {
+    // Otherwise a person sees in their library the catalogue of their own library and the
+    // directory of trimmed descriptions — and decides those are their files.
     let m = manifest_with(vec![]);
     let entries = vec![
         file("library.json", 42),
@@ -119,8 +120,8 @@ fn служебные_записи_не_показываются_как_виде
 }
 
 #[test]
-fn ни_одна_запись_каталога_не_теряется_и_не_двоится() {
-    // Свойство, ради которого сведение вообще существует.
+fn no_catalogue_entry_is_lost_or_counted_twice() {
+    // The property reconciling exists for in the first place.
     let m = manifest_with(vec![
         media("m1", "a", &["a_10.mp4", "a_22.mp4"], &["a/master.m3u8"]),
         media("m2", "b", &["b_10.mp4"], &[]),
@@ -137,33 +138,37 @@ fn ни_одна_запись_каталога_не_теряется_и_не_д�
 
     let r = reconcile(&m, &entries);
 
-    let учтено: usize = r
+    let accounted: usize = r
         .media_files
         .iter()
         .map(|mf| mf.files.len() + mf.ladders.len())
         .sum::<usize>()
         + r.unrecognized.len();
-    // Семь записей минус служебная опись.
-    assert_eq!(учтено, 6, "записи потерялись или удвоились: {r:?}");
+    // Seven entries, minus the housekeeping catalogue.
+    assert_eq!(accounted, 6, "entries were lost or doubled: {r:?}");
 
-    let mut видимые: Vec<&str> = r
+    let mut visible: Vec<&str> = r
         .media_files
         .iter()
         .flat_map(|mf| mf.files.iter().chain(mf.ladders.iter()))
         .map(|f| f.path.as_str())
         .chain(r.unrecognized.iter().map(|e| e.name.as_str()))
         .collect();
-    видимые.sort_unstable();
-    let было = видимые.len();
-    видимые.dedup();
-    assert_eq!(было, видимые.len(), "запись попала сразу в два места");
+    visible.sort_unstable();
+    let before = visible.len();
+    visible.dedup();
+    assert_eq!(
+        before,
+        visible.len(),
+        "an entry landed in two places at once"
+    );
 }
 
 #[test]
-fn размер_вложенного_пути_не_приписывается_отдельному_описанию() {
-    // У `film/master.m3u8` своего размера мы не знаем: известен размер всего
-    // каталога. Приписать его описанию значило бы показать пользователю,
-    // что текстовый файл весит пять мегабайт.
+fn a_nested_path_is_not_credited_with_the_directory_size() {
+    // We do not know the size of `film/master.m3u8` itself: what is known is the size of
+    // the whole directory. Crediting it to the description would show a person a text file
+    // weighing five megabytes.
     let m = manifest_with(vec![media("m1", "film", &[], &["film/master.m3u8"])]);
     let entries = vec![dir("film", 5_000_000)];
 
@@ -172,11 +177,11 @@ fn размер_вложенного_пути_не_приписывается_о
 }
 
 #[test]
-fn пустая_опись_отдаёт_всё_содержимое_каталога_как_нераспознанное() {
-    // Обычное состояние сервера, на который заливали скриптами: описи нет,
-    // а файлы есть. Библиотека обязана показать их все.
+fn an_empty_catalogue_hands_back_the_whole_directory_as_unrecognised() {
+    // The ordinary state of a server that was uploaded to by scripts: no catalogue, but
+    // files aplenty. The library must show all of them.
     let m = Manifest::empty();
-    let entries = vec![file("один.mp4", 1), file("два.mp4", 2), dir("три", 3)];
+    let entries = vec![file("one.mp4", 1), file("two.mp4", 2), dir("three", 3)];
 
     let r = reconcile(&m, &entries);
     assert!(r.media_files.is_empty());

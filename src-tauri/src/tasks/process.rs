@@ -1,20 +1,21 @@
-//! T018 — запуск внешних программ так, чтобы их можно было гарантированно убить.
+//! T018 — starting external programs in a way that lets them be killed for certain.
 //!
-//! Конституция, принцип III (НЕОБСУЖДАЕМО). Это не предосторожность на всякий случай, а
-//! записанный урок проекта: осиротевший `ffmpeg` продолжает писать в тот же файл и портит
-//! его молча — пользователь узнаёт об этом от зрителей, когда чинить уже поздно.
+//! Constitution, principle III (NOT NEGOTIABLE). This is not a precaution taken just in
+//! case but a lesson the project wrote down: an orphaned `ffmpeg` goes on writing into the
+//! same file and spoils it quietly — a person learns of it from their viewers, when it is
+//! too late to fix.
 //!
-//! Обычного `kill` по идентификатору процесса недостаточно: `ffmpeg` и `ssh` порождают
-//! собственных потомков, и убийство родителя оставляет их работать. Поэтому каждый запуск
-//! получает **собственную группу**, и завершается группа целиком:
+//! An ordinary `kill` by process id is not enough: `ffmpeg` and `ssh` spawn children of
+//! their own, and killing the parent leaves those running. So every start gets **a group of
+//! its own**, and the group is terminated whole:
 //!
-//! | ОС | Механизм | Что даёт сверх обычного завершения |
+//! | OS | Mechanism | What it gives beyond an ordinary termination |
 //! |---|---|---|
-//! | Windows | объект задания с завершением по закрытию | потомки умирают, **даже если приложение убито диспетчером задач**: описатель закрывает ядро |
-//! | Unix | отдельная группа процессов, сигнал всей группе | сигнал доходит до всех потомков, а не только до прямого |
+//! | Windows | a job object that kills on close | the children die **even when the application is killed from Task Manager**: the kernel closes the handle |
+//! | Unix | a process group of its own, signalled as a whole | the signal reaches every child, not only the direct one |
 //!
-//! Строка про Windows — ключевая. Она закрывает сценарий, в котором никакой код приложения
-//! уже не выполняется, а гарантия всё равно обязана держаться (SC-010).
+//! The Windows row is the crucial one. It covers the case where no application code is
+//! running any more while the guarantee must hold all the same (SC-010).
 
 use std::process::Stdio;
 use tokio::process::{Child, Command};
@@ -33,12 +34,12 @@ pub enum ProcessError {
 
 pub type Result<T> = std::result::Result<T, ProcessError>;
 
-/// Внешняя программа, запущенная в собственной группе.
+/// An external program started in a group of its own.
 ///
-/// Пока эта структура жива, дерево процессов удерживается; `kill_tree` завершает его целиком.
+/// While this structure lives, the process tree is held; `kill_tree` terminates it whole.
 pub struct ManagedProcess {
-    /// Заморожена ли программа. Хранится, чтобы повторная заморозка не сбивала
-    /// счётчик (см. `suspend`).
+    /// Whether the program is frozen. Kept so that freezing it twice does not throw the
+    /// counter off (see `suspend`).
     suspended: bool,
     child: Child,
     program: String,
@@ -47,13 +48,13 @@ pub struct ManagedProcess {
 }
 
 impl ManagedProcess {
-    /// Запустить программу в собственной группе процессов.
+    /// Start a program in a process group of its own.
     ///
-    /// **Не вызывать из недолговечных потоков.** На Linux защита опирается на сигнал,
-    /// который ядро шлёт при смерти родительского *потока*, а не процесса. Если породить
-    /// ffmpeg из потока, который вскоре завершится, ffmpeg умрёт вместе с ним посреди
-    /// работы. Рабочие потоки исполнителя задач живут всё время работы приложения —
-    /// оттуда вызывать можно; из отдельных потоков для блокирующих операций — нельзя.
+    /// **Do not call this from short-lived threads.** On Linux the protection rests on a
+    /// signal the kernel sends when the parent *thread* dies, not the parent process. Spawn
+    /// ffmpeg from a thread that ends soon after and ffmpeg dies along with it mid-work.
+    /// The task runner's worker threads live for as long as the application does — calling
+    /// from there is fine; from separate threads for blocking operations it is not.
     pub fn spawn(program: &str, args: &[String]) -> Result<Self> {
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -64,47 +65,50 @@ impl ManagedProcess {
 
         #[cfg(unix)]
         {
-            // Типаж `std::os::unix::process::CommandExt` здесь НЕ нужен: `pre_exec`
-            // у `tokio::process::Command` собственный. Лишний импорт компилируется
-            // только под Unix — под Windows этот кусок не собирается вовсе, — и
-            // поймал его лишь прогон в непрерывной интеграции под Linux.
+            // The `std::os::unix::process::CommandExt` trait is NOT wanted here: tokio's
+            // `Command` has a `pre_exec` of its own. The needless import compiles only
+            // under Unix — under Windows this block is not built at all — and only a
+            // continuous integration run on Linux caught it.
             //
-            // Идентификатор родителя запоминаем ДО порождения: он понадобится потомку,
-            // чтобы закрыть щель, описанную ниже.
+            // The parent's id is remembered BEFORE spawning: the child will need it to
+            // close the gap described below.
             let parent_pid = std::process::id();
             unsafe {
                 cmd.pre_exec(move || {
-                    // Своя группа процессов: сигнал уйдёт всем потомкам, а не только прямому.
+                    // A process group of its own: a signal will reach every child, not
+                    // only the direct one.
                     if libc_setsid() == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
 
                     #[cfg(target_os = "linux")]
                     {
-                        // Ядро само убьёт потомка, когда умрёт родитель, — и сделает это,
-                        // даже если никакой наш код уже не выполняется: приложение убито
-                        // сигналом, съедено убийцей при нехватке памяти или упало в панике.
-                        // Это единственный на Linux аналог того, что на Windows даёт
-                        // объект задания.
+                        // The kernel will kill the child itself when the parent dies — and
+                        // will do so even when no code of ours is running any more: the
+                        // application killed by a signal, eaten by the out-of-memory killer
+                        // or brought down by a panic. This is the only Linux equivalent of
+                        // what a job object gives on Windows.
                         //
-                        // Два ограничения, о которых надо помнить:
-                        //   1. Действует только на ПРЯМОГО потомка. Внуков закрывает
-                        //      уборка при запуске (см. tasks::registry).
-                        //   2. Срабатывает при смерти родительского ПОТОКА, а не процесса.
-                        //      Поэтому порождать процессы из недолговечных потоков нельзя —
-                        //      см. предупреждение в описании ManagedProcess::spawn.
+                        // Two limits worth remembering:
+                        //   1. It applies only to the DIRECT child. Grandchildren are
+                        //      covered by the start-up sweep (see tasks::registry).
+                        //   2. It fires when the parent THREAD dies, not the process. So
+                        //      processes must not be spawned from short-lived threads —
+                        //      see the warning on ManagedProcess::spawn.
                         const PR_SET_PDEATHSIG: i32 = 1;
                         const SIGKILL: i64 = 9;
                         libc_prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
 
-                        // Щель: родитель мог умереть между порождением и строкой выше —
-                        // тогда сигнал уже не придёт никогда. Сверяем и уходим сами.
+                        // The gap: the parent may have died between the spawn and the line
+                        // above — in which case the signal will never come. We check and
+                        // leave of our own accord.
                         //
-                        // Уходить обязательно через _exit: между fork и exec разрешены
-                        // только async-signal-safe вызовы, а обычный exit запускает
-                        // atexit-обработчики и сброс потоков вывода — они могут навсегда
-                        // повиснуть на замке, оставленном потоком родителя, и потомок
-                        // станет вечным сиротой — ровно тем, от чего здесь защита.
+                        // Leaving must go through _exit: between fork and exec only
+                        // async-signal-safe calls are allowed, while an ordinary exit runs
+                        // atexit handlers and flushes the output streams — which can hang
+                        // forever on a lock left behind by a thread of the parent, and the
+                        // child would become an everlasting orphan, exactly what this
+                        // guards against.
                         if libc_getppid() != parent_pid as i32 {
                             libc_exit_now(0);
                         }
@@ -117,9 +121,10 @@ impl ManagedProcess {
 
         #[cfg(windows)]
         {
-            // CREATE_SUSPENDED не используем: процесс должен попасть в задание до начала
-            // работы, но приостановка усложнила бы чтение потоков. Достаточно того, что
-            // назначение в задание происходит сразу после запуска, до первого чтения.
+            // CREATE_SUSPENDED is not used: the process must be in the job before it
+            // starts working, but suspending it would complicate reading its streams. It is
+            // enough that assignment to the job happens right after the start, before the
+            // first read.
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
             cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
@@ -134,18 +139,18 @@ impl ManagedProcess {
         let job = {
             let job = windows_job::Job::create().map_err(|e| ProcessError::Spawn {
                 program: program.to_owned(),
-                reason: format!("не удалось создать объект задания: {e}"),
+                reason: format!("could not create the job object: {e}"),
             })?;
             if let Some(handle) = child.raw_handle() {
                 job.assign(handle).map_err(|e| ProcessError::Spawn {
                     program: program.to_owned(),
-                    reason: format!("не удалось назначить процесс заданию: {e}"),
+                    reason: format!("could not assign the process to the job: {e}"),
                 })?;
             }
             job
         };
 
-        tracing::debug!(program, pid = ?child.id(), "внешняя программа запущена в своей группе");
+        tracing::debug!(program, pid = ?child.id(), "external program started in its own group");
 
         Ok(Self {
             child,
@@ -164,7 +169,7 @@ impl ManagedProcess {
         &self.program
     }
 
-    /// Забрать потоки вывода для чтения прогресса.
+    /// Take the output streams, to read the progress from them.
     pub fn take_output(
         &mut self,
     ) -> (
@@ -174,19 +179,19 @@ impl ManagedProcess {
         (self.child.stdout.take(), self.child.stderr.take())
     }
 
-    /// Дождаться завершения.
+    /// Wait until it finishes.
     pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         self.child.wait().await
     }
 
-    /// Завершить всё дерево процессов.
+    /// Terminate the whole process tree.
     ///
-    /// Жёстко и сразу: результат прерванной задачи всё равно отбрасывается, а ожидание
-    /// вежливого выхода — та самая щель, в которую пролезает осиротевший процесс.
+    /// Hard and at once: the result of an interrupted task is thrown away regardless, and
+    /// waiting for a polite exit is the very gap an orphaned process slips through.
     pub async fn kill_tree(&mut self) -> Result<()> {
         #[cfg(windows)]
         {
-            // Завершает ВСЕ процессы задания, включая внуков.
+            // Terminates EVERY process in the job, grandchildren included.
             self.job
                 .terminate()
                 .map_err(|e| ProcessError::Kill(e.to_string()))?;
@@ -195,27 +200,28 @@ impl ManagedProcess {
         #[cfg(unix)]
         {
             if let Some(pid) = self.child.id() {
-                // Отрицательный идентификатор = вся группа процессов.
+                // A negative id means the whole process group.
                 unsafe {
                     libc_killpg(pid as i32, 9);
                 }
             }
         }
 
-        // Прямого потомка добиваем в любом случае и дожидаемся, чтобы не оставить зомби.
+        // The direct child is finished off in any case and waited for, so as to leave no
+        // zombie behind.
         let _ = self.child.start_kill();
         let _ = self.child.wait().await;
 
-        tracing::debug!(program = %self.program, "дерево процессов завершено");
+        tracing::debug!(program = %self.program, "the process tree was terminated");
         Ok(())
     }
 
-    /// Приостановить выполнение, не теряя проделанной работы (FR-083a).
+    /// Pause the work without losing what has been done (FR-083a).
     ///
-    /// Повторный вызов ничего не делает, и это не удобство, а необходимость:
-    /// на Windows заморозка потока считается счётчиком, и две подряд требуют двух
-    /// продолжений. Задача, которую приостановили дважды, не оживала бы после
-    /// одного «продолжить» — и выглядело бы это как повисшая намертво (T070).
+    /// Calling it again does nothing, and that is a necessity rather than a convenience: on
+    /// Windows freezing a thread is counted, and two in a row need two resumes. A task
+    /// paused twice would not come back to life after one "carry on" — and would look like
+    /// one hung for good (T070).
     pub fn suspend(&mut self) -> Result<()> {
         if self.suspended {
             return Ok(());
@@ -225,7 +231,7 @@ impl ManagedProcess {
         Ok(())
     }
 
-    /// Продолжить приостановленное выполнение. Повтор так же безобиден.
+    /// Carry on paused work. Repeating is just as harmless.
     pub fn resume(&mut self) -> Result<()> {
         if !self.suspended {
             return Ok(());
@@ -235,7 +241,7 @@ impl ManagedProcess {
         Ok(())
     }
 
-    /// Заморожена ли программа прямо сейчас.
+    /// Whether the program is frozen right now.
     pub fn is_suspended(&self) -> bool {
         self.suspended
     }
@@ -243,9 +249,11 @@ impl ManagedProcess {
     #[cfg(unix)]
     fn signal_stop(&self, stop: bool) -> Result<()> {
         let Some(pid) = self.child.id() else {
-            return Err(ProcessError::Suspend(String::from("процесс уже завершён")));
+            return Err(ProcessError::Suspend(String::from(
+                "the process has already finished",
+            )));
         };
-        // SIGSTOP / SIGCONT всей группе: приостанавливать надо и потомков.
+        // SIGSTOP / SIGCONT to the whole group: the children have to be paused too.
         let sig = if stop { 19 } else { 18 };
         unsafe {
             libc_killpg(pid as i32, sig);
@@ -256,7 +264,9 @@ impl ManagedProcess {
     #[cfg(windows)]
     fn signal_stop(&self, stop: bool) -> Result<()> {
         let Some(pid) = self.child.id() else {
-            return Err(ProcessError::Suspend(String::from("процесс уже завершён")));
+            return Err(ProcessError::Suspend(String::from(
+                "the process has already finished",
+            )));
         };
         windows_job::suspend_process(pid, stop).map_err(ProcessError::Suspend)
     }
@@ -276,17 +286,18 @@ extern "C" {
     #[cfg(target_os = "linux")]
     #[link_name = "prctl"]
     fn libc_prctl(option: i32, a2: i64, a3: i64, a4: i64, a5: i64) -> i32;
-    /// Немедленный выход без atexit-обработчиков — единственный безопасный
-    /// способ завершиться между fork и exec.
+    /// An immediate exit with no atexit handlers — the only safe way to end between fork
+    /// and exec.
     #[cfg(target_os = "linux")]
     #[link_name = "_exit"]
     fn libc_exit_now(status: i32) -> !;
 }
 
-/// Завершить процесс по идентификатору — для уборки уцелевших при запуске.
+/// Terminate a process by its id — for the start-up sweep of survivors.
 ///
-/// Отдельно от [`ManagedProcess::kill_tree`]: там процесс наш и живой, здесь — чужой
-/// по отношению к текущему запуску приложения, оставшийся от предыдущего.
+/// Kept apart from [`ManagedProcess::kill_tree`]: there the process is ours and alive, here
+/// it is a stranger to the current run of the application, left over from the previous
+/// one.
 pub(crate) fn kill_pid(pid: u32) -> bool {
     #[cfg(unix)]
     {
@@ -298,11 +309,11 @@ pub(crate) fn kill_pid(pid: u32) -> bool {
     }
 }
 
-/// Имя выполняемого файла процесса, если он ещё жив.
+/// The name of a process's executable, if it is still alive.
 ///
-/// Нужно не для красоты отчёта, а ради безопасности уборки: идентификаторы процессов
-/// переиспользуются, и за старым номером к моменту следующего запуска может стоять
-/// совершенно посторонняя программа. Убивать её недопустимо.
+/// Needed not to make a report look good but for the safety of the sweep: process ids are
+/// reused, and by the next start-up a completely unrelated program may stand behind an old
+/// number. Killing it is not allowed.
 pub(crate) fn process_name(pid: u32) -> Option<String> {
     #[cfg(unix)]
     {
@@ -316,41 +327,42 @@ pub(crate) fn process_name(pid: u32) -> Option<String> {
     }
 }
 
-/// Опознавательный признак процесса — время его запуска.
+/// Check a process by its start time and terminate it through ONE handle.
 ///
-/// Нужен уборке при запуске: перед тем как добить уцелевшую программу, надо
-/// убедиться, что за её номером не оказалась посторонняя. Номера переиспользуются,
-/// и убить чужое дороже, чем не добить своё.
+/// Windows only: there a handle opened on a live process holds its number, so the check and
+/// the termination certainly refer to one and the same process. On Unix the number is held
+/// by the process staying a zombie until the parent reaps it, and separate steps are not
+/// dangerous there.
 ///
-/// **Почему не имя.** Имя лжёт, и это выяснилось на живом примере: `sh -c "sleep"`
-/// заменяет себя на `sleep`, и записанное имя перестаёт совпадать. Вдобавок
-/// `/proc/<pid>/comm` обрезан пятнадцатью знаками, так что программа с длинным
-/// именем не совпадёт сама с собой. Время запуска не меняется при подмене образа,
-/// не обрезается и различает два процесса с одним номером точно.
-///
-/// `None` означает «узнать не удалось» — тогда остаётся сверка по имени, которая
-/// хуже, но лучше, чем ничего.
-/// Сверить процесс по времени запуска и завершить его ОДНИМ описателем.
-///
-/// Только на Windows: там описатель, открытый на живой процесс, удерживает за собой
-/// его номер, и потому сверка с завершением относятся заведомо к одному и тому же
-/// процессу. На Unix номер удерживается тем, что процесс остаётся зомби до сбора
-/// родителем, и раздельные шаги там не опасны.
-///
-/// `Some(true)` — завершили; `Some(false)` — это уже другой процесс, не тронули;
-/// `None` — процесса нет или к нему не подступиться.
+/// `Some(true)` — terminated; `Some(false)` — this is another process already, left
+/// untouched; `None` — there is no such process, or it cannot be reached.
 #[cfg(windows)]
 pub(crate) fn verify_and_terminate(pid: u32, expected_created_at: &str) -> Option<bool> {
     windows_job::verify_and_terminate(pid, expected_created_at)
 }
 
+/// A process's identifying mark — the time it started.
+///
+/// Needed by the start-up sweep: before finishing off a surviving program we must be sure
+/// no stranger stands behind its number. Numbers are reused, and killing someone else's
+/// costs more than failing to finish off our own.
+///
+/// **Why not the name.** The name lies, as a live example showed: `sh -c "sleep"` replaces
+/// itself with `sleep`, and the recorded name stops matching. On top of that
+/// `/proc/<pid>/comm` is truncated at fifteen characters, so a program with a long name
+/// will not match itself. A start time does not change when the image is replaced, is not
+/// truncated, and tells two processes with one number apart exactly.
+///
+/// `None` means "it could not be learned" — the name comparison is then all that is left,
+/// which is worse, but better than nothing.
 pub(crate) fn process_identity(pid: u32) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        // В /proc/<pid>/stat двадцать второе поле — время запуска в тактах от
-        // загрузки системы. Разбор осложняет второе поле: имя программы в скобках,
-        // и в нём бывают и пробелы, и сами скобки. Поэтому отсчитываем от ПОСЛЕДНЕЙ
-        // закрывающей скобки, а не разбиваем строку по пробелам с начала.
+        // In /proc/<pid>/stat the twenty-second field is the start time in ticks since the
+        // system booted. Parsing is complicated by the second field: the program's name in
+        // brackets, which can hold both spaces and brackets of its own. So counting starts
+        // from the LAST closing bracket rather than splitting the line on spaces from the
+        // beginning.
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let after_name = &stat[stat.rfind(')')? + 1..];
         let field = after_name.split_whitespace().nth(19)?;
@@ -358,7 +370,7 @@ pub(crate) fn process_identity(pid: u32) -> Option<String> {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        // На прочих Unix надёжного способа без лишних зависимостей нет.
+        // On other Unixes there is no reliable way without extra dependencies.
         let _ = pid;
         None
     }
@@ -370,10 +382,10 @@ pub(crate) fn process_identity(pid: u32) -> Option<String> {
 
 #[cfg(windows)]
 mod windows_job {
-    //! Минимальная обвязка над объектом задания Windows.
+    //! A minimal wrapper over the Windows job object.
     //!
-    //! Отдельной зависимости не берём: нужны четыре вызова, и каждый лишний пакет
-    //! в дереве — это ещё одна лицензия к проверке (приложение под GPL).
+    //! No separate dependency is taken: four calls are needed, and every extra package in
+    //! the tree is one more licence to check (the application is under the GPL).
 
     use std::ffi::c_void;
 
@@ -449,7 +461,7 @@ mod windows_job {
         ) -> i32;
     }
 
-    /// Время в системном виде: два тридцатидвухбитных слова.
+    /// A time in the system's own form: two thirty-two-bit words.
     #[repr(C)]
     #[derive(Default, Clone, Copy)]
     struct FileTime {
@@ -471,8 +483,7 @@ mod windows_job {
 
     pub struct Job(Handle);
 
-    // Описатель задания принадлежит одному владельцу и передаётся между потоками
-    // вместе с ним.
+    // The job handle belongs to a single owner and moves between threads along with it.
     unsafe impl Send for Job {}
     unsafe impl Sync for Job {}
 
@@ -484,10 +495,9 @@ mod windows_job {
                     return Err(std::io::Error::last_os_error().to_string());
                 }
 
-                // Вот ради этой строки всё и затевалось: когда описатель задания
-                // закрывается — а ядро закрывает его при смерти процесса-владельца,
-                // включая убийство через диспетчер задач, — все процессы задания
-                // завершаются вместе с ним.
+                // This is the line the whole thing was for: when the job handle is closed
+                // — and the kernel closes it when the owning process dies, a kill from Task
+                // Manager included — every process in the job is terminated with it.
                 let mut info = ExtendedLimitInformation {
                     basic: BasicLimitInformation {
                         limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -538,7 +548,7 @@ mod windows_job {
         }
     }
 
-    /// Завершить процесс по идентификатору. Используется уборкой уцелевших при запуске.
+    /// Terminate a process by its id. Used by the start-up sweep of survivors.
     pub fn terminate_pid(pid: u32) -> bool {
         const PROCESS_TERMINATE: u32 = 0x0001;
         unsafe {
@@ -552,20 +562,20 @@ mod windows_job {
         }
     }
 
-    /// Убедиться, что это тот самый процесс, и завершить его — ОДНИМ описателем.
+    /// Make sure this is the very process meant, and terminate it — through ONE handle.
     ///
-    /// Проверять и убивать по номеру раздельно нельзя, и это не теория: между
-    /// проверкой и убийством система вправе выдать освободившийся номер другой
-    /// программе, и убита будет она. Номера переиспользуются быстро, а уборка идёт
-    /// при запуске приложения — то есть ровно тогда, когда система раздаёт номера
-    /// пачками (задолженность T074).
+    /// Checking and killing by number separately will not do, and that is not theory:
+    /// between the check and the kill the system is free to hand the freed number to
+    /// another program, and that is the one that would be killed. Numbers are reused
+    /// quickly, and the sweep runs at the application's start-up — exactly when the system
+    /// hands numbers out in batches (debt T074).
     ///
-    /// Описатель, открытый на живой процесс, номер за собой удерживает: пока он
-    /// открыт, тот же номер никому не достанется. Поэтому сверка времени запуска
-    /// и завершение относятся заведомо к одному и тому же процессу.
+    /// A handle opened on a live process holds its number: while it is open, that number
+    /// goes to nobody else. So the start-time check and the termination certainly refer to
+    /// one and the same process.
     ///
-    /// `Some(true)` — завершили; `Some(false)` — это другой процесс, не тронули;
-    /// `None` — процесса уже нет или к нему не подступиться.
+    /// `Some(true)` — terminated; `Some(false)` — this is another process, left untouched;
+    /// `None` — there is no such process any more, or it cannot be reached.
     pub fn verify_and_terminate(pid: u32, expected_created_at: &str) -> Option<bool> {
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
         const PROCESS_TERMINATE: u32 = 0x0001;
@@ -602,11 +612,10 @@ mod windows_job {
         }
     }
 
-    /// Имя выполняемого файла живого процесса — для сверки перед убийством.
-    /// Время запуска процесса — точный опознавательный признак.
+    /// The time a process started — an exact identifying mark.
     ///
-    /// Номера процессов переиспользуются, а время запуска у нового процесса
-    /// с тем же номером будет другим. Этого достаточно, чтобы не убить чужое.
+    /// Process numbers are reused, while a new process with the same number will have a
+    /// different start time. That is enough to avoid killing someone else's.
     pub fn process_created_at(pid: u32) -> Option<String> {
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
         unsafe {
@@ -643,7 +652,7 @@ mod windows_job {
                 return None;
             }
             let full = String::from_utf16_lossy(&buf[..len as usize]);
-            // Разбор пути штатными средствами: они знают про разделители обеих ОС.
+            // The path is parsed by the standard means: they know both OSes' separators.
             std::path::Path::new(&full)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -651,17 +660,16 @@ mod windows_job {
         }
     }
 
-    /// Приостановить или продолжить процесс, перебрав его потоки.
+    /// Freeze or release every thread of a process.
     ///
-    /// В Windows нет средства приостановить процесс целиком одним вызовом — только
-    /// поток за потоком.
-    /// Заморозить или отпустить все потоки процесса.
+    /// Windows has no means of suspending a whole process in one call — only thread by
+    /// thread.
     ///
-    /// Снимок потоков берётся НЕСКОЛЬКО РАЗ, пока не перестанут находиться новые.
-    /// Один снимок оставлял щель: поток, созданный между снятием списка и заморозкой,
-    /// продолжал работать, и «приостановленная» программа продолжала писать в файл
-    /// (задолженность T070). Для продолжения повтор не нужен — отпускать нечего,
-    /// кроме уже замороженного.
+    /// The snapshot of threads is taken SEVERAL TIMES, until no new ones turn up. One
+    /// snapshot left a gap: a thread created between taking the list and freezing it went
+    /// on working, and the "paused" program went on writing into the file (debt T070).
+    /// Resuming needs no repetition — there is nothing to release but what is already
+    /// frozen.
     pub fn suspend_process(pid: u32, stop: bool) -> Result<(), String> {
         let mut known: Vec<u32> = Vec::new();
         let mut rounds = 0;
@@ -669,21 +677,21 @@ mod windows_job {
         loop {
             let touched = touch_threads(pid, stop, &mut known)?;
             rounds += 1;
-            // Ни одного нового потока — щель закрыта. Три круга как предел на случай
-            // программы, плодящей потоки без остановки: лучше выйти, чем встать здесь
-            // навсегда.
+            // Not one new thread — the gap is closed. Three rounds as a limit in case of a
+            // program that spawns threads without stopping: better to leave than to stand
+            // here forever.
             if !stop || touched == 0 || rounds >= 3 {
                 break;
             }
         }
 
         if known.is_empty() {
-            return Err(String::from("у процесса не найдено ни одного потока"));
+            return Err(String::from("not one thread of the process was found"));
         }
         Ok(())
     }
 
-    /// Один проход по потокам процесса. Возвращает, сколько НОВЫХ нашлось.
+    /// One pass over a process's threads. Returns how many NEW ones were found.
     fn touch_threads(pid: u32, stop: bool, known: &mut Vec<u32>) -> Result<usize, String> {
         const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
         unsafe {

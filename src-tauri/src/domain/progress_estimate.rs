@@ -1,28 +1,28 @@
-//! T079 — скорость и оставшееся время (FR-035).
+//! T079 — speed and time remaining (FR-035).
 //!
-//! Показывать мгновенную скорость нельзя: она скачет от окна к окну, и число
-//! в интерфейсе мельтешит так, что прочитать его невозможно. Показывать среднюю
-//! за всё время тоже нельзя: после обрыва и получаса простоя она покажет вдвое
-//! меньше, чем идёт на самом деле.
+//! Instantaneous speed cannot be shown: it jumps from window to window, and the number
+//! flickers so badly it cannot be read. Nor can the average over all time: after a
+//! break and half an hour idle it shows half of what is really happening.
 //!
-//! Поэтому скорость считается по скользящему окну последних секунд. И отдельно —
-//! правило про паузы: если между двумя отсчётами прошло больше окна, накопленное
-//! больше не описывает происходящее и выбрасывается. Без этого правила после паузы
-//! пользователь видит «осталось четыреста часов» и решает, что всё сломалось.
+//! So speed is worked out over a sliding window of the last few seconds. And there is
+//! a separate rule about pauses: if more than a window has passed between two samples,
+//! what was accumulated no longer describes what is happening and is thrown away.
+//! Without that rule a person sees "four hundred hours left" after a pause and decides
+//! everything is broken.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-/// За какой отрезок усредняем.
+/// The stretch the average is taken over.
 const WINDOW: Duration = Duration::from_secs(10);
 
-/// Сколько отсчётов держим. Больше не нужно: при четырёх событиях в секунду
-/// (R-15) их и так не наберётся сверх этого за окно усреднения.
+/// How many samples are kept. No more is needed: at four events a second (R-15) that
+/// many will not accumulate within the averaging window anyway.
 const MAX_SAMPLES: usize = 64;
 
 #[derive(Debug)]
 pub struct ProgressEstimate {
-    /// Пары «когда» и «сколько передано всего».
+    /// Pairs of "when" and "how much has been sent in all".
     samples: VecDeque<(Instant, u64)>,
     window: Duration,
 }
@@ -41,10 +41,10 @@ impl ProgressEstimate {
         }
     }
 
-    /// Записать, сколько всего передано к этому мгновению.
+    /// Record how much has been sent in all by this moment.
     pub fn record(&mut self, now: Instant, transferred: u64) {
-        // Разрыв длиннее окна усреднения — это пауза, обрыв или перезапуск.
-        // Накопленное до него ничего не говорит о нынешней скорости.
+        // A gap longer than the averaging window means a pause, a break or a
+        // restart. What was accumulated before it says nothing about the speed now.
         if let Some((last, _)) = self.samples.back() {
             if now.saturating_duration_since(*last) > self.window {
                 self.samples.clear();
@@ -53,8 +53,8 @@ impl ProgressEstimate {
 
         self.samples.push_back((now, transferred));
 
-        // Выбрасываем всё, что старше окна, но последний отсчёт бережём: без него
-        // не с чем сравнивать следующий.
+        // Everything older than the window goes, but the last sample is kept: without
+        // it there is nothing to compare the next one against.
         while self.samples.len() > 1 {
             let Some((oldest, _)) = self.samples.front() else {
                 break;
@@ -69,14 +69,14 @@ impl ProgressEstimate {
         }
     }
 
-    /// Скорость в байтах в секунду. `None`, пока отсчётов не хватает для вывода.
+    /// Speed in bytes per second. `None` while there are too few samples to say.
     pub fn speed_bps(&self) -> Option<u64> {
         let (first_at, first_bytes) = *self.samples.front()?;
         let (last_at, last_bytes) = *self.samples.back()?;
 
         let seconds = last_at.saturating_duration_since(first_at).as_secs_f64();
-        // Слишком короткий отрезок даёт число, которому нельзя верить: деление
-        // на тысячные доли секунды превращает любую дрожь в гигабиты.
+        // Too short a stretch gives a number not worth believing: dividing by
+        // thousandths of a second turns any jitter into gigabits.
         if seconds < 0.5 {
             return None;
         }
@@ -84,8 +84,8 @@ impl ProgressEstimate {
         Some((bytes as f64 / seconds).round() as u64)
     }
 
-    /// Сколько осталось при нынешней скорости. `None`, если скорость неизвестна
-    /// или равна нулю — «бесконечность» показывать человеку незачем.
+    /// How long is left at the present speed. `None` if the speed is unknown or zero
+    /// — there is no point showing a person infinity.
     pub fn eta(&self, remaining: u64) -> Option<Duration> {
         let speed = self.speed_bps()?;
         if speed == 0 {
@@ -94,7 +94,7 @@ impl ProgressEstimate {
         Some(Duration::from_secs_f64(remaining as f64 / speed as f64))
     }
 
-    /// Забыть накопленное — при паузе, обрыве и продолжении после перезапуска.
+    /// Forget what was accumulated — on a pause, a break, or resuming after a restart.
     pub fn reset(&mut self) {
         self.samples.clear();
     }

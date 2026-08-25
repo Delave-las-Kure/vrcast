@@ -1,13 +1,15 @@
-//! Доступ к серверу пользователя.
+//! Reaching the user's server.
 //!
-//! Решение R-04: работа с сервером ведётся библиотекой протокола прямо в ядре, а не запуском
-//! внешних `ssh`/`scp`. Причина не в чистоте: FR-110 и FR-112 требуют самодостаточности, а на
-//! Windows у обычного пользователя этих программ может не быть вовсе.
+//! Decision R-04: the server is worked with by a protocol library inside the core
+//! rather than by running external `ssh`/`scp`. Not for purity: FR-110 and FR-112
+//! require self-sufficiency, and on Windows an ordinary person may not have those
+//! programs at all.
 //!
-//! **Одно соединение на сервер, много каналов.** Сервер ограничивает число одновременно
-//! устанавливаемых соединений (`maxstartups 10:30:100`), и именно на этом у автора однажды
-//! оборвалась сборка лесенки на середине третьего варианта. Поэтому соединение одно, а
-//! слежение за журналом, передача файла и короткие команды идут отдельными каналами внутри него.
+//! **One connection per server, many channels.** A server limits how many connections
+//! may be established at once (`maxstartups 10:30:100`), and that is exactly what once
+//! broke the author's ladder build halfway through the third variant. So there is one
+//! connection, and watching a log, transferring a file and running short commands go
+//! down separate channels inside it.
 
 pub mod auth;
 pub mod connection;
@@ -22,7 +24,8 @@ pub use fingerprint::HostKey;
 
 use crate::store::redact;
 
-/// Адрес сервера. Порт отделён от имени намеренно: он участвует в ключе отпечатка.
+/// A server's address. The port is kept apart from the name deliberately: it takes
+/// part in the fingerprint key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ServerAddress {
     pub host: String,
@@ -44,17 +47,17 @@ impl std::fmt::Display for ServerAddress {
     }
 }
 
-/// Ошибки доступа к серверу.
+/// Failures in reaching the server.
 ///
-/// Разделены по причинам, а не по слоям: каждая соответствует коду из
-/// `contracts/ipc-commands.md` и своей подсказке пользователю (FR-105).
+/// Divided by cause rather than by layer: each corresponds to a code from
+/// `contracts/ipc-commands.md` and to its own answer for the person (FR-105).
 #[derive(Debug, thiserror::Error)]
 pub enum SshError {
     #[error("server {addr} is unreachable: {reason}")]
     Unreachable { addr: ServerAddress, reason: String },
 
-    /// FR-092. Самая опасная из ошибок здесь: она означает либо смену сервера,
-    /// либо перехват соединения, и молча её проглатывать нельзя.
+    /// FR-092. The most dangerous failure here: it means either the server changed or
+    /// the connection was intercepted, and it must not be swallowed quietly.
     #[error("fingerprint of server {addr} has changed: expected {expected}, got {actual}")]
     HostKeyChanged {
         addr: ServerAddress,
@@ -80,13 +83,13 @@ pub enum SshError {
     #[error("command on the server failed: {0}")]
     Exec(String),
 
-    /// Файловая операция на сервере не удалась.
+    /// A file operation on the server failed.
     ///
-    /// `kind` отделяет причины, которые ведут человека в РАЗНЫЕ стороны. Раньше
-    /// их не было, и любая файловая беда объявлялась нехваткой прав с подсказкой
-    /// «проверьте владельца каталога» — при полном диске человек шёл чинить то,
-    /// что не сломано, а настоящая причина лежала на виду в тексте ошибки
-    /// (задолженность T071).
+    /// `kind` separates the causes that send a person in DIFFERENT directions. There
+    /// used to be none, and every file trouble was reported as a permission problem
+    /// with the hint "check who owns the directory" — on a full disk a person went to
+    /// fix what was not broken while the real cause lay in plain sight in the error
+    /// text (debt T071).
     #[error("file operation on the server failed: {reason}")]
     Sftp { kind: SftpFailure, reason: String },
 
@@ -94,29 +97,30 @@ pub enum SshError {
     Protocol(String),
 }
 
-/// Отчего не удалась файловая операция.
+/// Why a file operation failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SftpFailure {
-    /// Нет прав: не тот владелец, не те права на каталоге.
+    /// No permission: the wrong owner, the wrong mode on the directory.
     Denied,
-    /// На сервере кончилось место.
+    /// The server has run out of room.
     NoSpace,
-    /// Файла или каталога нет.
+    /// The file or directory is not there.
     Missing,
-    /// Связь оборвалась посреди операции — повод повторить, а не чинить сервер.
+    /// The connection broke mid-operation — a reason to retry, not to fix the server.
     Interrupted,
-    /// Что-то ещё. Текст ошибки сохраняется целиком: он непонятен, но его можно
-    /// найти поиском, а «файловая операция не удалась» — нельзя.
+    /// Something else. The error text is kept whole: it makes little sense, but it
+    /// can be searched for, and "a file operation failed" cannot.
     Other,
 }
 
 impl SftpFailure {
-    /// Опознать причину по жалобе библиотеки.
+    /// Work out the cause from the library's complaint.
     ///
-    /// Разбор по тексту — не от хорошей жизни: слой SFTP отдаёт код состояния
-    /// вперемешку с сообщениями транспорта, и единственное, что есть всегда, —
-    /// это текст. Незнакомое считается `Other`, а не угадывается: неверная догадка
-    /// здесь хуже честного «не знаю», потому что уводит человека чинить не то.
+    /// Parsing text is not a happy choice: the SFTP layer hands back a status code
+    /// mixed in with transport messages, and the one thing always present is the text.
+    /// The unfamiliar counts as `Other` rather than being guessed at: a wrong guess
+    /// here is worse than an honest "unknown", because it sends a person to fix the
+    /// wrong thing.
     pub fn classify(text: &str) -> Self {
         let t = text.to_ascii_lowercase();
         if t.contains("no space") || t.contains("quota") || t.contains("disk full") {
@@ -134,7 +138,7 @@ impl SftpFailure {
 }
 
 impl SshError {
-    /// Собрать файловую ошибку, опознав причину по тексту.
+    /// Build a file error, working out the cause from the text.
     pub fn sftp(reason: impl Into<String>) -> Self {
         let reason = reason.into();
         Self::Sftp {
@@ -147,9 +151,9 @@ impl SshError {
 pub type Result<T> = std::result::Result<T, SshError>;
 
 impl SshError {
-    /// Ошибка нижележащей библиотеки проходит через вырезание секретов: она о наших
-    /// правилах не знает и вполне может вставить в текст то, что мы прячем
-    /// (конституция, принцип IV).
+    /// The underlying library's error passes through secret redaction: it knows
+    /// nothing of our rules and may well put into its text the very thing we hide
+    /// (constitution, principle IV).
     pub(crate) fn protocol(e: impl std::fmt::Display) -> Self {
         Self::Protocol(redact::safe_display(&e))
     }

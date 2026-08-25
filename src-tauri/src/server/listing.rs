@@ -1,26 +1,26 @@
-//! T044 — что лежит в каталоге раздачи.
+//! T044 — what is in the serving directory.
 //!
-//! Читается **верхний уровень**: файл — запись, каталог — тоже запись (обычно это
-//! набор качеств). Спускаться внутрь набора незачем: пользователь думает о нём как
-//! о единице, а показывать ему каждый отрезок значило бы утопить библиотеку в шуме.
+//! The **top level** is read: a file is an entry, and so is a directory (usually a
+//! quality ladder). There is no reason to descend into a ladder: a person thinks of it
+//! as one thing, and showing them every segment would drown the library in noise.
 //!
-//! Перечень не фильтруется: он честно отдаёт всё, что видно на сервере. Решение,
-//! что из этого показывать, принимается выше — иначе фильтр пришлось бы помнить
-//! в каждом месте, где перечень используется.
+//! The listing is not filtered: it honestly gives back everything visible on the
+//! server. What of it to show is decided higher up — otherwise the filter would have
+//! to be remembered in every place the listing is used.
 
 use crate::ssh::{Connection, Result, SshError};
 
-/// Одна запись каталога раздачи.
+/// One entry of the serving directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// Имя относительно каталога раздачи.
+    /// The name, relative to the serving directory.
     pub name: String,
-    /// Размер: для каталога — суммарный размер того, что внутри.
+    /// The size; for a directory, the total size of what is inside it.
     pub size_bytes: u64,
     pub is_dir: bool,
 }
 
-/// Прочитать содержимое каталога раздачи.
+/// Read the contents of the serving directory.
 pub async fn list(conn: &Connection, video_dir: &str) -> Result<Vec<Entry>> {
     let sftp = conn.sftp().await?;
 
@@ -43,9 +43,9 @@ pub async fn list(conn: &Connection, video_dir: &str) -> Result<Vec<Entry>> {
         });
     }
 
-    // Каталоги в перечне пришли с размером самой записи каталога, а не того, что
-    // внутри. Досчитываем одной командой на все сразу: отдельный обход по каждому
-    // набору качеств — это десятки обращений к серверу там, где хватает одного.
+    // Directories arrived with the size of the directory entry itself, not of what is
+    // inside. They are totalled with one command for all of them at once: walking each
+    // quality ladder separately is dozens of calls to the server where one will do.
     let dirs: Vec<&str> = out
         .iter()
         .filter(|e| e.is_dir)
@@ -60,13 +60,13 @@ pub async fn list(conn: &Connection, video_dir: &str) -> Result<Vec<Entry>> {
         }
     }
 
-    // Порядок устойчивый: перечень видит человек, и он не должен прыгать
-    // от обращения к обращению.
+    // A stable order: a person sees this listing, and it must not jump about from one
+    // call to the next.
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
 
-/// Размеры перечисленных каталогов — одной командой.
+/// The sizes of the listed directories, in one command.
 async fn directory_sizes(
     conn: &Connection,
     video_dir: &str,
@@ -87,8 +87,8 @@ async fn directory_sizes(
         let Ok(size) = size.trim().parse::<u64>() else {
             continue;
         };
-        // Имя каталога — последний отрезок пути. Сравнивать с исходным именем
-        // надёжнее, чем полагаться на порядок строк вывода.
+        // The directory name is the last segment of the path. Comparing against the
+        // original name is sturdier than relying on the order of the output lines.
         let name = path.trim().rsplit('/').next().unwrap_or("").to_owned();
         if !name.is_empty() {
             map.insert(name, size);

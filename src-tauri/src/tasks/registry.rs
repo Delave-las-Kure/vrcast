@@ -1,39 +1,42 @@
-//! Учёт запущенных внешних программ и уборка уцелевших при запуске.
+//! Keeping account of the external programs started, and sweeping up the survivors at
+//! start-up.
 //!
-//! Зачем это нужно, коротко: **гарантии на Windows и Linux не равны.**
+//! Why this is needed, briefly: **the guarantees on Windows and on Linux are not equal.**
 //!
-//! | Как завершилось приложение | Windows | Linux |
+//! | How the application ended | Windows | Linux |
 //! |---|---|---|
-//! | наш код отработал | убиваем сами | убиваем сами |
-//! | паника, аварийный выход | ядро закроет объект задания | сигнал ядра прямому потомку |
-//! | сигнал на завершение, нехватка памяти | ядро закроет объект задания | сигнал ядра прямому потомку |
-//! | внук, порождённый программой | закрыт объектом задания | **не закрыт** |
+//! | our code ran to the end | we kill them ourselves | we kill them ourselves |
+//! | a panic, an abnormal exit | the kernel closes the job object | a kernel signal to the direct child |
+//! | a termination signal, out of memory | the kernel closes the job object | a kernel signal to the direct child |
+//! | a grandchild spawned by the program | closed with the job object | **not closed** |
 //!
-//! На Windows объект задания держит всё дерево, и держит его ядро. На Linux сигнал при
-//! смерти родителя доходит только до прямого потомка; внуков закрыть нечем.
+//! On Windows a job object holds the whole tree, and the kernel holds the job object. On
+//! Linux the signal sent when a parent dies reaches only the direct child; there is nothing
+//! to close the grandchildren with.
 //!
-//! Этот учёт закрывает остаток: идентификаторы запущенных программ пишутся в базу, а при
-//! следующем запуске приложение проверяет, не уцелел ли кто, и добивает.
+//! This account covers what is left: the identifiers of started programs are written to the
+//! database, and at the next start-up the application checks whether any survived and
+//! finishes them off.
 //!
-//! **Сверка перед убийством обязательна.** Номера процессов переиспользуются, и за старым
-//! номером к моменту следующего запуска может стоять совершенно посторонняя программа —
-//! браузер пользователя, например. Поэтому перед завершением проверяется, тот ли это
-//! процесс, и при несовпадении запись просто забывается.
+//! **Checking before killing is not optional.** Process numbers are reused, and by the next
+//! start-up a completely unrelated program may stand behind an old number — a person's
+//! browser, for instance. So before terminating anything we check that it is the same
+//! process, and on a mismatch the record is simply forgotten.
 //!
-//! Сверяется **время запуска**, а не имя. Имя лжёт, и это выяснила непрерывная интеграция
-//! под Linux 2026-08-25: `sh -c "sleep 300"` заменяет себя на `sleep`, записанное имя
-//! перестаёт совпадать, и уцелевшая программа переживала уборку. Вдобавок система
-//! показывает не больше пятнадцати знаков имени, так что программа с длинным именем
-//! не совпала бы сама с собой. Имя осталось запасным путём — на случай, когда время
-//! узнать не удалось.
+//! What is compared is the **start time**, not the name. The name lies, as continuous
+//! integration on Linux found out on 2026-08-25: `sh -c "sleep 300"` replaces itself with
+//! `sleep`, the recorded name stops matching, and a surviving program lived through the
+//! sweep. On top of that the system shows no more than fifteen characters of a name, so a
+//! program with a long name would not match itself. The name stayed as a fallback — for
+//! when the time could not be learned.
 
 use super::process::{kill_pid, process_name};
 use crate::store::db::{now_rfc3339, Db, DbError};
 
-/// Записать запущенную программу, чтобы её можно было добить после аварии.
+/// Record a started program so that it can be finished off after a crash.
 pub fn record(db: &Db, pid: u32, program: &str, task_id: Option<&str>) -> Result<(), DbError> {
-    // Опознавательный признак снимаем прямо сейчас, пока процесс заведомо жив
-    // и это точно он. Позже за этим номером может оказаться кто угодно.
+    // The identifying mark is taken right now, while the process is certainly alive and
+    // certainly the one we mean. Later, anyone at all may stand behind this number.
     let identity = crate::tasks::process::process_identity(pid);
     db.with_conn(|c| {
         c.execute(
@@ -45,7 +48,7 @@ pub fn record(db: &Db, pid: u32, program: &str, task_id: Option<&str>) -> Result
     })
 }
 
-/// Забыть запись: программа завершилась штатно.
+/// Forget a record: the program finished as it should.
 pub fn forget(db: &Db, pid: u32) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute("DELETE FROM running_processes WHERE pid = ?1", [pid])?;
@@ -53,14 +56,14 @@ pub fn forget(db: &Db, pid: u32) -> Result<(), DbError> {
     })
 }
 
-/// Итог уборки.
+/// What the sweep did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SweepReport {
-    /// Завершено уцелевших от прошлого запуска.
+    /// Survivors of the previous run that were terminated.
     pub killed: Vec<u32>,
-    /// Записи, за номерами которых оказалась посторонняя программа. Не тронуты.
+    /// Records whose numbers turned out to hold an unrelated program. Left untouched.
     pub reused: Vec<u32>,
-    /// Записи, чьи программы уже завершились сами.
+    /// Records whose programs had already finished on their own.
     pub already_gone: Vec<u32>,
 }
 
@@ -70,10 +73,10 @@ impl SweepReport {
     }
 }
 
-/// Добить программы, уцелевшие от предыдущего запуска приложения.
+/// Finish off the programs that survived the application's previous run.
 ///
-/// Вызывается один раз при старте, до того как появятся новые задачи. После уборки таблица
-/// очищается целиком: всё, что в ней было, относилось к прошлому запуску.
+/// Called once at start-up, before any new tasks appear. After the sweep the table is
+/// cleared entirely: everything in it belonged to the previous run.
 pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
     let records: Vec<(u32, String, Option<String>)> = db.with_conn(|c| {
         let mut stmt = c.prepare("SELECT pid, program, identity FROM running_processes")?;
@@ -94,11 +97,11 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
     let mut report = SweepReport::default();
 
     for (pid, program, recorded_identity) in records {
-        // На Windows сверка и завершение делаются ОДНИМ описателем: между
-        // раздельными проверкой и убийством система вправе выдать освободившийся
-        // номер другой программе, и убита будет она. Уборка идёт при запуске
-        // приложения — то есть ровно тогда, когда номера раздаются пачками
-        // (задолженность T074).
+        // On Windows the check and the termination are done through ONE handle: between a
+        // separate check and kill the system is free to hand the freed number to another
+        // program, and that is the one that would be killed. The sweep runs at the
+        // application's start-up — exactly when numbers are handed out in batches
+        // (debt T074).
         #[cfg(windows)]
         if let Some(identity) = recorded_identity.as_deref() {
             match crate::tasks::process::verify_and_terminate(pid, identity) {
@@ -107,15 +110,15 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
                     tracing::warn!(
                         pid,
                         program = %program,
-                        "добита программа, уцелевшая от предыдущего запуска"
+                        "finished off a program that survived the previous run"
                     );
                     report.killed.push(pid);
                 }
                 Some(false) => {
                     tracing::debug!(
                         pid,
-                        ожидалось = %program,
-                        "номер процесса переиспользован, запись забыта без завершения"
+                        expected = %program,
+                        "the process number was reused; record forgotten without terminating"
                     );
                     report.reused.push(pid);
                 }
@@ -131,21 +134,21 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
                         tracing::warn!(
                             pid,
                             program = %program,
-                            "добита программа, уцелевшая от предыдущего запуска"
+                            "finished off a program that survived the previous run"
                         );
                         report.killed.push(pid);
                     } else {
-                        // Не смогли завершить — но и не молчим об этом.
-                        tracing::error!(pid, program = %program, "уцелевшую программу не удалось завершить");
+                        // We could not terminate it — but we do not keep quiet about that.
+                        tracing::error!(pid, program = %program, "could not terminate a surviving program");
                         report.reused.push(pid);
                     }
                 } else {
-                    // Номер переиспользован посторонней программой. Не трогаем.
+                    // The number was reused by an unrelated program. Left untouched.
                     tracing::debug!(
                         pid,
-                        ожидалось = %program,
-                        обнаружено = %actual,
-                        "номер процесса переиспользован, запись забыта без завершения"
+                        expected = %program,
+                        found = %actual,
+                        "the process number was reused; record forgotten without terminating"
                     );
                     report.reused.push(pid);
                 }
@@ -161,16 +164,18 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
     Ok(report)
 }
 
-/// Тот ли это процесс, который мы записали, — или за его номером уже кто-то другой.
+/// Whether this is the process we recorded — or someone else already stands behind its
+/// number.
 ///
-/// Сверяется в первую очередь **время запуска**: оно не меняется при подмене образа
-/// и не обрезается. Имя — запасной путь на случай, когда время узнать не удалось
-/// (старая запись без него, не-Linux Unix, отказ в доступе).
+/// What is compared first is the **start time**: it does not change when the image is
+/// replaced and it is not truncated. The name is a fallback for when the time could not be
+/// learned (an old record without it, a non-Linux Unix, a refused permission).
 ///
-/// Почему имени недостаточно, выяснила непрерывная интеграция под Linux 2026-08-25:
-/// `sh -c "sleep 300"` заменяет себя на `sleep`, записанное имя перестаёт совпадать,
-/// и уцелевшая программа переживала уборку. Вдобавок `/proc/<pid>/comm` обрезан
-/// пятнадцатью знаками — программа с длинным именем не совпала бы сама с собой.
+/// Why the name is not enough was found out by continuous integration on Linux on
+/// 2026-08-25: `sh -c "sleep 300"` replaces itself with `sleep`, the recorded name stops
+/// matching, and a surviving program lived through the sweep. On top of that
+/// `/proc/<pid>/comm` is truncated at fifteen characters — a program with a long name would
+/// not match itself.
 fn same_process(
     pid: u32,
     recorded_name: &str,
@@ -185,13 +190,14 @@ fn same_process(
     names_match(actual_name, recorded_name)
 }
 
-/// Совпадают ли имена программ.
+/// Whether two program names match.
 ///
-/// Сравниваем без учёта расширения и регистра: в записи может стоять `ffmpeg`, а система
-/// покажет `ffmpeg.exe`. Учитываем и обрезание: система показывает не больше
-/// пятнадцати знаков имени, и длинное имя иначе не совпало бы само с собой.
+/// They are compared without the extension and without regard to case: a record may hold
+/// `ffmpeg` while the system shows `ffmpeg.exe`. Truncation is taken into account too: the
+/// system shows no more than fifteen characters of a name, and a long name would otherwise
+/// not match itself.
 fn names_match(actual: &str, recorded: &str) -> bool {
-    /// Сколько знаков имени показывает система. Больше не покажет никогда.
+    /// How many characters of a name the system shows. It will never show more.
     const SHOWN_CHARS: usize = 15;
 
     let norm = |s: &str| {
@@ -206,7 +212,7 @@ fn names_match(actual: &str, recorded: &str) -> bool {
     if a == r {
         return true;
     }
-    // Показанное имя упёрлось в предел — сравниваем столько, сколько видно.
+    // The shown name hit the limit — compare only as much as is visible.
     a.chars().count() == SHOWN_CHARS && r.chars().take(SHOWN_CHARS).collect::<String>() == a
 }
 
@@ -215,7 +221,7 @@ mod tests {
     use super::names_match;
 
     #[test]
-    fn имена_сверяются_без_расширения_и_регистра() {
+    fn names_match_ignoring_extension_and_case() {
         assert!(names_match("ffmpeg.exe", "ffmpeg"));
         assert!(names_match("FFmpeg.EXE", "ffmpeg"));
         assert!(names_match("ffmpeg", "C:/tools/ffmpeg.exe"));

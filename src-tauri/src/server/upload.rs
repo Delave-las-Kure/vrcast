@@ -1,19 +1,19 @@
-//! T086–T092 — передача файла на сервер с продолжением после обрыва (R-05).
+//! T086–T092 — sending a file to the server, carrying on after a break (R-05).
 //!
-//! Устройство: файл пишется во временный **вне каталога раздачи**, окнами
-//! по несколько мегабайт, с записью по смещению. Позиция продолжения берётся
-//! из размера этого временного файла на сервере. По завершении — сверка
-//! контрольных сумм и ввод в раздачу одним переименованием.
+//! How it works: the file is written into a staged file **outside the serving directory**,
+//! in windows of a few megabytes, written at an offset. The position to carry on from is
+//! taken from the size of that staged file on the server. When it ends comes the checksum
+//! comparison and the entry into serving, by a single rename.
 //!
-//! Почему не нарезка на куски с последующей склейкой (как делал прежний скрипт):
-//! куски занимают на диске сервера второй такой же объём, склейка — это ещё один
-//! проход по всему файлу, а позиция продолжения требует отдельного учёта. Запись
-//! по смещению даёт то же самое даром: позиция — это размер файла.
+//! Why not cutting into pieces and gluing them afterwards, the way the old script did:
+//! pieces take up a second copy of the same volume on the server's disk, gluing is another
+//! pass over the whole file, and the position to carry on from needs an account of its own.
+//! Writing at an offset gives the same thing for free: the position is the file's size.
 //!
-//! **Один заход, а не вся передача.** Модуль делает попытку и возвращает, докуда
-//! дошёл. Переподключение и повторы — этажом выше (`commands::upload`), там же,
-//! где известен профиль сервера. Смешивать это здесь значило бы протащить сюда
-//! и секреты, и правила повторов.
+//! **One attempt, not the whole transfer.** This module makes one attempt and returns how
+//! far it got. Reconnecting and retrying live one floor up (`commands::upload`), where the
+//! server profile is known. Mixing that in here would drag both the secrets and the retry
+//! rules along with it.
 
 use super::{join_remote, shell_quote};
 use crate::domain::progress_estimate::ProgressEstimate;
@@ -25,29 +25,29 @@ use russh_sftp::protocol::OpenFlags;
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// Что и куда передавать.
+/// What to send, and where.
 #[derive(Debug, Clone)]
 pub struct UploadPlan {
     pub local_path: PathBuf,
-    /// Полный путь временного файла на сервере.
+    /// The full path of the staged file on the server.
     pub remote_temp: String,
-    /// Полный путь конечного файла в каталоге раздачи.
+    /// The full path of the final file in the serving directory.
     pub remote_final: String,
     pub total_bytes: u64,
     pub limit_bps: Option<u64>,
 }
 
-/// Чем кончился заход.
+/// How an attempt ended.
 #[derive(Debug, thiserror::Error)]
 pub enum UploadError {
-    /// Связь оборвалась. Это не поломка, а обычное дело на многочасовой передаче:
-    /// переподключиться и продолжить с достигнутого.
+    /// The connection broke. That is not a fault but an ordinary thing on a transfer that
+    /// runs for hours: reconnect and carry on from where it got to.
     #[error("transfer interrupted: {0}")]
     Interrupted(String),
 
-    /// На сервере лежит больше, чем есть в источнике. Продолжать нельзя: получится
-    /// склейка двух разных файлов, и обнаружится это только на сверке — когда время
-    /// уже потрачено.
+    /// There is more on the server than there is in the source. Carrying on is impossible:
+    /// the result would be two different files glued together, and it would only be found
+    /// at the comparison — when the time has already been spent.
     #[error("the staged file on the server ({temp} B) is larger than the source ({total} B)")]
     SourceChanged { temp: u64, total: u64 },
 
@@ -59,7 +59,7 @@ pub enum UploadError {
 }
 
 impl UploadError {
-    /// Стоит ли пробовать снова.
+    /// Whether it is worth trying again.
     pub fn is_retriable(&self) -> bool {
         matches!(self, Self::Interrupted(_))
     }
@@ -71,7 +71,7 @@ impl From<SshError> for UploadError {
     fn from(e: SshError) -> Self {
         let text = crate::store::redact::safe_display(&e);
         match e {
-            // Обрыв и всё, что с ним связано, — повод повторить.
+            // A break, and everything that comes with it, is a reason to retry.
             SshError::Unreachable { .. } | SshError::Protocol(_) | SshError::Sftp { .. } => {
                 Self::Interrupted(text)
             }
@@ -80,13 +80,13 @@ impl From<SshError> for UploadError {
     }
 }
 
-/// Подготовить каталог сборки и убедиться, что он на той же файловой системе.
+/// Prepare the staging directory and make sure it is on the same file system.
 ///
-/// Проверка не формальность: переименование неделимо только внутри одной файловой
-/// системы. Через границу оно превращается в копирование с удалением — то есть
-/// в те самые минуты, когда в каталоге раздачи лежит наполовину скопированный файл.
-/// Молча получить это вместо неделимого ввода в раздачу — худший исход, потому что
-/// проявится он у зрителя.
+/// The check is not a formality: a rename is indivisible only within one file system.
+/// Across a boundary it turns into a copy followed by a delete — that is, into the very
+/// minutes during which a half-copied file sits in the serving directory. Quietly getting
+/// that instead of an indivisible entry into serving is the worst outcome, because it shows
+/// up for a viewer.
 pub async fn ensure_staging(conn: &Connection, staging_dir: &str, video_dir: &str) -> Result<()> {
     let out = conn
         .exec(&format!(
@@ -98,7 +98,7 @@ pub async fn ensure_staging(conn: &Connection, staging_dir: &str, video_dir: &st
 
     if !out.ok() {
         return Err(UploadError::Failed(format!(
-            "не подготовить каталог сборки {staging_dir}: {}",
+            "could not prepare the staging directory {staging_dir}: {}",
             out.stderr.trim()
         )));
     }
@@ -109,23 +109,24 @@ pub async fn ensure_staging(conn: &Connection, staging_dir: &str, video_dir: &st
 
     if staging_fs.is_empty() || videos_fs.is_empty() {
         return Err(UploadError::Failed(String::from(
-            "не удалось узнать файловую систему каталогов на сервере",
+            "could not learn which file system the directories on the server are on",
         )));
     }
     if staging_fs != videos_fs {
         return Err(UploadError::Failed(format!(
-            "каталог сборки {staging_dir} и каталог раздачи {video_dir} — на разных файловых \
-             системах. Ввод в раздачу перестал бы быть неделимым, и зритель мог бы получить \
-             наполовину скопированный файл"
+            "the staging directory {staging_dir} and the serving directory {video_dir} are on \
+             different file systems. Entry into serving would stop being indivisible, and a \
+             viewer could get a half-copied file"
         )));
     }
     Ok(())
 }
 
-/// Сколько уже лежит во временном файле на сервере.
+/// How much already lies in the staged file on the server.
 pub async fn uploaded_so_far(conn: &Connection, remote_temp: &str) -> Result<u64> {
-    // Отсутствие файла — законный ответ «ноль», а не ошибка: так выглядит первая
-    // попытка. Поэтому спрашиваем размер командой, которая на этот случай молчит.
+    // A missing file is a legitimate answer of "zero" rather than an error: that is what a
+    // first attempt looks like. So the size is asked for with a command that stays quiet in
+    // that case.
     let out = conn
         .exec(&format!(
             "stat -c %s -- {} 2>/dev/null || echo 0",
@@ -135,11 +136,11 @@ pub async fn uploaded_so_far(conn: &Connection, remote_temp: &str) -> Result<u64
     Ok(out.trimmed().trim().parse::<u64>().unwrap_or(0))
 }
 
-/// Один заход передачи. Возвращает, сколько всего лежит во временном файле.
+/// One attempt at the transfer. Returns how much lies in the staged file in all.
 ///
-/// `estimate` передаётся снаружи и переживает переподключения: иначе после каждого
-/// обрыва оценка времени начиналась бы с нуля и первые секунды показывала бы
-/// бессмыслицу.
+/// `estimate` is passed in from outside and survives reconnections: otherwise the time
+/// estimate would start from nothing after every break and show nonsense for the first few
+/// seconds.
 pub async fn transfer_once(
     conn: &Connection,
     ctx: &TaskContext,
@@ -160,11 +161,13 @@ pub async fn transfer_once(
 
     let mut local = tokio::fs::File::open(&plan.local_path)
         .await
-        .map_err(|e| UploadError::Failed(format!("исходник не открылся: {e}")))?;
+        .map_err(|e| UploadError::Failed(format!("the source would not open: {e}")))?;
     local
         .seek(std::io::SeekFrom::Start(offset))
         .await
-        .map_err(|e| UploadError::Failed(format!("не встать на позицию в исходнике: {e}")))?;
+        .map_err(|e| {
+            UploadError::Failed(format!("could not seek to the position in the source: {e}"))
+        })?;
 
     let sftp = conn.sftp().await?;
     let mut remote = sftp
@@ -177,16 +180,18 @@ pub async fn transfer_once(
     remote
         .seek(std::io::SeekFrom::Start(offset))
         .await
-        .map_err(|e| UploadError::Interrupted(format!("не встать на позицию на сервере: {e}")))?;
+        .map_err(|e| {
+            UploadError::Interrupted(format!("could not seek to the position on the server: {e}"))
+        })?;
 
     let mut limiter = RateLimiter::new(plan.limit_bps);
     let mut sent = offset;
     let mut buf = vec![0u8; WINDOW_BYTES as usize];
 
     loop {
-        // Отмена и приостановка проверяются между окнами: рвать запись посередине
-        // значило бы оставить в файле оборванный хвост, который потом придётся
-        // переписывать.
+        // Cancelling and pausing are checked between windows: tearing off a write in the
+        // middle would leave a broken tail in the file that has to be written over
+        // afterwards.
         ctx.wait_while_paused().await;
         if ctx.is_cancelled() {
             return Err(UploadError::Cancelled);
@@ -195,19 +200,19 @@ pub async fn transfer_once(
         let read = local
             .read(&mut buf)
             .await
-            .map_err(|e| UploadError::Failed(format!("исходник не читается: {e}")))?;
+            .map_err(|e| UploadError::Failed(format!("the source will not read: {e}")))?;
         if read == 0 {
             break;
         }
 
         let wait = limiter.delay_for(read as u64, Instant::now());
         if !wait.is_zero() {
-            // Ждём с оглядкой на отмену: иначе при ограничении в сотню килобайт
-            // отмена ждала бы своей очереди десятки секунд.
+            // The wait keeps an eye on cancelling: otherwise, with a limit of a hundred
+            // kilobytes, a cancel would wait its turn for tens of seconds.
             //
-            // Токен именуется отдельной переменной намеренно: временное значение
-            // внутри `select!` живёт до конца выражения и до конца ожидания
-            // не доживает.
+            // The token is named in a variable of its own deliberately: a temporary value
+            // inside `select!` lives only to the end of the expression and does not last
+            // until the end of the wait.
             let cancel = ctx.cancel_token();
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
@@ -215,24 +220,21 @@ pub async fn transfer_once(
             }
         }
 
-        remote
-            .write_all(&buf[..read])
-            .await
-            .map_err(|e| UploadError::Interrupted(format!("запись на сервер оборвалась: {e}")))?;
+        remote.write_all(&buf[..read]).await.map_err(|e| {
+            UploadError::Interrupted(format!("the write to the server broke off: {e}"))
+        })?;
 
         sent += read as u64;
         estimate.record(Instant::now(), sent);
         report(ctx, plan, estimate, sent);
     }
 
-    remote
-        .flush()
-        .await
-        .map_err(|e| UploadError::Interrupted(format!("запись на сервер не дописалась: {e}")))?;
-    remote
-        .shutdown()
-        .await
-        .map_err(|e| UploadError::Interrupted(format!("файл на сервере не закрылся: {e}")))?;
+    remote.flush().await.map_err(|e| {
+        UploadError::Interrupted(format!("the write to the server did not finish: {e}"))
+    })?;
+    remote.shutdown().await.map_err(|e| {
+        UploadError::Interrupted(format!("the file on the server would not close: {e}"))
+    })?;
 
     Ok(sent)
 }
@@ -249,16 +251,16 @@ fn report(ctx: &TaskContext, plan: &UploadPlan, estimate: &ProgressEstimate, sen
         estimate.speed_bps().unwrap_or(0) as i64,
         estimate.eta(remaining).map_or(0, |d| d.as_secs() as i64),
     );
-    // И отдельно — на диск, много реже. Заливка идёт часами, и после перезапуска
-    // приложения человек должен увидеть, сколько уже передано, а не ноль.
+    // And separately — to disk, far less often. An upload runs for hours, and after the
+    // application restarts a person must see how much has already been sent, not zero.
     ctx.save_progress(progress);
 }
 
-/// Ввести файл в раздачу одним неделимым действием (FR-033).
+/// Enter the file into serving in one indivisible act (FR-033).
 ///
-/// До этого мгновения файл по ссылке недоступен: он лежит вне каталога раздачи.
-/// После — доступен целиком. Промежуточного состояния нет, и это главное, ради
-/// чего вся сборка идёт в стороне.
+/// Until that moment the file is unreachable by its link: it lies outside the serving
+/// directory. After it, it is reachable whole. There is no state in between, and that is
+/// the whole reason the staging happens off to the side.
 pub async fn publish(conn: &Connection, plan: &UploadPlan) -> Result<()> {
     let out = conn
         .exec(&format!(
@@ -269,19 +271,19 @@ pub async fn publish(conn: &Connection, plan: &UploadPlan) -> Result<()> {
         .await?;
     if !out.ok() {
         return Err(UploadError::Failed(format!(
-            "файл не удалось ввести в раздачу: {}",
+            "the file could not be entered into serving: {}",
             out.stderr.trim()
         )));
     }
-    tracing::info!(file = %plan.remote_final, "файл введён в раздачу");
+    tracing::info!(file = %plan.remote_final, "the file entered serving");
     Ok(())
 }
 
-/// Убрать за собой при отмене (FR-038).
+/// Clean up after a cancellation (FR-038).
 ///
-/// Ошибка уборки не возвращается: отмена уже произошла, и превращать её в неудачу
-/// из-за не удалившегося временного файла незачем. Но и молчать нельзя — иначе
-/// мусор копится незаметно.
+/// A failure to clean up is not returned: the cancellation has already happened, and there
+/// is no point turning it into a failure because a staged file would not delete. But
+/// keeping quiet will not do either — litter piles up unnoticed.
 pub async fn cleanup(conn: &Connection, remote_temp: &str) {
     let result = conn
         .exec(&format!("rm -f -- {}", shell_quote(remote_temp)))
@@ -289,13 +291,15 @@ pub async fn cleanup(conn: &Connection, remote_temp: &str) {
     match result {
         Ok(out) if out.ok() => {}
         Ok(out) => {
-            tracing::warn!(file = remote_temp, stderr = %out.stderr.trim(), "временный файл не удалился")
+            tracing::warn!(file = remote_temp, stderr = %out.stderr.trim(), "the staged file would not delete")
         }
-        Err(e) => tracing::warn!(file = remote_temp, error = %e, "временный файл не удалился"),
+        Err(e) => {
+            tracing::warn!(file = remote_temp, error = %e, "the staged file would not delete")
+        }
     }
 }
 
-/// Полный путь конечного файла в каталоге раздачи.
+/// The full path of the final file in the serving directory.
 pub fn final_path(video_dir: &str, remote_name: &str) -> String {
     join_remote(
         video_dir,

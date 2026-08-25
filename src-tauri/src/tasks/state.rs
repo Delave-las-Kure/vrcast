@@ -1,15 +1,15 @@
-//! Виды задач, их состояния и разрешённые переходы.
+//! The kinds of task, their states, and the transitions that are allowed.
 //!
-//! Здесь нет ни ввода-вывода, ни сети — только правила. Это сделано намеренно
-//! (конституция, раздел «Ограничения качества исполнения»): логика, которую можно
-//! проверить только через базу или сервер, считается непроверенной.
+//! There is neither input-output nor networking here — only rules. That is deliberate
+//! (constitution, section "Limits on quality of execution"): logic that can only be checked
+//! through a database or a server counts as unchecked.
 
 use serde::{Deserialize, Serialize};
 
-/// Объявляет перечисление ОДНИМ перечнем: из него рождаются и enum, и `ALL`,
-/// и `as_str`, и `parse`. Рукописный список рядом с enum — лазейка: код,
-/// добавленный в enum и забытый в списке, выпадает из сверки с TS-договором,
-/// и компилятор при этом молчит. Тот же приём — в `commands::error`.
+/// Declares an enumeration from ONE list: the enum, `ALL`, `as_str` and `parse` are all
+/// born from it. A hand-written list beside an enum is a loophole: a code added to the enum
+/// and forgotten in the list drops out of the comparison against the TypeScript contract,
+/// and the compiler says nothing about it. The same trick is used in `commands::error`.
 macro_rules! str_enum {
     (
         $(#[$outer:meta])*
@@ -23,7 +23,7 @@ macro_rules! str_enum {
         }
 
         impl $enum_name {
-            /// Все варианты. Порождён тем же перечнем, что и enum, — разойтись не могут.
+            /// Every variant. Born of the same list as the enum — they cannot diverge.
             pub const ALL: &'static [$enum_name] = &[$(Self::$name),+];
 
             pub fn as_str(&self) -> &'static str {
@@ -41,29 +41,29 @@ macro_rules! str_enum {
 }
 
 str_enum! {
-    /// Вид задачи.
+    /// The kind of a task.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum TaskKind {
-        /// Разбор исходника — быстро, локально.
+        /// Examining a source file — quick, and local.
         Probe => "probe",
-        /// Подготовка файла к раздаче.
+        /// Preparing a file for serving.
         Convert => "convert",
-        /// Передача файла на сервер.
+        /// Sending a file to the server.
         Upload => "upload",
-        /// Сборка набора качеств на сервере.
+        /// Building a quality ladder on the server.
         BuildLadder => "build_ladder",
-        /// Развёртывание раздачи на чистом сервере.
+        /// Setting up serving on a bare server.
         Deploy => "deploy",
-        /// Обновление серверной части.
+        /// Upgrading the server side.
         UpgradeServer => "upgrade_server",
-        /// Снятие состояния сервера.
+        /// Taking a reading of the server's state.
         Diagnose => "diagnose",
     }
 }
 
 impl TaskKind {
-    /// Какой ресурс занимает задача.
+    /// Which resource a task takes up.
     pub fn lane(&self) -> Lane {
         match self {
             Self::Convert => Lane::Compute,
@@ -72,53 +72,56 @@ impl TaskKind {
         }
     }
 
-    /// Можно ли приостановить, не потеряв работу, и переживёт ли это закрытие приложения.
+    /// Whether it can be paused without losing the work, and whether that survives the
+    /// application being closed.
     pub fn pause_kind(&self) -> PauseKind {
         match self {
-            // Позиция хранится в байтах на сервере: продолжится и после перезапуска (R-05).
+            // The position is held as bytes on the server: it carries on even after a
+            // restart (R-05).
             Self::Upload => PauseKind::ResumableAcrossRestart,
-            // Приостановленный процесс живёт, только пока живо приложение (решение владельца
-            // 2026-08-24). Закрытие приложения теряет проделанную работу — и пользователь
-            // обязан узнать об этом ДО закрытия (FR-086).
+            // A suspended process lives only as long as the application does (the owner's
+            // decision, 2026-08-24). Closing the application loses the work done — and a
+            // person must learn that BEFORE closing it (FR-086).
             Self::Convert => PauseKind::SuspendedProcess,
-            // Собирается из выполненных шагов: продолжится с того, что уже готово.
+            // Assembled from completed steps: it carries on from what is already done.
             Self::BuildLadder | Self::Deploy | Self::UpgradeServer => {
                 PauseKind::ResumableAcrossRestart
             }
-            // Короткие: приостанавливать нечего, проще выполнить заново.
+            // Short ones: there is nothing to pause, running them again is simpler.
             Self::Probe | Self::Diagnose => PauseKind::NotPausable,
         }
     }
 }
 
-/// Полоса — по какому ресурсу задачи конкурируют между собой.
+/// A lane — the resource tasks compete with one another for.
 ///
-/// Общий предел на все задачи был бы неверен: подготовка файла упирается в вычисления,
-/// передача — в канал, и запрещать им идти одновременно бессмысленно. А вот две подготовки
-/// сразу вдвое медленнее каждая и ничего не выигрывают.
+/// One shared limit over all tasks would be wrong: preparing a file is bound by computation
+/// and a transfer by the network, and forbidding them to run at the same time makes no
+/// sense. Two preparations at once, on the other hand, are each twice as slow and win
+/// nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lane {
-    /// Вычисления: подготовка файла.
+    /// Computation: preparing a file.
     Compute,
-    /// Канал и сервер: передача, сборка на сервере, развёртывание.
+    /// The network and the server: a transfer, a build on the server, a setup.
     Network,
-    /// Короткие проверки: почти ничего не занимают.
+    /// Short checks: they take up almost nothing.
     Light,
 }
 
-/// Как задача переносит приостановку.
+/// How a task takes being paused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PauseKind {
-    /// Продолжится с достигнутого места даже после перезапуска приложения.
+    /// Carries on from where it got to, even after the application restarts.
     ResumableAcrossRestart,
-    /// Приостановленный процесс держит работу, но не переживёт закрытия приложения.
+    /// A suspended process holds the work, but will not survive the application closing.
     SuspendedProcess,
-    /// Приостановка не поддерживается.
+    /// Pausing is not supported.
     NotPausable,
 }
 
 str_enum! {
-    /// Состояние задачи.
+    /// The state of a task.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum TaskState {
@@ -132,41 +135,41 @@ str_enum! {
 }
 
 impl TaskState {
-    /// Завершённые состояния: из них переходов нет.
+    /// The finished states: there are no transitions out of them.
     pub fn is_final(&self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
 
-    /// Занимает ли задача место в полосе.
+    /// Whether the task takes up a place in its lane.
     pub fn occupies_lane(&self) -> bool {
-        // Приостановленная подготовка держит процесс в памяти, но вычислений не ведёт —
-        // место в полосе освобождается, иначе приостановка не давала бы ничего.
+        // A paused preparation holds its process in memory but does no computing — its
+        // place in the lane is freed, or pausing would gain nothing at all.
         matches!(self, Self::Running)
     }
 
-    /// Разрешён ли переход. Единственное место, где это решается.
+    /// Whether a transition is allowed. The one place where that is decided.
     pub fn can_transition_to(&self, next: TaskState) -> bool {
         use TaskState::*;
         match (self, next) {
             (Queued, Running | Cancelled) => true,
             (Running, Completed | Failed | Paused | Cancelled) => true,
-            // Из приостановленной — не только продолжить и снять, но и завершиться.
-            // Приостановка вступает в силу на ближайшей точке остановки, и работа
-            // может дойти до конца, пока задача уже помечена приостановленной:
-            // передача дописывает последнее окно, подготовка — последний шаг.
-            // Отказаться записать это значило бы соврать о готовом результате;
-            // прежде таблица такой переход запрещала, а движок делал его всё равно,
-            // и расхождение молчало (задолженность T072).
+            // Out of paused — not only carrying on and cancelling, but finishing too.
+            // A pause takes effect at the nearest stopping point, and the work can run to
+            // its end while the task is already marked paused: a transfer finishes writing
+            // its last window, a preparation its last step. Refusing to record that would
+            // be lying about a finished result; the table used to forbid this transition
+            // while the engine made it anyway, and the disagreement said nothing
+            // (debt T072).
             (Paused, Running | Cancelled | Completed | Failed) => true,
-            // Переход в самого себя допустим: повторное нажатие отмены не должно быть
-            // ошибкой (конституция, принцип V).
+            // A transition into itself is allowed: pressing cancel a second time must not
+            // be an error (constitution, principle V).
             (a, b) if a == &b => true,
             _ => false,
         }
     }
 }
 
-/// Пределы одновременных задач по полосам.
+/// The limits on simultaneous tasks, per lane.
 #[derive(Debug, Clone, Copy)]
 pub struct LaneLimits {
     pub compute: usize,
@@ -177,10 +180,10 @@ pub struct LaneLimits {
 impl Default for LaneLimits {
     fn default() -> Self {
         Self {
-            // Две подготовки сразу вдвое медленнее каждая — выигрыша нет.
+            // Two preparations at once are each twice as slow — nothing is gained.
             compute: 1,
-            // Две передачи делят один канал; кроме того, сервер ограничивает число
-            // одновременно устанавливаемых соединений (R-04).
+            // Two transfers share one network link; besides, a server limits how many
+            // connections may be established at once (R-04).
             network: 1,
             light: 4,
         }

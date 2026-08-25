@@ -1,10 +1,11 @@
-//! T022 — соединение с сервером: одно на сервер, каналы внутри него.
+//! T022 — the connection to a server: one per server, channels inside it.
 //!
-//! Почему одно (R-04): сервер ограничивает число одновременно устанавливаемых соединений
-//! (`maxstartups 10:30:100`). Флуд неаутентифицированных соединений забивает эти слоты, и
-//! новые долгие сессии отбрасываются — именно так у автора однажды оборвалась сборка лесенки
-//! на середине третьего варианта. Слежение за журналом, передача файла и короткие команды
-//! идут отдельными каналами внутри одного соединения, а не отдельными соединениями.
+//! Why one (R-04): a server limits how many connections may be established at once
+//! (`maxstartups 10:30:100`). A flood of unauthenticated connections fills those slots and
+//! new long sessions are dropped — that is exactly how the author's ladder build once broke
+//! halfway through the third variant. Watching a log, transferring a file and running short
+//! commands go down separate channels inside one connection rather than down separate
+//! connections.
 
 use super::fingerprint::{client_config, ClientHandler, HostKeyPolicy, HostKeySlot};
 use super::{auth, Credentials, Result, ServerAddress, SshError};
@@ -12,34 +13,34 @@ use russh::client;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 
-/// Сколько каналов держим открытыми одновременно в одном соединении.
+/// How many channels are kept open at once inside one connection.
 ///
-/// У OpenSSH есть предел `MaxSessions`, по умолчанию **10**, и превышение даёт не
-/// очередь, а отказ: `Failed to open channel (ConnectFailed)`. Проверено на живом
-/// сервере 2026-08-25 — двенадцать одновременных каналов не открылись.
+/// OpenSSH has a `MaxSessions` limit, **10** by default, and going over it gives not a
+/// queue but a refusal: `Failed to open channel (ConnectFailed)`. Checked on a live server
+/// on 2026-08-25 — twelve simultaneous channels would not open.
 ///
-/// Берём восемь, оставляя запас: у пользователя предел может быть ниже умолчания,
-/// а вылезти за него мы обязаны не отказом посреди работы, а ожиданием.
+/// Eight is taken, leaving room to spare: a person's limit may be lower than the default,
+/// and running into it must show up as waiting rather than as a refusal mid-work.
 const MAX_CONCURRENT_CHANNELS: usize = 8;
 
-/// Установленное соединение с сервером.
+/// An established connection to a server.
 ///
-/// Клонируется дёшево: клоны делят одно соединение, а не создают новые.
+/// Cloning is cheap: the clones share one connection rather than making new ones.
 #[derive(Clone)]
 pub struct Connection {
     handle: Arc<client::Handle<ClientHandler>>,
     addr: ServerAddress,
     user: String,
-    /// Ограничитель числа одновременно открытых каналов — см. `MAX_CONCURRENT_CHANNELS`.
+    /// Caps how many channels are open at once — see `MAX_CONCURRENT_CHANNELS`.
     channels: Arc<Semaphore>,
 }
 
 impl Connection {
-    /// Подключиться и войти на сервер.
+    /// Connect and log in to the server.
     ///
-    /// `expected_fingerprint` обязателен: учётные данные не отправляются серверу, отпечаток
-    /// которого не подтверждён (см. `fingerprint`). Узнать отпечаток заранее —
-    /// [`super::fingerprint::probe`].
+    /// `expected_fingerprint` is not optional: credentials are never sent to a server whose
+    /// fingerprint has not been confirmed (see `fingerprint`). To learn the fingerprint
+    /// beforehand, use [`super::fingerprint::probe`].
     pub async fn connect(
         addr: ServerAddress,
         user: impl Into<String>,
@@ -56,8 +57,9 @@ impl Connection {
         let connect_result =
             client::connect(client_config(), (addr.host.as_str(), addr.port), handler).await;
 
-        // Разбор неудачи начинается с ключа сервера: подмена важнее любой другой причины,
-        // и сообщать о ней надо ею, а не общей ошибкой протокола.
+        // Sorting out a failure starts with the server's key: a substitution matters more
+        // than any other cause, and must be reported as itself rather than as a general
+        // protocol error.
         let mut handle = match connect_result {
             Ok(h) => h,
             Err(e) => {
@@ -83,7 +85,7 @@ impl Connection {
 
         Self::authenticate(&mut handle, &user, credentials).await?;
 
-        tracing::info!(server = %addr, user = %user, "соединение с сервером установлено");
+        tracing::info!(server = %addr, user = %user, "connected to the server");
 
         Ok(Self {
             handle: Arc::new(handle),
@@ -101,8 +103,8 @@ impl Connection {
         let result = match credentials {
             Credentials::Key { path, passphrase } => {
                 let key = auth::load_key(&path, passphrase.as_deref())?;
-                // Хеш подписи для RSA выбирается по тому, что поддерживает сервер:
-                // старый sha1 многие серверы уже не принимают.
+                // The signature hash for RSA is chosen by what the server supports: many
+                // servers no longer accept the old sha1.
                 let hash_alg = handle
                     .best_supported_rsa_hash()
                     .await
@@ -130,9 +132,9 @@ impl Connection {
             russh::client::AuthResult::Failure {
                 remaining_methods, ..
             } => {
-                // Перечень предложенных сервером способов — не украшение отчёта.
-                // Именно он показывает разницу между «неверный пароль» и «вход по паролю
-                // для этого пользователя запрещён», а снаружи они выглядят одинаково.
+                // The list of methods the server offered is not decoration for a report.
+                // It is what shows the difference between "wrong password" and "password
+                // login is forbidden for this user", which look the same from outside.
                 let methods = remaining_methods
                     .iter()
                     .map(|m| format!("{m:?}"))
@@ -140,7 +142,7 @@ impl Connection {
                     .join(", ");
                 Err(SshError::AuthFailed {
                     methods: if methods.is_empty() {
-                        String::from("сервер не назвал ни одного")
+                        String::from("the server named none")
                     } else {
                         methods
                     },
@@ -149,15 +151,15 @@ impl Connection {
         }
     }
 
-    /// Открыть канал-сессию, переживая мгновенный отказ сервера.
+    /// Open a session channel, surviving an instant refusal from the server.
     ///
-    /// Слот сессии на сервере освобождается не в момент обмена `close`: sshd сперва
-    /// прибирает дочерний процесс, а сигнал о его завершении приходит асинхронно.
-    /// Поэтому даже при соблюдении собственного предела (`MAX_CONCURRENT_CHANNELS`)
-    /// свежий канал может упереться в отжившую, но ещё не прибранную сессию — сервер
-    /// отвечает отказом, хотя место вот-вот освободится. Такой отказ — повод
-    /// подождать и повторить, а не ошибка: наблюдалось вживую 2026-08-25, когда
-    /// двенадцать очередей через семафор на восемь всё равно поймали
+    /// A session slot on the server is not freed at the moment `close` is exchanged: sshd
+    /// first reaps the child process, and the signal that it finished arrives
+    /// asynchronously. So even while our own limit (`MAX_CONCURRENT_CHANNELS`) is honoured,
+    /// a fresh channel can run into a session that is spent but not yet reaped — the server
+    /// answers with a refusal although the place is about to be free. Such a refusal is a
+    /// reason to wait and retry rather than an error: seen live on 2026-08-25, when twelve
+    /// queued through a semaphore of eight and still caught
     /// `ChannelOpenFailure(ConnectFailed)`.
     pub(crate) async fn open_session(&self) -> Result<russh::Channel<client::Msg>> {
         use russh::ChannelOpenFailure::{ConnectFailed, ResourceShortage};
@@ -173,8 +175,8 @@ impl Connection {
                     attempts_left -= 1;
                     tracing::debug!(
                         ?reason,
-                        осталось_попыток = attempts_left,
-                        "сервер отказал в открытии канала, ждём и повторяем"
+                        attempts_left,
+                        "the server refused to open a channel; waiting and retrying"
                     );
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(std::time::Duration::from_secs(1));
@@ -184,16 +186,16 @@ impl Connection {
         }
     }
 
-    /// Занять место под канал, дождавшись очереди при необходимости.
+    /// Take a place for a channel, waiting in the queue when there is one.
     ///
-    /// Ожидание здесь правильнее отказа: превышение предела сервера — не ошибка
-    /// пользователя и не повод прерывать работу.
+    /// Waiting is more right here than refusing: going over the server's limit is not a
+    /// person's mistake and not a reason to break off the work.
     pub(crate) async fn acquire_channel(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
         self.channels
             .clone()
             .acquire_owned()
             .await
-            .map_err(|_| SshError::Protocol(String::from("соединение закрывается")))
+            .map_err(|_| SshError::Protocol(String::from("the connection is closing")))
     }
 
     pub fn address(&self) -> &ServerAddress {
@@ -204,12 +206,12 @@ impl Connection {
         &self.user
     }
 
-    /// Живо ли соединение. Дёшево: без обращения к сети.
+    /// Whether the connection is alive. Cheap: it does not touch the network.
     pub fn is_alive(&self) -> bool {
         !self.handle.is_closed()
     }
 
-    /// Вежливо разорвать соединение.
+    /// Close the connection politely.
     pub async fn close(&self) {
         let _ = self
             .handle

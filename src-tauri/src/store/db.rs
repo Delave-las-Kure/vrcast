@@ -1,20 +1,21 @@
-//! T008 — локальное хранилище: подключение, схема, миграции.
+//! T008 — the local store: the connection, the schema, the migrations.
 //!
-//! Здесь лежит то, что переживает перезапуск приложения: профили серверов **без секретов**
-//! (сами секреты — в хранилище ОС, см. `super::secrets`), журнал задач с позицией возобновления
-//! и кеш библиотеки. Требования: FR-081 (задачи переживают перезапуск), FR-085 (повтор безопасен),
-//! конституция, принцип V.
+//! What survives a restart of the application lives here: server profiles **without their
+//! secrets** (the secrets themselves are in the operating system store, see
+//! `super::secrets`), the task journal with its resume position, and the library cache.
+//! Requirements: FR-081 (tasks survive a restart), FR-085 (repeating is safe),
+//! constitution, principle V.
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-/// Версия схемы, которую понимает эта сборка приложения.
+/// The schema version this build of the application understands.
 pub const SCHEMA_VERSION: u32 = 5;
 
-/// Миграции применяются по порядку; номер = значение `user_version` после применения.
-/// Менять уже выпущенную миграцию нельзя — только добавлять следующую.
+/// Migrations are applied in order; the number is the `user_version` after applying it.
+/// A migration already released must never be changed — only followed by the next one.
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("migrations/0001_initial.sql")),
     (2, include_str!("migrations/0002_running_processes.sql")),
@@ -35,8 +36,8 @@ pub enum DbError {
         source: rusqlite::Error,
     },
 
-    /// Тот же принцип, что и с версией серверной части (FR-130): встретив состояние новее,
-    /// чем понимаем, мы отказываемся работать, а не портим его молча.
+    /// The same principle as with the server-side version (FR-130): meeting state newer
+    /// than we understand, we refuse to work rather than quietly damaging it.
     #[error("the local database was made by a newer version of the application (schema {found}, this build knows up to {known})")]
     TooNew { found: u32, known: u32 },
 
@@ -49,17 +50,17 @@ pub enum DbError {
 
 pub type Result<T> = std::result::Result<T, DbError>;
 
-/// Локальная база.
+/// The local database.
 ///
-/// `Connection` из rusqlite не разделяется между потоками, поэтому доступ идёт через мьютекс.
-/// Критические участки короткие: длительная работа (передача, кодирование) базу не держит,
-/// она пишет только отметки о сдвигах состояния.
+/// A rusqlite `Connection` is not shared between threads, so access goes through a mutex.
+/// The critical sections are short: long work — a transfer, an encode — does not hold the
+/// database, it only writes marks when the state moves.
 pub struct Db {
     conn: Mutex<Connection>,
 }
 
 impl Db {
-    /// Открыть базу по пути, создав каталог при необходимости, и применить миграции.
+    /// Open the database at a path, creating the directory if needed, and migrate it.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Some(dir) = path.parent() {
@@ -73,18 +74,18 @@ impl Db {
         Self::from_conn(conn)
     }
 
-    /// База в памяти — для тестов. Никаких следов на диске.
+    /// A database in memory, for tests. It leaves no trace on disk.
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(DbError::Open)?;
         Self::from_conn(conn)
     }
 
     fn from_conn(conn: Connection) -> Result<Self> {
-        // Ссылочная целостность в SQLite выключена по умолчанию — включаем явно,
-        // иначе удаление профиля оставит осиротевшие задачи.
+        // Referential integrity is off by default in SQLite — turned on explicitly, or
+        // deleting a profile leaves orphaned tasks behind.
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        // Журнал с упреждающей записью: чтение не блокируется записью. На базе в памяти
-        // не поддерживается и молча остаётся прежним — это нормально.
+        // Write-ahead logging: a read is not blocked by a write. An in-memory database
+        // does not support it and quietly stays as it was — which is fine.
         let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
         conn.busy_timeout(Duration::from_secs(5))?;
 
@@ -95,16 +96,16 @@ impl Db {
         Ok(db)
     }
 
-    /// Путь к базе по умолчанию: каталог данных приложения текущего пользователя.
+    /// The default path: the current user's application data directory.
     pub fn default_path() -> Result<PathBuf> {
         let dirs = directories::ProjectDirs::from("ru", "VRCast", "VRCast Studio")
             .ok_or(DbError::NoDataDir)?;
         Ok(dirs.data_dir().join("vrcast-studio.sqlite"))
     }
 
-    /// Применить недостающие миграции. Безопасно при повторе: уже применённые пропускаются.
+    /// Apply the missing migrations. Safe to repeat: applied ones are skipped.
     fn migrate(&self) -> Result<()> {
-        let mut guard = self.conn.lock().expect("мьютекс базы отравлен");
+        let mut guard = self.conn.lock().expect("the database mutex is poisoned");
         let conn = &mut *guard;
 
         let current: u32 =
@@ -121,8 +122,9 @@ impl Db {
             if *version <= current {
                 continue;
             }
-            // Миграция и отметка о ней — в одной транзакции: иначе прерывание между
-            // ними оставит базу в состоянии, которое не соответствует записанной версии.
+            // The migration and the mark of it go in one transaction: an interruption
+            // between them would leave the database in a state that does not match the
+            // version written down.
             let tx = conn.transaction()?;
             tx.execute_batch(sql).map_err(|source| DbError::Migration {
                 version: *version,
@@ -130,42 +132,42 @@ impl Db {
             })?;
             tx.pragma_update(None, "user_version", *version as i64)?;
             tx.commit()?;
-            tracing::info!(version = *version, "применена миграция базы");
+            tracing::info!(version = *version, "database migration applied");
         }
         Ok(())
     }
 
-    /// Текущая версия схемы.
+    /// The current schema version.
     pub fn schema_version(&self) -> Result<u32> {
-        let conn = self.conn.lock().expect("мьютекс базы отравлен");
+        let conn = self.conn.lock().expect("the database mutex is poisoned");
         Ok(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? as u32)
     }
 
-    /// Выполнить работу с подключением. Держите замыкание коротким.
+    /// Do some work with the connection. Keep the closure short.
     pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-        let conn = self.conn.lock().expect("мьютекс базы отравлен");
+        let conn = self.conn.lock().expect("the database mutex is poisoned");
         f(&conn)
     }
 
-    /// То же, но с изменяемым доступом — нужно для транзакций.
+    /// The same, but with mutable access — needed for transactions.
     pub fn with_conn_mut<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
-        let mut conn = self.conn.lock().expect("мьютекс базы отравлен");
+        let mut conn = self.conn.lock().expect("the database mutex is poisoned");
         f(&mut conn)
     }
 }
 
-/// Метка времени в виде, пригодном для хранения и сравнения строками.
+/// A timestamp in a form fit for storing and for comparing as strings.
 pub fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"))
 }
 
-/// Разобрать отметку времени обратно в секунды от начала эпохи.
+/// Parse a timestamp back into seconds since the epoch.
 ///
-/// Нужно там, где считают промежутки: сколько задача шла, давно ли обновляли опись.
-/// Возвращает ошибку, а не нуль: нуль здесь означал бы 1970 год и давал бы промежутки
-/// в полвека там, где на деле отметку просто не удалось разобрать.
+/// Needed wherever spans are counted: how long a task ran, how long ago the catalogue was
+/// refreshed. It returns an error rather than zero: zero here would mean the year 1970 and
+/// would give half-century spans where in truth the timestamp simply would not parse.
 pub fn parse_rfc3339(s: &str) -> std::result::Result<u64, time::error::Parse> {
     let t = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)?;
     Ok(t.unix_timestamp().max(0) as u64)

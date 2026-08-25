@@ -1,13 +1,14 @@
-//! Предметная область: правила, не зависящие ни от сервера, ни от файловой системы.
+//! The subject matter: rules that depend on neither the server nor the file system.
 //!
-//! Здесь нет ни ввода-вывода, ни сети — только то, что можно проверить тестом без
-//! сервера (конституция, раздел «Ограничения качества исполнения»: логика, которую
-//! можно проверить только через сервер, считается непроверенной).
+//! There is no input, output or network here — only what can be tested without a
+//! server (constitution, "limits on how work is done": logic that can only be checked
+//! through a server counts as unchecked).
 //!
-//! Разделение проходит по одной черте: **что известно** живёт здесь, **как это узнать** —
-//! в слоях `ssh` и `server`. Поэтому, например, у файла раздачи нет полей с готовыми
-//! ссылками: ссылка вычисляется из профиля (`links`), а не хранится рядом с файлом,
-//! где неминуемо устареет при смене домена.
+//! One line runs through the split: **what is known** lives here, **how to find it
+//! out** lives in the `ssh` and `server` layers. That is why, for instance, a served
+//! file has no fields holding ready-made links: a link is worked out from the profile
+//! (`links`) rather than stored beside the file, where it would inevitably go stale
+//! the day the domain changes.
 
 pub mod convert_plan;
 pub mod grouping;

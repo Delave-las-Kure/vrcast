@@ -1,16 +1,17 @@
-//! T115 — вложенный в поставку FFmpeg: где он лежит и что умеет (FR-112, R-01).
+//! T115 — the FFmpeg bundled with the application: where it lies and what it can do
+//! (FR-112, R-01).
 //!
-//! Приложение ничего не скачивает при первом запуске. Человек ставит его и сразу
-//! готовит видео; сборка FFmpeg кладётся рядом при сборке установщика
-//! (`scripts/fetch-ffmpeg.mjs`, слепок закреплён в `scripts/ffmpeg.json`).
+//! The application downloads nothing on its first run. A person installs it and prepares a
+//! video straight away; the FFmpeg build is put beside it when the installer is built
+//! (`scripts/fetch-ffmpeg.mjs`, with the exact snapshot pinned in `scripts/ffmpeg.json`).
 //!
-//! **Проверять при запуске обязательно.** Вложенный файл может не запуститься:
-//! его вырезал антивирус, установщик распаковался наполовину, у файла нет права
-//! на выполнение. Узнать об этом в начале — значит сказать человеку, что чинить.
-//! Узнать в середине двухчасовой подготовки — значит отнять эти два часа.
+//! **Checking at start-up is not optional.** The bundled file may fail to run: an antivirus
+//! cut it out, the installer unpacked only halfway, the file has no execute permission.
+//! Learning that at the start means telling a person what to fix. Learning it halfway
+//! through a two-hour preparation means taking those two hours away.
 //!
-//! Здесь нет разбора исходников и запуска подготовки: это `probe.rs` и `convert.rs`.
-//! Здесь — только «есть ли чем работать вообще».
+//! Examining sources and running preparations are not here: those are `probe.rs` and
+//! `convert.rs`. Here there is only "is there anything to work with at all".
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -29,51 +30,51 @@ pub enum FfmpegError {
 
 pub type Result<T> = std::result::Result<T, FfmpegError>;
 
-/// Что удалось узнать о вложенной сборке.
+/// What could be learned about the bundled build.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FfmpegInfo {
-    /// Строка версии как её называет сама программа.
+    /// The version string as the program itself gives it.
     pub version: String,
-    /// Полный путь — нужен при разборе неполадок.
+    /// The full path — needed when sorting out trouble.
     pub path: String,
-    /// Есть ли программный кодировщик H.264. Без него подготовка невозможна вовсе.
+    /// Whether there is a software H.264 encoder. Without it no preparation is possible.
     pub has_x264: bool,
-    /// Аппаратные кодировщики H.264, которые сборка умеет звать.
+    /// The hardware H.264 encoders this build knows how to call.
     ///
-    /// «Умеет звать» — не «работают здесь»: наличие в сборке ничего не говорит
-    /// о видеокарте. Настоящая проверка — пробный запуск, и она отдельно (FR-026).
+    /// "Knows how to call" is not "work here": their presence in the build says nothing
+    /// about the graphics card. The real check is a trial run, and it is separate
+    /// (FR-026).
     pub hardware: Vec<String>,
 }
 
-/// Аппаратные кодировщики H.264, которые нас интересуют.
+/// The hardware H.264 encoders we care about.
 ///
-/// Порядок — предпочтения: NVIDIA быстрее прочих на нашем материале, дальше
-/// встроенное в процессор Intel, потом AMD, и последним общий путь Linux.
+/// The order is a preference: NVIDIA is faster than the rest on our material, then Intel's
+/// built into the processor, then AMD, and last the general Linux path.
 ///
-/// `h264_vaapi` в списке обязателен, хотя на Windows он бесполезен: на Linux
-/// именно через него работают и Intel, и AMD. Без него у половины линуксовых
-/// машин аппаратное ускорение просто не находилось бы — при том что оно есть.
+/// `h264_vaapi` must be in the list even though it is useless on Windows: on Linux it is
+/// what both Intel and AMD work through. Without it, half of all Linux machines simply
+/// would not find their hardware acceleration — while having it.
 ///
-/// В сборке лежат и другие (`h264_mf`, `h264_d3d12va`, `h264_vulkan`), но они
-/// либо обёртки над теми же, либо не проверены на нашем материале; объявлять
-/// доступным то, чего не пробовали, — обещание, за которое некому отвечать.
+/// The build carries others too (`h264_mf`, `h264_d3d12va`, `h264_vulkan`), but they are
+/// either wrappers over the same ones or untested on our material; declaring available
+/// something we have not tried is a promise with nobody to answer for it.
 const HW_ENCODERS: [&str; 4] = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_vaapi"];
 
-/// Имя вложенной программы рядом с приложением.
+/// The name of a bundled program beside the application.
 ///
-/// Сборщик кладёт вложенные программы рядом с исполняемым файлом, отрезав от имени
-/// тройку платформы: `ffmpeg-x86_64-pc-windows-msvc.exe` становится `ffmpeg.exe`.
+/// The bundler puts bundled programs next to the executable, cutting the platform triple
+/// off the name: `ffmpeg-x86_64-pc-windows-msvc.exe` becomes `ffmpeg.exe`.
 fn bundled_name(tool: &str) -> String {
     format!("{tool}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// Найти вложенную программу.
+/// Find a bundled program.
 ///
-/// Сначала рядом с приложением — там она лежит у установленного приложения.
-/// В отладочной сборке добавляется каталог, куда её кладёт `npm run ffmpeg`:
-/// иначе разработка и тесты требовали бы каждый раз собирать установщик.
-/// В собранном приложении этого запасного пути нет намеренно — он указывал бы
-/// на каталог чужой машины.
+/// First beside the application — that is where an installed application keeps it. A debug
+/// build adds the directory `npm run ffmpeg` puts it in: otherwise development and tests
+/// would need the installer built every time. A released application deliberately has no
+/// such fallback — it would point at a directory on someone else's machine.
 pub fn locate(tool: &str) -> Result<PathBuf> {
     let name = bundled_name(tool);
     let mut tried: Vec<String> = Vec::new();
@@ -106,10 +107,10 @@ pub fn locate(tool: &str) -> Result<PathBuf> {
     Err(FfmpegError::NotFound(tried.join(", ")))
 }
 
-/// Тройка платформы, под которую собрано приложение.
+/// The platform triple the application was built for.
 ///
-/// Собирается из тех же составляющих, что использует сборщик: отдельного способа
-/// спросить её у самой программы нет.
+/// Put together from the same parts the bundler uses: there is no separate way to ask the
+/// program itself for it.
 #[cfg(debug_assertions)]
 fn target_triple() -> String {
     let arch = std::env::consts::ARCH;
@@ -121,11 +122,12 @@ fn target_triple() -> String {
     }
 }
 
-/// Проверить вложенную сборку: запускается ли и умеет ли то, что нужно.
+/// Check the bundled build: does it start, and can it do what is needed.
 pub async fn probe_self() -> Result<FfmpegInfo> {
     let path = locate("ffmpeg")?;
-    // ffprobe нужен наравне с ffmpeg: без него не разобрать исходник. Отсутствие
-    // одного из двух — та же беда, и сказать о ней надо здесь, а не при первом разборе.
+    // ffprobe is needed as much as ffmpeg: without it a source cannot be examined. Missing
+    // either of the two is the same trouble, and it must be reported here rather than at
+    // the first examination.
     locate("ffprobe")?;
 
     let version = parse_version(&run(&path, &["-hide_banner", "-version"]).await?)?;
@@ -143,49 +145,53 @@ pub async fn probe_self() -> Result<FfmpegInfo> {
     })
 }
 
-/// Вытащить версию из ответа программы.
+/// Pull the version out of the program's answer.
 ///
-/// Отдельно от запуска, чтобы разбор проверялся тестом без вложенного файла:
-/// в непрерывной интеграции его нет — сто сорок мегабайт качать на каждый прогон
-/// незачем, — и без этого разделения разбор остался бы непроверенным вовсе.
+/// Kept apart from running it so that the parsing is checked by a test without the bundled
+/// file: continuous integration has none — there is no point downloading a hundred and
+/// forty megabytes for every run — and without this split the parsing would go unchecked
+/// entirely.
 pub fn parse_version(text: &str) -> Result<String> {
-    let line = first_line(text)
-        .ok_or_else(|| FfmpegError::Unexpected(String::from("пустой ответ на запрос версии")))?;
+    let line = first_line(text).ok_or_else(|| {
+        FfmpegError::Unexpected(String::from("an empty answer to the version request"))
+    })?;
 
-    // Проверка не придирка: под именем `ffmpeg` в системе может оказаться что угодно —
-    // от обёртки пакетного менеджера до сообщения «программа не установлена».
+    // The check is not pedantry: anything at all may stand behind the name `ffmpeg` in a
+    // system — from a package manager's wrapper to a message saying the program is not
+    // installed.
     if !line.starts_with("ffmpeg version") {
         return Err(FfmpegError::Unexpected(format!(
-            "на запрос версии ответил «{line}»"
+            "the version request was answered with \"{line}\""
         )));
     }
     Ok(line)
 }
 
-/// Есть ли такой кодировщик в перечне.
+/// Whether such an encoder is in the listing.
 ///
-/// Смотрится **только столбец имён**, а не весь перечень. Поиск по всему тексту
-/// не годится, и это не теоретическая придирка: в строке
-/// `V....D h264_nvenc  NVIDIA NVENC H.264 encoder` слово «NVENC» стоит ещё и в
-/// человеческом описании, так что поиск по словам объявил бы наличие кодировщика
-/// `nvenc`, которого не существует. Приложение решило бы, что аппаратное ускорение
-/// доступно, и упало бы уже на запуске подготовки.
+/// **Only the name column** is looked at, not the whole listing. Searching the entire text
+/// will not do, and that is not a theoretical quibble: in the line
+/// `V....D h264_nvenc  NVIDIA NVENC H.264 encoder` the word "NVENC" also stands in the
+/// human description, so a word search would declare the presence of an encoder called
+/// `nvenc`, which does not exist. The application would decide hardware acceleration was
+/// available and fall over as soon as a preparation started.
 ///
-/// Поиск подстрокой тем более не годится: `x264` нашлось бы внутри `libx264`,
-/// а `aac` — внутри доброго десятка чужих имён.
+/// A substring search will do even less: `x264` would be found inside `libx264`, and `aac`
+/// inside a good dozen names belonging to others.
 pub fn encoder_present(listing: &str, name: &str) -> bool {
     encoder_names(listing).any(|n| n.eq_ignore_ascii_case(name))
 }
 
-/// Имена кодировщиков из перечня.
+/// The encoder names out of a listing.
 ///
-/// Строка перечня выглядит так: ` V....D libx264   libx264 H.264 / AVC`. Первый
-/// столбец — свойства (вид потока и что кодировщик умеет), второй — имя, дальше
-/// описание для человека. Опознаём строку по первому столбцу: он ровно шесть знаков
-/// и состоит из известного набора. Заголовок и пояснения так отсеиваются сами,
-/// без привязки к их виду, — а он от версии к версии меняется.
+/// A listing line looks like this: ` V....D libx264   libx264 H.264 / AVC`. The first
+/// column is the properties (the kind of stream and what the encoder can do), the second is
+/// the name, and after that comes a description for a person. A line is recognised by its
+/// first column: it is exactly six characters long and made of a known set. The heading and
+/// the explanations are then filtered out by themselves, without depending on their shape —
+/// and their shape changes from version to version.
 fn encoder_names(listing: &str) -> impl Iterator<Item = &str> {
-    /// Знаки, из которых состоит столбец свойств.
+    /// The characters the property column is made of.
     const FLAGS: &str = "VASFXBDIL.";
 
     listing.lines().filter_map(|line| {
@@ -206,14 +212,15 @@ async fn run(path: &Path, args: &[&str]) -> Result<String> {
         .await
         .map_err(|e| FfmpegError::NotRunnable(format!("{}: {e}", path.display())))?;
 
-    // `-encoders` и `-version` пишут в обычный вывод, но при части сборок часть
-    // сведений уходит в поток ошибок. Берём оба: разделять их здесь незачем.
+    // `-encoders` and `-version` write to the ordinary output, but in some builds part of
+    // what they say goes to the error stream. Both are taken: there is no point separating
+    // them here.
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
 
     if !out.status.success() && text.trim().is_empty() {
         return Err(FfmpegError::NotRunnable(format!(
-            "{} завершился с {} и ничего не сказал",
+            "{} exited with {} and said nothing",
             path.display(),
             out.status
         )));

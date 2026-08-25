@@ -1,30 +1,34 @@
-//! T009 — секреты только в хранилище учётных данных операционной системы.
+//! T009 — secrets live only in the operating system's credential store.
 //!
-//! Конституция, принцип IV. Приложение раздаётся людям и держит доступы к их серверам:
-//! утечка здесь — это чужой сервер, а не свой. Поэтому пароли, парольные фразы и приватные
-//! ключи не пишутся ни в настройки, ни в локальную базу — там лежит только `SecretRef`,
-//! ссылка на запись в хранилище ОС.
+//! Constitution, principle IV. The application is handed out to people and holds the keys
+//! to their servers: a leak here is someone else's server, not our own. So passwords,
+//! passphrases and private keys are written neither into the settings nor into the local
+//! database — what lies there is only a `SecretRef`, a pointer to an entry in the
+//! operating system's store.
 //!
-//! Хранилище своё на каждой платформе: Credential Manager на Windows, Secret Service
-//! на Linux. Выбор делается пер-платформенно в `Cargo.toml`, здесь различий нет.
+//! The store differs per platform: Credential Manager on Windows, Secret Service on Linux.
+//! The choice is made per platform in `Cargo.toml`; there is no difference here.
 //!
-//! **Важное свойство**: всякий секрет, проходящий через этот слой, автоматически попадает
-//! в список вырезаемых из вывода (`super::redact`). Так защита от утечки в журнал не зависит
-//! от того, вспомнил ли о ней автор конкретной строчки кода.
+//! **An important property**: every secret passing through this layer automatically joins
+//! the list of things cut out of the output (`super::redact`). That way protection against
+//! leaking into a log does not depend on whether the author of a particular line
+//! remembered it.
 
 use super::redact;
 
-/// Имя службы в хранилище ОС. Под ним пользователь увидит записи в системном менеджере.
+/// The service name in the operating system store. It is what a person sees the entries
+/// listed under in their system credential manager.
 const SERVICE: &str = "VRCast Studio";
 
-/// Ссылка на секрет. Именно она — а не значение — хранится в базе и пересекает границы слоёв.
+/// A pointer to a secret. This — and not the value — is what is stored in the database
+/// and what crosses the boundaries between layers.
 ///
-/// `Debug` печатает только ссылку: это не секрет, а его адрес.
+/// `Debug` prints only the pointer: that is not the secret but its address.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SecretRef(String);
 
 impl SecretRef {
-    /// Секрет доступа к серверу: пароль либо парольная фраза ключа.
+    /// The secret for reaching a server: a password, or a key's passphrase.
     pub fn for_server(server_id: &str) -> Self {
         Self(format!("server/{server_id}"))
     }
@@ -33,7 +37,7 @@ impl SecretRef {
         &self.0
     }
 
-    /// Восстановить ссылку из значения, прочитанного в базе.
+    /// Rebuild the pointer from a value read out of the database.
     pub fn from_stored(value: impl Into<String>) -> Self {
         Self(value.into())
     }
@@ -50,26 +54,26 @@ pub enum SecretError {
     #[error("secret not found in the operating system store")]
     NotFound,
 
-    /// Сообщение нижележащей библиотеки проходит через вырезание: она о наших правилах
-    /// не знает и вполне может вставить в текст ошибки то, что мы прячем.
+    /// The underlying library's message passes through redaction: it knows nothing of our
+    /// rules and may well put into its error text the very thing we hide.
     #[error("the operating system credential store is unavailable: {0}")]
     Backend(String),
 }
 
 pub type Result<T> = std::result::Result<T, SecretError>;
 
-/// Хранилище секретов.
+/// A store of secrets.
 ///
-/// Отделено интерфейсом от реализации не ради абстракции как таковой, а чтобы тесты
-/// не трогали настоящее хранилище пользователя: тест, оставляющий за собой записи
-/// в системном менеджере паролей, — плохой тест.
+/// Separated from its implementation by a trait not for abstraction's own sake, but so that
+/// tests do not touch a person's real store: a test that leaves entries behind in someone's
+/// system password manager is a bad test.
 pub trait SecretStore: Send + Sync {
     fn set(&self, reference: &SecretRef, value: &str) -> Result<()>;
     fn get(&self, reference: &SecretRef) -> Result<String>;
     fn delete(&self, reference: &SecretRef) -> Result<()>;
 }
 
-/// Настоящее хранилище операционной системы.
+/// The real operating system store.
 #[derive(Debug, Default)]
 pub struct OsSecretStore;
 
@@ -86,14 +90,14 @@ impl OsSecretStore {
 
 impl SecretStore for OsSecretStore {
     fn set(&self, reference: &SecretRef, value: &str) -> Result<()> {
-        // Регистрируем ДО записи: если запись провалится, сообщение об ошибке уже
-        // не сможет вынести секрет наружу.
+        // Registered BEFORE the write: should the write fail, the error message can no
+        // longer carry the secret outside.
         redact::register(value);
 
         Self::entry(reference)?
             .set_password(value)
             .map_err(|e| SecretError::Backend(redact::safe_display(&e)))?;
-        tracing::debug!(reference = %reference, "секрет сохранён в хранилище ОС");
+        tracing::debug!(reference = %reference, "secret saved to the operating system store");
         Ok(())
     }
 
@@ -110,31 +114,31 @@ impl SecretStore for OsSecretStore {
     }
 
     fn delete(&self, reference: &SecretRef) -> Result<()> {
-        // Значение читается ДО удаления, чтобы снять маскировку именно с него.
-        // Иначе оно осталось бы в списке вырезаемых навсегда — не беда сама
-        // по себе, но список растёт с каждым удалённым профилем, а вырезание
-        // проходит по каждой строке журнала.
-        let было = Self::entry(reference)
+        // The value is read BEFORE the deletion so that the masking comes off that value
+        // in particular. Otherwise it would stay on the redaction list forever — no
+        // disaster in itself, but the list grows with every deleted profile, and redaction
+        // runs over every line of the log.
+        let previous = Self::entry(reference)
             .ok()
             .and_then(|e| e.get_password().ok());
 
         match Self::entry(reference)?.delete_credential() {
             Ok(()) => {
-                if let Some(value) = было {
+                if let Some(value) = previous {
                     redact::forget(&value);
                 }
-                tracing::debug!(reference = %reference, "секрет удалён из хранилища ОС");
+                tracing::debug!(reference = %reference, "secret removed from the operating system store");
                 Ok(())
             }
-            // Удаление отсутствующего — не ошибка: повтор обязан быть безопасным
-            // (конституция, принцип V).
+            // Deleting what is not there is not an error: repeating must be safe
+            // (constitution, principle V).
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(SecretError::Backend(redact::safe_display(&e))),
         }
     }
 }
 
-/// Хранилище в памяти — для тестов. Настоящее хранилище пользователя не трогает.
+/// A store in memory, for tests. It never touches a person's real store.
 #[derive(Debug, Default)]
 pub struct InMemorySecretStore {
     items: std::sync::RwLock<std::collections::HashMap<String, String>>,
@@ -151,7 +155,7 @@ impl SecretStore for InMemorySecretStore {
         redact::register(value);
         self.items
             .write()
-            .map_err(|_| SecretError::Backend("хранилище в памяти повреждено".into()))?
+            .map_err(|_| SecretError::Backend("the in-memory store is poisoned".into()))?
             .insert(reference.as_str().to_owned(), value.to_owned());
         Ok(())
     }
@@ -160,7 +164,7 @@ impl SecretStore for InMemorySecretStore {
         let value = self
             .items
             .read()
-            .map_err(|_| SecretError::Backend("хранилище в памяти повреждено".into()))?
+            .map_err(|_| SecretError::Backend("the in-memory store is poisoned".into()))?
             .get(reference.as_str())
             .cloned()
             .ok_or(SecretError::NotFound)?;
@@ -169,14 +173,14 @@ impl SecretStore for InMemorySecretStore {
     }
 
     fn delete(&self, reference: &SecretRef) -> Result<()> {
-        let было = self
+        let previous = self
             .items
             .write()
-            .map_err(|_| SecretError::Backend("хранилище в памяти повреждено".into()))?
+            .map_err(|_| SecretError::Backend("the in-memory store is poisoned".into()))?
             .remove(reference.as_str());
-        // Снимаем маскировку с ИМЕННО ЭТОГО значения, а не со всех сразу:
-        // у остальных профилей секреты живы (T073).
-        if let Some(value) = было {
+        // The masking comes off THIS value in particular rather than off all of them at
+        // once: the other profiles' secrets are still alive (T073).
+        if let Some(value) = previous {
             redact::forget(&value);
         }
         Ok(())

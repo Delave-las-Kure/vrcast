@@ -1,10 +1,10 @@
-//! T034a — тесты разбора заголовка MP4 (R-19, FR-012).
+//! T034a — tests for parsing an MP4 header (R-19, FR-012).
 //!
-//! Контрольные файлы настоящие: собраны ffmpeg и лежат в `tests/fixtures/mp4`.
-//! Это принципиально — разбирать самодельные заготовки значило бы проверять
-//! согласие кода с собственными представлениями о формате, а не с тем, что
-//! действительно приходит с сервера. Заготовки тоже есть, но только для случаев,
-//! которые ffmpeg не выдаёт: полей восьмибайтовой длины и намеренно испорченных данных.
+//! The reference files are real ones: built by ffmpeg and kept in `tests/fixtures/mp4`.
+//! That is a matter of principle — parsing home-made blanks would check the code's agreement
+//! with our own notions of the format rather than with what really arrives from a server.
+//! There are blanks too, but only for the cases ffmpeg does not produce: eight-byte length
+//! fields and deliberately corrupted data.
 
 use vrcast_studio_lib::domain::moov::{self, MoovOutcome};
 
@@ -12,10 +12,10 @@ fn fixture(name: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/mp4")
         .join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("не прочитать {}: {e}", path.display()))
+    std::fs::read(&path).unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()))
 }
 
-/// Найти границы атома верхнего уровня — чтобы обрезать файл ровно там, где нужно.
+/// Find a top-level atom's bounds — to cut the file exactly where needed.
 fn top_level_box(data: &[u8], want: &[u8; 4]) -> Option<(usize, usize)> {
     let mut off = 0usize;
     while off + 8 <= data.len() {
@@ -37,16 +37,16 @@ fn top_level_box(data: &[u8], want: &[u8; 4]) -> Option<(usize, usize)> {
     None
 }
 
-// ---------- настоящие файлы ----------
+// ---------- real files ----------
 
 #[test]
-fn файл_подготовленный_к_раздаче_разбирается_целиком() {
+fn a_file_prepared_for_serving_parses_whole() {
     let data = fixture("faststart.mp4");
     let outcome = moov::parse(&data, Some(data.len() as u64));
 
     let params = match &outcome {
         MoovOutcome::Parsed(p) => p,
-        other => panic!("заголовок не разобран: {other:?}"),
+        other => panic!("the header was not parsed: {other:?}"),
     };
 
     assert_eq!(params.width, Some(128));
@@ -54,48 +54,48 @@ fn файл_подготовленный_к_раздаче_разбираетс�
     assert_eq!(params.video_codec.as_deref(), Some("h264"));
     assert_eq!(params.audio_codec.as_deref(), Some("aac"));
 
-    let duration = params.duration_s.expect("длительность не прочитана");
+    let duration = params.duration_s.expect("the duration was not read");
     assert!(
         (duration - 1.0).abs() < 0.05,
-        "длительность {duration} вместо ~1 с"
+        "duration {duration} instead of about 1 s"
     );
 
-    // Средний битрейт — объём, делённый на длительность. Сверяемся со значением,
-    // которое для этого же файла называет ffprobe: 112144.
-    let bitrate = params.bitrate_bps.expect("битрейт не посчитан");
+    // The average bitrate is the size divided by the duration. Compared against the value
+    // ffprobe gives for this same file: 112144.
+    let bitrate = params.bitrate_bps.expect("the bitrate was not worked out");
     assert!(
         (bitrate as i64 - 112_144).abs() < 2_000,
-        "битрейт {bitrate} расходится с тем, что считает ffprobe"
+        "bitrate {bitrate} disagrees with what ffprobe counts"
     );
 
     assert_eq!(outcome.faststart_ok(), Some(true));
 }
 
 #[test]
-fn файл_с_заголовком_в_конце_опознаётся_как_неподходящий() {
-    // FR-012: параметры остаются неизвестными, но пользователь узнаёт главное —
-    // такой файл зритель начнёт смотреть только после скачивания хвоста.
+fn a_file_with_its_header_at_the_end_is_recognised_as_unfit() {
+    // FR-012: the parameters stay unknown, but a person learns the main thing — a viewer
+    // will only start watching such a file after downloading its tail.
     let data = fixture("moov_at_end.mp4");
     let outcome = moov::parse(&data, Some(data.len() as u64));
 
     assert_eq!(
         outcome,
         MoovOutcome::MoovAfterData,
-        "файл без подготовки принят за подготовленный"
+        "a file with no preparation passed for a prepared one"
     );
     assert_eq!(outcome.faststart_ok(), Some(false));
     assert!(
         outcome.params().is_none(),
-        "выданы параметры, которых неоткуда взять"
+        "parameters were handed out that there is nowhere to take from"
     );
 }
 
 #[test]
-fn решение_о_неподходящем_файле_принимается_по_началу_а_не_по_всему_файлу() {
-    // Важное свойство: `mdat` бывает на гигабайты, и дочитывать его ради заголовка
-    // бессмысленно. Хватать должно первых килобайт.
+fn the_verdict_on_an_unfit_file_is_reached_from_the_beginning_rather_than_the_whole_file() {
+    // An important property: `mdat` runs to gigabytes, and reading it through for the sake
+    // of a header is senseless. The first few kilobytes must be enough.
     let data = fixture("moov_at_end.mp4");
-    let (mdat_start, _) = top_level_box(&data, b"mdat").expect("в файле нет mdat");
+    let (mdat_start, _) = top_level_box(&data, b"mdat").expect("the file has no mdat");
     let head = &data[..mdat_start + 64];
 
     assert_eq!(
@@ -105,41 +105,41 @@ fn решение_о_неподходящем_файле_принимается_
 }
 
 #[test]
-fn обрезанный_заголовок_говорит_сколько_байт_не_хватило() {
-    // Это не украшение сообщения: по этому числу слой чтения дозапрашивает ровно
-    // нужный кусок, а не удваивает объём вслепую.
+fn a_truncated_header_says_how_many_bytes_were_short() {
+    // This is not decoration for a message: the reading layer asks for exactly the piece
+    // this number names rather than blindly doubling the size.
     let data = fixture("faststart.mp4");
-    let (moov_start, moov_end) = top_level_box(&data, b"moov").expect("в файле нет moov");
+    let (moov_start, moov_end) = top_level_box(&data, b"moov").expect("the file has no moov");
     let cut = moov_start + (moov_end - moov_start) / 2;
 
     match moov::parse(&data[..cut], Some(data.len() as u64)) {
         MoovOutcome::NeedMoreBytes { need } => assert_eq!(
             need, moov_end as u64,
-            "запрошено не столько байт, сколько занимает заголовок"
+            "the number of bytes asked for is not the size of the header"
         ),
-        other => panic!("обрезанный заголовок разобран как {other:?}"),
+        other => panic!("a truncated header was parsed as {other:?}"),
     }
 }
 
 #[test]
-fn без_размера_файла_разбирается_всё_кроме_битрейта() {
-    // Размер бывает неизвестен: перечень каталога мог прийти без него.
-    // Это не повод отказываться от разрешения и кодеков.
+fn without_the_file_size_everything_but_the_bitrate_parses() {
+    // The size is sometimes unknown: a directory listing may have arrived without it. That
+    // is no reason to give up the resolution and the codecs.
     let data = fixture("faststart.mp4");
     let params = match moov::parse(&data, None) {
         MoovOutcome::Parsed(p) => p,
-        other => panic!("заголовок не разобран: {other:?}"),
+        other => panic!("the header was not parsed: {other:?}"),
     };
 
     assert_eq!(params.width, Some(128));
     assert!(params.duration_s.is_some());
     assert_eq!(
         params.bitrate_bps, None,
-        "битрейт посчитан из ниоткуда: без размера файла его не вычислить"
+        "the bitrate was worked out from nowhere: without the file size it cannot be"
     );
 }
 
-// ---------- заготовки для случаев, которых ffmpeg не выдаёт ----------
+// ---------- blanks for the cases ffmpeg does not produce ----------
 
 fn mp4_box(typ: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(payload.len() + 8);
@@ -150,33 +150,37 @@ fn mp4_box(typ: &[u8; 4], payload: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn длительность_читается_и_из_полей_восьмибайтовой_длины() {
-    // Вторая версия заголовка фильма: времена и длительность по восемь байт.
-    // Встречается у длинных записей, и перепутанные смещения дали бы не ошибку,
-    // а правдоподобное неверное число — худший исход.
-    let mut mvhd = vec![1u8, 0, 0, 0]; // версия 1, признаки
-    mvhd.extend_from_slice(&[0u8; 8]); // время создания
-    mvhd.extend_from_slice(&[0u8; 8]); // время изменения
-    mvhd.extend_from_slice(&1000u32.to_be_bytes()); // делений в секунде
-    mvhd.extend_from_slice(&90_000u64.to_be_bytes()); // длительность
+fn the_duration_is_read_from_eight_byte_fields_too() {
+    // Version one of the movie header: the times and the duration are eight bytes each. It
+    // turns up on long recordings, and muddled offsets would give not an error but a
+    // plausible wrong number — the worst outcome.
+    let mut mvhd = vec![1u8, 0, 0, 0]; // version 1, flags
+    mvhd.extend_from_slice(&[0u8; 8]); // creation time
+    mvhd.extend_from_slice(&[0u8; 8]); // modification time
+    mvhd.extend_from_slice(&1000u32.to_be_bytes()); // ticks per second
+    mvhd.extend_from_slice(&90_000u64.to_be_bytes()); // duration
 
     let mut file = mp4_box(b"ftyp", b"isom\0\0\x02\0isomiso2");
     file.extend_from_slice(&mp4_box(b"moov", &mp4_box(b"mvhd", &mvhd)));
 
     match moov::parse(&file, Some(1_000_000)) {
         MoovOutcome::Parsed(p) => {
-            let d = p.duration_s.expect("длительность не прочитана");
-            assert!((d - 90.0).abs() < 0.001, "длительность {d} вместо 90 с");
-            assert_eq!(p.bitrate_bps, Some(88_889), "битрейт посчитан неверно");
+            let d = p.duration_s.expect("the duration was not read");
+            assert!((d - 90.0).abs() < 0.001, "duration {d} instead of 90 s");
+            assert_eq!(
+                p.bitrate_bps,
+                Some(88_889),
+                "the bitrate was worked out wrongly"
+            );
         }
-        other => panic!("заготовка не разобрана: {other:?}"),
+        other => panic!("the blank was not parsed: {other:?}"),
     }
 }
 
 #[test]
-fn неизвестная_длительность_не_превращается_в_ноль() {
-    // Признак «неизвестно» в заголовке — все единицы. Принять его за число значит
-    // показать пользователю длительность в 49 суток и битрейт в единицы бит.
+fn an_unknown_duration_does_not_turn_into_zero() {
+    // The "unknown" mark in a header is all ones. Taking it for a number means showing a
+    // person a duration of 49 days and a bitrate of a few bits.
     let mut mvhd = vec![0u8, 0, 0, 0];
     mvhd.extend_from_slice(&[0u8; 4]);
     mvhd.extend_from_slice(&[0u8; 4]);
@@ -188,19 +192,22 @@ fn неизвестная_длительность_не_превращается
 
     match moov::parse(&file, Some(1_000_000)) {
         MoovOutcome::Parsed(p) => {
-            assert_eq!(p.duration_s, None, "признак «неизвестно» принят за число");
+            assert_eq!(
+                p.duration_s, None,
+                "the \"unknown\" mark was taken for a number"
+            );
             assert_eq!(p.bitrate_bps, None);
         }
-        other => panic!("заготовка не разобрана: {other:?}"),
+        other => panic!("the blank was not parsed: {other:?}"),
     }
 }
 
 #[test]
-fn нулевое_число_делений_не_роняет_разбор_делением_на_ноль() {
+fn a_tick_rate_of_zero_does_not_break_the_parse_by_dividing_by_zero() {
     let mut mvhd = vec![0u8, 0, 0, 0];
     mvhd.extend_from_slice(&[0u8; 4]);
     mvhd.extend_from_slice(&[0u8; 4]);
-    mvhd.extend_from_slice(&0u32.to_be_bytes()); // делений в секунде: ноль
+    mvhd.extend_from_slice(&0u32.to_be_bytes()); // ticks per second: zero
     mvhd.extend_from_slice(&1000u32.to_be_bytes());
 
     let mut file = mp4_box(b"ftyp", b"isom");
@@ -208,41 +215,41 @@ fn нулевое_число_делений_не_роняет_разбор_де�
 
     match moov::parse(&file, Some(1000)) {
         MoovOutcome::Parsed(p) => assert_eq!(p.duration_s, None),
-        other => panic!("заготовка не разобрана: {other:?}"),
+        other => panic!("the blank was not parsed: {other:?}"),
     }
 }
 
-// ---------- испорченные данные ----------
+// ---------- corrupted data ----------
 
 #[test]
-fn мусор_не_принимается_за_видео() {
+fn rubbish_is_not_taken_for_video() {
     assert_eq!(moov::parse(b"", None), MoovOutcome::NotMp4);
     assert_eq!(moov::parse(b"\x00\x00", None), MoovOutcome::NotMp4);
     assert_eq!(
         moov::parse(b"<!DOCTYPE html><html><body>404</body></html>", None),
         MoovOutcome::NotMp4,
-        "страница с ошибкой сервера принята за видео"
+        "a server's error page was taken for video"
     );
 }
 
 #[test]
-fn атом_нулевой_длины_не_зацикливает_разбор() {
-    // Разбор идёт по данным с сервера, и файл может быть собран как угодно —
-    // в том числе так, чтобы обход не сдвинулся ни на байт.
+fn an_atom_of_zero_length_does_not_loop_the_parse() {
+    // The parsing runs over data from a server, and a file may be put together any way at
+    // all — including so that the walk never moves a single byte.
     let mut file = mp4_box(b"ftyp", b"isom");
-    file.extend_from_slice(&[0, 0, 0, 4]); // длина меньше самого заголовка
+    file.extend_from_slice(&[0, 0, 0, 4]); // a length shorter than the header itself
     file.extend_from_slice(b"junk");
     file.extend_from_slice(&[0u8; 64]);
 
-    // Проверяется именно завершение: если разбор зациклится, тест не кончится.
+    // What is checked is precisely that it ends: should the parse loop, the test never does.
     let outcome = moov::parse(&file, Some(file.len() as u64));
     assert_eq!(outcome, MoovOutcome::NotMp4);
 }
 
 #[test]
-fn заголовок_обещающий_больше_чем_есть_не_выводит_за_пределы_куска() {
-    // Атом объявляет длину в гигабайт, а данных — сотня байт. Обращение по
-    // объявленной длине вышло бы за границы среза.
+fn a_header_promising_more_than_there_is_does_not_read_past_the_piece() {
+    // The atom declares a length of a gigabyte while there are a hundred bytes of data.
+    // Indexing by the declared length would run past the end of the slice.
     let mut file = mp4_box(b"ftyp", b"isom");
     file.extend_from_slice(&1_000_000_000u32.to_be_bytes());
     file.extend_from_slice(b"moov");
@@ -250,17 +257,20 @@ fn заголовок_обещающий_больше_чем_есть_не_вы�
 
     match moov::parse(&file, Some(2_000_000_000)) {
         MoovOutcome::NeedMoreBytes { need } => {
-            assert!(need > file.len() as u64, "запрошено меньше, чем уже есть");
+            assert!(
+                need > file.len() as u64,
+                "less was asked for than is already there"
+            );
         }
-        other => panic!("ожидался запрос данных, получено {other:?}"),
+        other => panic!("a request for data was expected, got {other:?}"),
     }
 }
 
 #[test]
-fn у_файла_без_заголовка_вовсе_не_просятся_байты_за_его_концом() {
-    // Иначе получается вечный круг: разбор просит данные за концом файла, читающий
-    // слой отдаёт тот же кусок, разбор просит снова. Файл целиком прочитан —
-    // значит, заголовка в нём нет, и это окончательный ответ.
+fn a_file_with_no_header_at_all_does_not_ask_for_bytes_past_its_end() {
+    // Otherwise it becomes an endless circle: the parse asks for data past the end of the
+    // file, the reading layer hands back the same piece, the parse asks again. The file was
+    // read whole — so it holds no header, and that is the final answer.
     let mut file = mp4_box(b"ftyp", b"isom");
     file.extend_from_slice(&mp4_box(b"free", &[0u8; 16]));
     let size = file.len() as u64;
@@ -268,10 +278,10 @@ fn у_файла_без_заголовка_вовсе_не_просятся_ба
     assert_eq!(
         moov::parse(&file, Some(size)),
         MoovOutcome::NotMp4,
-        "запрошены байты за концом файла — читающий слой зациклится"
+        "bytes past the end of the file were asked for — the reading layer will loop"
     );
 
-    // А когда размер файла неизвестен, просить ещё — законно: вдруг там есть.
+    // And when the file size is unknown, asking for more is legitimate: there may be more.
     assert!(matches!(
         moov::parse(&file, None),
         MoovOutcome::NeedMoreBytes { .. }
@@ -279,10 +289,10 @@ fn у_файла_без_заголовка_вовсе_не_просятся_ба
 }
 
 #[test]
-fn запрошенного_куска_всегда_хватает_чтобы_продвинуться() {
-    // Свойство, на которое опирается дочитывание: сколько бы раз слой чтения ни
-    // выполнил просьбу, разбор обязан дойти до ответа, а не просить снова и снова
-    // одно и то же.
+fn the_piece_asked_for_is_always_enough_to_move_on() {
+    // The property reading-more leans on: however many times the reading layer grants the
+    // request, the parse must reach an answer rather than asking for the same thing over and
+    // over.
     let data = fixture("faststart.mp4");
     let size = data.len() as u64;
 
@@ -290,28 +300,28 @@ fn запрошенного_куска_всегда_хватает_чтобы_п
     let mut steps = 0;
     loop {
         steps += 1;
-        assert!(steps < 10, "разбор не сошёлся за десять дочитываний");
+        assert!(steps < 10, "the parse did not converge in ten reads");
 
         let head = &data[..have.min(data.len())];
         match moov::parse(head, Some(size)) {
             MoovOutcome::NeedMoreBytes { need } => {
                 assert!(
                     need > have as u64,
-                    "запрошено {need} байт, а прочитано уже {have} — продвижения нет"
+                    "{need} bytes asked for while {have} are already read — no progress"
                 );
                 have = need as usize;
             }
             MoovOutcome::Parsed(_) => break,
-            other => panic!("неожиданный итог: {other:?}"),
+            other => panic!("an unexpected outcome: {other:?}"),
         }
     }
 }
 
 #[test]
-fn разбор_не_падает_ни_на_каком_обрезании_настоящего_файла() {
-    // Свойство важнее любого отдельного случая: кусок может прийти оборванным
-    // в произвольном месте — на границе поля, посреди имени атома, где угодно.
-    // Ни одно из таких обрезаний не должно ронять приложение.
+fn the_parse_survives_every_truncation_of_a_real_file() {
+    // A property that matters more than any single case: a piece may arrive cut off at an
+    // arbitrary place — on a field boundary, in the middle of an atom's name, anywhere. Not
+    // one of those truncations may bring the application down.
     let data = fixture("faststart.mp4");
     for cut in (0..data.len()).step_by(7) {
         let _ = moov::parse(&data[..cut], Some(data.len() as u64));

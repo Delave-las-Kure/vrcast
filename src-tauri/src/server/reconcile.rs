@@ -1,75 +1,77 @@
-//! T051 — свести опись с тем, что на самом деле лежит на сервере (FR-018).
+//! T051 — reconciling the catalogue with what is actually on the server (FR-018).
 //!
-//! Расхождения неизбежны и нормальны: файлы заливают скриптами, удаляют руками,
-//! переименовывают в файловом менеджере. Приложение не имеет права ни делать вид,
-//! что этого не бывает, ни молча подгонять опись под факт.
+//! Divergence is inevitable and normal: files are uploaded by scripts, deleted by
+//! hand, renamed in a file manager. The application has no right either to pretend
+//! that does not happen or to quietly bend the catalogue to fit the facts.
 //!
-//! Два вида расхождения и два разных ответа:
+//! Two kinds of divergence and two different answers:
 //!
-//! - **В описи есть, на сервере нет** — файл помечается пропавшим, но из медиа
-//!   не исчезает. Убрать его молча значило бы скрыть от пользователя потерю.
-//! - **На сервере есть, в описи нет** — файл попадает в группу «не распознано»
-//!   (FR-015). Спрятать его нельзя: место он занимает и по ссылке отдаётся.
+//! - **In the catalogue, not on the server** — the file is marked missing but does not
+//!   vanish from its medium. Removing it quietly would hide a loss from the person.
+//! - **On the server, not in the catalogue** — the file goes into the "not recognised"
+//!   group (FR-015). Hiding it is not allowed: it takes up room and is served over a
+//!   link.
 //!
-//! Здесь только сведение — чистая функция от описи и перечня каталога. Ни сети,
-//! ни файлов: сведение проверяется без сервера, потому что именно в нём легко
-//! потерять файл, и такая потеря должна ловиться тестом, а не пользователем.
+//! Only the reconciliation lives here — a pure function of the catalogue and the
+//! directory listing. No network, no files: reconciliation is checked without a server,
+//! because losing a file is easy precisely here, and such a loss should be caught by a
+//! test rather than by a person.
 
 use super::listing::Entry;
 use crate::domain::manifest::Manifest;
 use std::collections::{HashMap, HashSet};
 
-/// Результат сведения.
+/// The result of reconciling.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Reconciled {
-    /// Для каждого медиа — его файлы с отметкой, существуют ли они.
-    /// Порядок медиа и файлов взят из описи.
+    /// For each medium, its files marked with whether they exist.
+    /// The order of media and files comes from the catalogue.
     pub media_files: Vec<MediaFiles>,
-    /// Записи каталога, не числящиеся ни за одним медиа.
+    /// Directory entries that belong to no medium.
     pub unrecognized: Vec<Entry>,
 }
 
-/// Файлы одного медиа после сведения.
+/// The files of one medium after reconciling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaFiles {
     pub media_id: String,
-    /// Путь, размер и существует ли он на сервере.
+    /// The path, the size, and whether it exists on the server.
     pub files: Vec<ResolvedFile>,
-    /// Наборы качеств: путь и существует ли.
+    /// Quality ladders: the path and whether it exists.
     pub ladders: Vec<ResolvedFile>,
 }
 
-/// Файл описи, сопоставленный с фактом.
+/// A catalogue file matched against the facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedFile {
     pub path: String,
     pub size_bytes: u64,
-    /// Ложь = в описи числится, а на сервере нет (FR-018).
+    /// False = listed in the catalogue but absent from the server (FR-018).
     pub exists: bool,
 }
 
-/// Свести опись с перечнем каталога.
+/// Reconcile the catalogue with the directory listing.
 ///
-/// `entries` — верхний уровень каталога раздачи целиком, включая служебные записи:
-/// отбор делается здесь, в одном месте.
+/// `entries` is the whole top level of the serving directory, service entries
+/// included: the sifting happens here, in one place.
 pub fn reconcile(manifest: &Manifest, entries: &[Entry]) -> Reconciled {
-    // Что реально есть, по имени верхнего уровня.
+    // What is really there, by top-level name.
     let present: HashMap<&str, &Entry> = entries
         .iter()
         .filter(|e| !super::SERVICE_ENTRIES.contains(&e.name.as_str()))
         .map(|e| (e.name.as_str(), e))
         .collect();
 
-    // Какие записи верхнего уровня заняты описью. Путь в описи может быть вложенным
-    // (`backrooms/master.m3u8`) — занята им запись верхнего уровня `backrooms`.
+    // Which top-level entries the catalogue claims. A catalogue path may be nested
+    // (`backrooms/master.m3u8`) — what it claims is the top-level entry `backrooms`.
     let mut claimed: HashSet<&str> = HashSet::new();
     let mut media_files = Vec::new();
 
     for media in &manifest.media {
         let resolve = |path: &String| -> ResolvedFile {
             let top = top_level(path);
-            // Для вложенного пути размер записи верхнего уровня — это размер всего
-            // набора качеств; приписывать его отдельному описанию нельзя.
+            // For a nested path the size of the top-level entry is the size of the
+            // whole quality ladder; it must not be attributed to one description.
             let entry = present.get(top);
             let nested = top != path.as_str();
             ResolvedFile {
@@ -97,8 +99,8 @@ pub fn reconcile(manifest: &Manifest, entries: &[Entry]) -> Reconciled {
         });
     }
 
-    // Порядок нераспознанных берём из перечня каталога, а не из множества:
-    // список видит человек, и он не должен меняться от запуска к запуску.
+    // The order of the unrecognised comes from the directory listing rather than from
+    // a set: a person sees this list, and it must not change from run to run.
     let unrecognized: Vec<Entry> = entries
         .iter()
         .filter(|e| !super::SERVICE_ENTRIES.contains(&e.name.as_str()))
@@ -112,7 +114,7 @@ pub fn reconcile(manifest: &Manifest, entries: &[Entry]) -> Reconciled {
     }
 }
 
-/// Запись верхнего уровня, которой принадлежит путь.
+/// The top-level entry a path belongs to.
 fn top_level(path: &str) -> &str {
     let trimmed = path.trim_matches('/');
     trimmed.split_once('/').map_or(trimmed, |(head, _)| head)

@@ -1,14 +1,14 @@
-//! T046 — кеш библиотеки: последнее известное состояние сервера.
+//! T046 — the library cache: the last known state of a server.
 //!
-//! Хранится готовым ответом команды, а не разложенным по таблицам. Это снимок для
-//! показа: запросов к нему не делают, а разложить его значило бы держать в согласии
-//! две схемы одного и того же — и однажды не удержать.
+//! Stored as the finished answer of a command rather than spread across tables. It is
+//! a snapshot for showing: nothing queries it, and spreading it out would mean keeping
+//! two schemas of the same thing in agreement — and one day failing to.
 
 use crate::commands::library::LibraryView;
 use crate::store::db::{now_rfc3339, Db, DbError};
 use rusqlite::OptionalExtension;
 
-/// Запомнить последнее удачно прочитанное состояние библиотеки.
+/// Remember the last library state that was read successfully.
 pub fn save(db: &Db, server_id: &str, view: &LibraryView) -> Result<(), DbError> {
     let json = serde_json::to_string(view).unwrap_or_else(|_| String::from("{}"));
     db.with_conn(|c| {
@@ -24,10 +24,11 @@ pub fn save(db: &Db, server_id: &str, view: &LibraryView) -> Result<(), DbError>
     })
 }
 
-/// Прочитать последнее известное состояние.
+/// Read the last known state.
 ///
-/// Испорченный кеш — это отсутствие кеша, а не ошибка: он ускоряет показ и ничего
-/// не решает, и ронять из-за него открытие библиотеки было бы несоразмерно.
+/// A corrupt cache is an absent cache, not an error: it makes showing faster and
+/// decides nothing, and failing to open the library over it would be out of all
+/// proportion.
 pub fn load(db: &Db, server_id: &str) -> Result<Option<LibraryView>, DbError> {
     let json: Option<String> = db.with_conn(|c| {
         Ok(c.query_row(
@@ -41,13 +42,13 @@ pub fn load(db: &Db, server_id: &str) -> Result<Option<LibraryView>, DbError> {
     Ok(json.and_then(|j| match serde_json::from_str(&j) {
         Ok(view) => Some(view),
         Err(e) => {
-            tracing::warn!(server = server_id, error = %e, "кеш библиотеки не разобрать, читаем с сервера");
+            tracing::warn!(server = server_id, error = %e, "library cache unreadable, reading from the server");
             None
         }
     }))
 }
 
-/// Забыть кеш сервера.
+/// Forget a server's cache.
 pub fn forget(db: &Db, server_id: &str) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(

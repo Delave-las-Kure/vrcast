@@ -1,26 +1,26 @@
-//! T044–T049 — команды библиотеки.
+//! T044–T049 — the library commands.
 //!
-//! Договор: `contracts/ipc-commands.md`, раздел «Библиотека».
+//! The contract: `contracts/ipc-commands.md`, the "Library" section.
 //!
-//! Библиотека медиа-центрична: пользователь думает о произведении, а файлы — его
-//! варианты. Поэтому наружу отдаётся не плоский перечень каталога, а список медиа
-//! с вложенными файлами, и отдельной группой — то, что не удалось отнести ни к чему
-//! (FR-015). Прятать нераспознанное нельзя: файл, которого не видно в приложении,
-//! всё равно занимает место на диске и всё равно раздаётся по ссылке.
+//! The library is centred on media: a person thinks about a work, and the files are its
+//! variants. So what goes outside is not a flat directory listing but a list of media with
+//! their files nested inside, and, as a group of its own, whatever could not be attributed
+//! to anything (FR-015). Hiding the unrecognised will not do: a file that cannot be seen in
+//! the application still takes up room on the disk and is still served by its link.
 
 use super::error::{AppError, DetailCode, ErrorCode, Result};
 use super::AppState;
 use crate::domain::wording::Detail;
 use serde::{Deserialize, Serialize};
 
-/// Файл раздачи в том виде, в каком его показывает интерфейс.
+/// A served file in the form the interface shows it.
 ///
-/// Ссылки здесь есть, хотя у `domain::media::MediaFile` их нет: там хранятся факты
-/// о файле, а ссылка — вычисляемое представление, зависящее от профиля. Считать её
-/// на границе — единственный способ не выдать устаревший адрес после смены домена.
+/// The links are here although `domain::media::MediaFile` has none: that holds facts about
+/// the file, while a link is a derived view depending on the profile. Working it out at the
+/// boundary is the only way not to hand out a stale address after a domain changes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileView {
-    /// Путь относительно каталога видео.
+    /// The path, relative to the video directory.
     pub path: String,
     pub size_bytes: u64,
     pub duration_s: Option<f64>,
@@ -29,65 +29,66 @@ pub struct FileView {
     pub bitrate_bps: Option<u64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
-    /// `moov` в начале файла. Ложь = зритель будет ждать скачивания хвоста.
+    /// `moov` at the front of the file. False means a viewer waits for the tail.
     pub faststart_ok: Option<bool>,
-    /// Ложь = файл удалён или переименован мимо приложения (FR-018).
+    /// False means the file was deleted or renamed outside the application (FR-018).
     pub exists_on_server: bool,
     pub origin_url: String,
     pub cdn_url: Option<String>,
 }
 
-/// Медиа со всеми его файлами.
+/// A medium with all of its files.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaView {
     pub id: String,
     pub title: String,
     pub slug: String,
     pub files: Vec<FileView>,
-    /// Описания наборов качеств.
+    /// The quality-ladder descriptions.
     pub ladders: Vec<String>,
-    /// Сколько всего занимают файлы медиа — то, что освободится при удалении.
+    /// How much the medium's files take up in all — what a deletion would free.
     pub total_bytes: u64,
     pub created_at: String,
 }
 
-/// Место на диске сервера (FR-017).
+/// Room on the server's disk (FR-017).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskUsage {
     pub total_bytes: u64,
     pub free_bytes: u64,
-    /// Сколько из занятого приходится на каталог раздачи.
+    /// How much of what is taken belongs to the serving directory.
     pub used_by_videos_bytes: u64,
 }
 
-/// Библиотека целиком.
+/// The library, whole.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LibraryView {
     pub server_id: String,
     pub media: Vec<MediaView>,
-    /// Файлы, которые не удалось отнести ни к одному медиа (FR-015).
+    /// Files that could not be attributed to any medium (FR-015).
     pub unrecognized: Vec<FileView>,
-    /// `None`, когда сервер недоступен и место узнать неоткуда.
+    /// `None` when the server cannot be reached and there is nowhere to learn the room.
     pub disk: Option<DiskUsage>,
-    /// Истина = показано последнее известное состояние, сервер сейчас недоступен.
+    /// True means the last known state is shown; the server cannot be reached right now.
     ///
-    /// Пустой экран или бесконечная загрузка на недоступном сервере — худший из
-    /// возможных ответов: пользователь не понимает, потерял он библиотеку или связь.
+    /// An empty screen, or an endless loading spinner, on an unreachable server is the worst
+    /// answer possible: a person cannot tell whether they lost their library or their
+    /// connection.
     pub stale: bool,
 }
 
 impl LibraryView {
-    /// Сколько всего записей каталога учтено — файлов медиа, наборов качеств
-    /// и нераспознанного вместе.
+    /// How many catalogue entries were accounted for — media files, quality ladders and
+    /// the unrecognised together.
     ///
-    /// Служит проверкой полноты: это число обязано совпадать с числом записей
-    /// в каталоге раздачи на сервере, не считая служебных. Запись, не попавшая
-    /// ни в медиа, ни в группу «не распознано», — потерянная запись: пользователь
-    /// её не видит, а место она занимает и по ссылке отдаётся (FR-015).
+    /// It serves as a completeness check: this number must equal the number of entries in
+    /// the serving directory on the server, the housekeeping ones aside. An entry that
+    /// landed neither in a medium nor in the "not recognised" group is a lost entry: a
+    /// person does not see it, while it takes up room and is served by its link (FR-015).
     ///
-    /// Набор качеств считается одной записью, а не сотней отрезков: пользователь
-    /// думает о нём как о единице, и показывать ему каждый отрезок значило бы
-    /// утопить библиотеку в шуме.
+    /// A quality ladder counts as one entry rather than a hundred segments: a person thinks
+    /// of it as one thing, and showing them every segment would drown the library in
+    /// noise.
     pub fn accounted_entries(&self) -> usize {
         self.media
             .iter()
@@ -97,22 +98,22 @@ impl LibraryView {
     }
 }
 
-/// Что будет удалено — то, что пользователь обязан увидеть до подтверждения (FR-014).
+/// What will be deleted — what a person must see before confirming (FR-014).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeletionImpact {
     pub files: usize,
     pub bytes: u64,
-    /// Сколько соединений веб-сервер обслуживает прямо сейчас.
+    /// How many connections the web server is serving right now.
     ///
-    /// Именно соединений, а не зрителей этого файла: таблица соединений не говорит,
-    /// что именно качают, и приписать их конкретному медиа пока нечем. В вехе A
-    /// довольно факта наличия (FR-019a) — полноценный разбор появится в Фазе 4
-    /// вместе со слежением за журналом раздачи. Называть это «зрителями файла»
-    /// значило бы сказать пользователю то, чего мы не знаем.
+    /// Connections specifically, not viewers of this file: the connection table does not say
+    /// what is being downloaded, and there is as yet nothing to attribute them to a
+    /// particular medium with. In milestone A the bare fact is enough (FR-019a) — a full
+    /// account arrives in Phase 4 along with watching the serving log. Calling this "the
+    /// file's viewers" would tell a person something we do not know.
     pub active_connections: usize,
 }
 
-/// Тонкие обёртки для оболочки. Логики здесь нет — только вызов `api`.
+/// The thin wrappers for the shell. There is no logic here — only calls into `api`.
 pub mod ipc {
     use super::*;
     use crate::domain::links::Links;
@@ -199,7 +200,7 @@ pub mod ipc {
     }
 }
 
-/// Собрать сведения о файле для показа.
+/// Gather what is known about a file, for showing.
 fn file_view(
     profile: &crate::domain::server_profile::ServerProfile,
     path: &str,
@@ -241,11 +242,11 @@ pub mod api {
             .ok_or_else(|| crate::commands::servers::no_such_server(server_id))
     }
 
-    /// Библиотека сервера.
+    /// A server's library.
     ///
-    /// Без `refresh` отдаётся кеш — мгновенно, — а обновление идёт следом и приходит
-    /// событием. Ждать ответа сервера, чтобы показать список, который и так известен,
-    /// незачем: по медленному каналу это секунды пустого экрана.
+    /// Without `refresh` the cache is handed back — instantly — while the refresh follows
+    /// and arrives as an event. There is no point waiting for the server's answer to show a
+    /// list that is already known: over a slow link that is seconds of empty screen.
     pub async fn library_list(
         state: &AppState,
         server_id: &str,
@@ -255,8 +256,8 @@ pub mod api {
 
         if !refresh {
             if let Some(cached) = library_cache::load(&state.db, server_id)? {
-                // Обновление идёт своим ходом: пользователь уже видит список,
-                // а расхождение с сервером придёт событием и поправит показ.
+                // The refresh goes its own way: a person already sees the list, and any
+                // divergence from the server will arrive as an event and correct it.
                 spawn_background_refresh(state.clone(), profile.clone());
                 return Ok(cached);
             }
@@ -268,11 +269,12 @@ pub mod api {
                 Ok(view)
             }
             Err(e) => {
-                // Сервер недоступен. Показать последнее известное с пометкой лучше,
-                // чем пустой экран: пустой неотличим от «библиотека пропала».
+                // The server cannot be reached. Showing the last known state with a mark
+                // on it beats an empty screen: an empty one is indistinguishable from
+                // "the library is gone".
                 match library_cache::load(&state.db, server_id)? {
                     Some(mut cached) => {
-                        tracing::warn!(server = server_id, error = %e, "библиотека взята из кеша");
+                        tracing::warn!(server = server_id, error = %e, "library taken from the cache");
                         cached.stale = true;
                         Ok(cached)
                     }
@@ -282,7 +284,7 @@ pub mod api {
         }
     }
 
-    /// Обновить кеш в стороне от ответа и сообщить об изменении.
+    /// Refresh the cache aside from the answer, and report the change.
     fn spawn_background_refresh(state: AppState, profile: ServerProfile) {
         let server_id = profile.id.clone();
         tokio::spawn(async move {
@@ -293,13 +295,13 @@ pub mod api {
                     }
                 }
                 Err(e) => {
-                    tracing::debug!(server = %server_id, error = %e, "фоновое обновление библиотеки не удалось")
+                    tracing::debug!(server = %server_id, error = %e, "the background library refresh failed")
                 }
             }
         });
     }
 
-    /// Прочитать библиотеку с сервера целиком.
+    /// Read the whole library from the server.
     async fn build_from_server(state: &AppState, profile: &ServerProfile) -> Result<LibraryView> {
         let conn = connect(state.secrets.as_ref(), profile).await?;
         let dir = &profile.video_dir;
@@ -308,12 +310,12 @@ pub mod api {
         let entries = listing::list(&conn, dir).await?;
         let matched = reconcile::reconcile(&manifest, &entries);
 
-        // Место на диске — не повод отказать в библиотеке: если его не узнать,
-        // список всё равно полезен.
+        // Room on the disk is no reason to refuse the library: even when it cannot be
+        // learned, the list is useful all the same.
         let disk_usage = match disk::usage(&conn, dir).await {
             Ok(u) => Some(u),
             Err(e) => {
-                tracing::warn!(error = %e, "место на диске сервера не прочитано");
+                tracing::warn!(error = %e, "the room on the server's disk was not read");
                 None
             }
         };
@@ -327,7 +329,7 @@ pub mod api {
                 let params = probed(state, &conn, profile, &f.path, f.size_bytes, f.exists).await;
                 views.push(file_view(profile, &f.path, f.size_bytes, params, f.exists));
             }
-            // Набор качеств в объём медиа входит: удаление освободит и его.
+            // A quality ladder counts towards the medium's size: deleting frees it too.
             total += files.ladders.iter().map(|l| l.size_bytes).sum::<u64>();
 
             media_views.push(MediaView {
@@ -343,8 +345,8 @@ pub mod api {
 
         let mut unrecognized = Vec::with_capacity(matched.unrecognized.len());
         for entry in &matched.unrecognized {
-            // Внутрь каталога не заглядываем: заголовка у каталога нет, а перебирать
-            // его содержимое ради неизвестно чего — лишние обороты по сети.
+            // We do not look inside a directory: a directory has no header, and going
+            // through its contents for who knows what is needless network round trips.
             let params = if entry.is_dir {
                 probe_moov::FileParams::default()
             } else {
@@ -370,7 +372,7 @@ pub mod api {
         })
     }
 
-    /// Параметры файла из заголовка. Неудача разбора — не повод потерять сам файл.
+    /// A file's parameters from its header. A failed parse is no reason to lose the file.
     async fn probed(
         state: &AppState,
         conn: &Connection,
@@ -392,13 +394,13 @@ pub mod api {
         )
         .await
         .unwrap_or_else(|e| {
-            tracing::debug!(file = path, error = %e, "заголовок файла не прочитан");
+            tracing::debug!(file = path, error = %e, "the file's header was not read");
             probe_moov::FileParams::default()
         })
     }
 
-    /// Создать медиа. `slug` уникален в пределах сервера; пустой — составляется
-    /// из названия.
+    /// Create a medium. The `slug` is unique within a server; an empty one is made from
+    /// the title.
     pub async fn media_create(
         state: &AppState,
         server_id: &str,
@@ -445,10 +447,10 @@ pub mod api {
         Ok(id)
     }
 
-    /// Переименовать медиа.
+    /// Rename a medium.
     ///
-    /// Смена короткого имени переименовывает файлы и **делает прежние ссылки
-    /// нерабочими**: интерфейс обязан предупредить об этом до вызова.
+    /// Changing the short name renames the files and **breaks the old links**: the
+    /// interface must warn about that before calling.
     pub async fn media_rename(
         state: &AppState,
         server_id: &str,
@@ -505,11 +507,11 @@ pub mod api {
         Ok(())
     }
 
-    /// Переименовать записи каталога вслед за коротким именем.
+    /// Rename the catalogue entries to follow a short name.
     ///
-    /// Переименование идёт **до** записи описи: если оно не удастся, опись останется
-    /// прежней и будет соответствовать тому, что на сервере. Обратный порядок дал бы
-    /// опись, ссылающуюся на несуществующие файлы.
+    /// The renaming happens **before** the catalogue is written: should it fail, the
+    /// catalogue stays as it was and still matches what is on the server. The other order
+    /// would give a catalogue pointing at files that do not exist.
     async fn rename_entries(
         conn: &Connection,
         video_dir: &str,
@@ -519,8 +521,8 @@ pub mod api {
     ) -> Result<()> {
         use crate::server::{join_remote, shell_quote};
 
-        // Записи верхнего уровня, которые надо переименовать: имя целиком равно
-        // старому короткому имени либо начинается с него.
+        // The top-level entries that have to be renamed: the name equals the old short
+        // name entirely, or begins with it.
         let mut renames: Vec<(String, String)> = Vec::new();
         let mut rename_top = |path: &str| -> String {
             let (top, rest) = match path.split_once('/') {
@@ -532,8 +534,9 @@ pub mod api {
             } else if let Some(tail) = top.strip_prefix(old_slug) {
                 format!("{new_slug}{tail}")
             } else {
-                // Файл не следует соглашению об именах — трогать его нельзя:
-                // пользователь мог отнести к медиа что-то со своим именем.
+                // The file does not follow the naming convention — it must not be
+                // touched: a person may have attributed something of their own naming to
+                // the medium.
                 return path.to_owned();
             };
             if top != new_top && !renames.iter().any(|(o, _)| o == top) {
@@ -572,14 +575,14 @@ pub mod api {
         Ok(())
     }
 
-    /// Удалить медиа вместе с файлами.
+    /// Delete a medium along with its files.
     ///
-    /// Без `confirmed` выполняется **отказом**, в котором названы число файлов и
-    /// объём: подтверждать вслепую нечего (FR-014).
+    /// Without `confirmed` it comes back as a **refusal** naming the number of files and
+    /// the volume: there is nothing to confirm blind (FR-014).
     ///
-    /// Удаление не задача, хотя договор называет `task_id`: снятие файлов — это
-    /// операция по числу файлов, а не по их объёму, и занимает доли секунды даже
-    /// на десятках гигабайт. Возвращается номер удалённого медиа.
+    /// Deleting is not a task, although the contract names a `task_id`: removing files is an
+    /// operation counted in files rather than in bytes, and takes fractions of a second even
+    /// over tens of gigabytes. The deleted medium's identifier is returned.
     pub async fn media_delete(
         state: &AppState,
         server_id: &str,
@@ -610,15 +613,18 @@ pub mod api {
         conn.close().await;
 
         invalidate(state, server_id);
-        tracing::info!(media = media_id, "медиа удалено вместе с файлами");
+        tracing::info!(
+            media = media_id,
+            "the medium was deleted along with its files"
+        );
         Ok(media_id.to_owned())
     }
 
-    /// Перенести файл в другое медиа.
+    /// Move a file into another medium.
     ///
-    /// Файл остаётся на месте — меняется только то, за каким медиа он числится.
-    /// Переименовывать его вслед за новым коротким именем нельзя: это оборвало бы
-    /// работающие ссылки, о чём пользователь не просил.
+    /// The file stays where it is — only which medium it belongs to changes. Renaming it to
+    /// follow the new short name will not do: that would break working links, which nobody
+    /// asked for.
     pub async fn file_move(
         state: &AppState,
         server_id: &str,
@@ -662,9 +668,9 @@ pub mod api {
         Ok(())
     }
 
-    /// Удалить один файл.
+    /// Delete one file.
     ///
-    /// Без `confirmed` — отказ с объёмом, который освободится (FR-014).
+    /// Without `confirmed` — a refusal naming the volume that would be freed (FR-014).
     pub async fn file_delete(
         state: &AppState,
         server_id: &str,
@@ -699,8 +705,8 @@ pub mod api {
 
         remove_entries(&conn, &profile.video_dir, std::iter::once(&path.to_owned())).await?;
 
-        // Из описи убираем тем же действием: файла нет, и ссылка на него в описи
-        // превратилась бы в вечно пропавший файл.
+        // It leaves the catalogue in the same act: the file is gone, and a reference to it
+        // in the catalogue would turn into a file forever missing.
         let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
         if manifest.all_claimed_paths().contains(&path) {
             let mut next = manifest.prepared_for_write();
@@ -716,7 +722,7 @@ pub mod api {
         Ok(())
     }
 
-    /// Зрительские ссылки на файл (FR-016).
+    /// The viewers' links to a file (FR-016).
     pub fn links_for(state: &AppState, server_id: &str, path: &str) -> Result<Links> {
         let profile = profile_of(state, server_id)?;
         Ok(crate::domain::links::for_path(
@@ -726,7 +732,7 @@ pub mod api {
         ))
     }
 
-    // ---------- вспомогательное ----------
+    // ---------- helpers ----------
 
     fn no_such_media(id: &str) -> AppError {
         AppError::new(ErrorCode::InvalidInput)
@@ -734,9 +740,8 @@ pub mod api {
             .with_cause(id)
     }
 
-    /// Отказ, который называет последствия. Без чисел подтверждать было бы нечего.
-    /// A refusal that names the consequences. Without the numbers there would be
-    /// nothing to confirm.
+    /// A refusal that names the consequences. Without the numbers there would be nothing
+    /// to confirm.
     fn confirmation_needed(what: &str, impact: &DeletionImpact) -> AppError {
         let mut error = AppError::new(ErrorCode::ConfirmationRequired).with_detail(
             Detail::new(DetailCode::ConfirmDelete)
@@ -783,15 +788,15 @@ pub mod api {
         }
     }
 
-    /// Сколько соединений веб-сервер обслуживает прямо сейчас (FR-019a).
+    /// How many connections the web server is serving right now (FR-019a).
     ///
-    /// Живёт в `server::active_use`: то же самое нужно и перед заливкой (FR-037),
-    /// и две копии одного подсчёта разошлись бы при первой же правке.
+    /// It lives in `server::active_use`: the same thing is needed before an upload (FR-037),
+    /// and two copies of one count would diverge at the first edit.
     async fn active_connections(conn: &Connection) -> usize {
         crate::server::active_use::serving_connections(conn).await
     }
 
-    /// Удалить записи каталога — и файлы, и каталоги наборов качеств.
+    /// Delete catalogue entries — both files and quality-ladder directories.
     async fn remove_entries<'a>(
         conn: &Connection,
         video_dir: &str,
@@ -799,8 +804,8 @@ pub mod api {
     ) -> Result<()> {
         use crate::server::{join_remote, shell_quote};
 
-        // Удаляются записи верхнего уровня: набор качеств — это каталог целиком,
-        // и снимать его по отрезку значило бы оставить половину.
+        // Top-level entries are what gets deleted: a quality ladder is a whole directory,
+        // and removing it a segment at a time would leave half of it behind.
         let mut tops: Vec<String> = Vec::new();
         for path in paths {
             let top = path.split('/').next().unwrap_or(path).to_owned();
@@ -829,10 +834,10 @@ pub mod api {
         Ok(())
     }
 
-    /// Забыть кеш: после изменения он заведомо не соответствует серверу.
+    /// Forget the cache: after a change it certainly no longer matches the server.
     fn invalidate(state: &AppState, server_id: &str) {
         if let Err(e) = library_cache::forget(&state.db, server_id) {
-            tracing::warn!(server = server_id, error = %e, "кеш библиотеки не сброшен");
+            tracing::warn!(server = server_id, error = %e, "the library cache was not cleared");
         }
         state.notify_library_changed(server_id);
     }

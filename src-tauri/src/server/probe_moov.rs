@@ -1,34 +1,35 @@
-//! T044a — параметры файла из его заголовка, без скачивания целиком (FR-012, R-19).
+//! T044a — a file's particulars from its header, without downloading it all
+//! (FR-012, R-19).
 //!
-//! Берём начало файла, разбираем `moov` (см. `domain::moov`) и складываем результат
-//! в локальную базу. Кеш здесь не украшение: ради каждого файла надо забрать с сервера
-//! сотни килобайт, и перечитывать это при каждом открытии библиотеки значило бы
-//! качать десятки мегабайт на ровном месте.
+//! The start of the file is fetched, `moov` is parsed (see `domain::moov`), and the
+//! result goes into the local database. The cache is not decoration here: each file
+//! costs hundreds of kilobytes off the server, and re-reading that every time the
+//! library opens would mean downloading tens of megabytes for nothing.
 //!
-//! Ключ кеша включает размер файла. Файл заменили — размер почти наверняка другой,
-//! и параметры читаются заново: та же длительность при другом размере дала бы
-//! неверный битрейт, а это как раз то число, по которому подбирают ступени качества.
+//! The cache key includes the file size. If a file was replaced, its size is almost
+//! certainly different and the particulars are read again: the same duration at a
+//! different size would give the wrong bitrate — and that is exactly the number
+//! quality rungs are chosen by.
 
 use crate::domain::moov::{self, MediaParams, MoovOutcome};
 use crate::ssh::{Connection, Result, SshError};
 use crate::store::db::{now_rfc3339, Db};
 
-/// Разобранные параметры файла вместе с признаком пригодности к раздаче.
+/// A file's parsed particulars, along with whether it is fit to serve.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FileParams {
     pub params: MediaParams,
-    /// `moov` в начале файла. `None` = вопрос остался открытым.
+    /// `moov` at the start of the file. `None` means the question stayed open.
     pub faststart_ok: Option<bool>,
 }
 
-/// Сколько раз готовы дочитывать заголовок.
+/// How many times we are willing to fetch more of the header.
 ///
-/// Разбор сам говорит, сколько байт ему нужно, и с каждой попыткой запрашивается
-/// строго больше — поэтому кругов нужно немного. Предел стоит на случай файла,
-/// собранного так, чтобы просить бесконечно.
+/// The parser says how many bytes it needs, and each attempt asks for strictly more —
+/// so few rounds are needed. The limit is there for a file built to ask forever.
 const MAX_FETCHES: usize = 4;
 
-/// Прочитать параметры файла, взяв их из кеша, если он свеж.
+/// Read a file's particulars, taking them from the cache if it is fresh.
 pub async fn params_for(
     conn: &Connection,
     db: &Db,
@@ -49,15 +50,15 @@ pub async fn params_for(
         faststart_ok: outcome.faststart_ok(),
     };
 
-    // Неудача записи в кеш — не повод не отдать разобранное: кеш ускоряет, но
-    // ничего не решает.
+    // A failed cache write is no reason to withhold what was parsed: the cache makes
+    // things faster and decides nothing.
     if let Err(e) = cache_put(db, server_id, name, size_bytes, &result) {
-        tracing::warn!(file = name, error = %e, "параметры файла не сохранились в кеш");
+        tracing::warn!(file = name, error = %e, "file particulars were not cached");
     }
     Ok(result)
 }
 
-/// Забрать начало файла и разобрать его, дочитывая ровно столько, сколько попросят.
+/// Fetch the start of a file and parse it, reading exactly as much more as is asked for.
 async fn probe(conn: &Connection, path: &str, size_bytes: u64) -> Result<MoovOutcome> {
     let mut want = moov::SUGGESTED_HEAD_BYTES.min(size_bytes.max(1));
 
@@ -67,8 +68,9 @@ async fn probe(conn: &Connection, path: &str, size_bytes: u64) -> Result<MoovOut
             MoovOutcome::NeedMoreBytes { need } if need > want && need <= size_bytes => {
                 want = need;
             }
-            // Просят больше, чем есть в файле, либо не больше, чем уже прочитано, —
-            // дальше круг не сдвинется, и ответ надо давать по имеющемуся.
+            // Either more is asked for than the file holds, or no more than has
+            // already been read — another round moves nothing, and the answer has to
+            // be given from what there is.
             MoovOutcome::NeedMoreBytes { .. } => return Ok(MoovOutcome::NotMp4),
             other => return Ok(other),
         }
@@ -76,7 +78,7 @@ async fn probe(conn: &Connection, path: &str, size_bytes: u64) -> Result<MoovOut
     Ok(MoovOutcome::NotMp4)
 }
 
-/// Прочитать первые `bytes` байт файла.
+/// Read the first `bytes` bytes of a file.
 async fn read_head(conn: &Connection, path: &str, bytes: u64) -> Result<Vec<u8>> {
     use tokio::io::AsyncReadExt;
 

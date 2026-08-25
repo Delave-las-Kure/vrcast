@@ -1,52 +1,51 @@
-//! T080 — имена при заливке: где собирается файл и как он попадает в раздачу
+//! T080 — names during an upload: where a file is assembled and how it enters service
 //! (FR-033, FR-038, FR-039).
 //!
-//! Главное правило: **недокачанный файл не должен лежать там, откуда раздают.**
-//! Веб-сервер отдаёт всё, что видит в каталоге раздачи, и полагаться на то, что
-//! зритель не угадает имя, нельзя — ссылку выдаёт само же приложение, а имя
-//! предсказуемо. Поэтому файл собирается в отдельном каталоге и попадает в раздачу
-//! одним переименованием.
+//! The chief rule: **a half-transferred file must not lie where things are served
+//! from.** A web server hands out everything it sees in the serving directory, and
+//! counting on a viewer not guessing the name will not do — the application itself
+//! hands out the link, and the name is predictable. So a file is assembled in a
+//! separate directory and enters service by a single rename.
 //!
-//! Переименование неделимо **только в пределах одной файловой системы**. Через
-//! границу файловых систем оно превращается в копирование с последующим удалением —
-//! то есть ровно в то, чего мы избегаем: несколько минут, в течение которых в
-//! каталоге раздачи лежит наполовину скопированный файл. Поэтому каталог сборки
-//! выбирается рядом с каталогом раздачи, а совпадение файловых систем проверяется
-//! перед началом передачи.
+//! A rename is atomic **only within one file system**. Across a boundary it turns into
+//! a copy followed by a delete — which is exactly what we are avoiding: several
+//! minutes during which a half-copied file lies in the serving directory. So the
+//! staging directory is chosen beside the serving directory, and that they share a
+//! file system is checked before the transfer starts.
 
-/// Имя каталога, где файлы собираются до ввода в раздачу.
+/// The name of the directory where files are assembled before entering service.
 ///
-/// Кладётся рядом с каталогом раздачи — у общего родителя, а значит почти наверняка
-/// на той же файловой системе. Начинается с точки, чтобы не мозолить глаза тому,
-/// кто зайдёт на сервер руками.
+/// Placed beside the serving directory — under a shared parent, and so almost
+/// certainly on the same file system. It starts with a dot so as not to be an eyesore
+/// to anyone who comes to the server by hand.
 pub const STAGING_DIR_NAME: &str = ".vrcast-uploads";
 
-/// Куда собирать файл до ввода в раздачу.
+/// Where to assemble a file before it enters service.
 ///
-/// Возвращает каталог рядом с каталогом раздачи. Если у каталога раздачи нет
-/// родителя (кто-то указал корень) — `None`: собирать некуда, и молча складывать
-/// в раздачу нельзя.
+/// Returns a directory beside the serving directory. If the serving directory has no
+/// parent (someone gave the root) the answer is `None`: there is nowhere to assemble,
+/// and quietly putting it into service is not allowed.
 pub fn staging_dir(video_dir: &str) -> Option<String> {
     let trimmed = video_dir.trim_end_matches('/');
     let parent = trimmed.rsplit_once('/')?.0;
     if parent.is_empty() {
-        // Каталог раздачи лежит прямо в корне: рядом класть нечего.
+        // The serving directory sits at the root: there is nothing to put beside it.
         return None;
     }
     Some(format!("{parent}/{STAGING_DIR_NAME}"))
 }
 
-/// Имя временного файла для заливки под этим именем.
+/// The name of the staged file for an upload under this name.
 ///
-/// Зависит **только от конечного имени**, а не от номера задачи. Это существенно:
-/// вся схема возобновления держится на правиле «позиция — это размер временного
-/// файла», и найти его нужно уметь до того, как задача создана (проверки перед
-/// стартом) и после перезапуска приложения.
+/// It depends **only on the final name**, not on a task id. That matters: the whole
+/// resume scheme rests on the rule "the position is the size of the staged file", and
+/// it has to be findable before a task exists (the pre-flight checks) and after the
+/// application restarts.
 ///
-/// Обратная сторона — две одновременные заливки под одним именем писали бы в один
-/// файл и молча испортили бы работу друг другу. Это не решается именем: и с номером
-/// задачи в имени вторая заливка всё равно затёрла бы результат первой при вводе
-/// в раздачу. Поэтому одновременность запрещается прямо — см. проверку в
+/// The other side of that is two simultaneous uploads under one name writing into one
+/// file and quietly ruining each other's work. A name does not solve it: even with a
+/// task id in the name, the second upload would still overwrite the first one's result
+/// when entering service. So simultaneity is forbidden outright — see the check in
 /// `commands::upload`.
 pub fn staging_file(staging_dir: &str, remote_name: &str) -> String {
     format!(
@@ -56,11 +55,12 @@ pub fn staging_file(staging_dir: &str, remote_name: &str) -> String {
     )
 }
 
-/// Убрать из имени всё, что делает его не именем: разделители пути и переводы строк.
+/// Strip from a name everything that stops it being a name: path separators and line
+/// breaks.
 ///
-/// Имя приходит от пользователя и попадает и в путь на сервере, и в команду.
-/// Косая черта увела бы файл в другой каталог, а перевод строки — превратил бы
-/// одну команду в две.
+/// The name comes from a person and goes both into a path on the server and into a
+/// command. A slash would take the file into another directory, and a line break would
+/// turn one command into two.
 pub fn sanitize(name: &str) -> String {
     name.chars()
         .map(|c| match c {
@@ -73,26 +73,26 @@ pub fn sanitize(name: &str) -> String {
         .to_owned()
 }
 
-/// Годится ли имя для раздачи.
+/// Whether a name is fit for serving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NameVerdict {
     Ok,
-    /// Пустое имя или из одних недопустимых знаков.
+    /// An empty name, or one made entirely of characters that are not allowed.
     Empty,
-    /// Имя занято служебной записью раздачи — такое трогать нельзя.
+    /// The name belongs to an internal serving entry — not to be touched.
     Reserved,
-    /// Файл с таким именем уже раздаётся.
+    /// A file of that name is already being served.
     ///
-    /// Не запрет, а повод предупредить: замена законна, но у неё есть последствия
-    /// (FR-039). `cdn_cached` истинно, когда задан CDN: тогда какое-то время
-    /// зрителям будет отдаваться старое содержимое, и человек должен знать это
-    /// **до** замены, а не после жалоб.
+    /// Not a prohibition but grounds for a warning: replacing is legitimate, and it
+    /// has consequences (FR-039). `cdn_cached` is true when a CDN is configured: then
+    /// viewers will be served the old contents for a while, and a person has to know
+    /// that **before** replacing rather than after the complaints.
     Exists {
         cdn_cached: bool,
     },
 }
 
-/// Проверить имя перед заливкой.
+/// Check a name before uploading.
 pub fn check_name(name: &str, existing: &[String], cdn_configured: bool) -> NameVerdict {
     let clean = sanitize(name);
     if clean.is_empty() {

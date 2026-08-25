@@ -381,7 +381,7 @@ fn apply_pause(child: &mut ManagedProcess, ctx: &TaskContext) {
     if let Err(e) = outcome {
         // Not fatal: a pause that did not take is worth complaining about, but not
         // worth throwing away hours of encoding for.
-        tracing::warn!(error = %e, paused = should, "не удалось изменить состояние кодировщика");
+        tracing::warn!(error = %e, paused = should, "could not change the encoder state");
     }
 }
 

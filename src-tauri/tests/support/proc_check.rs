@@ -1,19 +1,19 @@
-//! Проверки состояния процессов для тестов.
+//! Process-state checks for the tests.
 //!
-//! Общие для тестов запуска программ и тестов уборки: обе проверяют одно и то же —
-//! умер ли процесс на самом деле, — и разъехавшиеся копии этой проверки уже
-//! однажды дали разные ответы на один вопрос.
+//! Shared by the tests for starting programs and by those for the sweep: both check the
+//! same thing — whether a process really died — and copies of this check that drifted apart
+//! have already once given different answers to the same question.
 
-/// Работает ли процесс на самом деле.
+/// Whether a process is really running.
 ///
-/// На Unix мало убедиться, что `/proc/<pid>` существует: у **зомби** он тоже есть.
-/// Зомби — уже мёртвый процесс, чьё место в таблице держится, пока родитель не
-/// заберёт его код возврата. В тестах родителем оказывается либо сам тест, либо
-/// первый процесс контейнера, и ни тот ни другой не торопятся это делать — убитая
-/// программа выглядела бы живой.
+/// On Unix it is not enough that `/proc/<pid>` exists: a **zombie** has one too. A zombie is
+/// an already dead process whose place in the table is held until its parent collects its
+/// exit code. In the tests the parent is either the test itself or the container's first
+/// process, and neither is in a hurry to do so — a killed program would look alive.
 ///
-/// Поймано прогоном под Linux 2026-08-25 дважды: сперва в уборке, потом на внуках
-/// при отмене. В жизни этого не бывает — сирот подбирает система.
+/// Caught by a run on Linux on 2026-08-25, twice: first in the sweep, then on the
+/// grandchildren of a cancellation. In real life this does not happen — the system adopts
+/// the orphans.
 pub fn alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
@@ -25,9 +25,9 @@ pub fn alive(pid: u32) -> bool {
     }
     #[cfg(unix)]
     {
-        // Третье поле в /proc/<pid>/stat — состояние; «Z» значит зомби.
-        // Отсчитываем от последней закрывающей скобки: второе поле — имя программы
-        // в скобках, и в нём бывают и пробелы, и сами скобки.
+        // The third field in /proc/<pid>/stat is the state; "Z" means a zombie. Counting
+        // starts from the last closing bracket: the second field is the program's name in
+        // brackets, and it can hold both spaces and brackets of its own.
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => match stat.rfind(')') {
                 Some(i) => !matches!(stat[i + 1..].split_whitespace().next(), Some("Z")),
@@ -38,10 +38,10 @@ pub fn alive(pid: u32) -> bool {
     }
 }
 
-/// Идентификаторы прямых потомков указанного процесса.
+/// The ids of a process's direct children.
 ///
-/// Считать процессы по имени нельзя: тесты идут параллельно, и чужие потомки
-/// попадают в счёт. Проверять надо родство, а не совпадение имени.
+/// Counting processes by name will not do: the tests run in parallel, and other people's
+/// children get counted in. What has to be checked is the parentage, not a matching name.
 pub fn children_of(pid: u32) -> Vec<u32> {
     let out = if cfg!(windows) {
         std::process::Command::new("powershell")
@@ -68,23 +68,22 @@ pub fn children_of(pid: u32) -> Vec<u32> {
     }
 }
 
-// Модуль общий для двух наборов проверок, и каждый берёт из него своё. Отсюда
-// пользуется только набор модульных: интеграционным нужна лишь проверка живости.
-// Метка стоит именно здесь, а не на весь файл, — чтобы по-настоящему забытая
-// функция всё-таки была замечена.
+// The module is shared by two sets of checks, and each takes what it needs. From here only
+// the unit set uses this: the integration tests need nothing but the liveness check. The
+// attribute sits here rather than on the whole file so that a function genuinely forgotten
+// is still noticed.
 #[allow(dead_code)]
-/// Долго работающая программа, на которой проверяется завершение.
+/// A long-running program to check termination against.
 pub fn long_running() -> (&'static str, Vec<String>) {
     if cfg!(windows) {
-        // ping с большим числом попыток — самый переносимый «спящий» процесс в Windows.
+        // ping with a large count is the most portable "sleeping" process on Windows.
         (
             "cmd",
             vec!["/c".into(), "ping -n 300 127.0.0.1 >nul".into()],
         )
     } else {
-        // Оболочка нужна намеренно: она порождает собственного потомка, и именно
-        // на нём проверяется, что завершение забирает всё дерево, а не только
-        // прямого потомка.
+        // The shell is deliberate: it spawns a child of its own, and that is what proves
+        // termination takes the whole tree rather than only the direct child.
         ("sh", vec!["-c".into(), "sleep 300 & wait".into()])
     }
 }

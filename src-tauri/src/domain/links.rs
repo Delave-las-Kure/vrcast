@@ -1,37 +1,40 @@
-//! T032 — зрительские ссылки (FR-016).
+//! T032 — viewer links (FR-016).
 //!
-//! Раздача отдаёт файлы из каталога видео по пути `/videos/…` — так устроен рабочий
-//! сервер, и приложение обязано выдавать те же ссылки, что работают сейчас.
+//! Serving hands out files from the video directory under `/videos/…` — that is how
+//! the working server is arranged, and the application must produce the same links
+//! that work today.
 //!
-//! Две ссылки, а не одна: origin отдаёт сам сервер, CDN — посредник. Когда CDN задан,
-//! выбор оставляется человеку (FR-016), потому что у вариантов разная цена: origin
-//! в России не блокируется, CDN быстрее, но зависит от посредника.
+//! Two links rather than one: the origin is served by the server itself, the CDN by an
+//! intermediary. When a CDN is configured the choice is left to the person (FR-016),
+//! because the options cost different things: the origin is not blocked in Russia, the
+//! CDN is faster but depends on someone else.
 
-/// Часть пути раздачи, под которой лежит каталог видео.
+/// The part of the serving path the video directory sits under.
 pub const VIDEOS_PREFIX: &str = "videos";
 
-/// Готовые ссылки на один файл.
+/// The finished links for one file.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Links {
-    /// Ссылка через сам сервер. Есть всегда.
+    /// The link through the server itself. Always there.
     pub origin: String,
-    /// Ссылка через CDN. Нет, если CDN не задан в профиле.
+    /// The link through the CDN. Absent when no CDN is set in the profile.
     pub cdn: Option<String>,
 }
 
 impl Links {
-    /// Ссылка по умолчанию — та, что работает без посредников.
+    /// The default link — the one that works without an intermediary.
     pub fn preferred(&self) -> &str {
         &self.origin
     }
 }
 
-/// Построить ссылки на файл раздачи.
+/// Build the links for a served file.
 ///
-/// `rel_path` — путь относительно каталога видео: `Backrooms_22.mp4` или
-/// `backrooms/master.m3u8`. `domain` ожидается уже приведённым
-/// (см. `server_profile::normalize_domain`), но схема и хвостовая косая снимаются
-/// и здесь: эта функция вызывается и с данными, пришедшими из базы от прошлых версий.
+/// `rel_path` is relative to the video directory: `Backrooms_22.mp4` or
+/// `backrooms/master.m3u8`. `domain` is expected to be normalised already (see
+/// `server_profile::normalize_domain`), but the scheme and a trailing slash are
+/// stripped here too: this function is also called with data that came out of the
+/// database from earlier versions.
 pub fn for_path(domain: &str, cdn_base: Option<&str>, rel_path: &str) -> Links {
     let host = super::server_profile::normalize_domain(domain);
     let path = encode_path(rel_path);
@@ -48,11 +51,11 @@ pub fn for_path(domain: &str, cdn_base: Option<&str>, rel_path: &str) -> Links {
     }
 }
 
-/// Закодировать путь для ссылки, сохранив разделители каталогов.
+/// Encode a path for a link, keeping the directory separators.
 ///
-/// Кодировать нужно не из педантизма: имена файлов на сервере бывают какими угодно —
-/// с пробелами, кириллицей, знаком решётки. Незакодированная решётка превращает
-/// остаток имени в якорь, и ссылка ведёт в никуда, причём молча.
+/// The encoding is not pedantry: file names on the server can be anything at all —
+/// with spaces, with Cyrillic, with a hash sign. An unencoded hash turns the rest of
+/// the name into a fragment, and the link leads nowhere, quietly.
 fn encode_path(rel_path: &str) -> String {
     rel_path
         .trim_matches('/')
@@ -63,12 +66,13 @@ fn encode_path(rel_path: &str) -> String {
         .join("/")
 }
 
-/// Процентное кодирование одного отрезка пути.
+/// Percent-encoding for one segment of a path.
 ///
-/// Без изменений остаются только «неограниченные» знаки (RFC 3986): латинские буквы,
-/// цифры и `-._~`. Всё прочее кодируется. Это чуть строже необходимого, зато не
-/// требует помнить, какие знаки безопасны в какой части ссылки; в обычном имени вида
-/// `Backrooms_22.mp4` кодировать нечего, и ссылка остаётся читаемой.
+/// Only the "unreserved" characters (RFC 3986) are left alone: Latin letters, digits
+/// and `-._~`. Everything else is encoded. That is slightly stricter than necessary,
+/// but it saves having to remember which characters are safe in which part of a URL;
+/// in an ordinary name like `Backrooms_22.mp4` there is nothing to encode, and the
+/// link stays readable.
 fn encode_segment(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.as_bytes() {

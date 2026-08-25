@@ -1,8 +1,9 @@
-//! T017 — хранение задач: они переживают перезапуск приложения (FR-081).
+//! T017 — storing tasks: they survive a restart of the application (FR-081).
 //!
-//! В базу пишутся не все подвижки, а только значимые: смена состояния, позиция
-//! возобновления, ошибка. Прогресс, меняющийся сотни раз в секунду, в базу не идёт —
-//! иначе диск станет узким местом у задачи, которая должна упираться в канал.
+//! Not every movement is written to the database, only the ones that matter: a change
+//! of state, the resume position, an error. Progress, which changes hundreds of times
+//! a second, does not go to the database — otherwise the disk would become the
+//! bottleneck of a task that ought to be limited by the network.
 
 use super::state::{TaskKind, TaskState};
 use crate::domain::wording::DetailCode;
@@ -10,7 +11,7 @@ use crate::error::AppError;
 use crate::store::db::{now_rfc3339, Db, DbError};
 use serde::{Deserialize, Serialize};
 
-/// Задача в том виде, в каком она хранится и показывается.
+/// A task in the form it is stored and shown in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub id: String,
@@ -23,16 +24,16 @@ pub struct TaskRecord {
     pub stage: Option<DetailCode>,
     pub speed_bps: Option<i64>,
     pub eta_s: Option<i64>,
-    /// Позиция возобновления: переданные байты, готовые ступени, выполненные шаги.
+    /// The resume position: bytes sent, rungs finished, steps completed.
     pub resume_token: Option<String>,
     /// Why it failed, if it did. Stored as an object rather than a sentence: a task
     /// finished a week ago must still explain itself in whatever language is chosen
     /// today. Secrets are already redacted.
     pub error: Option<AppError>,
-    /// Место в очереди: меньше — раньше.
+    /// Place in the queue: lower runs sooner.
     ///
-    /// Отдельно от времени создания, потому что перестановка (FR-083) обязана менять
-    /// порядок, не подделывая время появления задачи.
+    /// Kept apart from the creation time, because reordering (FR-083) has to change
+    /// the order without falsifying when a task appeared.
     pub queue_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -85,7 +86,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
     })
 }
 
-/// Записать задачу: создать или обновить.
+/// Write a task: create or update.
 pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
@@ -124,11 +125,12 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
     })
 }
 
-/// Записать только позицию возобновления, не трогая остального.
+/// Write only the resume position, leaving the rest alone.
 ///
-/// Точечное обновление вместо «прочитать-изменить-записать» всей записи: токен пишет
-/// работающая задача, а состояние — пауза или отмена из другого потока, и полная
-/// перезапись с любой из сторон затирала бы чужое свежее поле.
+/// A pointed update rather than read-modify-write of the whole record: the token is
+/// written by the running task, while the state is written by a pause or a cancel from
+/// another thread, and a full rewrite from either side would overwrite the other's
+/// fresh field.
 pub fn save_resume_token(db: &Db, id: &str, token: &str) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
@@ -139,15 +141,15 @@ pub fn save_resume_token(db: &Db, id: &str, token: &str) -> Result<(), DbError> 
     })
 }
 
-/// Записать только продвижение, не трогая остального.
+/// Write only the progress, leaving the rest alone.
 ///
-/// Нужно ради перезапуска: событиями продвижение расходится по интерфейсу, но живёт
-/// только в памяти. Без этой записи задача, прерванная на середине тридцатигигабайтной
-/// заливки, после запуска приложения показывает ноль — и решить, продолжать её или
-/// снять, человеку не по чему.
+/// Needed for restarts: progress spreads through the interface as events, but it lives
+/// only in memory. Without this write, a task interrupted halfway through a
+/// thirty-gigabyte upload shows zero after the application starts — and a person has
+/// nothing to decide by whether to resume it or drop it.
 ///
-/// Записи о завершённых задачах не трогаются: сообщение о продвижении может прийти
-/// с опозданием и сбить единицу у уже готовой задачи обратно на 0,98.
+/// Records of finished tasks are left alone: a progress message can arrive late and
+/// knock a completed task's 1.0 back down to 0.98.
 pub fn save_progress(db: &Db, id: &str, progress: f64) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
@@ -159,10 +161,10 @@ pub fn save_progress(db: &Db, id: &str, progress: f64) -> Result<(), DbError> {
     })
 }
 
-/// Записать только состояние и, при наличии, ошибку — не трогая остального.
+/// Write only the state and, if there is one, the error — leaving the rest alone.
 ///
-/// Возвращает `false`, если записи о задаче нет. Причина точечности та же,
-/// что у [`save_resume_token`].
+/// Returns `false` when there is no record of the task. The reason for being pointed
+/// is the same as in [`save_resume_token`].
 pub fn save_state(
     db: &Db,
     id: &str,
@@ -188,7 +190,7 @@ pub fn save_state(
     })
 }
 
-/// Прочитать одну задачу.
+/// Read one task.
 pub fn get(db: &Db, id: &str) -> Result<Option<TaskRecord>, DbError> {
     db.with_conn(|c| {
         let mut stmt = c.prepare("SELECT * FROM tasks WHERE id = ?1")?;
@@ -200,10 +202,10 @@ pub fn get(db: &Db, id: &str) -> Result<Option<TaskRecord>, DbError> {
     })
 }
 
-/// Наибольший занятый номер в очереди.
+/// The highest place taken in the queue.
 ///
-/// Нужен при запуске: следующая задача обязана встать **после** всех, что уже лежат
-/// в базе, иначе она молча влезет в середину очереди прошлого запуска.
+/// Needed at start-up: the next task has to go **after** everything already in the
+/// database, or it quietly cuts into the middle of the previous run's queue.
 pub fn max_queue_order(db: &Db) -> Result<i64, DbError> {
     db.with_conn(|c| {
         Ok(
@@ -214,7 +216,7 @@ pub fn max_queue_order(db: &Db) -> Result<i64, DbError> {
     })
 }
 
-/// Записать только место в очереди.
+/// Write only the place in the queue.
 pub fn save_queue_order(db: &Db, id: &str, order: i64) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
@@ -225,7 +227,7 @@ pub fn save_queue_order(db: &Db, id: &str, order: i64) -> Result<(), DbError> {
     })
 }
 
-/// Все задачи, свежие первыми.
+/// Every task, newest first.
 pub fn list(db: &Db) -> Result<Vec<TaskRecord>, DbError> {
     db.with_conn(|c| {
         let mut stmt = c.prepare("SELECT * FROM tasks ORDER BY created_at DESC")?;
@@ -238,19 +240,19 @@ pub fn list(db: &Db) -> Result<Vec<TaskRecord>, DbError> {
     })
 }
 
-/// Итог восстановления после запуска.
+/// What restoring after start-up found.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct RecoveryReport {
-    /// Задачи, застигнутые в работе прошлым запуском. Переведены в приостановленные.
+    /// Tasks caught running by the previous run. Moved to paused.
     pub interrupted: Vec<String>,
 }
 
-/// Разобрать состояние после запуска приложения.
+/// Sort out the state after the application starts.
 ///
-/// Задачи, оставшиеся в состоянии «выполняется», принадлежат прошлому запуску: их процессов
-/// больше нет. Они переводятся в **приостановленные** — и никогда в завершённые
-/// (конституция, принцип III; SC-010). Разница не косметическая: «завершено» означало бы,
-/// что результат готов, а он оборван на середине.
+/// Tasks left in the running state belong to the previous run: their processes are
+/// gone. They are moved to **paused** — and never to completed (constitution,
+/// principle III; SC-010). The difference is not cosmetic: "completed" would mean the
+/// result is ready, and it was cut off halfway.
 pub fn recover_after_start(db: &Db) -> Result<RecoveryReport, DbError> {
     let interrupted: Vec<String> = db.with_conn(|c| {
         let mut stmt = c.prepare("SELECT id FROM tasks WHERE state = 'running'")?;
@@ -276,13 +278,13 @@ pub fn recover_after_start(db: &Db) -> Result<RecoveryReport, DbError> {
 
     tracing::warn!(
         count = interrupted.len(),
-        "задачи прошлого запуска переведены в приостановленные"
+        "tasks from the previous run were moved to paused"
     );
 
     Ok(RecoveryReport { interrupted })
 }
 
-/// Убрать давно завершённые задачи.
+/// Remove tasks that finished long ago.
 pub fn purge_finished_before(db: &Db, before_rfc3339: &str) -> Result<usize, DbError> {
     db.with_conn(|c| {
         Ok(c.execute(

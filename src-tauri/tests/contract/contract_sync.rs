@@ -1,20 +1,21 @@
-//! Сверка договора между ядром и интерфейсом.
+//! Comparing the contract between the core and the interface.
 //!
-//! Ядро на Rust и его отражение на TypeScript — два описания одного договора. Расходятся
-//! они молча: код собирается, типы проверяются, а обработчик ошибки в интерфейсе просто
-//! никогда не срабатывает, потому что ждёт код, которого больше нет. Обнаружится это
-//! у пользователя, в тот момент, когда ошибка наконец случится.
+//! The Rust core and its TypeScript reflection are two descriptions of one contract. They
+//! drift apart quietly: the code builds, the types check, and an error handler in the
+//! interface simply never fires because it waits for a code that no longer exists. It comes
+//! to light at a person's machine, the moment the error finally happens.
 //!
-//! Поэтому расхождение ловится здесь — при сборке. Два правила, выведенные из
-//! ревизии 2026-08-25:
+//! So the drift is caught here, at build time. Two rules, drawn from the review of
+//! 2026-08-25:
 //!
-//! 1. Каждая сверка — В ОБЕ СТОРОНЫ. Односторонняя ловит «в ядре есть, в TS нет»,
-//!    но пропускает лишнее в TS — обработчик события, которого ядро не шлёт.
-//! 2. Искать значения только ВНУТРИ разобранного объявления, а не по всему файлу:
-//!    `contains` по файлу засчитывал бы код, оставшийся в комментарии или в чужом типе.
+//! 1. Every comparison goes BOTH WAYS. A one-way one catches "in the core, missing in TS"
+//!    but lets through the surplus in TS — a handler for an event the core never sends.
+//! 2. Values are looked for only INSIDE the declaration that was parsed, not across the
+//!    whole file: a `contains` over the file would count a code left in a comment or in
+//!    somebody else's type.
 //!
-//! Перечни со стороны Rust берутся из `ALL`, которые порождены тем же макросом,
-//! что и сами enum, — рукописного списка, способного отстать, больше нет.
+//! The Rust-side lists come from the `ALL` constants, born of the same macro as the enums
+//! themselves — there is no hand-written list left that could fall behind.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -22,28 +23,29 @@ use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
 
 fn frontend_file(rel: &str) -> PathBuf {
-    // Ядро лежит в src-tauri/, интерфейс — рядом, в src/.
+    // The core lives in src-tauri/, the interface beside it, in src/.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("нет родительского каталога у src-tauri")
+        .expect("src-tauri has no parent directory")
         .join(rel)
 }
 
 fn contract_ts() -> String {
     let path = frontend_file("src/shared/contract.ts");
     std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("не прочитать {}: {e}", path.display()))
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()))
 }
 
-/// Все строковые литералы из объявления, начинающегося с `marker` и закрытого `;`.
+/// Every string literal from the declaration that begins with `marker` and is closed by `;`.
 ///
-/// Комментарии выбрасываются построчно ДО поиска кавычек и точки с запятой: кавычка
-/// в комментарии не должна расширять перечень, а `;` в нём — обрезать разбираемый
-/// блок. (В значениях договора не бывает ни `//`, ни `;` — на это разбор и опирается.)
+/// Comments are thrown away line by line BEFORE the quotes and the semicolon are looked
+/// for: a quote in a comment must not widen the list, and a `;` in one must not cut the
+/// block short. (Contract values never hold either `//` or `;` — that is what the parsing
+/// leans on.)
 fn declared_strings(ts: &str, marker: &str) -> HashSet<String> {
     let start = ts
         .find(marker)
-        .unwrap_or_else(|| panic!("в contract.ts нет объявления «{marker}»"));
+        .unwrap_or_else(|| panic!("contract.ts has no declaration \"{marker}\""));
     let body = &ts[start + marker.len()..];
 
     let mut clean = String::new();
@@ -58,7 +60,10 @@ fn declared_strings(ts: &str, marker: &str) -> HashSet<String> {
         clean.push_str(line);
         clean.push('\n');
     }
-    assert!(closed, "объявление «{marker}» не закрыто точкой с запятой");
+    assert!(
+        closed,
+        "the declaration \"{marker}\" is not closed by a semicolon"
+    );
 
     clean
         .split('"')
@@ -68,7 +73,7 @@ fn declared_strings(ts: &str, marker: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Сверка перечня в обе стороны с понятным отчётом о каждом направлении.
+/// A two-way comparison of a list, reporting each direction understandably.
 fn assert_same_sets(what: &str, rust: HashSet<String>, ts: HashSet<String>) {
     let mut missing: Vec<_> = rust.difference(&ts).collect();
     let mut extra: Vec<_> = ts.difference(&rust).collect();
@@ -77,66 +82,67 @@ fn assert_same_sets(what: &str, rust: HashSet<String>, ts: HashSet<String>) {
 
     assert!(
         missing.is_empty() && extra.is_empty(),
-        "{what}: договор разошёлся.\n\
-         Есть в ядре, нет в contract.ts: {missing:?}\n\
-         Есть в contract.ts, но ядро не выдаёт: {extra:?}"
+        "{what}: the contract has drifted.\n\
+         In the core, missing from contract.ts: {missing:?}\n\
+         In contract.ts, but the core never sends it: {extra:?}"
     );
 }
 
 #[test]
-fn коды_ошибок_совпадают_в_обе_стороны() {
+fn the_error_codes_match_both_ways() {
     let rust: HashSet<String> = ErrorCode::ALL
         .iter()
         .map(|c| c.as_str().to_owned())
         .collect();
     let ts = declared_strings(&contract_ts(), "export type ErrorCode =");
-    assert_same_sets("коды ошибок", rust, ts);
+    assert_same_sets("error codes", rust, ts);
 }
 
 #[test]
-fn коды_уточнений_совпадают_в_обе_стороны() {
-    // Уточнения появились вместе с двумя языками: ядро перестало сочинять фразы и
-    // теперь называет случай кодом, а формулировку подбирает интерфейс. Забытый
-    // здесь код — это пустое место на экране вместо объяснения, и узналось бы это
-    // у пользователя.
+fn the_detail_codes_match_both_ways() {
+    // The details arrived along with the two languages: the core stopped composing sentences
+    // and now names the case with a code while the interface picks the wording. A code
+    // forgotten here is an empty space on the screen instead of an explanation, and it would
+    // come to light at a person's machine.
     //
-    // Полноту самих словарей проверяет компилятор TypeScript: они объявлены как
-    // `Record<DetailCode, ...>`, и пропущенный ключ роняет сборку интерфейса.
-    // Здесь сверяется звено перед этим — что перечень кодов в TS вообще тот же.
+    // The completeness of the catalogues themselves is checked by the TypeScript compiler:
+    // they are declared as `Record<DetailCode, ...>`, and a missing key fails the interface
+    // build. What is compared here is the link before that — that the list of codes in TS is
+    // the same one at all.
     let rust: HashSet<String> = DetailCode::ALL
         .iter()
         .map(|c| c.as_str().to_owned())
         .collect();
     let ts = declared_strings(&contract_ts(), "export type DetailCode =");
-    assert_same_sets("коды уточнений", rust, ts);
+    assert_same_sets("detail codes", rust, ts);
 }
 
 #[test]
-fn виды_задач_совпадают_в_обе_стороны() {
+fn the_task_kinds_match_both_ways() {
     let rust: HashSet<String> = TaskKind::ALL
         .iter()
         .map(|k| k.as_str().to_owned())
         .collect();
     let ts = declared_strings(&contract_ts(), "export type TaskKind =");
-    assert_same_sets("виды задач", rust, ts);
+    assert_same_sets("task kinds", rust, ts);
 }
 
 #[test]
-fn состояния_задач_совпадают_в_обе_стороны() {
+fn the_task_states_match_both_ways() {
     let rust: HashSet<String> = TaskState::ALL
         .iter()
         .map(|s| s.as_str().to_owned())
         .collect();
     let ts = declared_strings(&contract_ts(), "export type TaskState =");
-    assert_same_sets("состояния задач", rust, ts);
+    assert_same_sets("task states", rust, ts);
 }
 
 #[test]
-fn имена_событий_совпадают_в_обе_стороны() {
+fn the_event_names_match_both_ways() {
     use vrcast_studio_lib::commands::events::names;
 
-    // Перечень имён здесь рукописный: у модуля names нет своего ALL. Забытое
-    // здесь имя поймает обратная сторона — лишнее значение в EVENTS.
+    // The list of names here is hand-written: the names module has no ALL of its own. A
+    // name forgotten here is caught from the other side — a surplus value in EVENTS.
     let rust: HashSet<String> = [
         names::TASK_PROGRESS,
         names::TASK_DONE,
@@ -150,31 +156,31 @@ fn имена_событий_совпадают_в_обе_стороны() {
     .collect();
 
     let ts = declared_strings(&contract_ts(), "export const EVENTS = {");
-    assert_same_sets("имена событий", rust, ts);
+    assert_same_sets("event names", rust, ts);
 }
 
-// ---------- сверка ФОРМ, а не только перечней (T075) ----------
+// ---------- comparing SHAPES, not only lists (T075) ----------
 
-/// Имена полей объявленного в TypeScript интерфейса.
+/// The field names of an interface declared in TypeScript.
 ///
-/// Разбор нарочно простой и опирается на то, как этот файл написан: одно поле
-/// на строку, `имя: тип;`. Полноценный разбор TypeScript здесь был бы средством
-/// не по задаче — а если файл начнут писать иначе, сверка честно упадёт, а не
-/// сделает вид, что всё сошлось.
+/// The parsing is deliberately simple and leans on how this file is written: one field per
+/// line, `name: type;`. A full TypeScript parse would be a tool out of proportion here — and
+/// should the file start being written differently, the comparison fails honestly rather
+/// than pretending everything matched.
 fn declared_fields(ts: &str, name: &str) -> HashSet<String> {
     let marker = format!("export interface {name} {{");
     let start = ts
         .find(&marker)
-        .unwrap_or_else(|| panic!("в contract.ts нет интерфейса «{name}»"));
+        .unwrap_or_else(|| panic!("contract.ts has no interface \"{name}\""));
     let body = &ts[start + marker.len()..];
     let end = body
         .find("\n}")
-        .unwrap_or_else(|| panic!("интерфейс «{name}» не закрыт"));
+        .unwrap_or_else(|| panic!("the interface \"{name}\" is not closed"));
 
     let mut out = HashSet::new();
     for line in body[..end].lines() {
-        // Комментарии выбрасываются до разбора: `/** Что-то: и двоеточие */`
-        // иначе дало бы поле с именем «Что-то».
+        // Comments are thrown away before parsing: `/** Something: with a colon */` would
+        // otherwise give a field named "Something".
         let line = line.trim();
         if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
             continue;
@@ -187,45 +193,48 @@ fn declared_fields(ts: &str, name: &str) -> HashSet<String> {
             out.insert(field.to_owned());
         }
     }
-    assert!(!out.is_empty(), "у интерфейса «{name}» не нашлось полей");
+    assert!(
+        !out.is_empty(),
+        "the interface \"{name}\" turned out to have no fields"
+    );
     out
 }
 
-/// Имена полей, которые ядро на самом деле кладёт в JSON.
+/// The field names the core actually puts into JSON.
 ///
-/// Берутся из настоящей сериализации, а не из объявления структуры: значение
-/// имеет только то, что уходит за границу. Переименование через `#[serde(rename)]`
-/// или пропуск через `skip_serializing_if` объявление не меняют — а договор меняют.
+/// Taken from a real serialisation rather than from a struct's declaration: only what
+/// crosses the boundary counts. A rename through `#[serde(rename)]` or an omission through
+/// `skip_serializing_if` does not change the declaration — but it does change the contract.
 fn serialized_fields<T: serde::Serialize>(value: &T) -> HashSet<String> {
-    let json = serde_json::to_value(value).expect("значение не сериализуется");
+    let json = serde_json::to_value(value).expect("the value will not serialise");
     let map = json
         .as_object()
-        .expect("ожидался объект: сверять поля у не-объекта нечего");
+        .expect("an object was expected: there are no fields to compare on a non-object");
     map.keys().cloned().collect()
 }
 
-/// Сверить форму в обе стороны.
+/// Compare a shape both ways.
 fn same_shape(rust: &HashSet<String>, ts: &HashSet<String>, what: &str) {
     let missing_in_ts: Vec<_> = rust.difference(ts).cloned().collect();
     let missing_in_rust: Vec<_> = ts.difference(rust).cloned().collect();
 
     assert!(
         missing_in_ts.is_empty(),
-        "{what}: ядро шлёт поля, которых нет в contract.ts: {missing_in_ts:?}. \
-         Интерфейс их не прочитает, и узнается это у пользователя"
+        "{what}: the core sends fields that are missing from contract.ts: {missing_in_ts:?}. \
+         The interface will not read them, and it comes to light at a person's machine"
     );
     assert!(
         missing_in_rust.is_empty(),
-        "{what}: в contract.ts объявлены поля, которых ядро не шлёт: {missing_in_rust:?}. \
-         Интерфейс будет ждать того, чего не будет"
+        "{what}: contract.ts declares fields the core never sends: {missing_in_rust:?}. \
+         The interface will wait for what never comes"
     );
 }
 
 #[test]
-fn форма_задачи_совпадает_в_обе_стороны() {
-    // Перечни значений сверялись и раньше, а имена полей — нет. Переименование
-    // поля в serde проходило молча: сборка цела, типы сходятся, а интерфейс
-    // читает `undefined` там, где ждал число (задолженность T075).
+fn a_task_s_shape_matches_both_ways() {
+    // The lists of values were compared before, but the field names were not. Renaming a
+    // field in serde went by quietly: the build was whole, the types matched, and the
+    // interface read `undefined` where it expected a number (debt T075).
     let record = vrcast_studio_lib::tasks::store::TaskRecord::new(
         "t1",
         TaskKind::Upload,
@@ -239,7 +248,7 @@ fn форма_задачи_совпадает_в_обе_стороны() {
 }
 
 #[test]
-fn форма_событий_о_задачах_совпадает_в_обе_стороны() {
+fn the_task_events_shapes_match_both_ways() {
     use vrcast_studio_lib::tasks::engine::TaskEvent;
 
     let progress = TaskEvent::Progress {
@@ -250,8 +259,8 @@ fn форма_событий_о_задачах_совпадает_в_обе_ст
         speed_bps: Some(1),
         eta_s: Some(2),
     };
-    // У события есть ещё поле-метка вида (`event`), объявленное и в TypeScript:
-    // по нему одно событие отличают от другого, и оно обязано совпасть тоже.
+    // The event also has a tag field (`event`), declared in TypeScript too: it is what one
+    // event is told from another by, and it has to match as well.
     same_shape(
         &serialized_fields(&progress),
         &declared_fields(&contract_ts(), "TaskProgressEvent"),
@@ -271,7 +280,7 @@ fn форма_событий_о_задачах_совпадает_в_обе_ст
 }
 
 #[test]
-fn форма_разобранного_исходника_совпадает_в_обе_стороны() {
+fn an_examined_source_s_shape_matches_both_ways() {
     use vrcast_studio_lib::domain::source::{AudioTrack, SourceFile};
 
     let track = AudioTrack {
@@ -311,7 +320,7 @@ fn форма_разобранного_исходника_совпадает_в_
 }
 
 #[test]
-fn форма_проверки_воспроизведения_совпадает_в_обе_стороны() {
+fn the_playback_check_s_shape_matches_both_ways() {
     let verdict = vrcast_studio_lib::media::validate::classify("");
     same_shape(
         &serialized_fields(&verdict),
@@ -321,7 +330,7 @@ fn форма_проверки_воспроизведения_совпадает
 }
 
 #[test]
-fn форма_сведений_о_ffmpeg_совпадает_в_обе_стороны() {
+fn the_ffmpeg_info_s_shape_matches_both_ways() {
     let info = vrcast_studio_lib::media::ffmpeg::FfmpegInfo {
         version: String::from("ffmpeg version n8"),
         path: String::from("/x/ffmpeg"),
@@ -336,21 +345,22 @@ fn форма_сведений_о_ffmpeg_совпадает_в_обе_сторо
 }
 
 #[test]
-fn разбор_объявления_не_принимает_комментарий_за_поле() {
-    // Разбор простой, и его собственная ошибка была бы незаметна: лишнее «поле»
-    // из комментария сделало бы сверку вечно красной, а пропущенное — вечно зелёной.
-    let ts = "export interface Проба {\n  /** Что-то: с двоеточием */\n  \
-              // и строчный комментарий: тоже\n  настоящее: number;\n  \
-              необязательное?: string;\n}\n";
-    let fields = declared_fields(ts, "Проба");
+fn the_declaration_parser_does_not_take_a_comment_for_a_field() {
+    // The parsing is simple, and a fault of its own would go unnoticed: a surplus "field"
+    // out of a comment would make the comparison forever red, and a missed one forever
+    // green.
+    let ts = "export interface Sample {\n  /** Something: with a colon */\n  \
+              // and a line comment: too\n  real: number;\n  \
+              optional?: string;\n}\n";
+    let fields = declared_fields(ts, "Sample");
     assert_eq!(
         fields.len(),
         2,
-        "разобрано лишнее или пропущено нужное: {fields:?}"
+        "something surplus was parsed, or something needed was missed: {fields:?}"
     );
-    assert!(fields.contains("настоящее"));
+    assert!(fields.contains("real"));
     assert!(
-        fields.contains("необязательное"),
-        "знак вопроса не отброшен"
+        fields.contains("optional"),
+        "the question mark was not dropped"
     );
 }

@@ -1,109 +1,113 @@
-//! T119 — выбор кодировщика (FR-026).
+//! T119 — choosing an encoder (FR-026).
 //!
-//! Проверяется не столько сам выбор, сколько третье правило требования:
-//! **не молчать о переходе на процессор**. Разница во времени — разы, и человек,
-//! не предупреждённый об этом, решит, что приложение зависло, и убьёт задачу
-//! на середине.
+//! What is checked is less the choice itself than the requirement's third rule: **do not
+//! keep quiet about falling back to the processor**. The difference in time is severalfold,
+//! and a person not warned of it decides the application has frozen and kills the task
+//! halfway.
 
 use vrcast_studio_lib::domain::wording::DetailCode;
 use vrcast_studio_lib::media::encoders::{self, Encoder};
 
-fn список(items: &[&str]) -> Vec<String> {
+fn listing(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_string()).collect()
 }
 
 #[test]
-fn аппаратный_берётся_когда_он_есть() {
-    let выбор = encoders::choose(&список(&["h264_nvenc", "h264_qsv"]), true, true).unwrap();
+fn the_hardware_one_is_taken_when_it_is_there() {
+    let chosen = encoders::choose(&listing(&["h264_nvenc", "h264_qsv"]), true, true).unwrap();
     assert_eq!(
-        выбор.encoder,
+        chosen.encoder,
         Encoder::Hardware {
             name: String::from("h264_nvenc")
         }
     );
     assert_eq!(
-        выбор.notice, None,
-        "взяли лучшее из доступного, а человека всё равно чем-то потревожили"
+        chosen.notice, None,
+        "the best available was taken, and the person was bothered all the same"
     );
 }
 
 #[test]
-fn порядок_предпочтения_соблюдается() {
-    // NVIDIA быстрее прочих на нашем материале, и если она есть — берём её,
-    // в каком бы порядке ни пришёл список.
-    let выбор = encoders::choose(
-        &список(&["h264_vaapi", "h264_amf", "h264_nvenc"]),
+fn the_order_of_preference_is_honoured() {
+    // NVIDIA is faster than the rest on our material, and when it is there it is taken,
+    // whatever order the list arrives in.
+    let chosen = encoders::choose(
+        &listing(&["h264_vaapi", "h264_amf", "h264_nvenc"]),
         true,
         true,
     )
     .unwrap();
-    assert_eq!(выбор.encoder.ffmpeg_name(), "h264_nvenc");
+    assert_eq!(chosen.encoder.ffmpeg_name(), "h264_nvenc");
 
-    // Без NVIDIA — следующий по списку, а не первый попавшийся.
-    let выбор = encoders::choose(&список(&["h264_vaapi", "h264_qsv"]), true, true).unwrap();
-    assert_eq!(выбор.encoder.ffmpeg_name(), "h264_qsv");
+    // Without NVIDIA — the next in the list, not the first that turns up.
+    let chosen = encoders::choose(&listing(&["h264_vaapi", "h264_qsv"]), true, true).unwrap();
+    assert_eq!(chosen.encoder.ffmpeg_name(), "h264_qsv");
 }
 
 #[test]
-fn без_аппаратного_переходим_на_процессор_и_говорим_об_этом() {
-    // Ради этого правило и существует: молчаливый переход выглядит зависанием.
-    let выбор = encoders::choose(&[], true, true).unwrap();
-    assert_eq!(выбор.encoder, Encoder::Software);
+fn without_hardware_we_fall_back_to_the_processor_and_say_so() {
+    // This is why the rule exists: a silent fall-back looks like a freeze.
+    let chosen = encoders::choose(&[], true, true).unwrap();
+    assert_eq!(chosen.encoder, Encoder::Software);
 
-    // Ядро называет случай кодом; сама формулировка — и то, что в ней сказано про
-    // время и про качество, — проверяется на стороне словарей
-    // (`src/shared/i18n/__tests__/i18n.test.ts`), потому что языков теперь два.
-    let сказано = выбор.notice.expect("о переходе на процессор промолчали");
-    assert_eq!(сказано.key, DetailCode::NoticeNoHardwareFound);
+    // The core names the case with a code; the wording itself — and what it says about the
+    // time and about the quality — is checked on the catalogues' side
+    // (`src/shared/i18n/__tests__/i18n.test.ts`), because there are two languages now.
+    let said = chosen
+        .notice
+        .expect("the fall-back to the processor was passed over in silence");
+    assert_eq!(said.key, DetailCode::NoticeNoHardwareFound);
 }
 
 #[test]
-fn просьба_кодировать_процессором_уважается() {
-    // Аппаратный есть, но человек попросил процессор — берём процессор.
-    let выбор = encoders::choose(&список(&["h264_nvenc"]), true, false).unwrap();
-    assert_eq!(выбор.encoder, Encoder::Software);
-    // Отдельный код, а не тот же самый: вынужденный переход и осознанный выбор
-    // человека объясняются по-разному, и подать второе как первое значит сказать
-    // человеку, что случилась беда, когда он просто попросил.
-    let сказано = выбор.notice.expect("о медленном пути промолчали");
-    assert_eq!(сказано.key, DetailCode::NoticeSoftwareAsAsked);
+fn a_request_to_encode_on_the_processor_is_respected() {
+    // Hardware is there, but the person asked for the processor — the processor it is.
+    let chosen = encoders::choose(&listing(&["h264_nvenc"]), true, false).unwrap();
+    assert_eq!(chosen.encoder, Encoder::Software);
+    // A code of its own rather than the same one: a forced fall-back and a person's
+    // deliberate choice are explained differently, and passing the second off as the first
+    // tells a person something went wrong when they merely asked.
+    let said = chosen
+        .notice
+        .expect("the slow path was passed over in silence");
+    assert_eq!(said.key, DetailCode::NoticeSoftwareAsAsked);
 }
 
 #[test]
-fn без_единого_кодировщика_это_отказ_а_не_молчаливый_выбор() {
-    // Сборка без libx264 и без аппаратного — готовить нечем вовсе. Выбрать
-    // «что-нибудь» здесь значило бы упасть уже на запуске подготовки.
+fn with_no_encoder_at_all_it_is_a_refusal_rather_than_a_silent_choice() {
+    // A build without libx264 and without hardware has nothing to prepare with at all.
+    // Choosing "something" here would mean falling over as soon as a preparation started.
     assert!(encoders::choose(&[], false, true).is_err());
-    // И даже когда аппаратный есть в списке, но человек просит процессор,
-    // а процессорного нет.
-    assert!(encoders::choose(&список(&["h264_nvenc"]), false, false).is_err());
+    // And even when hardware is in the list but the person asks for the processor and
+    // there is no software encoder.
+    assert!(encoders::choose(&listing(&["h264_nvenc"]), false, false).is_err());
 }
 
 #[test]
-fn чужие_имена_в_списке_не_принимаются_за_свои() {
-    // В сборке есть и hevc_nvenc, и h264_mf, и прочее. Взять не тот кодировщик
-    // значит получить не тот формат или отказ на запуске.
-    let выбор = encoders::choose(&список(&["hevc_nvenc", "av1_nvenc"]), true, true).unwrap();
+fn other_names_in_the_list_are_not_taken_for_ours() {
+    // A build holds hevc_nvenc, h264_mf and the rest. Taking the wrong encoder means
+    // getting the wrong format, or a refusal at start-up.
+    let chosen = encoders::choose(&listing(&["hevc_nvenc", "av1_nvenc"]), true, true).unwrap();
     assert_eq!(
-        выбор.encoder,
+        chosen.encoder,
         Encoder::Software,
-        "кодировщик другого формата принят за наш"
+        "an encoder for another format was taken for ours"
     );
 }
 
 #[test]
-fn отказ_аппаратного_на_деле_объясняется_человеческими_словами() {
-    // Наличие в сборке не значит работоспособности: у видеокарты может не быть
-    // нужного блока, драйвер может быть старым, на ноутбуке карта может быть
-    // отключена. Переход на процессор правилен, но молчать о нём нельзя вдвойне.
-    let сказано = encoders::fallback_notice("h264_nvenc");
-    assert_eq!(сказано.key, DetailCode::NoticeHardwareFailed);
-    // Машинное имя передаётся значением, а не подставляется в текст: «NVIDIA» — это
-    // одно и то же на всех языках, и хранить перевод `h264_nvenc` в каждом словаре
-    // по отдельности было бы способом однажды их рассинхронизировать.
+fn a_hardware_encoder_failing_in_practice_is_explained_in_human_words() {
+    // Being in the build does not mean working: a graphics card may lack the right block,
+    // a driver may be old, a laptop's card may be switched off. Falling back to the
+    // processor is right, but keeping quiet about it is doubly wrong.
+    let said = encoders::fallback_notice("h264_nvenc");
+    assert_eq!(said.key, DetailCode::NoticeHardwareFailed);
+    // The machine name travels as a value rather than being pasted into the text: NVIDIA is
+    // the same in every language, and keeping a translation of `h264_nvenc` in each
+    // catalogue separately would be a way to let them drift apart one day.
     assert_eq!(
-        сказано.params.get("encoder").and_then(|v| v.as_str()),
+        said.params.get("encoder").and_then(|v| v.as_str()),
         Some("h264_nvenc"),
-        "не сказано, какое именно ускорение не заработало: {сказано:?}"
+        "it does not say which acceleration failed to work: {said:?}"
     );
 }

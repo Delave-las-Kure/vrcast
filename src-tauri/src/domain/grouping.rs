@@ -1,74 +1,76 @@
-//! T033 — восстановление группировки по именам (FR-015).
+//! T033 — recovering the grouping from file names (FR-015).
 //!
-//! Задача: на сервере лежат файлы, залитые мимо приложения — скриптами, руками,
-//! прошлым способом работы. Описи для них нет. Приложение обязано не прятать их,
-//! а показать и по возможности предложить, что чем является.
+//! The problem: there are files on the server that were uploaded outside the
+//! application — by scripts, by hand, by the old way of working. There is no catalogue
+//! for them. The application must not hide them, but show them and, where it can,
+//! suggest what is what.
 //!
-//! Опора — соглашение об именах, по которому работают существующие скрипты:
-//! варианты одного произведения называются `<имя>_<битрейт>.mp4`
-//! (`Backrooms_10.mp4`, `Backrooms_22.mp4`, `Backrooms_35.mp4`), а набор качеств
-//! лежит в каталоге `<имя>/`.
+//! What it leans on is the naming convention the existing scripts work by: the
+//! variants of one work are called `<name>_<bitrate>.mp4` (`Backrooms_10.mp4`,
+//! `Backrooms_22.mp4`, `Backrooms_35.mp4`), and a quality ladder sits in a directory
+//! `<name>/`.
 //!
-//! **Предложение, а не решение.** Ничего не привязывается автоматически: угаданная
-//! связь, записанная в опись без спроса, потом расходится с тем, что человек имел
-//! в виду, и разбираться в этом тяжелее, чем сгруппировать вручную.
+//! **A suggestion, not a decision.** Nothing is attached automatically: a guessed
+//! connection written into the catalogue without asking later diverges from what the
+//! person meant, and untangling that is harder than grouping by hand.
 
-/// Предложенная группа файлов.
+/// A suggested group of files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuggestedGroup {
-    /// Общая часть имени — готовый `slug`, если пользователь согласится.
+    /// The common part of the name — a ready `slug`, should the person agree.
     pub key: String,
-    /// Название для показа: та же общая часть, приведённая к читаемому виду.
+    /// The title to show: the same common part, made readable.
     pub suggested_title: String,
-    /// Пути файлов, относительно каталога видео. Порядок исходный.
+    /// The file paths, relative to the video directory. In the original order.
     pub files: Vec<String>,
-    /// Почему файлы сведены вместе — показывается пользователю, чтобы он мог
-    /// не гадать, откуда взялось предложение.
+    /// Why the files were brought together — shown to the person so they need not
+    /// guess where the suggestion came from.
     pub reason: GroupReason,
 }
 
-/// Основание, по которому файлы сведены в группу.
+/// The grounds on which files were brought into a group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupReason {
-    /// Лежат в одном каталоге — обычно это набор качеств.
+    /// They are in one directory — usually a quality ladder.
     SameDirectory,
-    /// Имена различаются только числом после подчёркивания — варианты по битрейту.
+    /// The names differ only in the number after the underscore — bitrate variants.
     BitrateVariants,
 }
 
 impl GroupReason {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::SameDirectory => "лежат в одном каталоге",
-            Self::BitrateVariants => "варианты одного файла по битрейту",
+            Self::SameDirectory => "they are in one directory",
+            Self::BitrateVariants => "bitrate variants of one file",
         }
     }
 }
 
-/// Итог разбора.
+/// What the analysis found.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Suggestion {
-    /// Файлы, которые удалось свести вместе.
+    /// Files that could be brought together.
     pub groups: Vec<SuggestedGroup>,
-    /// Файлы, для которых оснований не нашлось. Показываются по одному —
-    /// но показываются обязательно (FR-015).
+    /// Files for which no grounds were found. Shown one by one — but shown, without
+    /// fail (FR-015).
     pub singles: Vec<String>,
 }
 
 impl Suggestion {
-    /// Сколько всего файлов учтено. Служит проверкой полноты: ни один файл
-    /// не должен потеряться между группами и одиночками (FR-015, SC про полноту).
+    /// How many files were accounted for in all. It serves as a completeness check:
+    /// no file may be lost between the groups and the singletons (FR-015, and the
+    /// success criterion about completeness).
     pub fn total_files(&self) -> usize {
         self.groups.iter().map(|g| g.files.len()).sum::<usize>() + self.singles.len()
     }
 }
 
-/// Предложить группировку для файлов, о которых опись ничего не знает.
+/// Suggest a grouping for files the catalogue knows nothing about.
 ///
-/// Порядок входа сохраняется в выходе: пользователь видит список в том же порядке,
-/// что и на сервере, и ему не приходится искать знакомое имя заново.
+/// The input order is kept in the output: a person sees the list in the same order as
+/// on the server, and does not have to hunt for a familiar name again.
 pub fn suggest(paths: &[String]) -> Suggestion {
-    // Ключ → (основание, номера файлов). Порядок ключей — по первому появлению.
+    // Key to (grounds, file indices). Keys are ordered by first appearance.
     let mut order: Vec<String> = Vec::new();
     let mut buckets: std::collections::HashMap<String, (GroupReason, Vec<String>)> =
         std::collections::HashMap::new();
@@ -92,9 +94,9 @@ pub fn suggest(paths: &[String]) -> Suggestion {
         let Some((reason, files)) = buckets.remove(&key) else {
             continue;
         };
-        // Один файл — это не группа. Единственный `Backrooms_22.mp4` без соседей
-        // ничего не доказывает, и заводить под него медиа самовольно не за что.
-        // Каталог — другое дело: он и есть заявленная связь.
+        // One file is not a group. A lone `Backrooms_22.mp4` with no neighbours
+        // proves nothing, and there are no grounds for creating a medium for it
+        // unbidden. A directory is another matter: it is the stated connection.
         if files.len() == 1 && reason == GroupReason::BitrateVariants {
             singles.extend(files);
             continue;
@@ -110,21 +112,21 @@ pub fn suggest(paths: &[String]) -> Suggestion {
     Suggestion { groups, singles }
 }
 
-/// К какой группе отнести путь и почему.
+/// Which group a path belongs to, and why.
 fn classify(path: &str) -> Option<(String, GroupReason)> {
     let normalized = path.trim_matches('/');
     if normalized.is_empty() {
         return None;
     }
 
-    // Путь с каталогом: каталог и есть заявленная связь.
+    // A path with a directory: the directory is the stated connection.
     if let Some((dir, _rest)) = normalized.split_once('/') {
         if !dir.is_empty() {
             return Some((dir.to_owned(), GroupReason::SameDirectory));
         }
     }
 
-    // Имя вида `<общая часть>_<число>.<расширение>`.
+    // A name of the form `<common part>_<number>.<extension>`.
     let stem = normalized.rsplit_once('.').map_or(normalized, |(s, _)| s);
     let (prefix, tail) = stem.rsplit_once('_')?;
     if prefix.is_empty() || tail.is_empty() || !tail.chars().all(|c| c.is_ascii_digit()) {
@@ -133,7 +135,7 @@ fn classify(path: &str) -> Option<(String, GroupReason)> {
     Some((prefix.to_owned(), GroupReason::BitrateVariants))
 }
 
-/// Читаемое название из общей части имени: разделители — в пробелы.
+/// A readable title from the common part of a name: separators become spaces.
 fn readable_title(key: &str) -> String {
     let spaced: String = key
         .chars()

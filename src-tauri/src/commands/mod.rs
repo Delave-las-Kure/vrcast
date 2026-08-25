@@ -1,13 +1,13 @@
-//! T013 — слой команд: единственная граница между интерфейсом и ядром.
+//! T013 — the command layer: the one boundary between the interface and the core.
 //!
-//! Интерфейс не знает ни про SSH, ни про FFmpeg, ни про устройство сервера. Он вызывает
-//! команды и слушает поток событий — больше ничего.
+//! The interface knows nothing of SSH, of FFmpeg, or of how the server is arranged. It
+//! calls commands and listens to a stream of events — nothing more.
 //!
-//! **Команды устроены двухслойно**, и это не лишняя прослойка. Внутри — обычные функции
-//! (`api`), не знающие про оболочку приложения; снаружи — тонкие обёртки, которые оболочка
-//! выставляет наружу. Так договор проверяется тестами напрямую, без запуска окна: иначе
-//! договорные тесты потребовали бы живого приложения с графикой, а в непрерывной
-//! интеграции его нет.
+//! **Commands come in two layers**, and that is not a needless one. Inside are ordinary
+//! functions (`api`) that know nothing of the application shell; outside are thin wrappers
+//! the shell exposes. That way the contract is checked by tests directly, without opening a
+//! window: otherwise contract tests would need a live application with graphics, and
+//! continuous integration has none.
 
 pub mod convert;
 pub mod error;
@@ -26,59 +26,61 @@ use error::{AppError, DetailCode, ErrorCode, Result};
 use serde::Serialize;
 use std::sync::Arc;
 
-/// Событие о состоянии приложения, не связанное с задачами.
+/// An event about the application's state that has nothing to do with tasks.
 ///
-/// Ядро рассылает их в свой канал, а оболочка пересылает наружу (см. `events`).
-/// Так ядро не знает про окно и остаётся проверяемым без запуска графики.
+/// The core sends them into its own channel and the shell forwards them outside (see
+/// `events`). That way the core knows nothing of the window and stays checkable without
+/// starting up any graphics.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum AppEvent {
-    /// Библиотека сервера изменилась: перечитайте её.
+    /// The server's library changed: read it again.
     LibraryChanged { server_id: String },
 }
 
-/// Общее состояние приложения. Всё, что нужно командам, лежит здесь.
+/// The application's shared state. Everything the commands need lives here.
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Db>,
     pub tasks: TaskEngine,
     pub secrets: Arc<dyn SecretStore>,
-    /// Канал событий, не связанных с задачами.
+    /// The channel for events unrelated to tasks.
     events: tokio::sync::broadcast::Sender<AppEvent>,
 }
 
 impl AppState {
-    /// Собрать состояние с настоящими хранилищами и разобрать последствия прошлого запуска.
+    /// Build the state with the real stores and sort out what the previous run left.
     pub fn bootstrap() -> Result<Self> {
         let path = Db::default_path()?;
         let db = Arc::new(Db::open(path)?);
         Self::with_db(db, Arc::new(OsSecretStore::new()))
     }
 
-    /// То же, но с заданными хранилищами — для тестов.
+    /// The same, but with the stores given — for tests.
     pub fn with_db(db: Arc<Db>, secrets: Arc<dyn SecretStore>) -> Result<Self> {
         let tasks = TaskEngine::new(db.clone());
 
-        // Порядок важен. Сначала добиваем программы, уцелевшие от прошлого запуска, и
-        // только потом разбираем задачи: иначе задача будет объявлена приостановленной,
-        // пока её процесс ещё жив и продолжает писать в файл результата.
+        // The order matters. First the programs that survived the previous run are
+        // finished off, and only then are the tasks sorted out: otherwise a task would be
+        // declared paused while its process is still alive and still writing into the
+        // result file.
         match crate::tasks::registry::sweep_on_startup(&db) {
             Ok(report) if !report.is_clean() => {
                 tracing::warn!(
-                    добито = report.killed.len(),
-                    пропущено = report.reused.len(),
-                    "уборка программ, уцелевших от прошлого запуска"
+                    killed = report.killed.len(),
+                    skipped = report.reused.len(),
+                    "swept up the programs left over from the previous run"
                 );
             }
             Ok(_) => {}
-            Err(e) => tracing::error!(error = %e, "уборка при запуске не удалась"),
+            Err(e) => tracing::error!(error = %e, "the start-up sweep failed"),
         }
 
         if let Ok(report) = tasks.recover_after_start() {
             if !report.interrupted.is_empty() {
                 tracing::warn!(
                     count = report.interrupted.len(),
-                    "задачи прошлого запуска приостановлены и ждут продолжения"
+                    "tasks from the previous run are paused and waiting to be carried on"
                 );
             }
         }
@@ -92,15 +94,15 @@ impl AppState {
         })
     }
 
-    /// Подписаться на события приложения.
+    /// Subscribe to the application's events.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AppEvent> {
         self.events.subscribe()
     }
 
-    /// Сообщить, что библиотека сервера изменилась.
+    /// Say that the server's library changed.
     ///
-    /// Отсутствие слушателей — норма, а не ошибка: события уходят в никуда, пока
-    /// интерфейс не открыт, и падать из-за этого было бы нелепо.
+    /// Having no listeners is normal rather than an error: the events go nowhere while the
+    /// interface is not open, and failing over that would be absurd.
     pub fn notify_library_changed(&self, server_id: &str) {
         let _ = self.events.send(AppEvent::LibraryChanged {
             server_id: server_id.to_owned(),
@@ -108,31 +110,31 @@ impl AppState {
     }
 }
 
-/// Версии приложения и серверной части (FR-128).
+/// The versions of the application and of the server side (FR-128).
 #[derive(Debug, Clone, Serialize)]
 pub struct Versions {
     pub app: String,
-    /// Версия серверной части активного сервера. Появится в Фазе 7.
+    /// The server-side version of the active server. Arrives in Phase 7.
     pub server: Option<u32>,
-    /// Версия локального хранилища — нужна при разборе неполадок.
+    /// The local store's version — needed when sorting out trouble.
     pub schema: u32,
 }
 
-/// Что станет с задачей, если закрыть приложение (FR-086).
+/// What becomes of a task if the application is closed (FR-086).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TaskOnClose {
     pub id: String,
     pub kind: String,
     pub progress: f64,
-    /// `resumes` — продолжится с достигнутого места; `restarts` — начнётся заново.
+    /// `resumes` — carries on from where it got to; `restarts` — begins again.
     pub outcome: &'static str,
     /// What exactly will happen to this one. A general "tasks are running, close
     /// anyway?" is not enough: it gives nothing to decide on.
     pub explanation: Detail,
 }
 
-/// Обычные функции — то, что на самом деле выполняется.
+/// The ordinary functions — what actually runs.
 pub mod api {
     use super::*;
 
@@ -167,26 +169,26 @@ pub mod api {
         Ok(state.tasks.resume(id)?)
     }
 
-    /// Переставить ждущие задачи в очереди (FR-083).
+    /// Reorder the waiting tasks in the queue (FR-083).
     ///
-    /// `ordered` — номера задач в желаемом порядке. Выполняющиеся не трогаются:
-    /// прервать начатую передачу ради изменения порядка значило бы выбросить уже
-    /// сделанную работу. Возвращается, сколько задач переставлено, — список
-    /// у человека на экране всегда чуть отстаёт, и часть из них могла уже начаться.
+    /// `ordered` holds the task identifiers in the wanted order. Running ones are left
+    /// alone: breaking off a transfer already under way for the sake of a reordering would
+    /// throw away work already done. It returns how many tasks were moved — the list on a
+    /// person's screen always lags a little, and some of them may already have started.
     pub fn tasks_reorder(state: &AppState, ordered: &[String]) -> Result<usize> {
         Ok(state.tasks.reorder_queue(ordered)?)
     }
 
-    /// Номера ждущих задач в том порядке, в каком они пойдут в работу.
+    /// The waiting tasks' identifiers, in the order they will be taken up.
     pub fn tasks_queue_order(state: &AppState) -> Result<Vec<String>> {
         Ok(state.tasks.queue_order())
     }
 
-    /// Что сказать пользователю при закрытии приложения (FR-086).
+    /// What to tell a person when the application is closing (FR-086).
     ///
-    /// Разница между видами задач здесь не косметическая: передача продолжится с
-    /// достигнутого места, а приостановленная подготовка держится живым процессом и
-    /// закрытия не переживёт. Пользователь обязан узнать об этом **до** закрытия.
+    /// The difference between the kinds of task is not cosmetic here: a transfer carries on
+    /// from where it got to, while a paused preparation is held by a living process and will
+    /// not survive the closing. A person must learn of that **before** it happens.
     pub fn tasks_on_close(state: &AppState) -> Result<Vec<TaskOnClose>> {
         use crate::tasks::state::TaskState;
 
@@ -224,12 +226,12 @@ pub mod api {
         Ok(out)
     }
 
-    /// Проверить вложенный в поставку FFmpeg (FR-112, T115).
+    /// Check the FFmpeg bundled with the application (FR-112, T115).
     ///
-    /// Вызывается при запуске и перед подготовкой. Вложенный файл может не запуститься:
-    /// его вырезал антивирус, установщик распаковался наполовину, у файла нет права
-    /// на выполнение. Узнать об этом в начале — значит сказать человеку, что чинить;
-    /// узнать в середине двухчасовой подготовки — значит отнять эти два часа.
+    /// Called at start-up and before a preparation. The bundled file may fail to run: an
+    /// antivirus cut it out, the installer unpacked only halfway, the file has no execute
+    /// permission. Learning that at the start means telling a person what to fix; learning
+    /// it halfway through a two-hour preparation means taking those two hours away.
     pub async fn ffmpeg_probe_self() -> Result<crate::media::ffmpeg::FfmpegInfo> {
         let info = crate::media::ffmpeg::probe_self().await.map_err(|e| {
             AppError::new(ErrorCode::FfmpegBroken)
@@ -237,8 +239,9 @@ pub mod api {
                 .with_cause(e.to_string())
         })?;
 
-        // Без программного кодировщика подготовка невозможна на машине без подходящей
-        // видеокарты — то есть у части людей приложение молча оказалось бы бесполезным.
+        // Without a software encoder, preparing is impossible on a machine without a
+        // suitable graphics card — that is, for some people the application would quietly
+        // turn out to be useless.
         if !info.has_x264 {
             return Err(AppError::new(ErrorCode::FfmpegBroken)
                 .detail(DetailCode::FfmpegNoX264)
@@ -247,11 +250,11 @@ pub mod api {
         Ok(info)
     }
 
-    /// Разобрать исходник: что за файл нам дали (FR-020).
+    /// Examine a source file: what is it we have been given (FR-020).
     ///
-    /// Быстрая операция, а не задача: разбор занимает доли секунды и человек ждёт
-    /// ответа прямо сейчас. Заводить ради него запись в очереди значило бы засорить
-    /// список задач тем, что кончается раньше, чем успевает в нём появиться.
+    /// A quick operation rather than a task: examining takes fractions of a second and a
+    /// person is waiting for the answer right now. Making a queue entry for it would litter
+    /// the task list with something that ends before it manages to appear there.
     pub async fn source_probe(path: &str) -> Result<crate::domain::source::SourceFile> {
         use crate::media::probe::ProbeError;
 
@@ -273,16 +276,16 @@ pub mod api {
             })
     }
 
-    /// Узнать отпечаток сервера, ничего ему не предъявляя (FR-092).
+    /// Learn a server's fingerprint without presenting it anything (FR-092).
     pub async fn server_probe_fingerprint(host: &str, port: u16) -> Result<String> {
         let addr = crate::ssh::ServerAddress::new(host, port);
         Ok(crate::ssh::fingerprint::probe(&addr).await?)
     }
 }
 
-/// Тонкие обёртки, которые оболочка выставляет интерфейсу.
+/// The thin wrappers the shell exposes to the interface.
 ///
-/// Здесь не должно быть логики — только преобразование состояния и вызов `api`.
+/// There must be no logic here — only converting the state and calling `api`.
 pub mod ipc {
     use super::*;
     use tauri::State;

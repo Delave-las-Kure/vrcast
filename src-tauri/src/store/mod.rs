@@ -1,12 +1,13 @@
-//! Хранилища приложения.
+//! The application's stores.
 //!
-//! Разделение здесь принципиально и следует из конституции (принцип IV):
+//! The split here is a matter of principle and follows from the constitution
+//! (principle IV):
 //!
-//! | Что | Где | Почему |
+//! | What | Where | Why |
 //! |---|---|---|
-//! | пароли, парольные фразы, ключи | [`secrets`] — хранилище ОС | не должны лежать в файлах приложения |
-//! | профили, задачи, кеш, отпечатки | [`db`] — SQLite | переживают перезапуск |
-//! | вырезание секретов из вывода | [`redact`] | защита стоит на выходе, а не в местах вызова |
+//! | passwords, passphrases, keys | [`secrets`] — the OS store | must not sit in the application's files |
+//! | profiles, tasks, cache, fingerprints | [`db`] — SQLite | survive a restart |
+//! | cutting secrets out of output | [`redact`] | the guard stands at the exit, not at each call site |
 
 pub mod db;
 pub mod library_cache;

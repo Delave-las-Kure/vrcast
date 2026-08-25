@@ -1,60 +1,64 @@
-//! T109, T110 — что делать с исходником: переносить или пересжимать (FR-022, FR-025, FR-029).
+//! T109, T110 — what to do with a source: carry it across or re-encode it (FR-022,
+//! FR-025, FR-029).
 //!
-//! Целевой формат один и не обсуждается: MP4, видео H.264 в yuv420p, звук AAC-LC
-//! стерео, служебные данные в начале файла. Он выбран не из вкуса — его принимает
-//! плеер VRChat, а всё прочее у части зрителей не играет вовсе.
+//! There is one target format and it is not up for discussion: MP4, H.264 video in yuv420p,
+//! AAC-LC stereo audio, the housekeeping data at the front of the file. It was not chosen
+//! out of taste — it is what the VRChat player accepts, and everything else fails to play
+//! at all for some viewers.
 //!
-//! **Почему H.264, а не HEVC.** HEVC экономит 35–45 % битрейта, но требует декодера
-//! у зрителя, а в Windows 10/11 системного HEVC нет: нужен отдельный пакет из магазина,
-//! и плеер идёт через Media Foundation, то есть без пакета не играет ничего, сколько бы
-//! видеокарта ни умела. Проверено боем 2026-07-30: **четверо зрителей из восьми
-//! не смогли смотреть**. Поэтому исходник в HEVC здесь пересжимается, а не переносится,
-//! — хотя формально «видео уже сжато» и копировать было бы дешевле.
+//! **Why H.264 and not HEVC.** HEVC saves 35–45 % of the bitrate but needs a decoder on the
+//! viewer's side, and Windows 10/11 has no system HEVC: a separate package from the store is
+//! needed, and the player goes through Media Foundation, so without that package nothing
+//! plays no matter what the graphics card can do. Tested in the field on 2026-07-30: **four
+//! viewers out of eight could not watch**. So an HEVC source is re-encoded here rather than
+//! carried across — even though formally "the video is already compressed" and copying
+//! would have been cheaper.
 //!
-//! Правила ниже перенесены из `vrcast-convert` без изменения: каждое куплено ошибкой,
-//! и переизобретение гарантированно повторило бы её (R-13).
+//! The rules below were carried over from `vrcast-convert` unchanged: every one of them was
+//! bought with a mistake, and reinventing them would repeat it for certain (R-13).
 
 use super::source::{AudioTrack, SourceFile};
 use super::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
-/// Целевой битрейт звука по умолчанию, килобит в секунду.
+/// The default target audio bitrate, in kilobits per second.
 pub const AUDIO_KBPS: u32 = 256;
 
-/// Допуск на бюджет звука.
+/// The allowance on the audio budget.
 ///
-/// Настоящий AAC стабильно чуть толще номинала: дорожка «128k» весит 128 634 бит.
-/// Без допуска она уходила бы на пересжатие, теряя поколение впустую.
+/// Real AAC runs a little over its nominal size, consistently: a "128k" track weighs
+/// 128,634 bits. Without the allowance it would go off to be re-encoded, losing a
+/// generation for nothing.
 const AUDIO_TOLERANCE_PERCENT: u64 = 10;
 
-/// Насколько потолок битрейта выше цели.
+/// How far above the target the bitrate ceiling sits.
 ///
-/// Было +30 % — и давало пик в 1.36 раза выше цели: за ступенью «35 Мбит/с» скрывалось
-/// требование почти в 50. Замер 2026-08-02: снижение до +10 % стоило около 0.5 dB
-/// и сняло 15 % требований к каналу зрителя.
+/// It used to be +30 % — and gave a peak 1.36 times above the target: behind a rung marked
+/// "35 Mbit/s" hid a demand for almost 50. Measured on 2026-08-02: dropping to +10 % cost
+/// about 0.5 dB and took 15 % off what a viewer's connection has to carry.
 const MAXRATE_PERCENT: u32 = 110;
 
-/// Во сколько раз настоящий пик выше заданного потолка.
+/// How much higher the real peak runs than the ceiling that was set.
 ///
-/// Потолок ограничивает не мгновенный битрейт, а среднее по окну проверки буфера,
-/// и пик стабильно выходит на 5–6 % выше. Число в сотых долях, чтобы обойтись
-/// целыми: нужен пик P — ставь потолок P/1.06.
+/// The ceiling limits not the instantaneous bitrate but the average over the buffer's
+/// verification window, and the peak comes out 5–6 % higher, consistently. The number is in
+/// hundredths so integers suffice: to want a peak of P, set the ceiling to P/1.06.
 const PEAK_OVER_MAXRATE: u32 = 106;
 
-/// Что делать с видеопотоком.
+/// What to do with the video stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum VideoAction {
-    /// Перенести как есть — ноль потерь и минуты вместо часов.
+    /// Carry it across as it is — no loss at all, and minutes instead of hours.
     Copy,
-    /// Пересжать без заданного битрейта: «визуально без потерь».
+    /// Re-encode with no bitrate given: "visually lossless".
     Reencode {
         /// Why it could not simply be carried across. Shown to a person: re-encoding
         /// takes hours, and they are entitled to know what they are paying for.
         reason: Detail,
         level: String,
     },
-    /// Пересжать под заданный битрейт с ограничением пиков.
+    /// Re-encode to a given bitrate with the peaks held down.
     ReencodeCapped {
         reason: Detail,
         level: String,
@@ -64,7 +68,7 @@ pub enum VideoAction {
     },
 }
 
-/// Что делать со звуком.
+/// What to do with the audio.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AudioAction {
@@ -72,30 +76,30 @@ pub enum AudioAction {
     Reencode {
         reason: Detail,
         bitrate_kbps: u32,
-        /// Выравнивание звука относительно картинки.
+        /// Lining the audio up against the picture.
         ///
-        /// Обязательно при пересжатии: AAC пишет вступительные отсчёты через список
-        /// правок, а плеер VRChat его не читает — и звук уезжает. Это и есть FR-024,
-        /// и без этого поля план был бы неполным.
+        /// Required whenever it is re-encoded: AAC writes its priming samples through an
+        /// edit list, and the VRChat player does not read one — so the sound drifts. That is
+        /// FR-024, and without this field the plan would be incomplete.
         resample_fix: bool,
     },
 }
 
-/// Что помешало составить план.
+/// What stood in the way of making a plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PlanProblem {
-    /// Звука нет вовсе — выбирать нечего.
+    /// There is no audio at all — nothing to choose from.
     NoAudioTracks,
-    /// Указанной дорожки в файле нет.
+    /// The file has no such track.
     NoSuchTrack { index: usize, available: usize },
-    /// Задана нулевая высота кадра.
+    /// A frame height of zero was given.
     HeightZero,
-    /// Просят больше строк, чем есть в источнике.
+    /// More lines are asked for than the source has.
     HeightAboveSource { asked: u32, source: u32 },
-    /// Задан нулевой битрейт.
+    /// A bitrate of zero was given.
     BitrateZero,
-    /// Просят битрейт заметно выше исходного.
+    /// A bitrate noticeably higher than the source's is asked for.
     BitrateAboveSource { asked_kbps: u32, source_kbps: u64 },
 }
 
@@ -130,56 +134,57 @@ impl PlanProblem {
     }
 }
 
-/// Чего человек хочет от подготовки.
+/// What a person wants out of the preparation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConvertRequest {
-    /// Какую звуковую дорожку взять.
+    /// Which audio track to take.
     pub audio_track: usize,
-    /// Целевой битрейт видео в килобитах. Пусто — не задавать, сжимать «без потерь
-    /// на глаз».
+    /// The target video bitrate, in kilobits. Empty means do not set one and compress so
+    /// that the eye sees no loss.
     pub target_kbps: Option<u32>,
-    /// Целевая высота кадра. Пусто — не менять.
+    /// The target frame height. Empty means leave it alone.
     pub height: Option<u32>,
 }
 
-/// Готовый план подготовки.
+/// A finished preparation plan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConvertPlan {
     pub video: VideoAction,
     pub audio: AudioAction,
-    /// Номер выбранной дорожки.
+    /// The index of the chosen track.
     pub audio_track: usize,
-    /// Кадров между опорными.
+    /// Frames between keyframes.
     ///
-    /// Опорный кадр раз в секунду при любой частоте кадров. Константа здесь была
-    /// бы ошибкой: 48 писалось под 48-кадровое видео и означало «раз в секунду»,
-    /// а на 24-кадровом давало раз в две.
+    /// A keyframe once a second at any frame rate. A constant here would be a mistake: 48
+    /// was written for 48-frame video and meant "once a second", while on 24-frame material
+    /// it gave one every two.
     pub gop: u32,
-    /// Приводить ли расширенный динамический диапазон к обычному.
+    /// Whether to bring high dynamic range down to the ordinary one.
     pub tonemap: bool,
     /// Requested frame height, as asked for. Kept even when it equals the source
     /// height: the command builder needs to tell "not asked" from "asked for the
     /// same", and only the former may skip the scaling filter.
     pub requested_height: Option<u32>,
-    /// Служебные данные в начале файла — иначе зритель ждёт скачивания хвоста (FR-023).
+    /// The housekeeping data at the front of the file — otherwise a viewer waits for the
+    /// tail to download (FR-023).
     pub faststart: bool,
 }
 
 impl ConvertPlan {
-    /// Останется ли качество нетронутым.
+    /// Whether the quality will be left untouched.
     pub fn lossless(&self) -> bool {
         self.video == VideoAction::Copy && self.audio == AudioAction::Copy
     }
 }
 
-/// Уровень совместимости H.264 по **двум** пределам сразу.
+/// The H.264 compatibility level, by **two** limits at once.
 ///
-/// Проверять только размер кадра недостаточно, и это записанная ошибка: 1922×1082
-/// при 48 кадрах — это 8228 макроблоков на кадр (почти влезает в 4.1) и 394 944
-/// в секунду при пределе 4.1 в 245 760, то есть превышение в 1.6 раза. Занижённый
-/// уровень строгий декодер вправе не принять; завышенный безопасен всегда.
+/// Checking only the frame size is not enough, and that is a recorded mistake: 1922×1082 at
+/// 48 frames is 8228 macroblocks per frame (which almost fits 4.1) and 394,944 per second
+/// against the 4.1 limit of 245,760 — an excess of 1.6 times. A strict decoder is entitled
+/// to refuse an understated level; an overstated one is always safe.
 pub fn h264_level(width: u32, height: u32, fps: u32) -> &'static str {
-    // Макроблок — 16×16, и неполный тоже считается: 1922 даёт 121 столбец, а не 120.
+    // A macroblock is 16×16, and a partial one counts too: 1922 gives 121 columns, not 120.
     let mb = u64::from(width.div_ceil(16)) * u64::from(height.div_ceil(16));
     let mbps = mb * u64::from(fps.max(1));
 
@@ -192,35 +197,37 @@ pub fn h264_level(width: u32, height: u32, fps: u32) -> &'static str {
     }
 }
 
-/// Потолок и буфер под заданный целевой битрейт.
+/// The ceiling and the buffer for a given target bitrate.
 ///
-/// Возвращает килобиты. Считать в мегабитах нельзя, и это отдельная записанная
-/// ошибка: при цели 8 Мбит/с целочисленное `8 * 11 / 10` даёт ровно 8 — потолок
-/// совпадает с целью, буфера нет вовсе, и выходит режим постоянного битрейта,
-/// который в замерах проиграл. На прежних +30 % это не вылезало (`8*13/10 = 10`),
-/// а на +10 % сломалось молча.
+/// It returns kilobits. Counting in megabits will not do, and that is a recorded mistake of
+/// its own: at a target of 8 Mbit/s the integer `8 * 11 / 10` gives exactly 8 — the ceiling
+/// equals the target, there is no buffer at all, and out comes constant-bitrate mode, which
+/// lost in the measurements. At the old +30 % this never showed (`8*13/10 = 10`); at +10 %
+/// it broke quietly.
 ///
-/// Буфер равен потолку намеренно: большой буфер разрешает всплеск выше потолка,
-/// и на этом зрители замирали — было `потолок 45 / буфер 60` и пики 54 Мбит/с.
+/// The buffer equals the ceiling deliberately: a large buffer allows a surge above the
+/// ceiling, and that is what froze viewers — it used to be `ceiling 45 / buffer 60`, with
+/// peaks of 54 Mbit/s.
 pub fn peak_control(target_kbps: u32) -> (u32, u32) {
     let maxrate = target_kbps.saturating_mul(MAXRATE_PERCENT) / 100;
-    // Потолок обязан быть строго выше цели: равенство и есть тот самый постоянный
-    // битрейт, ради ухода от которого всё и считается.
+    // The ceiling must be strictly above the target: equality is the very constant
+    // bitrate all this arithmetic exists to get away from.
     let maxrate = maxrate.max(target_kbps.saturating_add(1));
     (maxrate, maxrate)
 }
 
-/// Какой потолок ставить, чтобы настоящий пик не превысил заданного.
+/// What ceiling to set so that the real peak does not exceed a given one.
 ///
-/// Обратная задача к [`peak_control`]: канал зрителя рассчитан на пик, а не на среднее.
+/// The inverse of [`peak_control`]: a viewer's connection is sized for the peak, not for
+/// the average.
 pub fn maxrate_for_peak(peak_kbps: u32) -> u32 {
     peak_kbps.saturating_mul(100) / PEAK_OVER_MAXRATE
 }
 
-/// Составить план.
+/// Make a plan.
 ///
-/// Возвращает **все** замечания сразу, а не первое: их бывает несколько, и человеку
-/// нужно увидеть весь список, а не разбираться по одному за круг.
+/// It returns **every** objection at once rather than the first: there are often several,
+/// and a person needs to see the whole list rather than deal with one per round.
 pub fn plan(
     source: &SourceFile,
     request: &ConvertRequest,
@@ -240,9 +247,9 @@ pub fn plan(
         if h == 0 {
             problems.push(PlanProblem::HeightZero);
         } else if h > source.height {
-            // Растягивать нечего: подробностей, которых нет в источнике, не прибавится,
-            // а файл раздуется. Это ровно тот случай, о котором FR-029 говорит
-            // «не позволять молча».
+            // There is nothing to stretch: detail the source does not have will not
+            // appear, and the file swells. This is exactly the case FR-029 means by "do
+            // not allow it quietly".
             problems.push(PlanProblem::HeightAboveSource {
                 asked: h,
                 source: source.height,
@@ -267,7 +274,7 @@ pub fn plan(
 
     let track = source
         .track(request.audio_track)
-        .expect("дорожка проверена выше");
+        .expect("the track was checked above");
 
     let tonemap = source.is_hdr();
     let downscale = request.height.is_some_and(|h| h != source.height);
@@ -281,7 +288,7 @@ pub fn plan(
         video: video_action(source, request, level, tonemap, downscale),
         audio: audio_action(track),
         audio_track: request.audio_track,
-        // Опорный кадр раз в секунду при любой частоте кадров.
+        // A keyframe once a second at any frame rate.
         gop: source.fps.max(1),
         tonemap,
         requested_height: request.height,
@@ -296,9 +303,9 @@ fn video_action(
     tonemap: bool,
     downscale: bool,
 ) -> VideoAction {
-    // Перенос без пересжатия возможен, только когда трогать поток не надо вовсе:
-    // любое изменение картинки требует её раскодировать, а раскодировав, обратно
-    // «как было» уже не сложить.
+    // Carrying across without re-encoding is possible only when the stream need not be
+    // touched at all: any change to the picture requires decoding it, and once decoded it
+    // can no longer be put back the way it was.
     let reason = if !source.video_codec.eq_ignore_ascii_case("h264") {
         Some(Detail::new(DetailCode::ReasonVideoNotH264).with("codec", source.video_codec.clone()))
     } else if !source.pix_fmt.eq_ignore_ascii_case("yuv420p") {
@@ -314,8 +321,9 @@ fn video_action(
 
     match (reason, request.target_kbps) {
         (None, None) => VideoAction::Copy,
-        // Битрейт задан — пересжимать придётся, даже если поток совместим: иначе
-        // требование останется невыполненным, а человек будет думать, что оно учтено.
+        // A bitrate was given — re-encoding is unavoidable even when the stream is
+        // compatible: otherwise the request goes unmet while a person believes it was
+        // honoured.
         (reason, Some(kbps)) => {
             let (maxrate_kbps, bufsize_kbps) = peak_control(kbps);
             VideoAction::ReencodeCapped {
@@ -334,21 +342,21 @@ fn video_action(
 }
 
 fn audio_action(track: &AudioTrack) -> AudioAction {
-    // Три условия обязательны, и это записанная ошибка: проверка одного лишь кодека
-    // пропускала шестиканальную дорожку вопреки целевому формату — на входе AAC 5.1
-    // файл уезжал шестиканальным.
-    let подходит_кодек = track.codec.eq_ignore_ascii_case("aac");
-    let стерео = track.channels == 2;
-    let бюджет = u64::from(AUDIO_KBPS) * 1000 * (100 + AUDIO_TOLERANCE_PERCENT) / 100;
-    let не_толще = track.bitrate_bps.is_none_or(|b| b <= бюджет);
+    // All three conditions are required, and that is a recorded mistake: checking only the
+    // codec let a six-channel track through against the target format — given AAC 5.1 on
+    // the way in, the file went out with six channels.
+    let codec_fits = track.codec.eq_ignore_ascii_case("aac");
+    let is_stereo = track.channels == 2;
+    let budget = u64::from(AUDIO_KBPS) * 1000 * (100 + AUDIO_TOLERANCE_PERCENT) / 100;
+    let within_budget = track.bitrate_bps.is_none_or(|b| b <= budget);
 
-    if подходит_кодек && стерео && не_толще {
+    if codec_fits && is_stereo && within_budget {
         return AudioAction::Copy;
     }
 
-    let reason = if !подходит_кодек {
+    let reason = if !codec_fits {
         Detail::new(DetailCode::ReasonAudioNotAac).with("codec", track.codec.clone())
-    } else if !стерео {
+    } else if !is_stereo {
         Detail::new(DetailCode::ReasonAudioChannels).with("channels", track.channels)
     } else {
         Detail::new(DetailCode::ReasonAudioTooFat)

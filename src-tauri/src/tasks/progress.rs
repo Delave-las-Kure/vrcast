@@ -1,20 +1,20 @@
-//! T020 — ограничение частоты событий прогресса.
+//! T020 — capping how often progress events are sent.
 //!
-//! Передача файла сообщает о продвижении сотни раз в секунду. Если пропускать всё,
-//! поток событий сам станет причиной подтормаживания интерфейса — то есть средство
-//! показать отзывчивость её же и убьёт (SC-009, R-15).
+//! Transferring a file reports progress hundreds of times a second. Letting all of it
+//! through would make the stream of events the cause of the interface stuttering — the
+//! very means of showing responsiveness would destroy it (SC-009, R-15).
 //!
-//! Ключевая тонкость не в ограничении, а в исключениях из него. Последнее сообщение
-//! перед завершением обязано пройти всегда, иначе полоса застынет на 87 % у задачи,
-//! которая уже закончилась.
+//! The subtlety is not in the cap but in the exceptions to it. The last message before
+//! completion must always get through, or the bar freezes at 87% on a task that has
+//! already finished.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Не чаще четырёх раз в секунду на задачу.
+/// No more than four times a second per task.
 pub const MIN_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Пропускной клапан для событий прогресса.
+/// The valve that progress events pass through.
 #[derive(Debug)]
 pub struct ProgressThrottle {
     min_interval: Duration,
@@ -35,20 +35,20 @@ impl ProgressThrottle {
         }
     }
 
-    /// Пропустить ли это событие.
+    /// Whether to let this event through.
     ///
-    /// `important` — сообщение, которое обязано пройти независимо от частоты: смена
-    /// состояния, завершение, ошибка. Без этого исключения показатель застревает
-    /// на последнем пропущенном значении.
+    /// `important` marks a message that must pass regardless of the rate: a change of
+    /// state, a completion, an error. Without that exception the figure sticks at the
+    /// last value that happened to get through.
     pub fn allow(&self, important: bool) -> bool {
         self.allow_at(Instant::now(), important)
     }
 
-    /// То же, но с явным моментом времени — чтобы тесты не зависели от настоящих часов.
+    /// The same, with an explicit instant — so tests do not depend on a real clock.
     pub fn allow_at(&self, now: Instant, important: bool) -> bool {
         let mut last = match self.last.lock() {
             Ok(l) => l,
-            // Отравленная блокировка не повод терять событие.
+            // A poisoned lock is no reason to lose an event.
             Err(e) => e.into_inner(),
         };
 
@@ -66,7 +66,7 @@ impl ProgressThrottle {
         }
     }
 
-    /// Забыть отметку — например, когда задача продолжается после приостановки.
+    /// Forget the mark — when a task resumes after being paused, for instance.
     pub fn reset(&self) {
         if let Ok(mut last) = self.last.lock() {
             *last = None;

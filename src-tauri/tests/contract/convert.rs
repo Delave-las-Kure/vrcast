@@ -1,6 +1,6 @@
 //! T112 — contract tests for the file-preparation commands.
 //!
-//! Contract: `contracts/ipc-commands.md`, "Подготовка файлов".
+//! Contract: `contracts/ipc-commands.md`, "Preparing files".
 //!
 //! Only what is visible from outside: the shape of the answer, and which refusal
 //! carries which code. The code is not a detail — it decides whether the interface

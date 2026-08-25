@@ -1,28 +1,28 @@
-//! T029 — профиль сервера и его проверки (`data-model.md` §1).
+//! T029 — the server profile and its checks (`data-model.md` section 1).
 //!
-//! Профиль **не содержит секрета** — только ссылку на запись в хранилище ОС
-//! (конституция, принцип IV). Это не соглашение, а свойство типа: поля под пароль
-//! здесь просто нет, и положить его в профиль некуда.
+//! A profile **contains no secret** — only a reference to an entry in the OS store
+//! (constitution, principle IV). That is not a convention but a property of the type:
+//! there is simply no field for a password here, and nowhere to put one.
 
 use super::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
-/// Каталог раздачи по умолчанию.
+/// The default serving directory.
 ///
-/// Это единственное место во всём приложении, где путь раздачи написан буквами.
-/// Он подставляется в новый профиль, тут же доступен пользователю для правки, и
-/// дальше приложение берёт путь **только** из профиля (FR-004). Пометка в конце
-/// строки — то, по чему `scripts/check-no-hardcoded-server.sh` отличает это
-/// умолчание от случайно занесённой привязки к чужому серверу.
-pub const DEFAULT_VIDEO_DIR: &str = "/var/lib/vrcast/videos"; // FR-004-ok: значение по умолчанию
+/// This is the one place in the whole application where a serving path is spelt out.
+/// It is put into a new profile, is immediately editable, and from then on the
+/// application takes the path **only** from the profile (FR-004). The mark at the end
+/// of the line is what `scripts/check-no-hardcoded-server.sh` tells this default by,
+/// as against a binding to somebody's server left there by accident.
+pub const DEFAULT_VIDEO_DIR: &str = "/var/lib/vrcast/videos"; // FR-004-ok: the default
 
-/// Порт SSH по умолчанию.
+/// The default SSH port.
 pub const DEFAULT_SSH_PORT: u16 = 22;
 
-/// Предел длины имени профиля — чтобы список оставался читаемым.
+/// A limit on a profile name's length, so the list stays readable.
 const MAX_NAME_LEN: usize = 100;
 
-/// Способ входа на сервер.
+/// How to sign in to the server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthKind {
@@ -47,8 +47,8 @@ impl AuthKind {
     }
 }
 
-/// Что делать с IPv6 при развёртывании (FR-135). `None` в профиле = пользователь
-/// ещё не выбирал; молчаливое умолчание здесь недопустимо.
+/// What to do about IPv6 when deploying (FR-135). `None` in a profile means the
+/// person has not chosen yet; a silent default here is not acceptable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ipv6Mode {
@@ -73,7 +73,7 @@ impl Ipv6Mode {
     }
 }
 
-/// Профиль сервера. Хранится в локальной базе.
+/// A server profile. Kept in the local database.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerProfile {
     pub id: String,
@@ -82,26 +82,26 @@ pub struct ServerProfile {
     pub port: u16,
     pub user: String,
     pub auth_kind: AuthKind,
-    /// Ссылка на запись в хранилище ОС — **не сам секрет**.
+    /// A reference to an entry in the OS store — **not the secret itself**.
     pub secret_ref: String,
-    /// Путь к файлу ключа. Только при `auth_kind = Key`.
+    /// The path to the key file. Only when `auth_kind = Key`.
     pub key_path: Option<String>,
-    /// Домен раздачи. Обязателен: без него нельзя ни выдать ссылку, ни проверить
-    /// работоспособность раздачи (FR-125).
+    /// The serving domain. Required: without it there is no link to hand out and no
+    /// way to check that serving works (FR-125).
     pub domain: String,
     pub video_dir: String,
-    /// Пусто = ссылки только с origin (FR-016).
+    /// Empty means links only from the origin (FR-016).
     pub cdn_base: Option<String>,
     pub host_fingerprint: Option<String>,
     pub ipv6_mode: Option<Ipv6Mode>,
     pub is_active: bool,
 }
 
-/// Что именно не так с профилем.
+/// What exactly is wrong with a profile.
 ///
-/// Проверка возвращает **все** замечания сразу, а не первое: в мастере настройки
-/// пользователь заполняет форму целиком, и показывать ошибки по одной — значит
-/// заставлять его проходить круг заново из-за каждой опечатки.
+/// The check returns **every** objection at once rather than the first: in the setup
+/// wizard a person fills the form in whole, and showing the errors one at a time means
+/// sending them round again for each typo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfileProblem {
     /// Which field to highlight in the form.
@@ -131,7 +131,7 @@ impl std::fmt::Display for ProfileProblem {
 }
 
 impl ServerProfile {
-    /// Новый профиль с разумными умолчаниями. Проверку всё равно надо пройти.
+    /// A new profile with sensible defaults. It still has to pass the checks.
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -151,13 +151,13 @@ impl ServerProfile {
         }
     }
 
-    /// Привести поля к каноническому виду: убрать пробелы по краям, снять схему и
-    /// хвостовую косую черту с домена, хвостовую косую с путей.
+    /// Bring the fields to canonical form: trim the edges, strip the scheme and a
+    /// trailing slash from the domain, and a trailing slash from paths.
     ///
-    /// Приведение отделено от проверки намеренно. Люди вставляют домен из адресной
-    /// строки браузера — вместе с `https://` и косой чертой. Отвергать за это значит
-    /// придираться: намерение однозначно. А вот путь с `..` уже не приведёшь — про
-    /// него скажет проверка.
+    /// Normalising is deliberately separate from checking. People paste a domain out
+    /// of a browser's address bar — complete with `https://` and a slash. Refusing for
+    /// that would be pedantry: the intent is unambiguous. A path with `..`, on the
+    /// other hand, cannot be normalised — the check has something to say about it.
     pub fn normalize(&mut self) {
         self.id = self.id.trim().to_owned();
         self.name = self.name.trim().to_owned();
@@ -183,14 +183,15 @@ impl ServerProfile {
             .map(|f| f.trim().to_owned())
             .filter(|f| !f.is_empty());
 
-        // Ключ имеет смысл только при входе по ключу. Оставлять его при входе по
-        // паролю — значит хранить путь, который однажды применят не к тому профилю.
+        // A key means something only with key sign-in. Keeping it with password
+        // sign-in means storing a path that will one day be applied to the wrong
+        // profile.
         if self.auth_kind == AuthKind::Password {
             self.key_path = None;
         }
     }
 
-    /// Проверить профиль целиком. Перед проверкой стоит вызвать [`Self::normalize`].
+    /// Check the whole profile. [`Self::normalize`] is worth calling first.
     pub fn validate(&self) -> Result<(), Vec<ProfileProblem>> {
         let mut problems = Vec::new();
 
@@ -274,11 +275,11 @@ impl ServerProfile {
     }
 }
 
-/// Привести домен к каноническому виду: без схемы, без хвостовой косой, в нижнем регистре.
+/// Bring a domain to canonical form: no scheme, no trailing slash, lower case.
 ///
-/// Регистр снимается ПЕРВЫМ делом. Иначе вставленное из адресной строки `HTTPS://…`
-/// не совпадёт с образцом схемы, и она останется внутри домена — а дальше ссылка
-/// соберётся с удвоенной схемой и молча перестанет работать.
+/// The case is taken down FIRST. Otherwise `HTTPS://…` pasted from an address bar does
+/// not match the scheme pattern and stays inside the domain — and the link then
+/// assembles with a doubled scheme and quietly stops working.
 pub fn normalize_domain(raw: &str) -> String {
     let lowered = raw.trim().to_lowercase();
     let mut d = lowered.as_str();
@@ -291,7 +292,7 @@ pub fn normalize_domain(raw: &str) -> String {
     d.trim_end_matches('/').to_owned()
 }
 
-/// Привести путь к каталогу к каноническому виду: без хвостовой косой черты.
+/// Bring a directory path to canonical form: no trailing slash.
 fn normalize_dir(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.len() > 1 {
@@ -336,8 +337,8 @@ fn check_dir(dir: &str) -> Result<(), DetailCode> {
     if !dir.starts_with('/') {
         return Err(DetailCode::VideoDirNotAbsolute);
     }
-    // Отрезки `..` опасны не теоретически: путь отсюда попадает в команды на сервере,
-    // и один такой отрезок выводит запись за пределы каталога раздачи.
+    // `..` segments are not a theoretical danger: a path from here goes into commands
+    // on the server, and one such segment takes a write outside the serving directory.
     if dir.split('/').any(|part| part == "..") {
         return Err(DetailCode::VideoDirHasDotDot);
     }

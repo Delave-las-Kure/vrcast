@@ -1,26 +1,28 @@
-//! T048a, T093 — идёт ли раздача прямо сейчас (FR-019a, FR-037).
+//! T048a, T093 — whether anything is being served right now (FR-019a, FR-037).
 //!
-//! Нужно перед двумя разными действиями, и по одной причине: и удаление файла,
-//! и заливка нового ухудшают то, что смотрят прямо сейчас. Удаление обрывает
-//! просмотр; заливка вымывает из памяти сервера то, что он держал для зрителей,
-//! и у них начинаются подвисания.
+//! Needed before two different actions, for one reason: deleting a file and uploading
+//! a new one both spoil what is being watched at that moment. Deleting cuts the
+//! viewing short; uploading pushes out of the server's memory what it was holding for
+//! viewers, and their playback starts to stall.
 //!
-//! **Честная оговорка про вехи A и B.** Спека просит назвать число зрителей
-//! конкретного файла. Таблица соединений сервера не говорит, что именно качают,
-//! и приписать соединение медиа пока нечем: для этого нужен разбор журнала
-//! раздачи, а он — Фаза 4. Поэтому возвращается число открытых соединений
-//! раздачи: факт наличия, как и допускают задачи T048a и T093. Назвать это
-//! «зрителями файла» значило бы сказать пользователю то, чего мы не знаем.
+//! **An honest caveat for milestones A and B.** The specification asks for the number
+//! of viewers of a particular file. The server's connection table does not say what is
+//! being downloaded, and there is as yet nothing to attribute a connection to a medium
+//! with: that needs the serving log parsed, and that is Phase 4. So what comes back is
+//! the number of open serving connections — the fact that there are some, which is
+//! what tasks T048a and T093 allow. Calling it "viewers of the file" would be telling
+//! the user something we do not know.
 
 use crate::ssh::Connection;
 
-/// Порты, на которых раздача отвечает зрителям.
+/// The ports serving answers viewers on.
 const SERVING_PORTS: [u16; 2] = [80, 443];
 
-/// Сколько соединений веб-сервер обслуживает прямо сейчас.
+/// How many connections the web server is serving right now.
 ///
-/// Неудача подсчёта — ноль, а не ошибка: предупреждение полезно, но отказывать
-/// из-за него в удалении или заливке несоразмерно. О неудаче сообщается в журнал.
+/// A failed count is zero rather than an error: the warning is useful, but refusing a
+/// deletion or an upload over it would be out of proportion. The failure goes to the
+/// log.
 pub async fn serving_connections(conn: &Connection) -> usize {
     let ports = SERVING_PORTS
         .iter()
@@ -33,11 +35,11 @@ pub async fn serving_connections(conn: &Connection) -> usize {
     match conn.exec(&cmd).await {
         Ok(out) if out.ok() => out.trimmed().trim().parse::<usize>().unwrap_or(0),
         Ok(out) => {
-            tracing::debug!(stderr = %out.stderr.trim(), "не сосчитать соединения раздачи");
+            tracing::debug!(stderr = %out.stderr.trim(), "could not count serving connections");
             0
         }
         Err(e) => {
-            tracing::debug!(error = %e, "не сосчитать соединения раздачи");
+            tracing::debug!(error = %e, "could not count serving connections");
             0
         }
     }

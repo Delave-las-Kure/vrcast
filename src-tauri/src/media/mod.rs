@@ -1,8 +1,8 @@
-//! Работа с видеофайлами: вложенный FFmpeg, разбор исходника, подготовка.
+//! Working with video files: the bundled FFmpeg, examining a source, preparing it.
 //!
-//! Слой отделён от `domain` тем же правилом, что и остальные: здесь всё, что
-//! требует диска и запуска чужих программ, а решения — этажом ниже, в `domain`,
-//! где их можно проверить тестом без единого файла на диске.
+//! This layer is separated from `domain` by the same rule as the others: everything
+//! that needs a disk and other people's programs lives here, and the decisions live a
+//! floor below in `domain`, where they can be tested without a single file on disk.
 
 pub mod convert;
 pub mod encoders;

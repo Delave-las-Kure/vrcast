@@ -1,12 +1,12 @@
-//! T025 — выполнение команд на сервере.
+//! T025 — running commands on the server.
 
 use super::{Connection, Result, SshError};
 use russh::ChannelMsg;
 
-/// Результат выполнения команды.
+/// The result of running a command.
 ///
-/// Код возврата — `Option`: сервер не обязан его прислать, если канал оборвался.
-/// Отсутствие кода это НЕ успех, и вызывающий код обязан различать эти случаи.
+/// The exit code is an `Option`: the server need not send one if the channel broke.
+/// A missing code is NOT success, and callers must tell the two apart.
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
     pub exit_code: Option<u32>,
@@ -15,42 +15,43 @@ pub struct CommandOutput {
 }
 
 impl CommandOutput {
-    /// Успех — только явный нулевой код возврата.
+    /// Success is an explicit zero exit code, and nothing else.
     pub fn ok(&self) -> bool {
         self.exit_code == Some(0)
     }
 
-    /// Вывод без хвостовых переводов строки — то, что обычно нужно от однострочной команды.
+    /// Output without trailing newlines — what a one-line command is usually wanted for.
     pub fn trimmed(&self) -> &str {
         self.stdout.trim_end()
     }
 
-    /// Превратить неуспех в ошибку с понятным текстом.
+    /// Turn a non-success into an error that says something.
     pub fn require_ok(self, what: &str) -> Result<Self> {
         if self.ok() {
             return Ok(self);
         }
         let code = match self.exit_code {
             Some(c) => c.to_string(),
-            None => String::from("нет кода возврата, канал оборвался"),
+            None => String::from("no exit code, the channel broke"),
         };
         let detail = if self.stderr.trim().is_empty() {
             self.stdout.trim().to_owned()
         } else {
             self.stderr.trim().to_owned()
         };
-        Err(SshError::Exec(format!("{what}: код {code}. {detail}")))
+        Err(SshError::Exec(format!("{what}: code {code}. {detail}")))
     }
 }
 
 impl Connection {
-    /// Выполнить команду и дождаться её завершения.
+    /// Run a command and wait for it to finish.
     ///
-    /// Открывает отдельный канал в уже установленном соединении — новое соединение
-    /// не создаётся (R-04: сервер ограничивает число одновременно устанавливаемых).
+    /// Opens a separate channel inside the connection that already exists — no new
+    /// connection is made (R-04: servers limit how many are established at once).
     pub async fn exec(&self, command: &str) -> Result<CommandOutput> {
-        // Место под канал держится всё время выполнения: у сервера есть предел на число
-        // одновременных каналов в соединении, и превышать его нельзя (см. connection.rs).
+        // The channel slot is held for the whole run: a server limits how many
+        // channels a connection may have at once, and that must not be exceeded
+        // (see connection.rs).
         let _permit = self.acquire_channel().await?;
 
         let mut channel = self.open_session().await?;
@@ -67,11 +68,11 @@ impl Connection {
         while let Some(msg) = channel.wait().await {
             match msg {
                 ChannelMsg::Data { ref data } => stdout.extend_from_slice(data),
-                // Поток ошибок приходит отдельным типом сообщения; ext == 1 это stderr.
+                // The error stream arrives as its own message type; ext == 1 is stderr.
                 ChannelMsg::ExtendedData { ref data, ext: 1 } => stderr.extend_from_slice(data),
                 ChannelMsg::ExitStatus { exit_status } => {
-                    // Выходить из цикла сразу нельзя: за кодом возврата может прийти
-                    // ещё не считанный вывод.
+                    // Leaving the loop at once will not do: output not yet read can
+                    // arrive after the exit code.
                     exit_code = Some(exit_status);
                 }
                 _ => {}

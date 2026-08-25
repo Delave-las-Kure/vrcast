@@ -1,7 +1,7 @@
-//! Договорные тесты слоя команд (T015).
+//! Contract tests for the command layer (T015).
 //!
-//! Отдельная тестовая цель: договор — это граница, и проверять её надо в отрыве
-//! от внутренних тестов слоёв.
+//! A test target of its own: the contract is a boundary, and it has to be checked apart
+//! from the layers' internal tests.
 
 #[path = "contract/support.rs"]
 mod support;

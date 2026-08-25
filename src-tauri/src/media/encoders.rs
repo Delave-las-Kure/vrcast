@@ -1,37 +1,37 @@
-//! T119 — каким кодировщиком пользоваться (FR-026).
+//! T119 — which encoder to use (FR-026).
 //!
-//! Три правила, и третье — самое важное:
+//! Three rules, and the third matters most:
 //!
-//! 1. пользоваться аппаратным, когда он есть;
-//! 2. работать без него;
-//! 3. **не молчать о переходе на процессор**.
+//! 1. use the hardware one when it is there;
+//! 2. work without it;
+//! 3. **do not stay quiet about falling back to the processor**.
 //!
-//! Третье не вежливость. Разница во времени — разы: то, что видеокарта делает
-//! за десять минут, процессор делает час-полтора. Человек, не предупреждённый
-//! об этом, решит, что приложение зависло, и убьёт задачу на середине.
+//! The third is not politeness. The difference in time is severalfold: what a graphics
+//! card does in ten minutes the processor does in an hour and a half. Someone who was
+//! not warned decides the application has hung and kills the task halfway.
 //!
-//! А вот о качестве беспокоиться не надо, и это не общие слова, а замер
-//! 2026-08-02 на своём материале: программный x264 против NVENC дал разницу
-//! +1.13 по шкале VMAF на четырёх мегабитах и ноль (даже небольшой минус)
-//! на рабочих битрейтах от четырнадцати и выше. Поэтому в сообщении о переходе
-//! честно сказано: потеряете время, а не качество.
+//! Quality, on the other hand, is nothing to worry about, and that is not a platitude
+//! but a measurement taken on 2026-08-02 on our own material: software x264 against
+//! NVENC differed by +1.13 on the VMAF scale at four megabits and by nothing (a slight
+//! minus, even) at working bitrates of fourteen and above. So the message about the
+//! fallback says honestly: you will lose time, not quality.
 
 use crate::domain::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
-/// Чем кодировать.
+/// What to encode with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Encoder {
-    /// Аппаратный кодировщик видеокарты или процессора.
+    /// A hardware encoder in a graphics card or a processor.
     Hardware { name: String },
-    /// Программный x264. Медленнее в разы, но по качеству на рабочих битрейтах
-    /// не уступает.
+    /// Software x264. Severalfold slower, but at working bitrates it gives up
+    /// nothing in quality.
     Software,
 }
 
 impl Encoder {
-    /// Имя, которое понимает FFmpeg.
+    /// The name FFmpeg understands.
     pub fn ffmpeg_name(&self) -> &str {
         match self {
             Self::Hardware { name } => name,
@@ -40,7 +40,7 @@ impl Encoder {
     }
 }
 
-/// Что выбрали и что об этом сказать человеку.
+/// What was chosen, and what to say about it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EncoderChoice {
     pub encoder: Encoder,
@@ -49,26 +49,26 @@ pub struct EncoderChoice {
     pub notice: Option<Detail>,
 }
 
-/// Почему выбрать не удалось.
+/// Why no choice could be made.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("nothing to encode with: the bundled build has neither a hardware H.264 encoder nor a software one")]
 pub struct NoEncoder;
 
-/// Порядок предпочтения.
+/// The order of preference.
 ///
-/// NVIDIA первой — она быстрее прочих на нашем материале. Дальше встроенное
-/// в процессор Intel, потом AMD, и последним общий путь Linux: он работает
-/// и с Intel, и с AMD, но выбирать его при наличии своего смысла нет.
+/// NVIDIA first — it is faster than the rest on our material. Then Intel's integrated
+/// graphics, then AMD, and last the general Linux path: it works with both Intel and
+/// AMD, but there is no sense choosing it when the vendor's own is available.
 const PREFERRED: [&str; 4] = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_vaapi"];
 
-/// Выбрать кодировщик.
+/// Choose an encoder.
 ///
-/// `available` — что **умеет звать** вложенная сборка (см. `ffmpeg::probe_self`).
-/// Это не то же самое, что «работает на этой машине»: наличие кодировщика в сборке
-/// ничего не говорит о железе, и настоящий ответ даёт только пробный запуск.
-/// Поэтому выбор здесь — предположение, а проверка его — отдельный шаг.
+/// `available` is what the bundled build **knows how to call** (see
+/// `ffmpeg::probe_self`). That is not the same as "works on this machine": an encoder
+/// being in the build says nothing about the hardware, and only a trial run gives the
+/// real answer. So the choice here is a supposition, and testing it is a separate step.
 ///
-/// `prefer_hardware` = ложь, когда человек сам попросил процессор.
+/// `prefer_hardware` is false when a person asked for the processor themselves.
 pub fn choose(
     available: &[String],
     has_x264: bool,
@@ -102,12 +102,12 @@ pub fn choose(
     })
 }
 
-/// Что сказать, когда аппаратный кодировщик подвёл на деле.
+/// What to say when a hardware encoder let us down in practice.
 ///
-/// Наличие в сборке не значит работоспособности: у видеокарты может не быть нужного
-/// блока, драйвер может быть старым, а на ноутбуке видеокарта — просто отключённой.
-/// Переход на процессор в этом случае — правильное поведение, но молчать о нём
-/// нельзя вдвойне: человек ждал десяти минут, а получит час.
+/// Being in the build does not mean working: a graphics card may lack the block, the
+/// driver may be old, and on a laptop the card may simply be switched off. Falling
+/// back to the processor is the right behaviour in that case, but staying quiet about
+/// it is doubly wrong: the person expected ten minutes and will get an hour.
 pub fn fallback_notice(failed: &str) -> Detail {
     Detail::new(DetailCode::NoticeHardwareFailed).with("encoder", failed.to_string())
 }

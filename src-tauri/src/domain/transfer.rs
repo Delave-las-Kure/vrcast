@@ -1,43 +1,43 @@
-//! T077 — где продолжать прерванную передачу (R-05, FR-031).
+//! T077 — where to resume an interrupted transfer (R-05, FR-031).
 //!
-//! Позиция берётся не из локальной записи, а из размера временного файла **на
-//! сервере**: локальная запись могла устареть — приложение убили между отправкой
-//! окна и записью в базу, и тогда она укажет позицию раньше настоящей. Хуже,
-//! если укажет позже: тогда в файле останется дыра, которую заметит только сверка
-//! контрольных сумм — после того, как передача целиком закончится.
+//! The position comes not from a local record but from the size of the staged file
+//! **on the server**: a local record may be stale — the application was killed between
+//! sending a window and writing to the database, and then it points earlier than the
+//! truth. Worse if it points later: then a hole is left in the file, and only the
+//! checksum comparison notices — after the whole transfer has finished.
 //!
-//! Отступ назад на одно окно перед продолжением обязателен: последняя запись могла
-//! оборваться на середине, и её хвост в файле уже есть, но целым не является.
-//! Переписать это окно заново дешевле, чем гадать.
+//! Stepping back one window before resuming is not optional: the last write may have
+//! broken off midway, and its tail is in the file already without being whole.
+//! Rewriting that window is cheaper than guessing.
 
 use serde::{Deserialize, Serialize};
 
-/// Размер окна передачи.
+/// The size of a transfer window.
 ///
-/// Четыре мегабайта — компромисс: мелкие окна тратят обороты по сети на каждое
-/// подтверждение, крупные увеличивают то, что придётся переписать после обрыва.
+/// Four megabytes is a compromise: small windows spend a network round trip on every
+/// acknowledgement, large ones increase what has to be rewritten after a break.
 pub const WINDOW_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Что делать с прерванной передачей.
+/// What to do with an interrupted transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResumeDecision {
-    /// Ничего не передано — начинаем сначала.
+    /// Nothing was sent — start from the beginning.
     FromStart,
-    /// Продолжаем с этого смещения.
+    /// Resume from this offset.
     Continue { offset: u64 },
-    /// Передано всё; осталась сверка контрольных сумм и ввод в раздачу.
+    /// Everything was sent; the checksum comparison and entering service remain.
     AlreadyComplete,
-    /// Временный файл **больше** исходного. Это не «почти готово», а признак,
-    /// что источник подменили или файл на сервере не тот. Продолжать нельзя:
-    /// получится склейка двух разных файлов, и обнаружится это только сверкой,
-    /// когда время уже потрачено.
+    /// The staged file is **larger** than the source. That is not "nearly done" but a
+    /// sign that the source was swapped or the file on the server is not the right
+    /// one. Resuming is out: it would splice two different files together, and only
+    /// the comparison would find out, by which time the time has been spent.
     Mismatch { temp: u64, total: u64 },
 }
 
-/// Решить, откуда продолжать, по размеру временного файла на сервере.
+/// Decide where to resume from, by the size of the staged file on the server.
 pub fn decide_resume(temp_size: u64, total: u64, window: u64) -> ResumeDecision {
     if total == 0 {
-        // Пустой исходник — законный случай, передавать нечего.
+        // An empty source is a legitimate case: there is nothing to send.
         return ResumeDecision::AlreadyComplete;
     }
     if temp_size > total {
@@ -53,7 +53,7 @@ pub fn decide_resume(temp_size: u64, total: u64, window: u64) -> ResumeDecision 
         return ResumeDecision::FromStart;
     }
 
-    // Отступ назад на окно — на случай оборванной записи. Ниже нуля не уходим.
+    // A step back of one window, in case the last write broke off. Never below zero.
     let offset = temp_size.saturating_sub(window.max(1));
     if offset == 0 {
         ResumeDecision::FromStart
@@ -62,45 +62,44 @@ pub fn decide_resume(temp_size: u64, total: u64, window: u64) -> ResumeDecision 
     }
 }
 
-/// Всё, что нужно, чтобы продолжить передачу после перезапуска приложения.
+/// Everything needed to resume a transfer after the application restarts.
 ///
-/// Хранится в поле задачи `resume_token`. Запись задачи знает номер, состояние
-/// и сервер; здесь — остальное: откуда брать байты, куда их класть и как убедиться,
-/// что исходник тот же самый.
+/// Kept in the task's `resume_token` field. The task record knows the id, the state
+/// and the server; the rest is here: where to take the bytes from, where to put them,
+/// and how to be sure the source is the same one.
 ///
-/// Размер и время изменения исходника не для красоты: если человек подменил
-/// локальный файл между запусками, продолжать прежнюю передачу нельзя — получится
-/// смесь двух файлов. Дешевле заметить это сразу, чем после часа передачи
-/// на сверке контрольных сумм.
+/// The source's size and modification time are not decoration: if a person swapped the
+/// local file between runs, the old transfer must not continue — it would come out a
+/// mixture of two files. Noticing that at once is cheaper than noticing it at the
+/// checksum comparison after an hour of transfer.
 ///
-/// Поля, помеченные `serde(default)`, добавлены позже: записи, сделанные прежними
-/// версиями, обязаны читаться дальше, иначе обновление молча потеряет незаконченные
-/// передачи.
+/// The fields marked `serde(default)` were added later: records written by earlier
+/// versions have to keep reading, or an update quietly loses unfinished transfers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResumeToken {
-    /// Полный путь временного файла на сервере.
+    /// The full path of the staged file on the server.
     pub remote_temp: String,
-    /// Конечное имя в каталоге раздачи.
+    /// The final name in the serving directory.
     pub remote_name: String,
-    /// Путь к исходнику на этом компьютере.
+    /// The path to the source on this computer.
     #[serde(default)]
     pub local_path: Option<String>,
-    /// К какому медиа отнести файл после ввода в раздачу.
+    /// Which medium to assign the file to once it is in service.
     ///
-    /// Без этого продолженная после перезапуска заливка положила бы файл
-    /// в «не распознано», хотя человек уже указал, куда его отнести.
+    /// Without this, an upload resumed after a restart would drop the file into "not
+    /// recognised" even though the person had already said where it belongs.
     #[serde(default)]
     pub media_id: Option<String>,
-    /// Предел скорости, заданный человеком.
+    /// The speed cap the person set.
     ///
-    /// Тоже переживает перезапуск: предел ставят, чтобы заливка не съедала канал,
-    /// и молча снять его при продолжении значило бы занять всю полосу тогда,
-    /// когда этого не ждут.
+    /// It survives a restart too: a cap is set so that an upload does not eat the
+    /// connection, and quietly lifting it on resume would take the whole channel at a
+    /// moment nobody expects it.
     #[serde(default)]
     pub limit_bps: Option<u64>,
-    /// Размер исходника на момент начала передачи.
+    /// The size of the source when the transfer began.
     pub source_size: u64,
-    /// Время изменения исходника, если его удалось узнать.
+    /// The source's modification time, if it could be found out.
     pub source_modified: Option<String>,
 }
 
@@ -113,17 +112,17 @@ impl ResumeToken {
         serde_json::to_string(self).unwrap_or_default()
     }
 
-    /// Тот ли это исходник, с которого начинали.
+    /// Whether this is the source we started with.
     ///
-    /// Совпадения размера мало: файл могли пересобрать в тот же объём. Поэтому
-    /// сверяется и время изменения — когда оно известно.
+    /// A matching size is not enough: a file can be rebuilt to the same size. So the
+    /// modification time is compared too — when it is known.
     pub fn matches_source(&self, size: u64, modified: Option<&str>) -> bool {
         if self.source_size != size {
             return false;
         }
         match (&self.source_modified, modified) {
             (Some(was), Some(now)) => was == now,
-            // Время неизвестно с одной из сторон — довольствуемся размером.
+            // The time is unknown on one side — the size will have to do.
             _ => true,
         }
     }

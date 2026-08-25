@@ -1,8 +1,9 @@
-//! Механизм длительных задач.
+//! The machinery of long tasks.
 //!
-//! Подготовка файла идёт часами, заливка — тоже. Интерфейс при этом обязан оставаться
-//! отзывчивым (FR-080, SC-009), задачи — переживать перезапуск приложения (FR-081),
-//! а отмена — гарантированно завершать всё дерево процессов (конституция, принцип III).
+//! Preparing a file takes hours, and so does uploading. Through all of it the
+//! interface has to stay responsive (FR-080, SC-009), tasks have to survive a restart
+//! of the application (FR-081), and cancelling has to end the whole process tree for
+//! certain (constitution, principle III).
 
 pub mod engine;
 pub mod process;

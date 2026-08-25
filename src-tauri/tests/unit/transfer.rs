@@ -1,8 +1,8 @@
-//! T081 — тесты чистой логики заливки (US3).
+//! T081 — tests for the upload's pure logic (US3).
 //!
-//! Проверяется то, на чём заливка ломается в жизни: продолжение после обрыва,
-//! подменённый исходник, ограничитель скорости на длинном отрезке и оценка
-//! времени после паузы.
+//! What is checked is what an upload breaks on in real life: carrying on after a break, a
+//! source that was swapped, the rate limiter over a long stretch, and the time estimate
+//! after a pause.
 
 use std::time::{Duration, Instant};
 use vrcast_studio_lib::domain::progress_estimate::ProgressEstimate;
@@ -10,10 +10,10 @@ use vrcast_studio_lib::domain::rate_limit::RateLimiter;
 use vrcast_studio_lib::domain::remote_name::{self, NameVerdict};
 use vrcast_studio_lib::domain::transfer::{self, ResumeDecision, ResumeToken, WINDOW_BYTES};
 
-// ---------- где продолжать (T077) ----------
+// ---------- where to carry on from (T077) ----------
 
 #[test]
-fn пустой_временный_файл_значит_начать_сначала() {
+fn an_empty_staged_file_means_starting_over() {
     assert_eq!(
         transfer::decide_resume(0, 1_000_000, WINDOW_BYTES),
         ResumeDecision::FromStart
@@ -21,21 +21,21 @@ fn пустой_временный_файл_значит_начать_снача
 }
 
 #[test]
-fn продолжение_отступает_назад_на_одно_окно() {
-    // Последняя запись могла оборваться на середине: её хвост в файле уже есть,
-    // но целым не является. Переписать окно заново дешевле, чем гадать.
+fn carrying_on_steps_back_by_one_window() {
+    // The last write may have broken off midway: its tail is in the file already but is not
+    // whole. Rewriting the window is cheaper than guessing.
     let temp = 100 * 1024 * 1024;
     match transfer::decide_resume(temp, 500 * 1024 * 1024, WINDOW_BYTES) {
         ResumeDecision::Continue { offset } => {
             assert_eq!(offset, temp - WINDOW_BYTES);
         }
-        other => panic!("получено {other:?}"),
+        other => panic!("got {other:?}"),
     }
 }
 
 #[test]
-fn отступ_не_уводит_за_начало_файла() {
-    // Передано меньше окна: отступать некуда, начинаем сначала.
+fn the_step_back_does_not_go_past_the_start_of_the_file() {
+    // Less than a window was sent: there is nowhere to step back to, so we start over.
     assert_eq!(
         transfer::decide_resume(1024, 10_000_000, WINDOW_BYTES),
         ResumeDecision::FromStart
@@ -43,8 +43,8 @@ fn отступ_не_уводит_за_начало_файла() {
 }
 
 #[test]
-fn полностью_переданный_файл_не_передаётся_заново() {
-    // Осталась сверка контрольных сумм и ввод в раздачу — но не передача.
+fn a_fully_sent_file_is_not_sent_again() {
+    // The checksum comparison and the entry into serving are left — but not the transfer.
     assert_eq!(
         transfer::decide_resume(1_000_000, 1_000_000, WINDOW_BYTES),
         ResumeDecision::AlreadyComplete
@@ -52,53 +52,53 @@ fn полностью_переданный_файл_не_передаётся_з
 }
 
 #[test]
-fn временный_файл_больше_исходного_это_не_почти_готово() {
-    // Признак того, что источник подменили или на сервере лежит не тот файл.
-    // Продолжить значило бы склеить два разных файла, и обнаружилось бы это
-    // только сверкой — когда время уже потрачено.
+fn a_staged_file_larger_than_the_source_is_not_almost_done() {
+    // A sign that the source was swapped, or that the wrong file lies on the server.
+    // Carrying on would glue two different files together, and it would only be found at
+    // the comparison — when the time has already been spent.
     match transfer::decide_resume(2_000_000, 1_000_000, WINDOW_BYTES) {
         ResumeDecision::Mismatch { temp, total } => {
             assert_eq!(temp, 2_000_000);
             assert_eq!(total, 1_000_000);
         }
-        other => panic!("расхождение принято за продолжение: {other:?}"),
+        other => panic!("a divergence was taken for a carry-on: {other:?}"),
     }
 }
 
 #[test]
-fn позиция_возобновления_переживает_запись_и_чтение() {
+fn a_resume_position_survives_writing_and_reading() {
     let token = ResumeToken {
         remote_temp: String::from("/var/lib/.vrcast-uploads/t1.film.part"),
         remote_name: String::from("film_22.mp4"),
-        local_path: Some(String::from("F:/видео/фильм 22.mp4")),
+        local_path: Some(String::from("F:/video/film 22.mp4")),
         source_size: 32_000_000_000,
         source_modified: Some(String::from("1756108800")),
         media_id: Some(String::from("m-42")),
         limit_bps: Some(8_000_000),
     };
-    let back = ResumeToken::parse(&token.to_json()).expect("позиция не прочиталась");
+    let back = ResumeToken::parse(&token.to_json()).expect("the position would not read");
     assert_eq!(back, token);
 }
 
 #[test]
-fn позиция_из_прежней_версии_читается_без_пути_к_исходнику() {
-    // Записи, сделанные прежними версиями, лежат в базе у тех, кто уже пользуется
-    // приложением. Уронить на них разбор значило бы потерять незаконченные передачи
-    // при обновлении — молча, потому что разбор возвращает `None`.
+fn a_position_from_an_earlier_version_reads_without_a_path_to_the_source() {
+    // Records made by earlier versions sit in the databases of people already using the
+    // application. Failing to parse them would mean losing unfinished transfers on an
+    // upgrade — quietly, because the parse returns `None`.
     //
-    // Запись нарочно взята «как есть»: в ней нет полей, появившихся позже,
-    // и есть `uploaded_hint`, которого больше нет. Должно пережить и то и другое.
-    let старая = r#"{"remote_temp":"/tmp/x.part","remote_name":"film.mp4",
+    // The record is deliberately taken as it stands: it holds none of the fields that came
+    // later, and it does hold `uploaded_hint`, which no longer exists. Both must survive.
+    let old = r#"{"remote_temp":"/tmp/x.part","remote_name":"film.mp4",
         "source_size":1000,"source_modified":null,"uploaded_hint":500}"#;
-    let back = ResumeToken::parse(старая).expect("прежняя запись перестала читаться");
+    let back = ResumeToken::parse(old).expect("an earlier record stopped reading");
     assert_eq!(back.local_path, None);
     assert_eq!(back.remote_name, "film.mp4");
 }
 
 #[test]
-fn подменённый_исходник_замечается_до_передачи() {
-    // Иначе продолжение допишет к началу одного файла хвост другого, и узнается
-    // это только на сверке контрольных сумм — после часа передачи.
+fn a_swapped_source_is_noticed_before_the_transfer() {
+    // Otherwise carrying on appends the tail of one file to the beginning of another, and it
+    // only comes to light at the checksum comparison — after an hour of transferring.
     let token = ResumeToken {
         remote_temp: String::from("/tmp/x.part"),
         remote_name: String::from("film.mp4"),
@@ -112,39 +112,39 @@ fn подменённый_исходник_замечается_до_перед�
     assert!(token.matches_source(1_000, Some("1756108800")));
     assert!(
         !token.matches_source(2_000, Some("1756108800")),
-        "другой размер принят за тот же файл"
+        "a different size was taken for the same file"
     );
     assert!(
         !token.matches_source(1_000, Some("1756195200")),
-        "файл пересобрали в тот же объём, и это не замечено"
+        "the file was rebuilt to the same size, and it went unnoticed"
     );
-    // Время неизвестно — довольствуемся размером, но не выдумываем расхождение.
+    // The time is unknown — we make do with the size, but do not invent a divergence.
     assert!(token.matches_source(1_000, None));
 }
 
-// ---------- ограничение скорости (T078) ----------
+// ---------- the rate limit (T078) ----------
 
 #[test]
-fn без_предела_ждать_не_приходится() {
+fn with_no_limit_there_is_nothing_to_wait_for() {
     let mut r = RateLimiter::new(None);
     let now = Instant::now();
     assert_eq!(r.delay_for(100_000_000, now), Duration::ZERO);
 }
 
 #[test]
-fn нулевой_предел_считается_отсутствием_предела() {
-    // Ноль как предел означал бы «не передавать никогда» — это не то, что человек
-    // имеет в виду, оставляя поле пустым.
+fn a_limit_of_zero_counts_as_no_limit() {
+    // Zero as a limit would mean "never send anything" — which is not what a person means by
+    // leaving the field empty.
     let mut r = RateLimiter::new(Some(0));
     assert_eq!(r.limit_bps(), None);
     assert_eq!(r.delay_for(1_000_000, Instant::now()), Duration::ZERO);
 }
 
 #[test]
-fn средняя_скорость_держится_в_пределе_на_длинном_отрезке() {
-    // Главное свойство ограничителя. Проверяется по модельному времени: ждать
-    // настоящие десять секунд ради проверки незачем.
-    let limit = 1_000_000u64; // байт в секунду
+fn the_average_speed_stays_within_the_limit_over_a_long_stretch() {
+    // The limiter's main property. Checked against modelled time: there is no point waiting
+    // ten real seconds for a test.
+    let limit = 1_000_000u64; // bytes per second
     let mut r = RateLimiter::new(Some(limit));
 
     let start = Instant::now();
@@ -152,8 +152,8 @@ fn средняя_скорость_держится_в_пределе_на_дл�
     let chunk = 64 * 1024u64;
     let mut sent = 0u64;
 
-    // Отправляем без пауз, продвигая время ровно на столько, сколько велит
-    // ограничитель, — как поступал бы настоящий отправитель.
+    // Sent without pauses, moving the clock on by exactly what the limiter asks — as a real
+    // sender would.
     for _ in 0..400 {
         let wait = r.delay_for(chunk, now);
         now += wait;
@@ -164,18 +164,18 @@ fn средняя_скорость_держится_в_пределе_на_дл�
     let actual = sent as f64 / seconds.max(0.001);
     assert!(
         actual <= limit as f64 * 1.15,
-        "средняя скорость {actual:.0} байт/с превысила предел {limit}"
+        "the average speed of {actual:.0} bytes/s went over the limit of {limit}"
     );
     assert!(
         actual > limit as f64 * 0.5,
-        "ограничитель душит сильнее заданного: {actual:.0} вместо {limit}"
+        "the limiter throttles harder than asked: {actual:.0} instead of {limit}"
     );
 }
 
 #[test]
-fn короткий_простой_не_превращается_в_потерю_скорости() {
-    // Запас позволяет отправить накопленное сразу после короткой паузы —
-    // иначе передача шла бы рывками строго по расписанию.
+fn a_short_idle_spell_does_not_turn_into_lost_speed() {
+    // The allowance lets what has built up go out right after a short pause — otherwise a
+    // transfer would move in jerks, strictly by the clock.
     let mut r = RateLimiter::new(Some(1_000_000));
     let now = Instant::now();
     r.delay_for(1_000_000, now);
@@ -184,14 +184,14 @@ fn короткий_простой_не_превращается_в_потерю
     assert_eq!(
         r.delay_for(500_000, later),
         Duration::ZERO,
-        "после паузы пришлось ждать, хотя разрешение накопилось"
+        "after a pause it had to wait although the allowance had built up"
     );
 }
 
-// ---------- скорость и оставшееся время (T079) ----------
+// ---------- speed and time left (T079) ----------
 
 #[test]
-fn скорость_считается_по_последним_секундам() {
+fn the_speed_is_counted_over_the_last_few_seconds() {
     let mut e = ProgressEstimate::new(Duration::from_secs(10));
     let start = Instant::now();
 
@@ -199,18 +199,18 @@ fn скорость_считается_по_последним_секундам(
         e.record(start + Duration::from_secs(i), i * 1_000_000);
     }
 
-    let speed = e.speed_bps().expect("скорость не посчиталась");
+    let speed = e.speed_bps().expect("the speed was not worked out");
     assert!(
         (900_000..=1_100_000).contains(&speed),
-        "скорость {speed} вместо примерно миллиона"
+        "speed {speed} instead of roughly a million"
     );
 }
 
 #[test]
-fn после_паузы_не_показывается_четыреста_часов() {
-    // Ради этого правила модуль и существует. Накопленное до паузы больше не
-    // описывает происходящее: если его не выбросить, оценка станет чудовищной,
-    // и человек решит, что всё сломалось.
+fn four_hundred_hours_are_not_shown_after_a_pause() {
+    // The rule this module exists for. What built up before a pause no longer describes what
+    // is happening: not thrown away, the estimate turns monstrous and a person decides
+    // everything is broken.
     let mut e = ProgressEstimate::new(Duration::from_secs(10));
     let start = Instant::now();
 
@@ -218,16 +218,16 @@ fn после_паузы_не_показывается_четыреста_час
         e.record(start + Duration::from_secs(i), i * 1_000_000);
     }
 
-    // Полчаса простоя.
+    // Half an hour of idleness.
     let after_pause = start + Duration::from_secs(1805);
     e.record(after_pause, 5_000_000);
     assert_eq!(
         e.speed_bps(),
         None,
-        "сразу после паузы скорость выдумана из воздуха"
+        "right after a pause the speed was invented out of thin air"
     );
 
-    // Пошло заново — скорость считается по новым отсчётам, а не по всей истории.
+    // Off again — the speed is counted over the new readings, not over the whole history.
     for i in 1..=5u64 {
         e.record(
             after_pause + Duration::from_secs(i),
@@ -236,22 +236,22 @@ fn после_паузы_не_показывается_четыреста_час
     }
     let speed = e
         .speed_bps()
-        .expect("скорость не посчиталась после продолжения");
+        .expect("the speed was not worked out after carrying on");
     assert!(
         (1_800_000..=2_200_000).contains(&speed),
-        "скорость {speed} посчитана с учётом простоя"
+        "speed {speed} was counted with the idle spell included"
     );
 }
 
 #[test]
-fn оставшееся_время_не_выдумывается_при_неизвестной_скорости() {
+fn the_time_left_is_not_invented_when_the_speed_is_unknown() {
     let e = ProgressEstimate::default();
     assert_eq!(e.eta(1_000_000), None);
 }
 
 #[test]
-fn слишком_короткий_отрезок_не_даёт_поверить_в_гигабиты() {
-    // Деление на тысячные доли секунды превращает любую дрожь в невероятное число.
+fn too_short_a_stretch_does_not_make_gigabits_believable() {
+    // Dividing by thousandths of a second turns any jitter into an unbelievable number.
     let mut e = ProgressEstimate::default();
     let start = Instant::now();
     e.record(start, 0);
@@ -259,81 +259,86 @@ fn слишком_короткий_отрезок_не_даёт_поверить
     assert_eq!(e.speed_bps(), None);
 }
 
-// ---------- имена (T080) ----------
+// ---------- names (T080) ----------
 
 #[test]
-fn файл_собирается_рядом_с_раздачей_а_не_внутри_неё() {
-    // Веб-сервер отдаёт всё, что видит в каталоге раздачи. Недокачанный файл там
+fn the_file_is_staged_beside_the_serving_rather_than_inside_it() {
+    // A web server hands out everything it sees in the serving directory. A file still being
+    // downloaded must not lie there for a second.
     // лежать не должен ни секунды.
-    let staging = remote_name::staging_dir("/var/lib/vrcast/videos").expect("некуда собирать");
+    let staging = remote_name::staging_dir("/var/lib/vrcast/videos").expect("nowhere to stage");
     assert_eq!(staging, "/var/lib/vrcast/.vrcast-uploads");
     assert!(
         !staging.starts_with("/var/lib/vrcast/videos"),
-        "сборка идёт внутри каталога раздачи"
+        "the staging happens inside the serving directory"
     );
 }
 
 #[test]
-fn каталог_раздачи_в_корне_не_даёт_места_под_сборку() {
-    // Класть недокачанное в саму раздачу нельзя, а рядом — некуда. Честный отказ
-    // лучше молчаливого нарушения главного правила.
+fn a_serving_directory_at_the_root_leaves_no_room_to_stage_in() {
+    // Putting what is still downloading into the serving itself will not do, and beside it
+    // there is nowhere. An honest refusal beats quietly breaking the main rule.
     assert_eq!(remote_name::staging_dir("/videos"), None);
 }
 
 #[test]
-fn имя_временного_файла_зависит_только_от_конечного_имени() {
-    // На этом держится вся схема возобновления: позиция — это размер временного
-    // файла, и найти его нужно уметь до создания задачи (проверки перед стартом)
-    // и после перезапуска приложения. Привязка к номеру задачи это сломала бы.
+fn the_staged_file_s_name_depends_only_on_the_final_name() {
+    // The whole resume scheme rests on this: the position is the staged file's size, and it
+    // has to be findable before the task is created (the pre-start checks) and after the
+    // application restarts. Tying it to the task id would break that.
     let dir = "/var/lib/vrcast/.vrcast-uploads";
     let a = remote_name::staging_file(dir, "film.mp4");
     let b = remote_name::staging_file(dir, "film.mp4");
-    assert_eq!(a, b, "одно и то же имя дало разные временные файлы");
+    assert_eq!(a, b, "one and the same name gave different staged files");
     assert!(a.ends_with(".part"));
 
-    // Разные конечные имена — разные временные файлы.
-    assert_ne!(a, remote_name::staging_file(dir, "другое.mp4"));
+    // Different final names — different staged files.
+    assert_ne!(a, remote_name::staging_file(dir, "other.mp4"));
 
-    // Опасные знаки обезвреживаются и здесь: временный путь тоже уходит в команду.
+    // Dangerous characters are defused here too: the staged path also goes into a command.
     let dangerous = remote_name::staging_file(dir, "../../etc/passwd");
     assert!(
         dangerous.starts_with(dir),
-        "временный файл ушёл за пределы каталога сборки: {dangerous}"
+        "the staged file went outside the staging directory: {dangerous}"
     );
 }
 
 #[test]
-fn опасные_знаки_в_имени_обезвреживаются() {
-    // Проверяются свойства, а не точный вид результата. Как именно выглядит
-    // обезвреженное имя — дело вкуса и может меняться; важно, что из него нельзя
-    // выйти в другой каталог, спрятать файл или разорвать команду на сервере.
-    for опасное in [
+fn dangerous_characters_in_a_name_are_defused() {
+    // Properties are checked rather than the exact look of the result. Just how a defused
+    // name looks is a matter of taste and may change; what matters is that one cannot escape
+    // into another directory, hide a file, or tear a command apart on the server.
+    for dangerous_name in [
         "../../etc/passwd",
         "film\nrm -rf /.mp4",
-        "  .скрытый.mp4  ",
+        "  .hidden.mp4  ",
         "C:\\Windows\\system32",
         ".",
         "..",
     ] {
-        let clean = remote_name::sanitize(опасное);
+        let clean = remote_name::sanitize(dangerous_name);
 
         assert!(
             !clean.contains('/') && !clean.contains('\\'),
-            "разделитель пути уцелел в «{clean}» (из «{опасное}»)"
+            "a path separator survived in \"{clean}\" (from \"{dangerous_name}\")"
         );
         assert!(
             !clean.starts_with('.'),
-            "имя осталось скрытым: «{clean}» (из «{опасное}»)"
+            "the name stayed hidden: \"{clean}\" (from \"{dangerous_name}\")"
         );
         assert!(
             !clean.contains('\n') && !clean.contains('\r') && !clean.contains('\0'),
-            "перевод строки уцелел в «{clean}»"
+            "a newline survived in \"{clean}\""
         );
-        assert_eq!(clean.trim(), clean, "по краям остались пробелы: «{clean}»");
+        assert_eq!(
+            clean.trim(),
+            clean,
+            "spaces were left at the edges: \"{clean}\""
+        );
     }
 
-    // Обычное имя проходит нетронутым: обезвреживание не должно портить то,
-    // что и так в порядке.
+    // An ordinary name passes untouched: defusing must not spoil what is already fine.
+    // The non-Latin case is deliberate — people's titles are written in their own language.
     assert_eq!(
         remote_name::sanitize("Backrooms_22.mp4"),
         "Backrooms_22.mp4"
@@ -342,33 +347,33 @@ fn опасные_знаки_в_имени_обезвреживаются() {
         remote_name::sanitize("Фильм — финал.mp4"),
         "Фильм — финал.mp4"
     );
-    // Две точки внутри имени — законны, и трогать их незачем.
+    // Two dots inside a name are legitimate, and there is no reason to touch them.
     assert_eq!(remote_name::sanitize("film..final.mp4"), "film..final.mp4");
 }
 
 #[test]
-fn занятое_имя_это_предупреждение_а_не_запрет() {
-    // Замена законна, но у неё есть последствия, и человек должен знать о них
-    // до, а не после жалоб зрителей (FR-039).
+fn a_name_already_taken_is_a_warning_rather_than_a_bar() {
+    // Replacing is legitimate, but it has consequences, and a person must know them before
+    // rather than after their viewers complain (FR-039).
     let existing = vec![String::from("film.mp4")];
 
     assert_eq!(
         remote_name::check_name("film.mp4", &existing, true),
         NameVerdict::Exists { cdn_cached: true },
-        "при заданном CDN не сказано про кеш"
+        "with a CDN set, the cache was not mentioned"
     );
     assert_eq!(
         remote_name::check_name("film.mp4", &existing, false),
         NameVerdict::Exists { cdn_cached: false }
     );
     assert_eq!(
-        remote_name::check_name("другое.mp4", &existing, false),
+        remote_name::check_name("other.mp4", &existing, false),
         NameVerdict::Ok
     );
 }
 
 #[test]
-fn служебные_имена_раздачи_занимать_нельзя() {
+fn the_serving_s_housekeeping_names_cannot_be_taken() {
     assert_eq!(
         remote_name::check_name("library.json", &[], false),
         NameVerdict::Reserved

@@ -1,49 +1,53 @@
-//! T036 — договорные тесты команд библиотеки.
+//! T036 — contract tests for the library commands.
 //!
-//! Здесь проверяется то, что решается **без сервера**: разбор доводов, коды отказов
-//! и построение ссылок. Всё, для чего нужна настоящая опись — занятое короткое имя,
-//! требование подтверждения с числом файлов и объёмом, расхождение поколений, —
-//! проверяется против настоящего OpenSSH в `tests/integration/library_ops.rs`
-//! и `manifest_conflict.rs`.
+//! What is checked here is what can be settled **without a server**: parsing the arguments,
+//! the refusal codes and building the links. Everything that needs a real catalogue — a
+//! short name already taken, demanding confirmation with the number of files and the
+//! volume, a divergence of generations — is checked against a real OpenSSH in
+//! `tests/integration/library_ops.rs` and `manifest_conflict.rs`.
 //!
-//! Разделение не формальное: договорный тест, подсовывающий команде выдуманную опись,
-//! проверял бы согласие кода с этой выдумкой, а не с тем, что лежит на сервере.
+//! The split is not a formality: a contract test that slipped an invented catalogue to a
+//! command would check the code's agreement with that invention rather than with what lies
+//! on the server.
 
 use super::support::{state, valid_input};
 use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::library::{api, FileView, LibraryView, MediaView};
 use vrcast_studio_lib::commands::servers::api as servers_api;
 
-const SECRET: &str = "пароль-от-сервера-для-теста-9f3a";
+const SECRET: &str = "server-password-for-the-test-9f3a";
 
 fn state_with_server() -> (vrcast_studio_lib::commands::AppState, String) {
     let s = state();
-    let mut input = valid_input("Сервер");
+    let mut input = valid_input("Server");
     input.domain = String::from("stream.example.com");
-    let id = servers_api::server_add(&s, input, SECRET).expect("профиль не создан");
+    let id = servers_api::server_add(&s, input, SECRET).expect("the profile was not created");
     (s, id)
 }
 
-// ---------- ссылки ----------
+// ---------- links ----------
 
 #[test]
-fn ссылки_на_файл_строятся_из_профиля() {
-    // FR-016. Домен берётся из профиля пользователя — в приложении его нет и быть
-    // не может (FR-004).
+fn a_file_s_links_are_built_from_the_profile() {
+    // FR-016. The domain comes from a person's profile — the application has none and
+    // cannot have one (FR-004).
     let (s, id) = state_with_server();
 
-    let links = api::links_for(&s, &id, "Backrooms_22.mp4").expect("ссылки не построены");
+    let links = api::links_for(&s, &id, "Backrooms_22.mp4").expect("the links were not built");
     assert_eq!(
         links.origin,
         "https://stream.example.com/videos/Backrooms_22.mp4"
     );
-    assert_eq!(links.cdn, None, "CDN не задан, а вторая ссылка появилась");
+    assert_eq!(
+        links.cdn, None,
+        "no CDN was set, yet a second link appeared"
+    );
 }
 
 #[test]
-fn при_заданном_cdn_отдаются_обе_ссылки() {
+fn with_a_cdn_set_both_links_are_handed_back() {
     let s = state();
-    let mut input = valid_input("С посредником");
+    let mut input = valid_input("With a middleman");
     input.cdn_base = Some(String::from("https://cdn.example.net"));
     let id = servers_api::server_add(&s, input, SECRET).unwrap();
 
@@ -56,120 +60,124 @@ fn при_заданном_cdn_отдаются_обе_ссылки() {
 }
 
 #[test]
-fn ссылки_для_несуществующего_сервера_это_ошибка() {
+fn links_for_a_server_that_does_not_exist_are_an_error() {
     let s = state();
-    let err = api::links_for(&s, "нет-такого", "a.mp4").expect_err("выданы ссылки в пустоту");
+    let err = api::links_for(&s, "no-such-server", "a.mp4")
+        .expect_err("links into nothing were handed out");
     assert_eq!(err.code, ErrorCode::InvalidInput);
 }
 
-// ---------- разбор доводов, не требующий сервера ----------
+// ---------- argument checks that need no server ----------
 
 #[tokio::test]
-async fn медиа_с_недопустимым_коротким_именем_не_создаётся() {
-    // Проверка идёт до обращения к серверу: незачем ходить в сеть, чтобы отвергнуть
-    // то, что отвергается по виду.
+async fn a_medium_with_a_disallowed_short_name_is_not_created() {
+    // The check happens before the server is reached: there is no point going to the
+    // network to reject what is rejected by its shape.
     let (s, id) = state_with_server();
 
-    let err = api::media_create(&s, &id, "Название", Some("имя с пробелом"))
+    let err = api::media_create(&s, &id, "Title", Some("name with a space"))
         .await
-        .expect_err("создано медиа с пробелом в коротком имени");
+        .expect_err("a medium with a space in its short name was created");
     assert_eq!(err.code, ErrorCode::InvalidInput);
-    // Отказ называет, ЧТО именно не так с именем, а не только что оно не годится:
-    // подсказку по коду интерфейс возьмёт сам, а вот про пробел знает только ядро.
+    // The refusal names WHAT exactly is wrong with the name rather than only that it will
+    // not do: the hint the interface takes from the code, but only the core knows about the
+    // space.
     assert!(
         err.says(DetailCode::SlugBadChar),
-        "отказ не называет негодный знак: {err}"
+        "the refusal does not name the disallowed character: {err}"
     );
 }
 
 #[tokio::test]
-async fn медиа_с_пустым_названием_не_создаётся() {
+async fn a_medium_with_an_empty_title_is_not_created() {
     let (s, id) = state_with_server();
     let err = api::media_create(&s, &id, "   ", None)
         .await
-        .expect_err("создано медиа без названия");
+        .expect_err("a medium with no title was created");
     assert_eq!(err.code, ErrorCode::InvalidInput);
 }
 
 #[tokio::test]
-async fn название_без_латинского_соответствия_требует_короткого_имени_от_человека() {
-    // Приложение не выдумывает короткое имя из мусора: оно попадёт в имя файла
-    // и в ссылку, и исправлять это будет поздно.
+async fn a_title_with_no_latin_counterpart_asks_a_person_for_the_short_name() {
+    // The application does not invent a short name out of rubbish: it goes into the file
+    // name and into the link, and it would be too late to put right.
     let (s, id) = state_with_server();
     let err = api::media_create(&s, &id, "日本語", None)
         .await
-        .expect_err("короткое имя выдумано из ниоткуда");
+        .expect_err("a short name was invented out of nowhere");
     assert_eq!(err.code, ErrorCode::InvalidInput);
     assert!(
         err.says(DetailCode::SlugUnmakeable),
-        "отказ не объясняет, что короткое имя придётся задать самому: {err}"
+        "the refusal does not explain that the short name has to be set by hand: {err}"
     );
 }
 
 #[tokio::test]
-async fn переименование_без_единого_нового_значения_отвергается() {
-    // Вызов, который ничего не меняет, но записывает опись, — это лишнее поколение
-    // и лишний повод для расхождения с другим экземпляром приложения.
+async fn a_rename_with_not_one_new_value_is_rejected() {
+    // A call that changes nothing yet writes the catalogue is a needless generation and a
+    // needless chance to diverge from another copy of the application.
     let (s, id) = state_with_server();
     let err = api::media_rename(&s, &id, "m1", None, None)
         .await
-        .expect_err("принято переименование в никуда");
+        .expect_err("a rename into nothing was accepted");
     assert_eq!(err.code, ErrorCode::InvalidInput);
 }
 
 #[tokio::test]
-async fn команды_библиотеки_для_несуществующего_сервера_отказывают() {
+async fn the_library_commands_refuse_for_a_server_that_does_not_exist() {
     let s = state();
     for err in [
-        api::library_list(&s, "нет-такого", false).await.err(),
-        api::media_create(&s, "нет-такого", "Название", None)
+        api::library_list(&s, "no-such-server", false).await.err(),
+        api::media_create(&s, "no-such-server", "Title", None)
             .await
             .err(),
-        api::media_delete(&s, "нет-такого", "m1", true).await.err(),
-        api::file_delete(&s, "нет-такого", "a.mp4", true)
+        api::media_delete(&s, "no-such-server", "m1", true)
+            .await
+            .err(),
+        api::file_delete(&s, "no-such-server", "a.mp4", true)
             .await
             .err(),
     ] {
-        let err = err.expect("команда отработала на несуществующем сервере");
-        assert_eq!(err.code, ErrorCode::InvalidInput, "неверный код: {err:?}");
+        let err = err.expect("the command worked on a server that does not exist");
+        assert_eq!(err.code, ErrorCode::InvalidInput, "the wrong code: {err:?}");
     }
 }
 
-// ---------- форма ответа ----------
+// ---------- the shape of the answer ----------
 
 #[test]
-fn полнота_библиотеки_считается_по_всем_видимым_файлам() {
-    // Свойство, ради которого группа «не распознано» вообще существует (FR-015):
-    // число файлов, видимых пользователю, обязано совпадать с числом файлов
-    // в каталоге. Файл, не попавший ни в медиа, ни в эту группу, — потерянный файл.
+fn a_library_s_completeness_is_counted_over_every_visible_file() {
+    // The property the "not recognised" group exists for in the first place (FR-015): the
+    // number of files a person can see must equal the number of files in the directory. A
+    // file that landed neither in a medium nor in that group is a lost file.
     let view = LibraryView {
         server_id: String::from("srv"),
         media: vec![MediaView {
             id: String::from("m1"),
-            title: String::from("Фильм"),
+            title: String::from("Film"),
             slug: String::from("film"),
             files: vec![file_view("film_22.mp4"), file_view("film_10.mp4")],
             ladders: vec![String::from("film/master.m3u8")],
             total_bytes: 2048,
             created_at: String::from("2026-08-01T10:00:00Z"),
         }],
-        unrecognized: vec![file_view("непонятное.mp4")],
+        unrecognized: vec![file_view("unclear.mp4")],
         disk: None,
         stale: false,
     };
 
-    // Два файла медиа, один набор качеств, одно нераспознанное.
+    // Two files of the medium, one quality ladder, one unrecognised.
     assert_eq!(view.accounted_entries(), 4);
 }
 
 #[test]
-fn ответ_библиотеки_переживает_передачу_через_границу() {
-    // Договор пересекает границу между ядром и интерфейсом в виде JSON. Тип, который
-    // не проходит туда и обратно, — это договор, который где-то потеряет данные.
+fn the_library_s_answer_survives_the_crossing() {
+    // The contract crosses the boundary between the core and the interface as JSON. A type
+    // that does not survive the round trip is a contract that will lose data somewhere.
     let view = LibraryView {
         server_id: String::from("srv"),
         media: Vec::new(),
-        unrecognized: vec![file_view("одинокий.mp4")],
+        unrecognized: vec![file_view("lonely.mp4")],
         disk: Some(vrcast_studio_lib::commands::library::DiskUsage {
             total_bytes: 100,
             free_bytes: 40,
@@ -178,12 +186,12 @@ fn ответ_библиотеки_переживает_передачу_чер�
         stale: true,
     };
 
-    let json = serde_json::to_string(&view).expect("ответ не сериализуется");
-    let back: LibraryView = serde_json::from_str(&json).expect("ответ не читается обратно");
+    let json = serde_json::to_string(&view).expect("the answer will not serialise");
+    let back: LibraryView = serde_json::from_str(&json).expect("the answer will not read back");
     assert_eq!(back, view);
     assert!(
         json.contains("\"stale\":true"),
-        "признак устаревших данных потерян: {json}"
+        "the stale-data mark was lost: {json}"
     );
 }
 

@@ -1,24 +1,25 @@
-//! T060 — сценарий 1 из `quickstart.md` на настоящем сервере, **только на чтение**.
+//! T060 — scenario 1 from `quickstart.md` against the live server, **read-only**.
 //!
-//! Это приёмочная проверка вехи A, а не часть обычного набора: она помечена
-//! `#[ignore]` и запускается только по прямой просьбе:
+//! This is milestone A's acceptance check rather than part of the ordinary suite: it is
+//! marked `#[ignore]` and runs only when asked for directly:
 //!
 //! ```text
-//! cargo test --features integration --test integration -- --ignored --nocapture живой_сервер
+//! cargo test --features integration --test integration -- --ignored --nocapture live_server
 //! ```
 //!
-//! **Что она делает с сервером: ничего.** Перечисляет каталог, читает опись, читает
-//! начала файлов, спрашивает место на диске. Ни одной записи — конституция запрещает
-//! проверять на боевом сервере то, что меняет его состояние: там идёт настоящая
-//! раздача, и оборвать её ради проверки недопустимо.
+//! **What it does to the server: nothing.** It lists the directory, reads the catalogue,
+//! reads the beginnings of files, asks how much room the disk has. Not one write — the
+//! constitution forbids checking anything that changes the live server's state against it:
+//! real serving is going on there, and breaking it for a check is not allowed.
 //!
-//! Шаги сценария, которые меняют сервер (переименование короткого имени, удаление
-//! с подтверждением), проверяются против одноразового контейнера — `library_ops.rs`.
-//! Смысл этой проверки в другом: убедиться, что приложение справляется с настоящей
-//! библиотекой, а не только с той, которую само же и разложило.
+//! The scenario's steps that do change the server (renaming a short name, deleting with
+//! confirmation) are checked against a throwaway container — `library_ops.rs`. The point of
+//! this check is another one: to be sure the application copes with a real library rather
+//! than only with the one it laid out itself.
 //!
-//! Настройки берутся из `server.env` через тот же перенос, что предлагается
-//! пользователю (T043) — так заодно проверяется и он. Секрет в код теста не попадает.
+//! The settings come from `server.env` through the same carry-over that is offered to a
+//! person (T043) — so that gets checked along the way. The secret never reaches the test's
+//! code.
 
 use std::sync::Arc;
 use vrcast_studio_lib::commands::library::api as library;
@@ -33,86 +34,85 @@ fn state() -> AppState {
         Arc::new(Db::open_in_memory().unwrap()),
         Arc::new(InMemorySecretStore::new()),
     )
-    .expect("состояние приложения не собралось")
+    .expect("the application state would not assemble")
 }
 
 #[tokio::test]
-#[ignore = "приёмочная проверка вехи A: обращается к настоящему серверу, запускать вручную"]
-async fn живой_сервер_только_чтение() {
+#[ignore = "milestone A's acceptance check: it reaches the live server, run it by hand"]
+async fn the_live_server_read_only() {
     let Some(path) = env_import::default_location() else {
         panic!(
-            "рядом не нашлось server.env — проверка рассчитана на машину автора, \
-             где он есть; на чужой её запускать нечего"
+            "no server.env was found nearby — the check is meant for the author's machine, \
+             where there is one; there is nothing to run it for on anyone else's"
         );
     };
-    let imported = env_import::read_from(&path).expect("server.env не разобрался");
+    let imported = env_import::read_from(&path).expect("server.env would not parse");
 
-    // Журнал включаем нарочно: он служит второй половиной проверки (T064, SC-011).
-    // Прогон идёт с настоящим ключом от настоящего сервера, и если вырезание
-    // секретов где-то не сработает, след останется именно здесь. Уровень задаётся
-    // через VRCAST_LOG — для поиска утечек его ставят в trace, чтобы разговорчивые
-    // библиотеки выложили всё, что знают.
+    // The log is switched on deliberately: it serves as the other half of the check (T064,
+    // SC-011). The run goes with a real key to a real server, and if secret redaction fails
+    // anywhere, the trace stays right here. The level is set through VRCAST_LOG — for
+    // hunting leaks it is put to trace, so that talkative libraries lay out all they know.
     vrcast_studio_lib::logging::init();
 
-    println!("\n=== Сценарий 1, только чтение ===");
-    println!("настройки взяты из {}", imported.source.display());
+    println!("\n=== Scenario 1, read-only ===");
+    println!("settings taken from {}", imported.source.display());
     println!(
-        "сервер {}@{}:{}, домен {}",
+        "server {}@{}:{}, domain {}",
         imported.input.user, imported.input.host, imported.input.port, imported.input.domain
     );
 
     let state = state();
 
-    // Шаг 2 сценария: заведомо неверные данные не должны никуда пустить.
-    // Проверяем безопасным способом: несуществующий порт того же адреса.
+    // The scenario's step 2: credentials that are certainly wrong must let nobody in.
+    // Checked the safe way: a port of the same address that nothing listens on.
     {
         let mut wrong = imported.input.clone();
-        wrong.name = String::from("Заведомо неверный");
+        wrong.name = String::from("Certainly wrong");
         wrong.port = 64_999;
-        let id = servers::server_add(&state, wrong, "заведомо-неверный-секрет")
-            .expect("профиль не создан");
+        let id = servers::server_add(&state, wrong, "a-certainly-wrong-secret")
+            .expect("the profile was not created");
         let steps = servers::server_test(&state, &id)
             .await
-            .expect("проверка обязана вернуть шаги, а не ошибку");
+            .expect("the check must return steps rather than an error");
         assert_eq!(
             steps[0].status,
             StepStatus::Failed,
-            "закрытый порт вдруг открыт"
+            "the closed port is suddenly open"
         );
         assert!(
             steps[1..].iter().all(|s| s.status == StepStatus::Skipped),
-            "после провала сети проверка пошла дальше"
+            "the check went on after the network step failed"
         );
-        println!("шаг 2: неверные данные останавливают проверку на первом же шаге — верно");
-        servers::server_remove(&state, &id).expect("временный профиль не удалился");
+        println!("step 2: wrong credentials stop the check at the very first step — correct");
+        servers::server_remove(&state, &id).expect("the temporary profile would not delete");
     }
 
-    // Шаг 3: верные данные.
-    let secret = String::new(); // ключ автора без парольной фразы
-    let id =
-        servers::server_add(&state, imported.input.clone(), &secret).expect("профиль не создан");
+    // Step 3: the right credentials.
+    let secret = String::new(); // the author's key has no passphrase
+    let id = servers::server_add(&state, imported.input.clone(), &secret)
+        .expect("the profile was not created");
 
     let fingerprint = vrcast_studio_lib::commands::api::server_probe_fingerprint(
         &imported.input.host,
         imported.input.port,
     )
     .await
-    .expect("отпечаток не получен");
-    println!("отпечаток сервера: {fingerprint}");
+    .expect("the fingerprint was not obtained");
+    println!("the server's fingerprint: {fingerprint}");
     servers::server_fingerprint_confirm(&state, &id, &fingerprint)
-        .expect("отпечаток не подтвердился");
+        .expect("the fingerprint would not confirm");
 
     let steps = servers::server_test(&state, &id)
         .await
-        .expect("проверка вернула ошибку вместо шагов");
-    println!("\n--- шаги проверки подключения ---");
+        .expect("the check returned an error instead of steps");
+    println!("\n--- the connection check's steps ---");
     for s in &steps {
         println!(
             "  [{}] {} — {}",
             match s.status {
-                StepStatus::Ok => "готово",
-                StepStatus::Failed => "СБОЙ  ",
-                StepStatus::Skipped => "мимо  ",
+                StepStatus::Ok => "done  ",
+                StepStatus::Failed => "FAILED",
+                StepStatus::Skipped => "missed",
             },
             s.id,
             s.detail.as_ref().map(|d| d.key.as_str()).unwrap_or("")
@@ -120,77 +120,77 @@ async fn живой_сервер_только_чтение() {
     }
     assert!(
         steps.iter().all(|s| s.status == StepStatus::Ok),
-        "не все шаги проверки прошли"
+        "not every step of the check passed"
     );
 
-    // Шаги 4 и 4a: библиотека и параметры файлов.
+    // Steps 4 and 4a: the library and the files' parameters.
     let view = library::library_list(&state, &id, true)
         .await
-        .expect("библиотека не прочиталась");
+        .expect("the library would not read");
 
-    println!("\n--- библиотека ---");
+    println!("\n--- the library ---");
     println!(
-        "медиа: {}, не распознано: {}, учтено записей: {}",
+        "media: {}, not recognised: {}, entries accounted for: {}",
         view.media.len(),
         view.unrecognized.len(),
         view.accounted_entries()
     );
     if let Some(d) = view.disk {
         println!(
-            "диск: свободно {} из {}, видео занимают {}",
+            "disk: {} free of {}, video takes {}",
             d.free_bytes, d.total_bytes, d.used_by_videos_bytes
         );
         assert!(d.total_bytes > 0 && d.free_bytes <= d.total_bytes);
     }
     assert!(
         !view.stale,
-        "данные пришли из кеша: до сервера не достучались"
+        "the data came from the cache: the server was not reached"
     );
 
-    println!("\n--- файлы и их параметры (из заголовка, без скачивания) ---");
-    let все: Vec<_> = view
+    println!("\n--- the files and their parameters (from the header, without downloading) ---");
+    let all: Vec<_> = view
         .media
         .iter()
         .flat_map(|m| m.files.iter())
         .chain(view.unrecognized.iter())
         .collect();
-    for f in &все {
+    for f in &all {
         println!(
-            "  {:<58} {:>10} Б  {}  {}  {}  {}",
+            "  {:<58} {:>10} B  {}  {}  {}  {}",
             f.path,
             f.size_bytes,
             match (f.width, f.height) {
                 (Some(w), Some(h)) => format!("{w}x{h}"),
-                _ => String::from("размер неизвестен"),
+                _ => String::from("size unknown"),
             },
             f.duration_s
-                .map(|d| format!("{:.0} с", d))
-                .unwrap_or_else(|| String::from("длит. неизв.")),
-            f.video_codec.as_deref().unwrap_or("кодек неизв."),
+                .map(|d| format!("{:.0} s", d))
+                .unwrap_or_else(|| String::from("duration unknown")),
+            f.video_codec.as_deref().unwrap_or("codec unknown"),
             match f.faststart_ok {
-                Some(true) => "готов к раздаче",
-                Some(false) => "ЗАГОЛОВОК В КОНЦЕ",
-                None => "заголовок не прочитан",
+                Some(true) => "ready for serving",
+                Some(false) => "HEADER AT THE END",
+                None => "header not read",
             }
         );
     }
 
-    // Шаг 5: ссылки. Проверяем, что они собраны из домена профиля и указывают
-    // на существующие файлы.
-    println!("\n--- зрительские ссылки ---");
-    for f in все.iter().take(3) {
+    // Step 5: the links. Checked to be built from the profile's domain and to point at
+    // files that exist.
+    println!("\n--- the viewers' links ---");
+    for f in all.iter().take(3) {
         println!("  {}", f.origin_url);
         assert!(
             f.origin_url
                 .starts_with(&format!("https://{}/", imported.input.domain)),
-            "ссылка собрана не из домена профиля: {}",
+            "the link was not built from the profile's domain: {}",
             f.origin_url
         );
     }
 
     assert!(
-        !все.is_empty(),
-        "на сервере не нашлось ни одного файла — проверять нечего"
+        !all.is_empty(),
+        "not one file was found on the server — there is nothing to check"
     );
-    println!("\n=== чтение сервера завершено, ничего не изменено ===\n");
+    println!("\n=== reading the server is done, nothing was changed ===\n");
 }

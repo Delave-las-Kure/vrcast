@@ -1,9 +1,9 @@
-//! Работа с сервером: то, что нельзя проверить без него.
+//! Working with the server: what cannot be checked without one.
 //!
-//! Черта между этим слоем и `domain` проходит по одному признаку: там — **что
-//! известно**, здесь — **как это узнать**. Правила разбора описи живут в
-//! `domain::manifest` и проверяются без сервера; порядок чтения и записи описи —
-//! здесь, и проверяется против настоящего OpenSSH.
+//! One line runs between this layer and `domain`: there lives **what is known**, here
+//! lives **how to find it out**. The rules for parsing the catalogue live in
+//! `domain::manifest` and are checked without a server; the order of reading and
+//! writing it lives here, and is checked against a real OpenSSH.
 
 pub mod active_use;
 pub mod checksum;
@@ -16,33 +16,33 @@ pub mod probe_moov;
 pub mod reconcile;
 pub mod upload;
 
-/// Записи каталога раздачи, которые не являются видео и не показываются в библиотеке.
+/// Entries of the serving directory that are not video and are not shown in the library.
 ///
-/// Обе — во владении приложения (`contracts/server-contract.md`). Показать их
-/// пользователю значило бы предложить ему удалить опись собственной библиотеки.
+/// Both belong to the application (`contracts/server-contract.md`). Showing them to a
+/// person would be offering them the chance to delete their own library's catalogue.
 pub const SERVICE_ENTRIES: [&str; 2] = [manifest_io::MANIFEST_NAME, "_slow"];
 
-/// Заключить строку в кавычки для команды на сервере.
+/// Quote a string for a command on the server.
 ///
-/// Пути приходят из профиля пользователя и содержат что угодно: пробелы, кириллицу,
-/// изредка кавычки. Подставлять их в команду как есть — это и сломанные пути,
-/// и возможность выполнить на сервере не то, что задумано.
+/// Paths come from a person's profile and contain anything at all: spaces, Cyrillic,
+/// occasionally quotes. Dropping them into a command as they stand means both broken
+/// paths and the chance of running something other than what was intended.
 pub(crate) fn shell_quote(value: &str) -> String {
-    // Внутри одинарных кавычек оболочка не толкует ничего, кроме самой кавычки;
-    // её закрывают, экранируют и открывают снова.
+    // Inside single quotes a shell interprets nothing but the quote itself; it is
+    // closed, escaped, and opened again.
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
-/// Соединить каталог и имя в путь на сервере.
+/// Join a directory and a name into a path on the server.
 pub(crate) fn join_remote(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), name)
 }
 
-/// Подключиться к серверу по его профилю.
+/// Connect to a server by its profile.
 ///
-/// Одна точка на всё приложение: подключение — единственное место, где секрет
-/// достаётся из хранилища, и разводить это по нескольким местам значит однажды
-/// забыть где-нибудь про проверку отпечатка.
+/// One point for the whole application: connecting is the only place a secret is taken
+/// out of the store, and spreading that across several places means forgetting the
+/// fingerprint check in one of them sooner or later.
 pub async fn connect(
     secrets: &dyn crate::store::secrets::SecretStore,
     profile: &crate::domain::server_profile::ServerProfile,
@@ -53,8 +53,8 @@ pub async fn connect(
 
     let addr = ServerAddress::new(&profile.host, profile.port);
 
-    // Учётные данные не отправляются серверу, отпечаток которого не подтверждён.
-    // Здесь это не «строгая настройка», а условие: подтверждения нет — подключения нет.
+    // Credentials are not sent to a server whose fingerprint is unconfirmed. This is
+    // not a "strict setting" but a condition: no confirmation, no connection.
     let Some(expected) = profile.host_fingerprint.clone() else {
         return Err(SshError::HostKeyUnconfirmed { addr });
     };

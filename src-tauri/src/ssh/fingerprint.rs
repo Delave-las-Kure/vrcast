@@ -1,16 +1,20 @@
-//! T024 — отпечаток сервера: запоминание, сверка, обнаружение подмены (FR-092).
+//! T024 — the server fingerprint: remembering, comparing, catching impersonation
+//! (FR-092).
 //!
-//! Здесь принято решение строже, чем требует спецификация, и оно стоит объяснения.
+//! A decision stricter than the specification demands was taken here, and it is worth
+//! explaining.
 //!
-//! Обычный клиент SSH при первом подключении показывает отпечаток и спрашивает «доверяем?» —
-//! но соединение к этому моменту уже установлено, а дальше пользователь нередко жмёт «да»
-//! не глядя. Мы делаем иначе: **учётные данные не отправляются серверу, отпечаток которого
-//! не подтверждён**. Узнать отпечаток можно отдельным действием ([`probe`]), которое
-//! соединяется, забирает ключ и разрывает связь, ничего не предъявив.
+//! An ordinary SSH client shows the fingerprint on first connection and asks "do we
+//! trust this?" — but by then the connection is established, and people often press
+//! yes without looking. We do it differently: **credentials are not sent to a server
+//! whose fingerprint is unconfirmed**. The fingerprint can be learnt by a separate
+//! action ([`probe`]) that connects, takes the key, and breaks the connection having
+//! presented nothing.
 //!
-//! Разница существенная: при подмене сервера обычный клиент уже отдал пароль, а мы — нет.
-//! Приложение раздаётся людям и держит доступы к их серверам, поэтому цена ошибки здесь
-//! не своя, а чужая (конституция, принцип IV).
+//! The difference matters: with an impersonating server, an ordinary client has
+//! already given up the password and we have not. This application is handed to people
+//! and holds the keys to their servers, so the cost of a mistake here is not ours but
+//! theirs (constitution, principle IV).
 
 use super::{Result, ServerAddress, SshError};
 use crate::store::db::{now_rfc3339, Db};
@@ -19,21 +23,22 @@ use russh::keys::HashAlg;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Отпечаток открытого ключа сервера в том же виде, в каком его показывает OpenSSH:
-/// `SHA256:...`. Совпадение вида важно — пользователь должен иметь возможность сверить
-/// его глазами с тем, что показал ему хостер.
+/// The fingerprint of the server's public key in the same form OpenSSH shows it:
+/// `SHA256:...`. Matching the form matters — a person has to be able to compare it by
+/// eye against what their hosting provider showed them.
 pub type HostKey = String;
 
-/// Что делать с ключом, который предъявил сервер.
+/// What to do with the key the server presented.
 #[derive(Debug, Clone)]
 pub enum HostKeyPolicy {
-    /// Только узнать отпечаток. Соединение принимается, но дальше него дело не идёт.
+    /// Learn the fingerprint and nothing more. The connection is accepted and goes
+    /// no further.
     Probe,
-    /// Принимать соединение, только если отпечаток совпал с известным.
+    /// Accept the connection only if the fingerprint matches the known one.
     Require(HostKey),
 }
 
-/// Что увидел обработчик во время рукопожатия.
+/// What the handler saw during the handshake.
 #[derive(Debug, Default)]
 pub(crate) struct HostKeySlot {
     pub seen: Option<HostKey>,
@@ -41,7 +46,7 @@ pub(crate) struct HostKeySlot {
     pub was_certificate: bool,
 }
 
-/// Обработчик событий соединения. Единственная его задача — решить судьбу ключа сервера.
+/// The connection's event handler. Its one job is to decide the fate of the server's key.
 pub(crate) struct ClientHandler {
     policy: HostKeyPolicy,
     slot: Arc<Mutex<HostKeySlot>>,
@@ -85,7 +90,8 @@ impl client::Handler for ClientHandler {
                     if let Ok(mut slot) = self.slot.lock() {
                         slot.mismatch = Some((expected.clone(), actual));
                     }
-                    // Отказ на уровне рукопожатия: до отправки учётных данных дело не дойдёт.
+                    // Refused at the handshake: it will never get as far as sending
+                    // credentials.
                     Ok(false)
                 }
             }
@@ -95,8 +101,8 @@ impl client::Handler for ClientHandler {
 
 pub(crate) fn client_config() -> Arc<client::Config> {
     Arc::new(client::Config {
-        // Соединение живёт долго (слежение за журналом, многочасовая передача),
-        // поэтому бездействие не должно его рвать — за живостью следят проверки ниже.
+        // A connection lives a long time (watching a log, a transfer running for
+        // hours), so inactivity must not break it — keepalives below watch for life.
         inactivity_timeout: None,
         keepalive_interval: Some(Duration::from_secs(30)),
         keepalive_max: 3,
@@ -104,10 +110,10 @@ pub(crate) fn client_config() -> Arc<client::Config> {
     })
 }
 
-/// Узнать отпечаток сервера, не предъявляя ему ничего.
+/// Learn a server's fingerprint while presenting it nothing.
 ///
-/// Соединяется, забирает ключ из рукопожатия и сразу разрывает связь. Ни имя пользователя,
-/// ни пароль, ни ключ серверу не отправляются.
+/// Connects, takes the key out of the handshake, and breaks the connection at once.
+/// Neither user name nor password nor key is sent to the server.
 pub async fn probe(addr: &ServerAddress) -> Result<HostKey> {
     let slot = Arc::new(Mutex::new(HostKeySlot::default()));
     let handler = ClientHandler::new(HostKeyPolicy::Probe, slot.clone());
@@ -119,7 +125,8 @@ pub async fn probe(addr: &ServerAddress) -> Result<HostKey> {
 
     match connected {
         Ok(handle) => {
-            // Вежливо прощаемся; неудача прощания ничего не меняет — отпечаток уже получен.
+            // A polite goodbye; a failed goodbye changes nothing — the fingerprint is
+            // already in hand.
             let _ = handle
                 .disconnect(russh::Disconnect::ByApplication, "", "en")
                 .await;
@@ -136,11 +143,11 @@ pub async fn probe(addr: &ServerAddress) -> Result<HostKey> {
 
     taken.ok_or_else(|| SshError::Unreachable {
         addr: addr.clone(),
-        reason: String::from("сервер не предъявил ключ"),
+        reason: String::from("the server presented no key"),
     })
 }
 
-/// Прочитать сохранённый отпечаток сервера.
+/// Read a server's stored fingerprint.
 pub fn stored(
     db: &Db,
     addr: &ServerAddress,
@@ -156,10 +163,10 @@ pub fn stored(
     })
 }
 
-/// Запомнить отпечаток как подтверждённый пользователем.
+/// Remember a fingerprint as confirmed by the person.
 ///
-/// Перезапись существующего — осознанное действие: сюда попадают только после того,
-/// как пользователь увидел новый отпечаток и согласился с ним.
+/// Overwriting an existing one is a deliberate act: this is reached only after someone
+/// has seen the new fingerprint and agreed to it.
 pub fn remember(
     db: &Db,
     addr: &ServerAddress,
@@ -176,7 +183,7 @@ pub fn remember(
     })
 }
 
-/// Забыть отпечаток — например, когда сервер пересоздан и это ожидаемо.
+/// Forget a fingerprint — when a server has been rebuilt and that is expected, say.
 pub fn forget(db: &Db, addr: &ServerAddress) -> std::result::Result<(), crate::store::db::DbError> {
     db.with_conn(|c| {
         c.execute(

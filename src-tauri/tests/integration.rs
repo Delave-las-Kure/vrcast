@@ -1,25 +1,25 @@
-//! Интеграционные тесты против одноразового сервера в контейнере (T026).
+//! Integration tests against a throwaway server in a container (T026).
 //!
-//! Выключены по умолчанию: требуют Docker и идут заметно дольше модульных.
-//! Запуск:
+//! Off by default: they need Docker and run noticeably longer than the unit tests.
+//! To run them:
 //!
 //! ```text
 //! cargo test --features integration --test integration -- --test-threads=1
 //! ```
 //!
-//! Однопоточность обязательна: каждый тест поднимает свой контейнер, а параллельный
-//! запуск дюжины контейнеров на обычной машине только замедляет дело.
+//! Running on one thread is not optional: each test brings up a container of its own, and
+//! starting a dozen containers at once on an ordinary machine only slows things down.
 //!
-//! Боевой сервер здесь не используется НИКОГДА — конституция, раздел «Порядок работы».
+//! The live server is NEVER used here — constitution, the "Way of working" section.
 
 #![cfg(feature = "integration")]
 
-/// Общая оснастка: ключ для тестов создаётся на месте и нужен и здесь,
-/// и модульным тестам.
+/// Shared fixtures: the test key is made on the spot and is needed both here and by the
+/// unit tests.
 #[path = "support/test_key.rs"]
 mod test_key;
 
-/// Проверки состояния процессов — общие с модульными тестами.
+/// The process-state checks — shared with the unit tests.
 #[path = "support/proc_check.rs"]
 mod proc_check;
 

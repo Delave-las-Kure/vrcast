@@ -1,9 +1,9 @@
-//! T083, T084 — заливка против настоящего OpenSSH.
+//! T083, T084 — uploading against a real OpenSSH.
 //!
-//! Здесь проверяется то, ради чего вся Фаза 2 и затевалась и что нельзя проверить
-//! без сервера: передача продолжается с достигнутого, а не начинается заново;
-//! недокачанный файл не виден по конечному имени **ни в один момент**; испорченная
-//! передача в раздачу не попадает и не оставляет мусора.
+//! What is checked here is what the whole of Phase 2 was for and what cannot be checked
+//! without a server: a transfer carries on from where it got to rather than starting over;
+//! a file still being downloaded is not visible under its final name **at any moment**; a
+//! spoilt transfer never enters serving and leaves no litter.
 
 use super::fixture::{key_path, TestServer, KEY_PASSPHRASE};
 use std::sync::Arc;
@@ -21,8 +21,8 @@ use vrcast_studio_lib::tasks::state::TaskState;
 const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 const STAGING_DIR: &str = "/var/lib/vrcast/.vrcast-uploads";
 
-/// Размер пробного файла. Достаточно велик, чтобы передача заняла несколько окон
-/// и её можно было застать в середине; достаточно мал, чтобы тест шёл секунды.
+/// The size of the sample file. Large enough for a transfer to take several windows and be
+/// caught in the middle; small enough for the test to run in seconds.
 const FILE_SIZE: usize = 12 * 1024 * 1024;
 
 fn app_state() -> AppState {
@@ -30,45 +30,45 @@ fn app_state() -> AppState {
         Arc::new(Db::open_in_memory().unwrap()),
         Arc::new(InMemorySecretStore::new()),
     )
-    .expect("состояние приложения не собралось")
+    .expect("the application state would not assemble")
 }
 
-/// Создать локальный файл с предсказуемым, но не однообразным содержимым.
+/// Create a local file with predictable but not uniform contents.
 ///
-/// Однообразное не годится: при нём испорченная передача может дать ту же
-/// контрольную сумму, и проверка неделимости ничего не докажет.
+/// Uniform will not do: with it a spoilt transfer can give the same checksum, and the
+/// indivisibility check would prove nothing.
 fn make_local_file(name: &str, size: usize) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("vrcast-upload-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::create_dir_all(&dir).expect("не создать временный каталог");
+    std::fs::create_dir_all(&dir).expect("could not create the temporary directory");
     let path = dir.join(name);
 
     let mut data = Vec::with_capacity(size);
     let mut x: u32 = 0x1234_5678;
     while data.len() < size {
-        // Простой генератор: повторяемый, но без длинных одинаковых кусков.
+        // A simple generator: repeatable, but with no long identical stretches.
         x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         data.extend_from_slice(&x.to_le_bytes());
     }
     data.truncate(size);
-    std::fs::write(&path, &data).expect("не записать файл");
+    std::fs::write(&path, &data).expect("could not write the file");
     path
 }
 
 async fn setup() -> (TestServer, AppState, String) {
     super::fixture::logging_if_requested();
-    let server = TestServer::start().expect("контейнер не поднялся");
+    let server = TestServer::start().expect("the container would not come up");
     let state = app_state();
     let id = add_profile(&state, &server).await;
     (server, state, id)
 }
 
-/// Завести профиль контейнера и подтвердить его отпечаток.
+/// Set the container's profile up and confirm its fingerprint.
 ///
-/// Отдельно от [`setup`], потому что проверка перезапуска поднимает состояние
-/// приложения дважды на одной и той же базе, а сервер держит у себя.
+/// Kept apart from [`setup`] because the restart check raises the application state twice
+/// against one and the same database while holding the server for itself.
 pub(crate) async fn add_profile(state: &AppState, server: &TestServer) -> String {
     let input = ServerInput {
-        name: String::from("Контейнер"),
+        name: String::from("Container"),
         host: server.host().to_owned(),
         port: server.port,
         user: String::from("root"),
@@ -79,14 +79,15 @@ pub(crate) async fn add_profile(state: &AppState, server: &TestServer) -> String
         cdn_base: None,
         ipv6_mode: None,
     };
-    let id = servers::server_add(state, input, KEY_PASSPHRASE).expect("профиль не создан");
-    // Секрет зарегистрирован — теперь можно проверить, что его действительно вырежут.
+    let id =
+        servers::server_add(state, input, KEY_PASSPHRASE).expect("the profile was not created");
+    // The secret is registered — now it can be checked that it really gets cut out.
     super::fixture::canary(KEY_PASSPHRASE);
     super::library_ops::confirm_fingerprint(state, &id, server).await;
     id
 }
 
-/// Дождаться, пока задача придёт в одно из завершённых состояний.
+/// Wait until a task reaches one of the finished states.
 async fn wait_done(state: &AppState, task_id: &str, limit: Duration) -> TaskState {
     let deadline = std::time::Instant::now() + limit;
     loop {
@@ -97,7 +98,7 @@ async fn wait_done(state: &AppState, task_id: &str, limit: Duration) -> TaskStat
         }
         if std::time::Instant::now() >= deadline {
             let task = state.tasks.get(task_id).ok().flatten();
-            panic!("задача не завершилась за отведённое время: {task:?}");
+            panic!("the task did not finish in the time allowed: {task:?}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -115,50 +116,54 @@ pub(crate) fn request(server_id: &str, local: &std::path::Path, name: &str) -> U
 }
 
 #[tokio::test]
-async fn файл_доходит_целиком_и_контрольные_суммы_сходятся() {
+async fn the_file_arrives_whole_and_the_checksums_agree() {
     let (server, state, id) = setup().await;
     let local = make_local_file("film_22.mp4", FILE_SIZE);
 
     let task = upload::upload_start(&state, request(&id, &local, "film_22.mp4"))
         .await
-        .expect("заливка не поставилась");
+        .expect("the upload would not submit");
 
     assert_eq!(
         wait_done(&state, &task, Duration::from_secs(120)).await,
         TaskState::Completed,
-        "заливка не завершилась успехом: {:?}",
+        "the upload did not finish successfully: {:?}",
         state.tasks.get(&task).ok().flatten()
     );
 
-    // Сверяем средствами самого сервера, а не тем же кодом, которым передавали.
+    // Checked by the server's own means rather than by the code that did the sending.
     let size = server
         .exec_inside(&format!("stat -c %s '{VIDEO_DIR}/film_22.mp4'"))
-        .expect("файла нет на сервере");
+        .expect("the file is not on the server");
     assert_eq!(size.trim().parse::<usize>().unwrap(), FILE_SIZE);
 
     let theirs = server
         .exec_inside(&format!(
             "sha256sum '{VIDEO_DIR}/film_22.mp4' | cut -d' ' -f1"
         ))
-        .expect("сумма не посчиталась");
+        .expect("the checksum would not compute");
     let ours = sha256_of(&local);
-    assert_eq!(theirs.trim(), ours, "содержимое на сервере отличается");
+    assert_eq!(theirs.trim(), ours, "the contents on the server differ");
 
-    // Временных данных не осталось.
+    // No staged data is left.
     let leftovers = server
         .exec_inside(&format!("ls -A '{STAGING_DIR}' 2>/dev/null | wc -l"))
         .unwrap_or_else(|_| String::from("0"));
-    assert_eq!(leftovers.trim(), "0", "в каталоге сборки остался мусор");
+    assert_eq!(
+        leftovers.trim(),
+        "0",
+        "litter was left in the staging directory"
+    );
 }
 
 #[tokio::test]
-async fn передача_продолжается_с_достигнутого_а_не_начинается_заново() {
-    // FR-031, главное свойство фазы. Проверяется по событиям продвижения: если бы
-    // передача начиналась заново, первое же сообщение показало бы около нуля.
+async fn the_transfer_carries_on_from_where_it_got_to_rather_than_starting_over() {
+    // FR-031, the phase's main property. Checked by the progress events: were the transfer
+    // to start over, the very first message would show about zero.
     let (server, state, id) = setup().await;
     let local = make_local_file("film_22.mp4", FILE_SIZE);
 
-    // Кладём в каталог сборки половину файла — как будто прошлая попытка оборвалась.
+    // Half the file is put into the staging directory — as if an earlier attempt broke off.
     let half = FILE_SIZE / 2;
     let partial = std::env::temp_dir().join("vrcast-partial.bin");
     let data = std::fs::read(&local).unwrap();
@@ -166,17 +171,17 @@ async fn передача_продолжается_с_достигнутого_�
 
     server
         .exec_inside(&format!("mkdir -p '{STAGING_DIR}'"))
-        .expect("не создать каталог сборки");
+        .expect("could not create the staging directory");
     server
         .put_file(&partial, &format!("{STAGING_DIR}/film_22.mp4.part"))
-        .expect("не положить недокачанный файл");
+        .expect("could not put the half-downloaded file there");
 
     let mut events = state.tasks.subscribe();
     let task = upload::upload_start(&state, request(&id, &local, "film_22.mp4"))
         .await
-        .expect("заливка не поставилась");
+        .expect("the upload would not submit");
 
-    // Собираем сообщения о продвижении, пока задача не кончится.
+    // The progress messages are gathered until the task ends.
     let collector = tokio::spawn(async move {
         let mut first_progress: Option<f64> = None;
         while let Ok(event) = events.recv().await {
@@ -200,85 +205,85 @@ async fn передача_продолжается_с_достигнутого_�
         .await
         .ok()
         .flatten()
-        .expect("не пришло ни одного сообщения о продвижении");
+        .expect("not one progress message arrived");
     assert!(
         first > 0.3,
-        "первое сообщение показало {first:.2} — передача началась заново, \
-         хотя половина файла уже лежала на сервере"
+        "the first message showed {first:.2} — the transfer started over, although half the \
+         file was already on the server"
     );
 
-    // И результат всё равно целый.
+    // And the result is whole all the same.
     let theirs = server
         .exec_inside(&format!(
             "sha256sum '{VIDEO_DIR}/film_22.mp4' | cut -d' ' -f1"
         ))
-        .expect("сумма не посчиталась");
+        .expect("the checksum would not compute");
     assert_eq!(theirs.trim(), sha256_of(&local));
 }
 
 #[tokio::test]
-async fn недокачанный_файл_не_виден_по_конечному_имени_ни_в_один_момент() {
-    // FR-033, SC-004. Проверяется не в конце, а ВО ВРЕМЯ передачи: смысл именно
-    // в том, что промежуточного состояния не бывает.
+async fn a_half_downloaded_file_is_never_visible_under_its_final_name() {
+    // FR-033, SC-004. Checked not at the end but DURING the transfer: the whole point is
+    // that there is no in-between state.
     let (server, state, id) = setup().await;
     let local = make_local_file("film_22.mp4", FILE_SIZE);
 
     let mut req = request(&id, &local, "film_22.mp4");
-    // Придерживаем передачу, чтобы успеть заглянуть на сервер несколько раз.
+    // The transfer is held back so the server can be looked at several times.
     req.limit_bps = Some(2 * 1024 * 1024);
 
     let task = upload::upload_start(&state, req)
         .await
-        .expect("заливка не поставилась");
+        .expect("the upload would not submit");
 
-    // Оба имени проверяются ОДНОЙ командой, в один миг на сервере.
+    // Both names are checked by ONE command, at one instant on the server.
     //
-    // Раздельные проверки здесь не годятся, и это стоило красного прогона.
-    // Спрашивать «идёт ли ещё задача» у записи в базе нельзя: ввод в раздачу —
-    // последнее, что делает работа, а состояние записывается уже после неё.
-    // Между переименованием и записью файл законно виден под конечным именем,
-    // а задача ещё не помечена завершённой — и проверка падала на этой щели,
-    // не найдя ничего плохого.
+    // Separate checks will not do here, and that cost a red run. Asking the database record
+    // "is the task still going" is no good: entering serving is the last thing the work
+    // does, and the state is written after it. Between the rename and the write the file is
+    // legitimately visible under its final name while the task is not yet marked finished —
+    // and the check failed on that gap, finding nothing wrong.
     //
-    // Здесь спрашивается сам сервер, и вопрос точнее: пока цел временный файл,
-    // конечного имени быть не должно. Переименование неделимо, поэтому мига,
-    // когда есть оба, не существует вовсе, — а если он найдётся, это и есть
-    // та самая поломка, ради которой всё затевалось.
-    // Состояний четыре, а не три: «временного файла нет» само по себе значит
-    // и «ещё не начали», и «уже ввели в раздачу». Спутать их — значит выйти
-    // из наблюдения на первом же круге, ни разу ничего не проверив.
-    const ОБА: &str = "ОБА";
-    const ИДЁТ: &str = "ИДЁТ";
-    const ГОТОВО: &str = "ГОТОВО";
-    const ЕЩЁ_НЕ: &str = "ЕЩЁ_НЕ";
-    let вопрос = format!(
+    // Here the server itself is asked, and the question is sharper: while the staged file is
+    // whole, the final name must not exist. The rename is indivisible, so a moment holding
+    // both does not exist at all — and should one turn up, that is the very fault all this
+    // was built for.
+    //
+    // There are four states rather than three: "there is no staged file" on its own means
+    // both "not started yet" and "already in serving". Confusing them means leaving the
+    // watch on the first round, having checked nothing.
+    const BOTH: &str = "BOTH";
+    const RUNNING: &str = "RUNNING";
+    const DONE: &str = "DONE";
+    const NOT_YET: &str = "NOT_YET";
+    let question = format!(
         "if [ -e '{STAGING_DIR}/film_22.mp4.part' ]; then \
-             if [ -e '{VIDEO_DIR}/film_22.mp4' ]; then echo {ОБА}; else echo {ИДЁТ}; fi; \
-         elif [ -e '{VIDEO_DIR}/film_22.mp4' ]; then echo {ГОТОВО}; \
-         else echo {ЕЩЁ_НЕ}; fi"
+             if [ -e '{VIDEO_DIR}/film_22.mp4' ]; then echo {BOTH}; else echo {RUNNING}; fi; \
+         elif [ -e '{VIDEO_DIR}/film_22.mp4' ]; then echo {DONE}; \
+         else echo {NOT_YET}; fi"
     );
 
     let mut looks = 0;
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     loop {
-        let ответ = server.exec_inside(&вопрос).unwrap_or_default();
-        let ответ = ответ.trim();
+        let answer = server.exec_inside(&question).unwrap_or_default();
+        let answer = answer.trim();
 
         assert_ne!(
-            ответ, ОБА,
-            "файл появился под конечным именем, пока идёт передача — \
-             зритель успел бы получить недокачанное"
+            answer, BOTH,
+            "the file appeared under its final name while the transfer was going — a viewer \
+             could have got something half-downloaded"
         );
-        if ответ == ГОТОВО {
+        if answer == DONE {
             break;
         }
-        if ответ == ИДЁТ {
+        if answer == RUNNING {
             looks += 1;
         }
 
         assert!(
             std::time::Instant::now() < deadline,
-            "заливка не завершилась за отведённое время"
+            "the upload did not finish in the time allowed"
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -286,26 +291,26 @@ async fn недокачанный_файл_не_виден_по_конечном
     assert_eq!(
         wait_done(&state, &task, Duration::from_secs(60)).await,
         TaskState::Completed,
-        "передача кончилась, но задача не завершилась успехом"
+        "the transfer ended, but the task did not finish successfully"
     );
 
     assert!(
         looks >= 3,
-        "успели заглянуть всего {looks} раз — передача прошла слишком быстро, \
-         и проверка ничего не доказала"
+        "there was time for only {looks} looks — the transfer went too fast, and the check \
+         proved nothing"
     );
     assert!(
         server
             .exec_inside(&format!("test -e '{VIDEO_DIR}/film_22.mp4'"))
             .is_ok(),
-        "после успешной заливки файла нет"
+        "after a successful upload the file is not there"
     );
 }
 
 #[tokio::test]
-async fn испорченная_передача_не_попадает_в_раздачу_и_не_оставляет_мусора() {
-    // FR-032, FR-038. Портим содержимое на сервере так, чтобы размер совпал,
-    // а содержимое — нет: тогда единственное, что может это заметить, — сверка.
+async fn a_spoilt_transfer_never_enters_serving_and_leaves_no_litter() {
+    // FR-032, FR-038. The contents on the server are spoilt so that the size matches while
+    // the contents do not: then the only thing that can notice is the comparison.
     let (server, state, id) = setup().await;
     let local = make_local_file("film_22.mp4", FILE_SIZE);
 
@@ -313,32 +318,34 @@ async fn испорченная_передача_не_попадает_в_раз
         .exec_inside(&format!(
             "mkdir -p '{STAGING_DIR}' && head -c {FILE_SIZE} /dev/zero > '{STAGING_DIR}/film_22.mp4.part'"
         ))
-        .expect("не подготовить испорченный файл");
+        .expect("could not prepare the spoilt file");
 
     let task = upload::upload_start(&state, request(&id, &local, "film_22.mp4"))
         .await
-        .expect("заливка не поставилась");
+        .expect("the upload would not submit");
 
     let final_state = wait_done(&state, &task, Duration::from_secs(120)).await;
     assert_eq!(
         final_state,
         TaskState::Failed,
-        "заливка с расхождением сумм объявлена успешной"
+        "an upload with diverging checksums was declared successful"
     );
 
     let record = state.tasks.get(&task).unwrap().unwrap();
-    let error = record.error.expect("неудача записана без причины");
+    let error = record
+        .error
+        .expect("the failure was recorded with no cause");
     assert_eq!(
         error.code,
         vrcast_studio_lib::commands::error::ErrorCode::ChecksumMismatch,
-        "расхождение сумм названо не своим кодом: {error}"
+        "the diverging checksums were not named by their own code: {error}"
     );
 
     assert!(
         server
             .exec_inside(&format!("test -e '{VIDEO_DIR}/film_22.mp4'"))
             .is_err(),
-        "испорченный файл попал в раздачу"
+        "the spoilt file entered serving"
     );
     let leftovers = server
         .exec_inside(&format!("ls -A '{STAGING_DIR}' 2>/dev/null | wc -l"))
@@ -346,24 +353,24 @@ async fn испорченная_передача_не_попадает_в_раз
     assert_eq!(
         leftovers.trim(),
         "0",
-        "после неудачи в каталоге сборки остался мусор"
+        "litter was left in the staging directory after the failure"
     );
 }
 
 #[tokio::test]
-async fn нехватка_места_сообщается_до_начала_передачи() {
-    // FR-036. Узнать об этом в середине заливки на тридцать гигабайт — значит
-    // потерять час и оставить на сервере недокачанный хвост.
+async fn too_little_room_is_reported_before_the_transfer_starts() {
+    // FR-036. Learning that halfway through a thirty-gigabyte upload means losing an hour
+    // and leaving an unfinished tail on the server.
     let (_server, state, id) = setup().await;
 
-    // Файл заведомо больше любого диска контейнера.
-    let local = make_local_file("огромный.mp4", 1024);
-    let mut req = request(&id, &local, "огромный.mp4");
+    // A file certainly larger than any of the container's disks.
+    let local = make_local_file("huge.mp4", 1024);
+    let mut req = request(&id, &local, "huge.mp4");
     req.limit_bps = None;
 
-    // Подменяем размер: делать настоящий терабайтный файл незачем, а проверка
-    // смотрит на размер файла. Поэтому берём другой путь — просим место под
-    // заведомо невозможный объём через прямой вызов проверки.
+    // The size is substituted: there is no point making a real terabyte file, and the check
+    // looks at the file's size. So another way is taken — room for a certainly impossible
+    // volume is asked for through a direct call into the check.
     use vrcast_studio_lib::commands::library::DiskUsage;
     use vrcast_studio_lib::server::free_space::{self, SpaceVerdict};
 
@@ -374,13 +381,13 @@ async fn нехватка_места_сообщается_до_начала_пе
     };
     match free_space::check(&tiny, 5 * 1024 * 1024 * 1024, 0) {
         SpaceVerdict::NotEnough { short_by, .. } => assert!(short_by > 0),
-        SpaceVerdict::Fits => panic!("нехватка места не замечена"),
+        SpaceVerdict::Fits => panic!("too little room went unnoticed"),
     }
 
-    // А обычная заливка на свободный диск проходит проверки.
+    // And an ordinary upload onto a free disk passes the checks.
     let task = upload::upload_start(&state, req)
         .await
-        .expect("маленький файл не прошёл проверку места");
+        .expect("a small file did not pass the room check");
     assert_eq!(
         wait_done(&state, &task, Duration::from_secs(60)).await,
         TaskState::Completed
@@ -388,19 +395,19 @@ async fn нехватка_места_сообщается_до_начала_пе
 }
 
 #[tokio::test]
-async fn вторая_заливка_под_тем_же_именем_отвергается() {
-    // Две заливки писали бы в один временный файл и затёрли бы работу друг друга,
-    // а узналось бы это только на сверке контрольных сумм.
+async fn a_second_upload_under_the_same_name_is_refused() {
+    // Two uploads would write into one staged file and clobber each other's work, and it
+    // would only come to light at the checksum comparison.
     let (_server, state, id) = setup().await;
     let local = make_local_file("film_22.mp4", FILE_SIZE);
 
     let mut first = request(&id, &local, "film_22.mp4");
-    first.limit_bps = Some(512 * 1024); // придерживаем, чтобы задача не успела кончиться
+    first.limit_bps = Some(512 * 1024); // held back so the task does not manage to finish
     let task = upload::upload_start(&state, first)
         .await
-        .expect("первая заливка не поставилась");
+        .expect("the first upload would not submit");
 
-    // Ждём, пока задача запишет позицию возобновления.
+    // Wait until the task writes its resume position.
     for _ in 0..50 {
         let has_token = state
             .tasks
@@ -417,97 +424,96 @@ async fn вторая_заливка_под_тем_же_именем_отвер�
 
     let err = upload::upload_start(&state, request(&id, &local, "film_22.mp4"))
         .await
-        .expect_err("вторая заливка под тем же именем принята");
+        .expect_err("a second upload under the same name was accepted");
     assert_eq!(err.code, ErrorCode::NameExists);
 
     let _ = state.tasks.cancel(&task);
 }
 
-// ---------- перезапуск приложения (T097, FR-031) ----------
+// ---------- restarting the application (T097, FR-031) ----------
 //
-// Приложение здесь убивается по-настоящему: первый запуск идёт **отдельным
-// процессом**, и родитель снимает его без предупреждения. Ничем иным этого
-// не изобразить. Прежняя редакция уничтожала исполнитель внутри того же
-// процесса — и на Linux рабочий поток успевал увидеть развалившийся ввод-вывод
-// и записать «не удалась». В жизни убитое приложение не записывает ничего,
-// и проверка ловила не свойство заливки, а особенность уничтожения исполнителя.
+// The application is killed for real here: the first run goes as a **process of its own**,
+// and the parent drops it without warning. There is no other way to portray this. An earlier
+// version destroyed the runtime inside the same process — and on Linux a worker thread had
+// time to see the input-output fall apart and record "it failed". In life a killed
+// application records nothing, and the check caught not a property of the upload but a
+// peculiarity of destroying a runtime.
 
-/// Размер файла для проверки перезапуска.
+/// The size of the file for the restart check.
 ///
-/// Больше обычного: приложение убивается на середине, и до конца передачи должен
-/// остаться запас — иначе проверка станет гонкой с самой собой.
+/// Larger than usual: the application is killed halfway, and there must be room left before
+/// the end of the transfer — otherwise the check becomes a race with itself.
 const RESTART_FILE_SIZE: usize = 20 * 1024 * 1024;
 
-/// С какой скоростью передавать в этой проверке.
+/// How fast to send in this check.
 ///
-/// Предел нужен не сам по себе, а чтобы передача заняла осязаемое время: без него
-/// файл уходит на соседний контейнер быстрее, чем его успеваешь застать.
+/// The limit is not wanted for its own sake but so the transfer takes a tangible time:
+/// without it the file goes to a neighbouring container faster than it can be caught.
 const RESTART_LIMIT_BPS: u64 = 4 * 1024 * 1024;
 
-/// Сколько должно лечь на сервер, прежде чем убивать приложение.
+/// How much must land on the server before the application is killed.
 ///
-/// Больше окна передачи: продолжение отступает на окно назад, и после меньшего
-/// куска оно началось бы с нуля — проверка перестала бы отличать продолжение
-/// от начала заново.
+/// More than a transfer window: carrying on steps one window back, and after a smaller piece
+/// it would begin from nothing — the check would stop telling a carry-on from a fresh start.
 const RESTART_KILL_AFTER: usize = 8 * 1024 * 1024;
 
-/// Имена, которыми родитель передаёт условия убиваемому запуску.
-mod окружение {
+/// The names the parent passes the conditions to the killed run under.
+mod env_names {
     pub const DB: &str = "VRCAST_RESTART_DB";
     pub const FILE: &str = "VRCAST_RESTART_FILE";
 }
 
-/// Имя проверки-помощника для запуска отдельным процессом.
-const HELPER: &str = "upload_live::первый_запуск_который_убьют";
+/// The name of the helper check, for running it as a process of its own.
+const HELPER: &str = "upload_live::the_first_run_that_gets_killed";
 
-/// Первый запуск приложения — тот, который убьют.
+/// The first run of the application — the one that gets killed.
 ///
-/// Помечен `ignore`: сам по себе он не проверка, а половина проверки, и запускается
-/// только соседним тестом через отдельный процесс. Без условий в окружении
-/// не делает ничего — на случай, если кто-то прогонит все отложенные проверки разом.
+/// Marked `ignore`: on its own it is not a check but half of one, and it is started only by
+/// the neighbouring test, as a separate process. With no conditions in the environment it
+/// does nothing — in case somebody runs every ignored check at once.
 #[test]
-#[ignore = "половина проверки перезапуска: запускается отдельным процессом"]
-fn первый_запуск_который_убьют() {
-    let (Ok(db_path), Ok(file)) = (std::env::var(окружение::DB), std::env::var(окружение::FILE))
+#[ignore = "half of the restart check: started as a process of its own"]
+fn the_first_run_that_gets_killed() {
+    let (Ok(db_path), Ok(file)) = (std::env::var(env_names::DB), std::env::var(env_names::FILE))
     else {
         return;
     };
 
-    let rt = tokio::runtime::Runtime::new().expect("исполнитель не создался");
+    let rt = tokio::runtime::Runtime::new().expect("the runtime would not be created");
     rt.block_on(async move {
         let state = AppState::with_db(
-            Arc::new(Db::open(&db_path).expect("база не открылась")),
+            Arc::new(Db::open(&db_path).expect("the database would not open")),
             Arc::new(InMemorySecretStore::new()),
         )
-        .expect("состояние приложения не собралось");
+        .expect("the application state would not assemble");
 
         let id = attach_secret(&state);
         let mut req = request(&id, std::path::Path::new(&file), "film_22.mp4");
         req.limit_bps = Some(RESTART_LIMIT_BPS);
         upload::upload_start(&state, req)
             .await
-            .expect("заливка не поставилась");
+            .expect("the upload would not submit");
 
-        // Дальше просто живём. Родитель следит за тем, сколько легло на сервер,
-        // и снимает нас, когда сочтёт нужным.
+        // From here we simply live. The parent watches how much lands on the server and
+        // drops us when it sees fit.
         loop {
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     });
 }
 
-/// Положить секрет профиля в хранилище этого процесса.
+/// Put the profile's secret into this process's store.
 ///
-/// Секреты живут в памяти процесса, а профиль — в общей базе. У второго запуска
-/// своё хранилище, и без повторной записи он не подключился бы — хотя в жизни
-/// секрет лежит в связке ключей системы и перезапуск переживает. Это разница
-/// между проверкой и жизнью, и она здесь единственная.
+/// Secrets live in a process's memory while the profile lives in a shared database. The
+/// second run has a store of its own, and without writing it again it would not connect —
+/// although in life the secret sits in the system keyring and survives a restart. That is
+/// the difference between the check and life, and it is the only one here.
 pub(crate) fn attach_secret(state: &AppState) -> String {
     let profile = servers::servers_list(state)
-        .expect("список профилей не прочитать")
+        .expect("the profile list would not read")
         .into_iter()
         .next()
-        .expect("профиль не заведён");
+        .expect("no profile was set up");
 
     let input = ServerInput {
         name: profile.name.clone(),
@@ -522,12 +528,12 @@ pub(crate) fn attach_secret(state: &AppState) -> String {
         ipv6_mode: profile.ipv6_mode,
     };
     servers::server_update(state, &profile.id, input, Some(KEY_PASSPHRASE))
-        .expect("секрет не записан");
+        .expect("the secret was not written");
     profile.id
 }
 
-/// Условия для убиваемого запуска.
-struct Подопытный {
+/// The conditions for the run that gets killed.
+struct Subject {
     server: TestServer,
     local: std::path::PathBuf,
     db_dir: std::path::PathBuf,
@@ -535,26 +541,27 @@ struct Подопытный {
     secrets: Arc<dyn SecretStore>,
 }
 
-/// Поднять сервер, завести базу и профиль — всё, что переживёт убийство приложения.
-async fn подготовить_перезапуск() -> Подопытный {
+/// Bring the server up, set the database and the profile up — everything that outlives the
+/// application being killed.
+async fn prepare_restart() -> Subject {
     super::fixture::logging_if_requested();
-    let server = TestServer::start().expect("контейнер не поднялся");
+    let server = TestServer::start().expect("the container would not come up");
     let local = make_local_file("film_22.mp4", RESTART_FILE_SIZE);
     let db_dir =
         std::env::temp_dir().join(format!("vrcast-restart-{}", uuid::Uuid::new_v4().simple()));
     let db_path = db_dir.join("vrcast.sqlite3");
     let secrets: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
 
-    // Профиль и подтверждённый отпечаток заводит родитель: они лежат в базе
-    // и нужны обоим запускам.
+    // The profile and the confirmed fingerprint are set up by the parent: they live in the
+    // database and are needed by both runs.
     let state = AppState::with_db(
-        Arc::new(Db::open(&db_path).expect("база не открылась")),
+        Arc::new(Db::open(&db_path).expect("the database would not open")),
         secrets.clone(),
     )
-    .expect("состояние приложения не собралось");
+    .expect("the application state would not assemble");
     add_profile(&state, &server).await;
 
-    Подопытный {
+    Subject {
         server,
         local,
         db_dir,
@@ -563,263 +570,264 @@ async fn подготовить_перезапуск() -> Подопытный {
     }
 }
 
-/// Запущенное приложение, которое будет убито в любом случае.
+/// A started application that will be killed in any case.
 ///
-/// Обёртка нужна не для красоты: если ожидание не сложится и проверка упадёт,
-/// без неё в системе останется живой процесс, льющий файл на сервер. Ровно тот
-/// класс ошибки, от которого бережёт третий принцип конституции, — стыдно
-/// допустить его в проверке этого же принципа.
-struct Убиваемый(std::process::Child);
+/// The wrapper is not for elegance: should the wait not work out and the check fail, without
+/// it a live process would be left in the system pouring a file onto the server. Exactly the
+/// class of fault the constitution's third principle guards against — shameful to allow in a
+/// check of that same principle.
+struct Killable(std::process::Child);
 
-impl Drop for Убиваемый {
+impl Drop for Killable {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
 }
 
-/// Запустить приложение отдельным процессом, дать ему передать кусок и убить.
+/// Start the application as a process of its own, let it send a piece, and kill it.
 ///
-/// Возвращает, сколько байт успело лечь во временный файл на сервере.
-fn запустить_и_убить(п: &Подопытный) -> usize {
+/// Returns how many bytes managed to land in the staged file on the server.
+fn start_and_kill(subject: &Subject) -> usize {
     let child = std::process::Command::new(
-        std::env::current_exe().expect("не узнать путь к собственной программе"),
+        std::env::current_exe().expect("could not learn the path to our own program"),
     )
     .args([HELPER, "--exact", "--ignored", "--test-threads=1"])
-    .env(окружение::DB, &п.db_path)
-    .env(окружение::FILE, &п.local)
+    .env(env_names::DB, &subject.db_path)
+    .env(env_names::FILE, &subject.local)
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null())
     .spawn()
-    .expect("первый запуск не начался");
-    let mut запущенное = Убиваемый(child);
+    .expect("the first run did not start");
+    let mut started = Killable(child);
 
-    let передано = ждать_кусок(&п.server, RESTART_KILL_AFTER, &mut запущенное.0);
+    let sent = wait_for_chunk(&subject.server, RESTART_KILL_AFTER, &mut started.0);
 
-    // Вот здесь приложение и умирает — без предупреждения и без единой записи
-    // о том, чем кончило.
-    drop(запущенное);
-    передано
+    // Here is where the application dies — without warning and without a single record of
+    // how it ended.
+    drop(started);
+    sent
 }
 
-/// Дождаться, пока во временном файле на сервере наберётся нужный кусок.
+/// Wait until the wanted piece has gathered in the staged file on the server.
 ///
-/// Смотрит и за самим запуском: если он упал, ждать больше нечего, и сказать
-/// об этом надо сразу, а не через минуту ожидания непонятно чего.
-fn ждать_кусок(
-    server: &TestServer,
-    надо: usize,
-    child: &mut std::process::Child,
-) -> usize {
+/// It watches the run too: should it fail, there is nothing left to wait for, and that must
+/// be said at once rather than after a minute of waiting for who knows what.
+fn wait_for_chunk(server: &TestServer, wanted: usize, child: &mut std::process::Child) -> usize {
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     let mut last = 0usize;
     loop {
         if let Ok(out) = server.exec_inside(&format!("stat -c %s '{STAGING_DIR}/film_22.mp4.part'"))
         {
             last = out.trim().parse().unwrap_or(0);
-            if last >= надо {
+            if last >= wanted {
                 return last;
             }
         }
         if let Ok(Some(status)) = child.try_wait() {
-            panic!("первый запуск кончился сам ({status}), передав {last} Б из {надо}");
+            panic!("the first run ended by itself ({status}), having sent {last} B of {wanted}");
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "за отведённое время на сервер легло {last} Б из {надо}"
+            "{last} B of {wanted} landed on the server in the time allowed"
         );
         std::thread::sleep(Duration::from_millis(200));
     }
 }
 
-/// Открыть приложение заново на той же базе.
-fn запустить_заново(п: &Подопытный) -> AppState {
+/// Open the application again against the same database.
+fn start_again(subject: &Subject) -> AppState {
     let state = AppState::with_db(
-        Arc::new(Db::open(&п.db_path).expect("база не открылась")),
-        п.secrets.clone(),
+        Arc::new(Db::open(&subject.db_path).expect("the database would not open")),
+        subject.secrets.clone(),
     )
-    .expect("состояние приложения не собралось");
+    .expect("the application state would not assemble");
     attach_secret(&state);
     state
 }
 
-/// Единственная незавершённая задача в базе.
-fn единственная_задача(
-    state: &AppState,
-) -> vrcast_studio_lib::tasks::store::TaskRecord {
-    let mut живые: Vec<_> = state
+/// The one unfinished task in the database.
+fn the_only_task(state: &AppState) -> vrcast_studio_lib::tasks::store::TaskRecord {
+    let mut alive: Vec<_> = state
         .tasks
         .list()
-        .expect("список задач не прочитать")
+        .expect("the task list would not read")
         .into_iter()
         .filter(|t| !t.state.is_final())
         .collect();
-    assert_eq!(живые.len(), 1, "ожидалась одна незавершённая задача");
-    живые.remove(0)
+    assert_eq!(alive.len(), 1, "one unfinished task was expected");
+    alive.remove(0)
 }
 
 #[tokio::test]
-async fn заливка_из_очереди_переживает_перезапуск_не_начавшись() {
-    // Задача, простоявшая в очереди и ни разу не начавшаяся, ничего о себе
-    // не записывает: путь к исходнику и имя в раздаче живут только в памяти
-    // приложения. После перезапуска поднять её было бы нечем, и она осталась бы
-    // в списке навсегда, не двигаясь и не поддаваясь. Поэтому позиция
-    // возобновления пишется сразу при постановке, а не когда дойдёт до работы.
+async fn an_upload_still_in_the_queue_survives_a_restart_without_having_started() {
+    // A task that stood in the queue and never once started records nothing about itself:
+    // the path to the source and the name in serving live only in the application's memory.
+    // After a restart there would be nothing to raise it with, and it would stay in the list
+    // forever, never moving and never yielding. So the resume position is written at
+    // submission rather than when the work gets round to it.
     let (server, state, id) = setup().await;
-    let первый = make_local_file("film_22.mp4", RESTART_FILE_SIZE);
-    let второй = make_local_file("film_23.mp4", FILE_SIZE);
+    let first = make_local_file("film_22.mp4", RESTART_FILE_SIZE);
+    let second = make_local_file("film_23.mp4", FILE_SIZE);
 
-    // Первый занимает полосу передачи — она рассчитана на одну задачу.
-    let mut req = request(&id, &первый, "film_22.mp4");
+    // The first takes the transfer lane — it is meant for one task.
+    let mut req = request(&id, &first, "film_22.mp4");
     req.limit_bps = Some(RESTART_LIMIT_BPS);
-    let идёт = upload::upload_start(&state, req)
+    let running = upload::upload_start(&state, req)
         .await
-        .expect("первая заливка не поставилась");
+        .expect("the first upload would not submit");
 
-    let ждёт = upload::upload_start(&state, request(&id, &второй, "film_23.mp4"))
+    let waiting = upload::upload_start(&state, request(&id, &second, "film_23.mp4"))
         .await
-        .expect("вторая заливка не поставилась");
+        .expect("the second upload would not submit");
 
     assert_eq!(
-        state.tasks.get(&ждёт).unwrap().unwrap().state,
+        state.tasks.get(&waiting).unwrap().unwrap().state,
         TaskState::Queued,
-        "вторая заливка не встала в очередь — проверять нечего"
+        "the second upload did not join the queue — there is nothing to check"
     );
 
     let token = state
         .tasks
-        .get(&ждёт)
+        .get(&waiting)
         .unwrap()
         .unwrap()
         .resume_token
-        .expect("у ждущей заливки нет позиции возобновления — после перезапуска её не поднять");
+        .expect(
+            "the waiting upload has no resume position — it could not be raised after a restart",
+        );
     let token = vrcast_studio_lib::domain::transfer::ResumeToken::parse(&token)
-        .expect("позиция возобновления не читается");
+        .expect("the resume position will not read");
 
     assert_eq!(
         token.local_path.as_deref(),
-        Some(второй.to_string_lossy().as_ref()),
-        "в позиции возобновления не тот исходник"
+        Some(second.to_string_lossy().as_ref()),
+        "the resume position holds the wrong source"
     );
     assert_eq!(token.remote_name, "film_23.mp4");
 
-    let _ = state.tasks.cancel(&ждёт);
-    let _ = state.tasks.cancel(&идёт);
+    let _ = state.tasks.cancel(&waiting);
+    let _ = state.tasks.cancel(&running);
     let _ = server;
 }
 
 #[tokio::test]
-async fn заливка_переживает_закрытие_и_запуск_приложения_заново() {
-    // FR-031, вторая половина: «включая случай, когда приложение было закрыто
-    // и запущено заново». Первая половина — продолжение после обрыва связи —
-    // проверена выше; там приложение живо и помнит, что делало. Здесь умирает оно
-    // само, а вместе с ним вся рабочая часть, которая живёт только в памяти.
-    let п = подготовить_перезапуск().await;
-    let передано = запустить_и_убить(&п);
+async fn an_upload_survives_the_application_being_closed_and_started_again() {
+    // FR-031, the second half: "including the case where the application was closed and
+    // started again". The first half — carrying on after a broken connection — is checked
+    // above; there the application is alive and remembers what it was doing. Here it dies
+    // itself, and with it the whole working part, which lives only in memory.
+    let subject = prepare_restart().await;
+    let sent = start_and_kill(&subject);
 
     assert!(
-        передано < RESTART_FILE_SIZE,
-        "передача успела закончиться: застать её на середине не вышло"
+        sent < RESTART_FILE_SIZE,
+        "the transfer managed to finish: catching it halfway did not work out"
     );
     assert!(
-        п.server
+        subject
+            .server
             .exec_inside(&format!("test -e '{VIDEO_DIR}/film_22.mp4'"))
             .is_err(),
-        "недоделанная заливка попала в раздачу"
+        "an unfinished upload entered serving"
     );
 
-    // ---- второй запуск: то же приложение, ничего не помнящее ----
-    let state = запустить_заново(&п);
-    let task = единственная_задача(&state);
+    // ---- the second run: the same application, remembering nothing ----
+    let state = start_again(&subject);
+    let task = the_only_task(&state);
 
     assert_eq!(
         task.state,
         TaskState::Paused,
-        "задача прошлого запуска должна ждать решения человека"
+        "a task from the previous run must wait for a person's decision"
     );
     assert!(
         task.progress > 0.0,
-        "после перезапуска задача показывает {:.2} — по такому нулю человек не решит, \
-         продолжать многочасовую передачу или снять её",
+        "after the restart the task shows {:.2} — on such a zero a person cannot decide \
+         whether to carry on a transfer of hours or drop it",
         task.progress
     );
 
-    let restored = upload::restore_uploads(&state).expect("восстановление не удалось");
-    assert_eq!(restored, 1, "заливка прошлого запуска не поднята");
+    let restored = upload::restore_uploads(&state).expect("restoring failed");
+    assert_eq!(restored, 1, "the previous run's upload was not raised");
 
-    // Сама она не продолжается: приложение могли закрыть именно ради её прекращения.
+    // It does not carry on by itself: the application may have been closed precisely to stop it.
     tokio::time::sleep(Duration::from_millis(700)).await;
     assert_eq!(
         state.tasks.get(&task.id).unwrap().unwrap().state,
         TaskState::Paused,
-        "поднятая заливка продолжилась самовольно"
+        "the raised upload carried on unbidden"
     );
 
-    // Продолжаем — тем же номером задачи, а не новым.
-    upload::upload_resume(&state, &task.id).expect("задача не продолжилась");
+    // Carried on — under the same task identifier, not a new one.
+    upload::upload_resume(&state, &task.id).expect("the task would not carry on");
     assert_eq!(
         wait_done(&state, &task.id, Duration::from_secs(180)).await,
         TaskState::Completed,
-        "продолженная заливка не дошла до конца: {:?}",
+        "the upload that carried on did not run to its end: {:?}",
         state.tasks.get(&task.id).ok().flatten()
     );
 
-    // Главное: на сервере лежит именно тот файл, а не склейка двух попыток.
-    let theirs = п
+    // The main thing: the right file lies on the server rather than two attempts glued.
+    let theirs = subject
         .server
         .exec_inside(&format!(
             "sha256sum '{VIDEO_DIR}/film_22.mp4' | cut -d' ' -f1"
         ))
-        .expect("сумма не посчиталась");
+        .expect("the checksum would not compute");
     assert_eq!(
         theirs.trim(),
-        sha256_of(&п.local),
-        "содержимое на сервере отличается от исходника"
+        sha256_of(&subject.local),
+        "the contents on the server differ from the source"
     );
 
-    let leftovers = п
+    let leftovers = subject
         .server
         .exec_inside(&format!("ls -A '{STAGING_DIR}' 2>/dev/null | wc -l"))
         .unwrap_or_else(|_| String::from("0"));
-    assert_eq!(leftovers.trim(), "0", "в каталоге сборки остался мусор");
+    assert_eq!(
+        leftovers.trim(),
+        "0",
+        "litter was left in the staging directory"
+    );
 
-    let _ = std::fs::remove_dir_all(&п.db_dir);
+    let _ = std::fs::remove_dir_all(&subject.db_dir);
 }
 
 #[tokio::test]
-async fn подменённый_между_запусками_исходник_не_дописывается_к_чужому_началу() {
-    // Оборотная сторона предыдущей проверки. Продолжать можно только тот же файл:
-    // если человек между запусками пересобрал видео, дописывание хвоста новой версии
-    // к началу старой даст на сервере склейку двух разных файлов. Поймала бы это
-    // и сверка контрольных сумм — но уже после того, как передача целиком
-    // закончится, то есть через час работы впустую.
-    let п = подготовить_перезапуск().await;
-    запустить_и_убить(&п);
+async fn a_source_swapped_between_runs_is_not_appended_to_another_s_beginning() {
+    // The other side of the previous check. Only the same file may be carried on: had a
+    // person rebuilt the video between runs, appending the new version's tail to the old
+    // one's beginning would give two different files glued together on the server. The
+    // checksum comparison would catch that too — but only after the whole transfer had
+    // finished, that is, after an hour of wasted work.
+    let subject = prepare_restart().await;
+    start_and_kill(&subject);
 
-    // Пока приложения нет, человек пересобрал видео. Размер тот же — иначе
-    // расхождение поймалось бы и без сверки времени изменения.
-    let mut data = std::fs::read(&п.local).expect("исходник не читается");
+    // While the application is away, the person rebuilt the video. The size is the same —
+    // otherwise the divergence would be caught without comparing modification times.
+    let mut data = std::fs::read(&subject.local).expect("the source will not read");
     for byte in data.iter_mut() {
         *byte = !*byte;
     }
-    // Время изменения на некоторых файловых системах огрубляется до секунды,
-    // а вся первая половина проверки укладывается в несколько секунд.
+    // On some file systems the modification time is coarsened to a second, while the whole
+    // first half of the check fits in a few seconds.
     std::thread::sleep(Duration::from_millis(1100));
-    std::fs::write(&п.local, &data).expect("исходник не переписался");
+    std::fs::write(&subject.local, &data).expect("the source would not be rewritten");
 
-    let state = запустить_заново(&п);
-    let task = единственная_задача(&state);
+    let state = start_again(&subject);
+    let task = the_only_task(&state);
 
     assert_eq!(
-        upload::restore_uploads(&state).expect("восстановление не удалось"),
+        upload::restore_uploads(&state).expect("restoring failed"),
         1
     );
-    upload::upload_resume(&state, &task.id).expect("задача не продолжилась");
+    upload::upload_resume(&state, &task.id).expect("the task would not carry on");
 
     assert_eq!(
         wait_done(&state, &task.id, Duration::from_secs(120)).await,
         TaskState::Failed,
-        "заливка продолжилась поверх другого файла"
+        "the upload carried on over a different file"
     );
 
     let error = state
@@ -828,28 +836,30 @@ async fn подменённый_между_запусками_исходник_�
         .unwrap()
         .unwrap()
         .error
-        .expect("отказ записан без причины");
-    // Именно «исходник подменили», а не «суммы разошлись»: это разные беды, и
-    // человеку они говорят разное. Раньше их различал текст, теперь — код.
+        .expect("the refusal was recorded with no cause");
+    // "The source was swapped" specifically, not "the checksums diverged": those are
+    // different troubles and they tell a person different things. They used to be told apart
+    // by the text, and now by the code.
     assert!(
         error.says(vrcast_studio_lib::commands::error::DetailCode::UploadSourceChanged),
-        "причина отказа не названа: {error}"
+        "the reason for the refusal is not named: {error}"
     );
 
-    // И главное: в раздачу склейка не попала.
+    // And the main thing: the glued file never entered serving.
     assert!(
-        п.server
+        subject
+            .server
             .exec_inside(&format!("test -e '{VIDEO_DIR}/film_22.mp4'"))
             .is_err(),
-        "склейка двух файлов попала в раздачу"
+        "two files glued together entered serving"
     );
 
-    let _ = std::fs::remove_dir_all(&п.db_dir);
+    let _ = std::fs::remove_dir_all(&subject.db_dir);
 }
 
 pub(crate) fn sha256_of(path: &std::path::Path) -> String {
     use sha2::{Digest, Sha256};
-    let data = std::fs::read(path).expect("файл не читается");
+    let data = std::fs::read(path).expect("the file will not read");
     let mut hasher = Sha256::new();
     hasher.update(&data);
     hex::encode(hasher.finalize())

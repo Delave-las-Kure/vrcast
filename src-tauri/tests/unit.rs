@@ -1,15 +1,16 @@
-//! Модульные тесты ядра.
+//! The core's unit tests.
 //!
-//! Файлы лежат в `tests/unit/`, а не рядом с этим файлом: путь указан явно, потому что
-//! корень тестовой цели ищет модули в своём каталоге, а не в одноимённой папке.
+//! The files live in `tests/unit/` rather than beside this one: the path is given
+//! explicitly, because a test target's root looks for modules in its own directory rather
+//! than in a folder of the same name.
 
-/// Общая оснастка. Проверки состояния процессов нужны и тестам запуска программ,
-/// и тестам уборки: две копии одной проверки уже однажды дали разные ответы
-/// на один вопрос.
+/// Shared fixtures. The process-state checks are needed by the tests for starting
+/// programs and by those for the sweep alike: two copies of one check have already once
+/// given different answers to the same question.
 #[path = "support/proc_check.rs"]
 mod proc_check;
 
-/// Ключ для тестов создаётся на месте и нужен и здесь, и интеграционным тестам.
+/// The test key is made on the spot and is needed both here and by the integration tests.
 #[path = "support/test_key.rs"]
 mod test_key;
 

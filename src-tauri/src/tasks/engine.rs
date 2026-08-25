@@ -1,14 +1,14 @@
-//! T016, T019 — очередь задач, полосы по ресурсам, отмена и приостановка.
+//! T016, T019 — the task queue, the lanes by resource, cancelling and pausing.
 //!
-//! Устройство подчинено трём требованиям, и каждое влияет на форму:
+//! The design answers three requirements, and each one shapes it:
 //!
-//! - **Интерфейс остаётся отзывчивым** (FR-080, SC-009): вся работа идёт в исполнителе,
-//!   а наружу уходит поток событий, а не запросы состояния.
-//! - **Задачи переживают перезапуск** (FR-081): значимые сдвиги пишутся в базу, а
-//!   застигнутые в работе при следующем старте становятся приостановленными, но никогда
-//!   завершёнными (конституция, принцип III).
-//! - **Отмена не считается выполненной, пока живо дерево процессов** (принцип III):
-//!   состояние записывается только после того, как процессов не осталось.
+//! - **The interface stays responsive** (FR-080, SC-009): all the work runs in the task
+//!   runner, and what goes outside is a stream of events rather than state queries.
+//! - **Tasks survive a restart** (FR-081): the moves that matter are written to the
+//!   database, and those caught running become paused at the next start, never completed
+//!   (constitution, principle III).
+//! - **A cancellation does not count as done while the process tree is alive**
+//!   (principle III): the state is written only once no processes are left.
 
 use super::progress::ProgressThrottle;
 use super::state::{Lane, LaneLimits, TaskKind, TaskState};
@@ -49,13 +49,13 @@ pub enum TaskError {
 
 pub type Result<T> = std::result::Result<T, TaskError>;
 
-/// Как часто продвижение попадает в базу.
+/// How often progress reaches the database.
 ///
-/// Три секунды — это про то, сколько работы не жалко переспросить у человека после
-/// перезапуска, а не про плавность показа: плавность даёт поток событий.
+/// Three seconds is about how much work one is willing to lose after a restart, not about
+/// how smooth the display looks: the smoothness comes from the stream of events.
 const PROGRESS_PERSIST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Событие о задаче, уходящее в интерфейс.
+/// An event about a task, on its way to the interface.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum TaskEvent {
@@ -74,23 +74,23 @@ pub enum TaskEvent {
     },
 }
 
-/// Ручки управления живой задачей.
+/// The controls of a live task.
 struct LiveTask {
     kind: TaskKind,
     state: TaskState,
     cancel: CancellationToken,
-    /// Взведён, пока задача приостановлена.
+    /// Raised while the task is paused.
     paused: Arc<Mutex<bool>>,
     resume: Arc<Notify>,
     throttle: Arc<ProgressThrottle>,
-    /// Место в очереди: меньше — раньше (FR-083).
+    /// The place in the queue: lower runs sooner (FR-083).
     position: i64,
 }
 
-/// То, что видит выполняющаяся задача.
+/// What a running task sees.
 ///
-/// Через него она сообщает о продвижении и узнаёт, не пора ли остановиться. Ничего
-/// другого задаче знать не нужно — ни про базу, ни про очередь.
+/// Through it the task reports its progress and learns whether it is time to stop. Nothing
+/// else is any of the task's business — not the database, not the queue.
 #[derive(Clone)]
 pub struct TaskContext {
     pub id: String,
@@ -98,37 +98,37 @@ pub struct TaskContext {
     paused: Arc<Mutex<bool>>,
     resume: Arc<Notify>,
     throttle: Arc<ProgressThrottle>,
-    /// Отдельный клапан — для записи продвижения в базу.
+    /// A separate valve — for writing progress to the database.
     ///
-    /// Не тот же, что у событий: события идут в память четыре раза в секунду,
-    /// а запись на диск с такой частотой ради показателя не нужна никому.
+    /// Not the same one the events use: the events go into memory four times a second,
+    /// and writing to disk that often for the sake of a number serves nobody.
     persist_throttle: Arc<ProgressThrottle>,
     events: broadcast::Sender<TaskEvent>,
     db: Arc<Db>,
 }
 
 impl TaskContext {
-    /// Отменена ли задача. Проверять в местах, где можно остановиться без вреда.
+    /// Whether the task was cancelled. Check it where stopping does no harm.
     pub fn is_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
     }
 
-    /// Токен отмены — чтобы передать его в ожидание ввода-вывода.
+    /// The cancellation token — to hand into a wait on input-output.
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
     }
 
-    /// Приостановлена ли задача — **не дожидаясь** продолжения.
+    /// Whether the task is paused — **without waiting** for it to carry on.
     ///
-    /// Отличается от `wait_while_paused` тем, что не блокирует. Нужно там, где
-    /// работа не может просто встать в ожидание: кодирование идёт чужой программой,
-    /// и её надо заморозить, а не бросить на середине. Без этого «пауза» освобождала
-    /// бы место в полосе, не останавливая ничего (задолженность T067, FR-083a).
+    /// It differs from `wait_while_paused` in not blocking. Needed where the work cannot
+    /// simply stand and wait: encoding is done by somebody else's program, and that has to
+    /// be frozen rather than abandoned halfway. Without this a "pause" would free a place
+    /// in the lane while stopping nothing (debt T067, FR-083a).
     pub fn is_paused(&self) -> bool {
         *self.paused.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Прерваться, если задачу отменили.
+    /// Break off if the task was cancelled.
     pub fn bail_if_cancelled(&self) -> Result<()> {
         if self.is_cancelled() {
             Err(TaskError::Cancelled)
@@ -137,24 +137,25 @@ impl TaskContext {
         }
     }
 
-    /// Дождаться продолжения, если задача приостановлена.
+    /// Wait until the task carries on, if it is paused.
     ///
-    /// Вызывать между единицами работы: между кусками передачи, между шагами
-    /// развёртывания. Приостановка вступит в силу на ближайшей такой точке.
-    /// Отмена тоже будит: после возврата вызывающий обязан проверить `is_cancelled`.
+    /// Call it between units of work: between pieces of a transfer, between steps of a
+    /// setup. A pause takes effect at the nearest such point. A cancellation wakes it too:
+    /// after it returns, the caller must check `is_cancelled`.
     pub async fn wait_while_paused(&self) {
         loop {
-            // Подписка на «продолжить» оформляется ДО чтения флага: notify_waiters
-            // не сохраняет разрешения для ещё не подписанных, и иначе «продолжить»,
-            // нажатое в щели между чтением флага и засыпанием, потерялось бы навсегда.
+            // The subscription to "carry on" is taken out BEFORE the flag is read:
+            // notify_waiters keeps no permit for those not yet subscribed, and otherwise a
+            // "carry on" pressed in the gap between reading the flag and falling asleep
+            // would be lost forever.
             let resumed = self.resume.notified();
 
             if self.is_cancelled() || !*self.paused.lock().unwrap_or_else(|e| e.into_inner()) {
                 return;
             }
 
-            // Ждать одного лишь «продолжить» нельзя: при отмене флаг приостановки
-            // не сбрасывается, и задача, разбуженная отменой, тут же уснула бы снова.
+            // Waiting for "carry on" alone will not do: a cancellation does not clear the
+            // pause flag, and a task woken by one would fall asleep again at once.
             tokio::select! {
                 _ = resumed => {}
                 _ = self.cancel.cancelled() => return,
@@ -162,17 +163,18 @@ impl TaskContext {
         }
     }
 
-    /// Сообщить о продвижении. Частота ограничена (T020).
+    /// Report progress. The rate is capped (T020).
     pub fn report(&self, progress: f64, stage: DetailCode) {
         self.report_full(progress, Some(stage), None, None, false);
     }
 
-    /// Сообщить о продвижении с показателями передачи.
+    /// Report progress along with the transfer's figures.
     pub fn report_transfer(&self, progress: f64, speed_bps: i64, eta_s: i64) {
         self.report_full(progress, None, Some(speed_bps), Some(eta_s), false);
     }
 
-    /// Сообщение, которое обязано пройти независимо от частоты: смена этапа, конец работы.
+    /// A message that must get through regardless of the rate cap: a change of stage, the
+    /// end of the work.
     pub fn report_important(&self, progress: f64, stage: DetailCode) {
         self.report_full(progress, Some(stage), None, None, true);
     }
@@ -198,69 +200,69 @@ impl TaskContext {
         });
     }
 
-    /// Запомнить продвижение так, чтобы оно пережило закрытие приложения.
+    /// Remember the progress so that it survives the application closing.
     ///
-    /// Событиями продвижение расходится по интерфейсу четыре раза в секунду, но живёт
-    /// только в памяти. В базу оно пишется много реже — раз в несколько секунд:
-    /// точность до секунды здесь никому не нужна, а держать диск занятым ради неё
-    /// незачем. Задача сама решает, когда звать: слой задач не знает, что считать
-    /// продвижением.
+    /// As events, progress spreads through the interface four times a second, but it lives
+    /// only in memory. It reaches the database far less often — once every few seconds:
+    /// accuracy to the second serves nobody here, and there is no point keeping the disk
+    /// busy for it. The task itself decides when to call: the task layer does not know what
+    /// counts as progress.
     ///
-    /// Неудача записи проглатывается намеренно: показатель — не работа, и ронять
-    /// из-за него многочасовую передачу нельзя.
+    /// A failed write is swallowed deliberately: a number is not the work, and a transfer
+    /// running for hours must not be brought down by one.
     pub fn save_progress(&self, progress: f64) {
         if !self.persist_throttle.allow(false) {
             return;
         }
         if let Err(e) = store::save_progress(&self.db, &self.id, progress) {
-            tracing::debug!(id = %self.id, error = %e, "продвижение не записано");
+            tracing::debug!(id = %self.id, error = %e, "the progress was not written");
         }
     }
 
-    /// Записать позицию возобновления.
+    /// Write the resume position.
     ///
-    /// Это единственное, что имеет смысл писать в базу часто: без него прерванная
-    /// передача начнётся заново. Запись точечная — см. `store::save_resume_token`.
+    /// This is the one thing worth writing to the database often: without it an interrupted
+    /// transfer starts over. The write is pointed — see `store::save_resume_token`.
     pub fn save_resume_token(&self, token: &str) -> Result<()> {
         store::save_resume_token(&self.db, &self.id, token)?;
         Ok(())
     }
 
-    /// Прочитать позицию возобновления, оставленную прошлым запуском.
+    /// Read the resume position left by the previous run.
     pub fn resume_token(&self) -> Result<Option<String>> {
         Ok(store::get(&self.db, &self.id)?.and_then(|r| r.resume_token))
     }
 }
 
-/// Итог попытки занять место в полосе.
+/// How an attempt to take a place in a lane ended.
 enum ClaimOutcome {
-    /// Место занято, задача стала выполняющейся.
+    /// The place was taken; the task is now running.
     Started,
-    /// Полоса заполнена — подождать и попробовать снова.
+    /// The lane is full — wait and try again.
     Busy,
-    /// Задачи больше нет среди живых (снята или завершена) — не запускать.
+    /// The task is no longer among the living (cancelled or finished) — do not start it.
     Gone,
 }
 
-/// Механизм задач.
+/// The task machinery.
 #[derive(Clone)]
 pub struct TaskEngine {
     db: Arc<Db>,
     live: Arc<Mutex<HashMap<String, LiveTask>>>,
     limits: LaneLimits,
     events: broadcast::Sender<TaskEvent>,
-    /// Номер, который получит следующая поставленная задача.
+    /// The place the next task submitted will get.
     next_position: Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl TaskEngine {
     pub fn new(db: Arc<Db>) -> Self {
         let (events, _) = broadcast::channel(256);
-        // Отсчёт продолжается с того места, где кончил прошлый запуск: иначе новая
-        // задача получила бы номер, уже занятый лежащей в базе, и встала бы в середину
-        // чужой очереди.
+        // The count carries on from where the previous run left off: otherwise a new task
+        // would get a place already taken by one sitting in the database, and would cut
+        // into the middle of somebody else's queue.
         let next = store::max_queue_order(&db).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "не прочитать порядок очереди — начинаем с нуля");
+            tracing::warn!(error = %e, "could not read the queue order — starting from zero");
             0
         }) + 1;
         Self {
@@ -277,17 +279,17 @@ impl TaskEngine {
         self
     }
 
-    /// Подписаться на события задач.
+    /// Subscribe to task events.
     pub fn subscribe(&self) -> broadcast::Receiver<TaskEvent> {
         self.events.subscribe()
     }
 
-    /// Разобрать состояние после запуска приложения (T017).
+    /// Sort out the state after the application starts (T017).
     pub fn recover_after_start(&self) -> Result<store::RecoveryReport> {
         Ok(store::recover_after_start(&self.db)?)
     }
 
-    /// Сколько задач сейчас занимает полосу.
+    /// How many tasks take up the lane right now.
     pub fn running_in_lane(&self, lane: Lane) -> usize {
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         live.values()
@@ -295,16 +297,16 @@ impl TaskEngine {
             .count()
     }
 
-    /// Есть ли место в полосе для задачи этого вида.
+    /// Whether the lane has room for a task of this kind.
     pub fn has_room_for(&self, kind: TaskKind) -> bool {
         let lane = kind.lane();
         self.running_in_lane(lane) < self.limits.for_lane(lane)
     }
 
-    /// Поставить задачу и запустить её, когда освободится место в полосе.
+    /// Submit a task and start it once there is room in its lane.
     ///
-    /// Возвращает идентификатор сразу: команда не блокируется на длительной работе
-    /// (FR-080, договор слоя команд).
+    /// It returns the identifier at once: a command does not block on long work (FR-080,
+    /// the command layer's contract).
     pub async fn submit<F, Fut>(
         &self,
         kind: TaskKind,
@@ -331,17 +333,17 @@ impl TaskEngine {
         Ok(id)
     }
 
-    /// Вернуть к жизни задачу прошлого запуска, не создавая новой.
+    /// Bring a task from the previous run back to life without creating a new one.
     ///
-    /// Нужно ради FR-031: заливка обязана продолжаться после закрытия и повторного
-    /// запуска приложения. Без этого задача видна в списке приостановленной, но
-    /// продолжить её нечем — рабочая часть живёт только в памяти и умирает вместе
-    /// с приложением. Номер сохраняется прежний: у неё та же позиция возобновления,
-    /// та же запись в базе и то же место в глазах человека.
+    /// Needed for FR-031: an upload must carry on after the application is closed and
+    /// started again. Without it the task shows in the list as paused, but there is nothing
+    /// to carry it on with — the working part lives only in memory and dies along with the
+    /// application. The identifier stays the same: it has the same resume position, the same
+    /// record in the database, and the same place in a person's eyes.
     ///
-    /// Задача поднимается **приостановленной**: она ждёт, пока человек скажет
-    /// «продолжить». Самовольно возобновлять многочасовую передачу при запуске
-    /// приложения нельзя — человек мог закрыть его именно чтобы она прекратилась.
+    /// The task comes back **paused**: it waits until a person says "carry on". Resuming a
+    /// transfer that runs for hours unbidden at start-up will not do — a person may have
+    /// closed the application precisely to stop it.
     pub fn resubmit_paused<F, Fut>(&self, id: &str, work: F) -> Result<()>
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
@@ -361,8 +363,8 @@ impl TaskEngine {
             .unwrap_or_else(|e| e.into_inner())
             .contains_key(id)
         {
-            // Уже жива — поднимать второй раз нельзя: получатся две работы
-            // с одним номером.
+            // Already alive — raising it a second time will not do: that would give two
+            // pieces of work under one identifier.
             return Ok(());
         }
 
@@ -377,7 +379,7 @@ impl TaskEngine {
         Ok(())
     }
 
-    /// Общая часть постановки: завести живую задачу и запустить её работу.
+    /// The part both ways of submitting share: create the live task and start its work.
     fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, position: i64, work: F)
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
@@ -420,10 +422,11 @@ impl TaskEngine {
         let paused_flag = ctx.paused.clone();
         let resume_signal = ctx.resume.clone();
         tokio::spawn(async move {
-            // Поднятая после перезапуска задача ждёт человека и **не занимает полосу**:
-            // иначе она заняла бы место, ничего не делая, и вторая такая же не смогла
-            // бы начаться. Самовольно продолжать многочасовую передачу при запуске
-            // приложения тоже нельзя — его могли закрыть именно ради её прекращения.
+            // A task raised after a restart waits for a person and **takes up no lane**:
+            // otherwise it would hold a place while doing nothing, and a second one like it
+            // could not start. Carrying on a transfer that runs for hours unbidden at
+            // start-up will not do either — the application may have been closed precisely
+            // to stop it.
             loop {
                 let resumed = resume_signal.notified();
                 if cancel.is_cancelled() {
@@ -442,8 +445,8 @@ impl TaskEngine {
                 }
             }
 
-            // Ждём места в полосе. Отмена работает и здесь: стоящую в очереди задачу
-            // можно снять, не дожидаясь её запуска.
+            // Waiting for room in the lane. Cancelling works here too: a task standing in
+            // the queue can be dropped without waiting for it to start.
             loop {
                 if cancel.is_cancelled() {
                     engine.finish(&task_id, TaskState::Cancelled, None);
@@ -460,7 +463,8 @@ impl TaskEngine {
 
             let outcome = work(ctx).await;
 
-            // Отмена важнее исхода работы: задача, снятая пользователем, не «упала».
+            // A cancellation outweighs the work's outcome: a task a person dropped did
+            // not "fail".
             if cancel.is_cancelled() {
                 engine.finish(&task_id, TaskState::Cancelled, None);
                 return;
@@ -473,85 +477,85 @@ impl TaskEngine {
         });
     }
 
-    /// Переставить задачи в очереди (FR-083).
+    /// Reorder the tasks in the queue (FR-083).
     ///
-    /// `ordered` — номера задач в желаемом порядке, как их видит человек в списке.
-    /// Переставляются только те из них, что **ждут своей очереди**: выполняющуюся
-    /// задача перестановка не трогает, потому что прервать её ради изменения порядка
-    /// значило бы выбросить уже сделанную работу. Занятые места перераспределяются
-    /// между собой, так что задачи, которых в списке нет, остаются там, где стояли.
+    /// `ordered` holds the task identifiers in the wanted order, as a person sees them in
+    /// the list. Only those **waiting their turn** are moved: a running task is left alone,
+    /// because breaking it off for the sake of a reordering would throw away work already
+    /// done. The places taken are redistributed among themselves, so tasks not in the list
+    /// stay where they stood.
     ///
-    /// Задачи, успевшие начаться или закончиться между показом списка и нажатием,
-    /// пропускаются молча: список у человека на экране всегда чуть отстаёт, и отказ
-    /// от всей перестановки из-за одной такой задачи был бы наказанием за чужую
-    /// расторопность. Возвращается, сколько задач действительно переставлено.
+    /// Tasks that managed to start or finish between the list being shown and the button
+    /// being pressed are skipped quietly: the list on a person's screen always lags a
+    /// little, and refusing the whole reordering over one such task would punish them for
+    /// somebody else's speed. It returns how many tasks were really moved.
     pub fn reorder_queue(&self, ordered: &[String]) -> Result<usize> {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Берём только тех, кто ещё ждёт, сохраняя порядок из заявки.
-        let ожидающие: Vec<&String> = ordered
+        // Only those still waiting are taken, keeping the order from the request.
+        let waiting: Vec<&String> = ordered
             .iter()
             .filter(|id| {
                 live.get(id.as_str())
                     .is_some_and(|t| t.state == TaskState::Queued)
             })
             .collect();
-        if ожидающие.len() < 2 {
-            // Переставлять нечего: одна задача или ни одной.
+        if waiting.len() < 2 {
+            // There is nothing to reorder: one task or none.
             return Ok(0);
         }
 
-        // Места, которые они занимают сейчас, — их и раздаём в новом порядке.
-        // Так задачи, не попавшие в заявку, не сдвигаются ни на шаг.
-        let mut места: Vec<i64> = ожидающие
+        // The places they hold right now are the ones handed out in the new order. That way
+        // tasks left out of the request do not move a single step.
+        let mut places: Vec<i64> = waiting
             .iter()
             .filter_map(|id| live.get(id.as_str()).map(|t| t.position))
             .collect();
-        места.sort_unstable();
+        places.sort_unstable();
 
-        let mut записать: Vec<(String, i64)> = Vec::with_capacity(ожидающие.len());
-        for (id, место) in ожидающие.iter().zip(места.iter()) {
-            записать.push(((*id).clone(), *место));
+        let mut to_write: Vec<(String, i64)> = Vec::with_capacity(waiting.len());
+        for (id, place) in waiting.iter().zip(places.iter()) {
+            to_write.push(((*id).clone(), *place));
         }
-        for (id, место) in &записать {
+        for (id, place) in &to_write {
             if let Some(t) = live.get_mut(id.as_str()) {
-                t.position = *место;
+                t.position = *place;
             }
         }
         drop(live);
 
-        // В базу — чтобы порядок пережил перезапуск приложения.
-        for (id, место) in &записать {
-            if let Err(e) = store::save_queue_order(&self.db, id, *место) {
-                tracing::warn!(id, error = %e, "порядок очереди не записан");
+        // And to the database, so the order survives a restart of the application.
+        for (id, place) in &to_write {
+            if let Err(e) = store::save_queue_order(&self.db, id, *place) {
+                tracing::warn!(id, error = %e, "the queue order was not written");
             }
         }
-        Ok(записать.len())
+        Ok(to_write.len())
     }
 
-    /// Номера ждущих задач в том порядке, в каком они пойдут в работу.
+    /// The waiting tasks' identifiers, in the order they will be taken up.
     pub fn queue_order(&self) -> Vec<String> {
         let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        let mut ждущие: Vec<(&String, i64)> = live
+        let mut waiting: Vec<(&String, i64)> = live
             .iter()
             .filter(|(_, t)| t.state == TaskState::Queued)
             .map(|(id, t)| (id, t.position))
             .collect();
-        ждущие.sort_by_key(|(_, position)| *position);
-        ждущие.into_iter().map(|(id, _)| id.clone()).collect()
+        waiting.sort_by_key(|(_, position)| *position);
+        waiting.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
-    /// Отменить задачу.
+    /// Cancel a task.
     ///
-    /// Токен взводится сразу, но состояние записывается только когда работа
-    /// действительно прекратилась — включая дерево процессов (принцип III).
+    /// The token is raised at once, but the state is written only when the work has really
+    /// stopped — the process tree included (principle III).
     pub fn cancel(&self, id: &str) -> Result<()> {
         let token = {
             let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
             match live.get(id) {
                 Some(t) => {
-                    // Приостановленная задача не проснётся сама — будим, чтобы она
-                    // увидела отмену.
+                    // A paused task will not wake by itself — it is woken so that it sees
+                    // the cancellation.
                     t.resume.notify_waiters();
                     Some(t.cancel.clone())
                 }
@@ -564,15 +568,15 @@ impl TaskEngine {
                 token.cancel();
                 Ok(())
             }
-            // Задачи нет среди живых: она осталась от прошлого запуска и никем
-            // не поднята. Останавливать нечего, но решение человека записать надо —
-            // иначе она навсегда останется в списке приостановленной, и снять её
-            // будет нечем.
+            // The task is not among the living: it was left over from the previous run and
+            // nobody raised it. There is nothing to stop, but the person's decision must be
+            // written down — otherwise it stays in the list as paused forever, with nothing
+            // to drop it with.
             None => {
                 let record =
                     store::get(&self.db, id)?.ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
                 if record.state.is_final() {
-                    // Повтор безопасен (конституция, принцип V).
+                    // Repeating is safe (constitution, principle V).
                     return Ok(());
                 }
                 store::save_state(&self.db, id, TaskState::Cancelled, None)?;
@@ -586,7 +590,7 @@ impl TaskEngine {
         }
     }
 
-    /// Приостановить задачу.
+    /// Pause a task.
     pub fn pause(&self, id: &str) -> Result<()> {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let t = live
@@ -611,7 +615,7 @@ impl TaskEngine {
         Ok(())
     }
 
-    /// Продолжить приостановленную задачу.
+    /// Carry on a paused task.
     pub fn resume(&self, id: &str) -> Result<()> {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let t = live
@@ -635,7 +639,8 @@ impl TaskEngine {
         Ok(())
     }
 
-    /// Список задач из базы — включая завершённые и оставшиеся от прошлых запусков.
+    /// The list of tasks from the database — finished ones and leftovers from previous
+    /// runs included.
     pub fn list(&self) -> Result<Vec<TaskRecord>> {
         Ok(store::list(&self.db)?)
     }
@@ -644,20 +649,20 @@ impl TaskEngine {
         Ok(store::get(&self.db, id)?)
     }
 
-    /// Занять место в полосе и стать выполняющейся — атомарно, под одним замком.
+    /// Take a place in the lane and become running — atomically, under one lock.
     ///
-    /// Проверка места и смена состояния нарочно неразделимы: две задачи, проснувшиеся
-    /// одновременно, иначе обе увидели бы одно свободное место — и обе бы стартовали,
-    /// две подготовки в полосе на одну.
+    /// Checking for room and changing the state are inseparable on purpose: two tasks that
+    /// wake at the same moment would otherwise both see one free place — and both would
+    /// start, two preparations in a lane meant for one.
     fn try_claim_lane(&self, id: &str) -> ClaimOutcome {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let Some(t) = live.get(id) else {
             return ClaimOutcome::Gone;
         };
         let lane = t.kind.lane();
-        // Себя в счёт не берём. Задача, поднятая после перезапуска и продолженная
-        // человеком, уже числится выполняющейся — и, считая себя, никогда бы
-        // не дождалась свободного места в собственной полосе.
+        // We do not count ourselves. A task raised after a restart and carried on by a
+        // person already counts as running — and, counting itself, would never see a free
+        // place in its own lane.
         let used = live
             .iter()
             .filter(|(other_id, x)| {
@@ -668,19 +673,19 @@ impl TaskEngine {
             return ClaimOutcome::Busy;
         }
 
-        // Очередь соблюдается: место занимает та задача, что стоит в полосе первой.
-        // Без этой проверки порядок был бы «кто первым захватил блокировку», и
-        // перестановка (FR-083) не давала бы ничего — переставлять было бы нечего.
+        // The queue is honoured: the place goes to the task standing first in the lane.
+        // Without this check the order would be "whoever grabbed the lock first", and
+        // reordering (FR-083) would give nothing — there would be nothing to reorder.
         //
-        // Сравнение только со стоящими в очереди. Приостановленная не ждёт полосы,
-        // она ждёт человека, и держать за собой очередь ей не за что; продолженная
-        // человеком идёт сразу — он только что сказал, что хочет именно её.
+        // Only those standing in the queue are compared. A paused task is not waiting for
+        // the lane, it is waiting for a person, and has no claim to hold the queue; one
+        // carried on by a person goes at once — they have just said it is the one they want.
         if t.state == TaskState::Queued {
             let position = t.position;
-            let есть_раньше = live.values().any(|x| {
+            let someone_is_ahead = live.values().any(|x| {
                 x.state == TaskState::Queued && x.kind.lane() == lane && x.position < position
             });
-            if есть_раньше {
+            if someone_is_ahead {
                 return ClaimOutcome::Busy;
             }
         }
@@ -692,7 +697,7 @@ impl TaskEngine {
             tracing::warn!(
                 id,
                 from = t.state.as_str(),
-                "задача не может стать выполняющейся"
+                "the task cannot become running"
             );
             return ClaimOutcome::Gone;
         }
@@ -721,8 +726,11 @@ impl TaskEngine {
     fn persist_state(&self, id: &str, state: TaskState, error: Option<AppError>) {
         match store::save_state(&self.db, id, state, error.as_ref()) {
             Ok(true) => {}
-            Ok(false) => tracing::warn!(id, "состояние сохранять некуда: записи о задаче нет"),
-            Err(e) => tracing::error!(id, error = %e, "не удалось сохранить состояние задачи"),
+            Ok(false) => tracing::warn!(
+                id,
+                "nowhere to save the state: there is no record of the task"
+            ),
+            Err(e) => tracing::error!(id, error = %e, "could not save the task's state"),
         }
     }
 }

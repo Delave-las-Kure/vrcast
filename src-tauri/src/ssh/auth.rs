@@ -1,18 +1,19 @@
-//! T023 — способы входа на сервер, включая ключ с парольной фразой (FR-096).
+//! T023 — ways of signing in to a server, including a key with a passphrase (FR-096).
 
 use super::{Result, SshError};
 use crate::store::redact;
 use russh::keys::PrivateKey;
 use std::path::{Path, PathBuf};
 
-/// Чем входим на сервер.
+/// What we sign in to the server with.
 ///
-/// Секрет здесь живёт ровно столько, сколько идёт подключение: в базу он не попадает,
-/// а берётся из хранилища ОС по ссылке (конституция, принцип IV).
+/// A secret lives here exactly as long as the connection does: it never reaches the
+/// database, and comes from the OS store by reference (constitution, principle IV).
 #[derive(Clone)]
 pub enum Credentials {
-    /// Приватный ключ. Парольная фраза нужна не всегда — но если ключ ею защищён,
-    /// без неё он не прочитается, и это отдельная, понятная пользователю ошибка.
+    /// A private key. The passphrase is not always needed — but if the key is
+    /// protected by one, it will not read without it, and that is its own error with
+    /// its own answer for the person.
     Key {
         path: PathBuf,
         passphrase: Option<String>,
@@ -20,8 +21,8 @@ pub enum Credentials {
     Password(String),
 }
 
-/// `Debug` намеренно не печатает ни пароль, ни парольную фразу: структура может попасть
-/// в отладочный вывод целиком, и это самый частый способ утечки.
+/// `Debug` deliberately prints neither the password nor the passphrase: the whole
+/// structure can end up in debug output, and that is the commonest way of leaking one.
 impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -30,26 +31,22 @@ impl std::fmt::Debug for Credentials {
                 .field("path", path)
                 .field(
                     "passphrase",
-                    &if passphrase.is_some() {
-                        "задана"
-                    } else {
-                        "нет"
-                    },
+                    &if passphrase.is_some() { "set" } else { "none" },
                 )
                 .finish(),
-            Self::Password(_) => f.write_str("Credentials::Password(<скрыт>)"),
+            Self::Password(_) => f.write_str("Credentials::Password(<hidden>)"),
         }
     }
 }
 
-/// Прочитать приватный ключ с диска.
+/// Read a private key from disk.
 ///
-/// Различает «ключ защищён парольной фразой» и «ключ не читается» — это разные причины
-/// и разные подсказки пользователю (FR-105). Слить их в одну ошибку значило бы заставить
-/// человека гадать, не тот ли он файл выбрал.
+/// Tells "the key is protected by a passphrase" from "the key will not read" — those
+/// are different causes calling for different answers (FR-105). Merging them into one
+/// error would leave a person guessing whether they picked the wrong file.
 pub fn load_key(path: &Path, passphrase: Option<&str>) -> Result<PrivateKey> {
-    // Регистрируем парольную фразу до чтения: если чтение провалится, сообщение об ошибке
-    // уже не сможет вынести её наружу.
+    // The passphrase is registered before the read: if the read fails, the error
+    // message will no longer be able to carry it out.
     if let Some(p) = passphrase {
         redact::register(p);
     }

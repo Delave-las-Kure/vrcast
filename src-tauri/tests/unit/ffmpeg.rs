@@ -1,21 +1,21 @@
-//! T115 — проверка вложенного FFmpeg.
+//! T115 — checking the bundled FFmpeg.
 //!
-//! Разбор ответов проверяется на записанных строках и идёт всегда. Сам вложенный
-//! файл весит сто сорок мегабайт, в репозиторий не попадает и в непрерывной
-//! интеграции отсутствует — проверки, которым он нужен, честно сообщают, что
-//! пропущены, а не делают вид, что прошли.
+//! Parsing the answers is checked against recorded strings and always runs. The bundled
+//! file itself weighs a hundred and forty megabytes, never reaches the repository and is
+//! absent from continuous integration — the checks that need it say honestly that they were
+//! skipped rather than pretending to have passed.
 
 use vrcast_studio_lib::media::ffmpeg::{self, FfmpegError};
 
-/// Настоящий ответ вложенной сборки, сокращённый до сути.
-const ОТВЕТ_О_ВЕРСИИ: &str = "\
+/// A real answer from the bundled build, shortened to the point.
+const VERSION_ANSWER: &str = "\
 ffmpeg version n8.1.2-44-g7c533d0f86-20260825 Copyright (c) 2000-2026 the FFmpeg developers
 built with gcc 15.2.0 (crosstool-NG 1.28.0.23_185f348)
 configuration: --enable-gpl --enable-version3 --enable-libx264 --enable-ffnvcodec
 ";
 
-/// Кусок настоящего перечня кодировщиков: тот же вид, что печатает программа.
-const ПЕРЕЧЕНЬ: &str = "\
+/// A piece of a real encoder listing: the same shape the program prints.
+const LISTING: &str = "\
 Encoders:
  V..... = Video
  ------
@@ -27,94 +27,96 @@ Encoders:
 ";
 
 #[test]
-fn версия_читается_из_ответа() {
-    let v = ffmpeg::parse_version(ОТВЕТ_О_ВЕРСИИ).expect("версия не прочиталась");
-    assert!(v.contains("n8.1.2"), "получено: {v}");
+fn the_version_is_read_out_of_the_answer() {
+    let v = ffmpeg::parse_version(VERSION_ANSWER).expect("the version would not read");
+    assert!(v.contains("n8.1.2"), "got: {v}");
 }
 
 #[test]
-fn чужая_программа_под_именем_ffmpeg_не_принимается() {
-    // Под этим именем в системе может оказаться что угодно — от обёртки пакетного
-    // менеджера до сообщения «программа не установлена». Принять такое за FFmpeg
-    // значит узнать правду в середине подготовки.
-    let ответ =
-        "Команда «ffmpeg» не найдена, но может быть установлена командой:\nsudo apt install ffmpeg";
-    let err = ffmpeg::parse_version(ответ).expect_err("чужой ответ принят за версию");
+fn another_program_under_the_name_ffmpeg_is_not_accepted() {
+    // Anything at all may stand behind that name in a system — from a package manager's
+    // wrapper to a message saying the program is not installed. Accepting such a thing as
+    // FFmpeg means learning the truth halfway through a preparation.
+    let answer = "Command 'ffmpeg' not found, but can be installed with:\nsudo apt install ffmpeg";
+    let err =
+        ffmpeg::parse_version(answer).expect_err("another program's answer passed for a version");
     assert!(matches!(err, FfmpegError::Unexpected(_)));
 }
 
 #[test]
-fn пустой_ответ_это_не_версия() {
-    let err = ffmpeg::parse_version("   \n\n  ").expect_err("пустота принята за версию");
+fn an_empty_answer_is_not_a_version() {
+    let err = ffmpeg::parse_version("   \n\n  ").expect_err("emptiness passed for a version");
     assert!(matches!(err, FfmpegError::Unexpected(_)));
 }
 
 #[test]
-fn кодировщик_ищется_целым_словом() {
-    assert!(ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "libx264"));
-    assert!(ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "h264_nvenc"));
-    assert!(ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "aac"));
+fn an_encoder_is_looked_for_as_a_whole_word() {
+    assert!(ffmpeg::encoder_present(LISTING, "libx264"));
+    assert!(ffmpeg::encoder_present(LISTING, "h264_nvenc"));
+    assert!(ffmpeg::encoder_present(LISTING, "aac"));
 }
 
 #[test]
-fn чужое_имя_внутри_нашего_не_считается_совпадением() {
-    // Ради этого поиск идёт по словам, а не подстрокой. В перечне есть `hevc_nvenc`,
-    // и подстрочный поиск объявил бы наличие `nvenc` вообще — а на самом деле
-    // важно, есть ли именно кодировщик H.264. Ошибка тихая: приложение решило бы,
-    // что аппаратное ускорение доступно, и упало бы уже на запуске подготовки.
+fn another_name_inside_ours_does_not_count_as_a_match() {
+    // This is why the search goes by words rather than by substring. The listing holds
+    // `hevc_nvenc`, and a substring search would declare `nvenc` present in general — while
+    // what matters is whether the H.264 encoder in particular is there. The fault is silent:
+    // the application would decide hardware acceleration was available and fall over as soon
+    // as a preparation started.
     assert!(
-        !ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "nvenc"),
-        "кусок чужого имени принят за кодировщик"
+        !ffmpeg::encoder_present(LISTING, "nvenc"),
+        "a piece of another name passed for an encoder"
     );
     assert!(
-        !ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "x264"),
-        "«x264» найдено внутри «libx264»"
+        !ffmpeg::encoder_present(LISTING, "x264"),
+        "\"x264\" was found inside \"libx264\""
     );
-    assert!(!ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "h264_qsv"));
-    assert!(!ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "h264_amf"));
-    assert!(!ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "h264_vaapi"));
+    assert!(!ffmpeg::encoder_present(LISTING, "h264_qsv"));
+    assert!(!ffmpeg::encoder_present(LISTING, "h264_amf"));
+    assert!(!ffmpeg::encoder_present(LISTING, "h264_vaapi"));
 }
 
 #[test]
-fn отсутствие_вложенного_файла_называется_отдельной_бедой() {
-    // Не «не запускается» и не «отвечает не то»: чинить это надо иначе, и путь,
-    // по которому искали, человеку нужен.
-    let err = ffmpeg::locate("такой-программы-нет").expect_err("найдено несуществующее");
+fn a_missing_bundled_file_is_named_as_a_trouble_of_its_own() {
+    // Not "it will not start" and not "it answers with the wrong thing": fixing it goes
+    // another way, and a person needs the path that was searched.
+    let err =
+        ffmpeg::locate("no-such-program").expect_err("something that does not exist was found");
     match err {
-        FfmpegError::NotFound(искали) => {
-            assert!(!искали.is_empty(), "не сказано, где искали");
+        FfmpegError::NotFound(searched) => {
+            assert!(!searched.is_empty(), "it does not say where it looked");
         }
-        иное => panic!("отсутствие файла названо иначе: {иное}"),
+        other => panic!("a missing file was named otherwise: {other}"),
     }
 }
 
 #[tokio::test]
-async fn вложенная_сборка_умеет_то_ради_чего_вложена() {
-    // Требует самого файла. Он весит сто сорок мегабайт, в репозиторий не попадает
-    // и качается командой `npm run ffmpeg`; в непрерывной интеграции его нет.
-    // Молча пройти в его отсутствие проверка не может — тогда она ничего не значит,
-    // — поэтому пропуск объявляется вслух.
+async fn the_bundled_build_can_do_what_it_was_bundled_for() {
+    // Needs the file itself. It weighs a hundred and forty megabytes, never reaches the
+    // repository and is downloaded by `npm run ffmpeg`; continuous integration has none.
+    // The check cannot pass quietly in its absence — then it would mean nothing — so the
+    // skip is announced out loud.
     let Ok(path) = ffmpeg::locate("ffmpeg") else {
         eprintln!(
-            "ПРОПУЩЕНО: вложенного FFmpeg нет. Выполните `npm run ffmpeg`, \
-             чтобы эта проверка что-то проверяла."
+            "SKIPPED: there is no bundled FFmpeg. Run `npm run ffmpeg` so that this check \
+             checks something."
         );
         return;
     };
-    eprintln!("проверяем вложенную сборку: {}", path.display());
+    eprintln!("checking the bundled build: {}", path.display());
 
     let info = ffmpeg::probe_self()
         .await
-        .expect("вложенная сборка не отвечает");
+        .expect("the bundled build does not answer");
 
     assert!(
         info.version.contains("ffmpeg version"),
-        "версия неожиданного вида: {}",
+        "a version of an unexpected shape: {}",
         info.version
     );
     assert!(
         info.has_x264,
-        "во вложенной сборке нет программного кодировщика H.264 — \
-         на машине без подходящей видеокарты готовить файлы будет нечем"
+        "the bundled build has no software H.264 encoder — on a machine without a suitable \
+         graphics card there would be nothing to prepare files with"
     );
 }

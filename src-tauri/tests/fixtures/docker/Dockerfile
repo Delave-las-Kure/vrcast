@@ -1,18 +1,18 @@
-# Одноразовый сервер для интеграционных тестов (T026).
+# A throwaway server for the integration tests (T026).
 #
-# Ubuntu 24.04 — та же система, что на боевом сервере и на тестовом VPS. Это не
-# формальность: проверять слой доступа к серверу на другой системе значит проверять
-# не то, с чем приложение будет работать.
+# Ubuntu 24.04 — the same system as on the live server and on the test VPS. That is not a
+# formality: checking the server-access layer on a different system means checking something
+# other than what the application will work with.
 #
-# Контейнер НЕ заменяет настоящий сервер целиком. Он закрывает файловые операции,
-# выполнение команд, разбор описи и передачу с обрывами. Не закрывает: службы systemd,
-# сетевой фильтр, настройку ядра и выдачу сертификата — для них нужен настоящий VPS
-# (Фаза 7, см. research.md R-06 и quickstart.md).
+# The container does NOT replace a real server entirely. It covers file operations, running
+# commands, parsing the catalogue and transfers with breaks. It does not cover: systemd
+# services, the network filter, kernel settings and issuing a certificate — those need a real
+# VPS (Phase 7, see research.md R-06 and quickstart.md).
 
 FROM ubuntu:24.04
 
-# iproute2 даёт ss: тест мультиплексирования каналов сверяет число соединений
-# средствами самого сервера. Без ss эта сверка молча вырождалась в «поверим на слово».
+# iproute2 provides ss: the channel-multiplexing test counts the connections by the server's
+# own means. Without ss that count quietly degenerated into taking our word for it.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       openssh-server \
@@ -23,14 +23,15 @@ RUN apt-get update \
 RUN mkdir -p /run/sshd /root/.ssh \
  && chmod 700 /root/.ssh
 
-# Открытая часть того же ключа, которым проверяется разбор ключа с парольной фразой.
-# Так интеграционный тест заодно проверяет FR-096 до конца: не «ключ прочитался»,
-# а «по нему получилось войти на настоящий OpenSSH».
+# The public half of the same key the passphrase-protected key parsing is checked with. That
+# way the integration test also carries FR-096 through to the end: not "the key parsed" but
+# "it got us into a real OpenSSH".
 COPY encrypted_ed25519.key.pub /root/.ssh/authorized_keys
 RUN chmod 600 /root/.ssh/authorized_keys
 
-# Пароль нужен, чтобы проверять и второй способ входа, и его отказ.
-RUN echo 'root:тестовый-пароль-контейнера' | chpasswd
+# The password is needed to check both the second way in and its refusal. It is also in
+# tests/integration/fixture.rs, and the two must be changed together.
+RUN echo 'root:test-container-password' | chpasswd
 
 RUN printf '%s\n' \
       'PermitRootLogin yes' \
@@ -40,8 +41,8 @@ RUN printf '%s\n' \
       'PrintMotd no' \
       > /etc/ssh/sshd_config.d/99-test.conf
 
-# Каталог раздачи в том же месте, что и на настоящем сервере: пути участвуют
-# в проверках, и подменять их значило бы проверять другой случай.
+# The serving directory in the same place as on a real server: the paths take part in the
+# checks, and substituting them would check a different case.
 RUN mkdir -p /var/lib/vrcast/videos /etc/vrcast
 
 EXPOSE 22

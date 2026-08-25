@@ -1,11 +1,12 @@
-//! Операции над библиотекой против настоящего сервера (T047, T048).
+//! Operations on the library against a real server (T047, T048).
 //!
-//! Здесь то, что нельзя проверить без описи: занятое короткое имя, требование
-//! подтверждения с числом файлов и объёмом, переименование файлов вслед за коротким
-//! именем, перенос файла между медиа и удаление.
+//! Here is what cannot be checked without a catalogue: a short name already taken, demanding
+//! confirmation with the number of files and the volume, renaming files to follow a short
+//! name, moving a file between media, and deleting.
 //!
-//! Договорный тест на выдуманной описи проверял бы согласие кода с выдумкой.
-//! Здесь опись настоящая — та, которую приложение само записало на сервер.
+//! A contract test on an invented catalogue would check the code's agreement with the
+//! invention. Here the catalogue is a real one — the one the application wrote to the server
+//! itself.
 
 use super::fixture::{key_path, TestServer, KEY_PASSPHRASE};
 use std::sync::Arc;
@@ -24,21 +25,21 @@ fn app_state() -> AppState {
         Arc::new(Db::open_in_memory().unwrap()),
         Arc::new(InMemorySecretStore::new()),
     )
-    .expect("состояние приложения не собралось")
+    .expect("the application state would not assemble")
 }
 
-/// Поднять контейнер, завести профиль и разложить файлы.
+/// Bring the container up, set a profile up and lay the files out.
 async fn setup(files: &[&str]) -> (TestServer, AppState, String) {
-    let server = TestServer::start().expect("контейнер не поднялся");
+    let server = TestServer::start().expect("the container would not come up");
     for name in files {
         server
             .exec_inside(&format!("head -c 2048 /dev/urandom > '{VIDEO_DIR}/{name}'"))
-            .unwrap_or_else(|e| panic!("не создать {name}: {e}"));
+            .unwrap_or_else(|e| panic!("could not create {name}: {e}"));
     }
 
     let state = app_state();
     let input = ServerInput {
-        name: String::from("Контейнер"),
+        name: String::from("Container"),
         host: server.host().to_owned(),
         port: server.port,
         user: String::from("root"),
@@ -49,95 +50,98 @@ async fn setup(files: &[&str]) -> (TestServer, AppState, String) {
         cdn_base: None,
         ipv6_mode: None,
     };
-    let id = servers::server_add(&state, input, KEY_PASSPHRASE).expect("профиль не создан");
+    let id =
+        servers::server_add(&state, input, KEY_PASSPHRASE).expect("the profile was not created");
     confirm_fingerprint(&state, &id, &server).await;
     (server, state, id)
 }
 
-/// Пройти тот же путь, что и человек в мастере настройки: узнать отпечаток и
-/// подтвердить его.
+/// Walk the same path a person walks in the setup wizard: learn the fingerprint and confirm
+/// it.
 ///
-/// Без этого шага приложение не подключается вовсе — учётные данные не отправляются
-/// серверу, отпечаток которого не подтверждён (FR-092). Пропустить его в оснастке
-/// значило бы проверять поведение, до которого пользователь не доберётся.
+/// Without this step the application does not connect at all — credentials are never sent to
+/// a server whose fingerprint has not been confirmed (FR-092). Skipping it in the fixture
+/// would check behaviour a person never reaches.
 pub async fn confirm_fingerprint(state: &AppState, server_id: &str, server: &TestServer) {
     let fingerprint =
         vrcast_studio_lib::commands::api::server_probe_fingerprint(server.host(), server.port)
             .await
-            .expect("отпечаток не получен");
+            .expect("the fingerprint was not obtained");
     servers::server_fingerprint_confirm(state, server_id, &fingerprint)
-        .expect("отпечаток не подтверждён");
+        .expect("the fingerprint was not confirmed");
 }
 
 #[tokio::test]
-async fn медиа_создаётся_и_видно_в_библиотеке() {
+async fn a_medium_is_created_and_shows_in_the_library() {
     let (_server, state, id) = setup(&[]).await;
 
+    // The title is deliberately not Latin: making a slug out of it is part of what is
+    // checked here.
     let media_id = library::media_create(&state, &id, "Название фильма", None)
         .await
-        .expect("медиа не создано");
+        .expect("the medium was not created");
 
     let view = library::library_list(&state, &id, true).await.unwrap();
     let media = view
         .media
         .iter()
         .find(|m| m.id == media_id)
-        .expect("созданное медиа не видно в библиотеке");
+        .expect("the medium that was created is not visible in the library");
 
     assert_eq!(media.title, "Название фильма");
     assert_eq!(
         media.slug, "nazvanie-filma",
-        "короткое имя составлено не по правилам"
+        "the short name was not made by the rules"
     );
 }
 
 #[tokio::test]
-async fn занятое_короткое_имя_отвергается_своим_кодом() {
-    // Отдельный код нужен, чтобы интерфейс предложил другое имя, а не показал
-    // общее сообщение о неполадке.
+async fn a_short_name_already_taken_is_refused_with_its_own_code() {
+    // A code of its own is needed so the interface can offer another name rather than show a
+    // general message about a fault.
     let (_server, state, id) = setup(&[]).await;
-    library::media_create(&state, &id, "Первое", Some("film"))
+    library::media_create(&state, &id, "The first", Some("film"))
         .await
         .unwrap();
 
-    let err = library::media_create(&state, &id, "Второе", Some("film"))
+    let err = library::media_create(&state, &id, "The second", Some("film"))
         .await
-        .expect_err("заведено второе медиа с тем же коротким именем");
+        .expect_err("a second medium was set up under the same short name");
     assert_eq!(err.code, ErrorCode::SlugTaken);
 }
 
 #[tokio::test]
-async fn удаление_без_подтверждения_называет_последствия() {
-    // FR-014. Подтверждать вслепую нечего: пользователь обязан увидеть, сколько
-    // файлов исчезнет и сколько места освободится.
+async fn deleting_without_confirmation_names_the_consequences() {
+    // FR-014. There is nothing to confirm blind: a person must see how many files will
+    // vanish and how much room will be freed.
     let (server, state, id) = setup(&["film_10.mp4", "film_22.mp4"]).await;
 
-    let media_id = library::media_create(&state, &id, "Фильм", Some("film"))
+    let media_id = library::media_create(&state, &id, "The film", Some("film"))
         .await
         .unwrap();
-    // Относим оба файла к медиа.
+    // Both files are attributed to the medium.
     for name in ["film_10.mp4", "film_22.mp4"] {
         library::file_move(&state, &id, name, &media_id, true)
             .await
-            .expect("файл не отнесён к медиа");
+            .expect("the file was not attributed to the medium");
     }
 
     let err = library::media_delete(&state, &id, &media_id, false)
         .await
-        .expect_err("медиа удалено без подтверждения");
+        .expect_err("the medium was deleted without confirmation");
 
     assert_eq!(err.code, ErrorCode::ConfirmationRequired);
-    // Отказ называет числа: без них подтверждать нечего. Сами по себе они уходят
-    // числами — во что их превратить, «2 файла» или "2 files", решает интерфейс.
+    // The refusal names the numbers: without them there is nothing to confirm. They travel
+    // as numbers — what to turn them into is the interface's decision.
     let detail = err
         .details
         .iter()
         .find(|d| d.key == DetailCode::ConfirmDelete)
-        .unwrap_or_else(|| panic!("в отказе не названы последствия: {err}"));
+        .unwrap_or_else(|| panic!("the refusal does not name the consequences: {err}"));
     assert_eq!(
         detail.params.get("files").and_then(|v| v.as_u64()),
         Some(2),
-        "в отказе не названо число файлов: {detail:?}"
+        "the refusal does not name the number of files: {detail:?}"
     );
     assert!(
         detail
@@ -146,21 +150,24 @@ async fn удаление_без_подтверждения_называет_п�
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
             > 0,
-        "в отказе не назван объём: {detail:?}"
+        "the refusal does not name the volume: {detail:?}"
     );
 
-    // Главное: без подтверждения ничего не произошло.
+    // The main thing: with no confirmation, nothing happened.
     let still_there = server
         .exec_inside(&format!("ls {VIDEO_DIR}/film_10.mp4"))
         .is_ok();
-    assert!(still_there, "файл удалён, хотя подтверждения не было");
+    assert!(
+        still_there,
+        "the file was deleted although there was no confirmation"
+    );
 }
 
 #[tokio::test]
-async fn подтверждённое_удаление_убирает_и_файлы_и_запись_в_описи() {
-    let (server, state, id) = setup(&["film_10.mp4", "film_22.mp4", "чужой.mp4"]).await;
+async fn a_confirmed_deletion_removes_both_the_files_and_the_catalogue_entry() {
+    let (server, state, id) = setup(&["film_10.mp4", "film_22.mp4", "other.mp4"]).await;
 
-    let media_id = library::media_create(&state, &id, "Фильм", Some("film"))
+    let media_id = library::media_create(&state, &id, "The film", Some("film"))
         .await
         .unwrap();
     for name in ["film_10.mp4", "film_22.mp4"] {
@@ -171,44 +178,44 @@ async fn подтверждённое_удаление_убирает_и_фай�
 
     library::media_delete(&state, &id, &media_id, true)
         .await
-        .expect("медиа не удалилось");
+        .expect("the medium would not delete");
 
     for name in ["film_10.mp4", "film_22.mp4"] {
         assert!(
             server
                 .exec_inside(&format!("test -e {VIDEO_DIR}/{name}"))
                 .is_err(),
-            "файл {name} остался на сервере"
+            "the file {name} was left on the server"
         );
     }
-    // Чужой файл не тронут: удаление медиа не имеет права задевать соседей.
+    // The other file is untouched: deleting a medium has no right to affect its neighbours.
     assert!(
         server
-            .exec_inside(&format!("test -e '{VIDEO_DIR}/чужой.mp4'"))
+            .exec_inside(&format!("test -e '{VIDEO_DIR}/other.mp4'"))
             .is_ok(),
-        "удаление медиа задело посторонний файл"
+        "deleting the medium affected an unrelated file"
     );
 
     let view = library::library_list(&state, &id, true).await.unwrap();
     assert!(
         !view.media.iter().any(|m| m.id == media_id),
-        "запись о медиа осталась в описи"
+        "the medium's entry stayed in the catalogue"
     );
     assert_eq!(
         view.unrecognized.len(),
         1,
-        "уцелевший файл потерялся: {view:?}"
+        "the surviving file was lost: {view:?}"
     );
 }
 
 #[tokio::test]
-async fn смена_короткого_имени_переименовывает_файлы() {
-    // И ломает прежние ссылки — об этом интерфейс обязан предупредить до вызова.
-    // Проверяем, что переименование действительно доходит до сервера: опись,
-    // ссылающаяся на несуществующие файлы, хуже отсутствия переименования.
+async fn changing_the_short_name_renames_the_files() {
+    // And breaks the old links — the interface must warn about that before calling. What is
+    // checked is that the renaming really reaches the server: a catalogue pointing at files
+    // that do not exist is worse than no renaming at all.
     let (server, state, id) = setup(&["film_10.mp4", "film_22.mp4"]).await;
 
-    let media_id = library::media_create(&state, &id, "Фильм", Some("film"))
+    let media_id = library::media_create(&state, &id, "The film", Some("film"))
         .await
         .unwrap();
     for name in ["film_10.mp4", "film_22.mp4"] {
@@ -219,19 +226,19 @@ async fn смена_короткого_имени_переименовывает
 
     library::media_rename(&state, &id, &media_id, None, Some("kino"))
         .await
-        .expect("переименование не удалось");
+        .expect("the renaming failed");
 
     assert!(
         server
             .exec_inside(&format!("test -e {VIDEO_DIR}/kino_10.mp4"))
             .is_ok(),
-        "файл не переименован на сервере"
+        "the file was not renamed on the server"
     );
     assert!(
         server
             .exec_inside(&format!("test -e {VIDEO_DIR}/film_10.mp4"))
             .is_err(),
-        "прежний файл остался — на диске появилась копия"
+        "the old file was left — a copy appeared on the disk"
     );
 
     let view = library::library_list(&state, &id, true).await.unwrap();
@@ -240,118 +247,124 @@ async fn смена_короткого_имени_переименовывает
     let paths: Vec<&str> = media.files.iter().map(|f| f.path.as_str()).collect();
     assert!(
         paths.contains(&"kino_10.mp4") && paths.contains(&"kino_22.mp4"),
-        "опись не поспела за переименованием: {paths:?}"
+        "the catalogue did not keep up with the renaming: {paths:?}"
     );
     assert!(
         media.files.iter().all(|f| f.exists_on_server),
-        "опись ссылается на несуществующие файлы: {media:?}"
+        "the catalogue points at files that do not exist: {media:?}"
     );
-    // Ссылки пересобрались под новое имя — иначе пользователь скопировал бы
-    // адрес, которого уже нет.
+    // The links were rebuilt under the new name — otherwise a person would copy an address
+    // that no longer exists.
     assert!(
         media.files.iter().all(|f| f.origin_url.contains("kino_")),
-        "ссылки остались на прежнее имя: {media:?}"
+        "the links stayed on the old name: {media:?}"
     );
 }
 
 #[tokio::test]
-async fn переименование_только_названия_файлов_не_трогает() {
-    // Смена названия — безобидное действие, и ломать из-за него работающие ссылки
-    // было бы неожиданностью для пользователя.
+async fn renaming_only_the_title_leaves_the_files_alone() {
+    // Changing the title is a harmless act, and breaking working links over it would be a
+    // surprise to a person.
     let (server, state, id) = setup(&["film_10.mp4"]).await;
-    let media_id = library::media_create(&state, &id, "Фильм", Some("film"))
+    let media_id = library::media_create(&state, &id, "The film", Some("film"))
         .await
         .unwrap();
     library::file_move(&state, &id, "film_10.mp4", &media_id, true)
         .await
         .unwrap();
 
-    library::media_rename(&state, &id, &media_id, Some("Совсем другое название"), None)
-        .await
-        .expect("переименование не удалось");
+    library::media_rename(
+        &state,
+        &id,
+        &media_id,
+        Some("A completely different title"),
+        None,
+    )
+    .await
+    .expect("the renaming failed");
 
     assert!(
         server
             .exec_inside(&format!("test -e {VIDEO_DIR}/film_10.mp4"))
             .is_ok(),
-        "файл переименован из-за смены одного лишь названия"
+        "the file was renamed over a change of title alone"
     );
     let view = library::library_list(&state, &id, true).await.unwrap();
     let media = view.media.iter().find(|m| m.id == media_id).unwrap();
-    assert_eq!(media.title, "Совсем другое название");
+    assert_eq!(media.title, "A completely different title");
     assert_eq!(media.slug, "film");
 }
 
 #[tokio::test]
-async fn удаление_файла_без_подтверждения_ничего_не_делает() {
-    let (server, state, id) = setup(&["одинокий.mp4"]).await;
+async fn deleting_a_file_without_confirmation_does_nothing() {
+    let (server, state, id) = setup(&["lonely.mp4"]).await;
 
-    let err = library::file_delete(&state, &id, "одинокий.mp4", false)
+    let err = library::file_delete(&state, &id, "lonely.mp4", false)
         .await
-        .expect_err("файл удалён без подтверждения");
+        .expect_err("the file was deleted without confirmation");
     assert_eq!(err.code, ErrorCode::ConfirmationRequired);
     assert!(
         server
-            .exec_inside(&format!("test -e '{VIDEO_DIR}/одинокий.mp4'"))
+            .exec_inside(&format!("test -e '{VIDEO_DIR}/lonely.mp4'"))
             .is_ok(),
-        "файл исчез без подтверждения"
+        "the file vanished with no confirmation"
     );
 
-    library::file_delete(&state, &id, "одинокий.mp4", true)
+    library::file_delete(&state, &id, "lonely.mp4", true)
         .await
-        .expect("файл не удалился с подтверждением");
+        .expect("the file would not delete with confirmation");
     assert!(
         server
-            .exec_inside(&format!("test -e '{VIDEO_DIR}/одинокий.mp4'"))
+            .exec_inside(&format!("test -e '{VIDEO_DIR}/lonely.mp4'"))
             .is_err(),
-        "файл остался после подтверждённого удаления"
+        "the file was left after a confirmed deletion"
     );
 }
 
 #[tokio::test]
-async fn удалить_опись_через_команду_нельзя() {
-    // Опись — служебная запись во владении приложения. Показывать её пользователю
-    // мы не показываем, но и защититься от прямого вызова обязаны.
+async fn the_catalogue_cannot_be_deleted_through_a_command() {
+    // The catalogue is a housekeeping record that belongs to the application. We do not show
+    // it to a person, but we must also guard against a direct call.
     let (_server, state, id) = setup(&[]).await;
-    library::media_create(&state, &id, "Фильм", Some("film"))
+    library::media_create(&state, &id, "The film", Some("film"))
         .await
         .unwrap();
 
     let err = library::file_delete(&state, &id, "library.json", true)
         .await
-        .expect_err("опись библиотеки удалена по просьбе интерфейса");
+        .expect_err("the library catalogue was deleted at the interface's request");
     assert_eq!(err.code, ErrorCode::InvalidInput);
 }
 
 #[tokio::test]
-async fn удаление_несуществующего_файла_говорит_об_этом_своим_кодом() {
+async fn deleting_a_file_that_does_not_exist_says_so_with_its_own_code() {
     let (_server, state, id) = setup(&[]).await;
-    let err = library::file_delete(&state, &id, "нет-такого.mp4", true)
+    let err = library::file_delete(&state, &id, "no-such-file.mp4", true)
         .await
-        .expect_err("удалён несуществующий файл");
+        .expect_err("a file that does not exist was deleted");
     assert_eq!(err.code, ErrorCode::FileMissingOnServer);
 }
 
 #[tokio::test]
-async fn второй_экземпляр_приложения_получает_свой_код_отказа() {
-    // Тот же конфликт описи, но увиденный сквозь слой команд: интерфейс обязан
-    // получить MANIFEST_CONFLICT, чтобы предложить перечитать и повторить,
-    // а не общее «внутренняя ошибка».
+async fn a_second_copy_of_the_application_gets_a_refusal_code_of_its_own() {
+    // The same catalogue conflict, but seen through the command layer: the interface must
+    // get MANIFEST_CONFLICT so it can offer to re-read and try again, rather than a general
+    // "internal error".
     let (server, state, id) = setup(&[]).await;
-    library::media_create(&state, &id, "Первое", Some("pervoe"))
+    library::media_create(&state, &id, "The first", Some("pervoe"))
         .await
         .unwrap();
 
-    // Второй экземпляр меняет опись мимо нас — и поколение уходит вперёд.
+    // A second copy changes the catalogue behind our back — and the generation moves on.
     server
         .exec_inside(&format!(
             "sed -i 's/\"generation\": 1/\"generation\": 99/' {VIDEO_DIR}/library.json"
         ))
-        .expect("не подменить поколение");
+        .expect("could not substitute the generation");
 
-    // Наша команда читает опись заново, поэтому конфликта на ней не будет —
-    // конфликт ловится, когда поколение уходит МЕЖДУ чтением и записью.
-    // Проверяем это напрямую слоем записи.
+    // Our command re-reads the catalogue, so there will be no conflict on it — a conflict is
+    // caught when the generation moves BETWEEN the read and the write. That is checked
+    // directly, at the writing layer.
     use vrcast_studio_lib::server::manifest_io;
     let conn = vrcast_studio_lib::server::connect(
         state.secrets.as_ref(),
@@ -360,26 +373,26 @@ async fn второй_экземпляр_приложения_получает_�
             .unwrap(),
     )
     .await
-    .expect("не подключиться");
+    .expect("could not connect");
 
-    let прочитано = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
+    let read = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
     server
         .exec_inside(&format!(
             "sed -i 's/\"generation\": 99/\"generation\": 100/' {VIDEO_DIR}/library.json"
         ))
-        .expect("не подменить поколение второй раз");
+        .expect("could not substitute the generation a second time");
 
     let err = manifest_io::write(
         &conn,
         VIDEO_DIR,
-        &прочитано.prepared_for_write(),
-        прочитано.generation,
+        &read.prepared_for_write(),
+        read.generation,
     )
     .await
-    .expect_err("запись прошла поверх чужого изменения");
+    .expect_err("the write went through over somebody else's change");
 
     let app_err = vrcast_studio_lib::commands::error::AppError::from(err);
-    // Код и есть ответ: подсказку «обновите список и повторите» интерфейс возьмёт
-    // из словаря — она одна на все места, где встречается этот код.
+    // The code is the answer: the hint "refresh the list and try again" the interface takes
+    // from its catalogue — one hint for every place this code turns up.
     assert_eq!(app_err.code, ErrorCode::ManifestConflict);
 }

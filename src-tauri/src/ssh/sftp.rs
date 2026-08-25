@@ -1,16 +1,18 @@
-//! T025 — файловые операции на сервере.
+//! T025 — file operations on the server.
 //!
-//! Отдельный канал в том же соединении. Именно поверх этого будет работать передача
-//! с возобновлением (R-05): запись во временный файл по смещению, а не нарезка на куски.
+//! A separate channel inside the same connection. This is what resumable transfer
+//! (R-05) is built on: writing into a staged file at an offset, rather than cutting
+//! the file into pieces.
 
 use super::{Connection, Result, SshError};
 use crate::store::redact;
 use russh_sftp::client::SftpSession;
 
-/// Файловая сессия на сервере.
+/// A file session on the server.
 ///
-/// Держит место под канал, пока жива: у соединения есть предел на число одновременно
-/// открытых каналов, и файловая сессия занимает один из них не на миг, а надолго.
+/// It holds a channel slot for as long as it lives: a connection has a limit on how
+/// many channels are open at once, and a file session takes one of them for a long
+/// while rather than for a moment.
 pub struct Sftp {
     session: SftpSession,
     _permit: tokio::sync::OwnedSemaphorePermit,
@@ -24,10 +26,10 @@ impl std::ops::Deref for Sftp {
 }
 
 impl Connection {
-    /// Открыть файловую сессию.
+    /// Open a file session.
     ///
-    /// Сессий может быть несколько одновременно — каждая занимает свой канал, но не
-    /// новое соединение. При исчерпании предела вызов подождёт, а не откажет.
+    /// There can be several at once — each takes its own channel, but not a new
+    /// connection. When the limit is reached the call waits rather than refusing.
     pub async fn sftp(&self) -> Result<Sftp> {
         let permit = self.acquire_channel().await?;
 

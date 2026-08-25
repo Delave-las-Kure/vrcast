@@ -1,53 +1,53 @@
-//! T104 — когда сообщать о завершении задачи (FR-084).
+//! T104 — when to report that a task finished (FR-084).
 //!
-//! Проверяется только решение «сообщать или промолчать»: показ уведомления —
-//! дело системы, и его здесь не изобразить. Само решение важнее показа: уведомление
-//! о каждой мелочи приучает закрывать их не читая, и тогда важное пройдёт мимо
-//! вместе с остальными.
+//! Only the decision "report or keep quiet" is checked: showing a notification is the
+//! system's business and cannot be portrayed here. The decision matters more than the
+//! showing: a notification about every trifle teaches people to dismiss them unread, and
+//! then the important one goes by along with the rest.
 
 use vrcast_studio_lib::commands::events::long_enough;
 use vrcast_studio_lib::store::db::parse_rfc3339;
 
 #[test]
-fn о_коротких_задачах_не_сообщается() {
-    // Разбор исходника укладывается в секунду и никого ждать не заставляет.
+fn short_tasks_are_not_reported() {
+    // Examining a source fits in a second and keeps nobody waiting.
     assert!(!long_enough("2026-08-25T10:00:00Z", "2026-08-25T10:00:01Z"));
 }
 
 #[test]
-fn о_длительных_сообщается() {
-    // Заливка на тридцать гигабайт идёт часами: человек за это время успевает
-    // заняться другим делом и про задачу забыть.
+fn long_ones_are_reported() {
+    // A thirty-gigabyte upload runs for hours: a person has time to go and do something
+    // else and forget about the task.
     assert!(long_enough("2026-08-25T10:00:00Z", "2026-08-25T12:34:00Z"));
 }
 
 #[test]
-fn граница_ровно_в_полминуты_считается_длительной() {
+fn exactly_half_a_minute_counts_as_long() {
     assert!(long_enough("2026-08-25T10:00:00Z", "2026-08-25T10:00:30Z"));
     assert!(!long_enough("2026-08-25T10:00:00Z", "2026-08-25T10:00:29Z"));
 }
 
 #[test]
-fn неразобранная_отметка_времени_считается_коротким() {
-    // Лишний раз промолчать лучше, чем лишний раз просигналить: лишние уведомления
-    // учат не читать их вовсе.
-    assert!(!long_enough("непонятно что", "2026-08-25T12:00:00Z"));
+fn an_unparsed_timestamp_counts_as_short() {
+    // Keeping quiet once too often beats signalling once too often: needless
+    // notifications teach people not to read them at all.
+    assert!(!long_enough("nonsense", "2026-08-25T12:00:00Z"));
     assert!(!long_enough("2026-08-25T10:00:00Z", ""));
 }
 
 #[test]
-fn отметка_времени_разбирается_обратно() {
+fn a_timestamp_parses_back() {
     let now = vrcast_studio_lib::store::db::now_rfc3339();
-    let back = parse_rfc3339(&now).expect("своя же отметка не разобралась");
-    // Заведомо больше начала эпохи: разбор, молча дающий нуль, показал бы
-    // промежутки в полвека там, где их нет.
+    let back = parse_rfc3339(&now).expect("our own timestamp would not parse");
+    // Certainly later than the epoch: parsing that quietly gives zero would show
+    // half-century spans where there are none.
     assert!(back > 1_700_000_000);
 }
 
 #[test]
-fn часовой_пояс_не_сдвигает_промежуток() {
-    // Отметки приходят из базы в UTC, но разбор обязан считать одно и то же время
-    // одним и тем же, как бы оно ни было записано.
+fn the_time_zone_does_not_shift_the_span() {
+    // The timestamps come out of the database in UTC, but parsing must treat one and the
+    // same moment as the same however it was written down.
     let utc = parse_rfc3339("2026-08-25T10:00:00Z").unwrap();
     let msk = parse_rfc3339("2026-08-25T13:00:00+03:00").unwrap();
     assert_eq!(utc, msk);

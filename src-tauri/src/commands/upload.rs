@@ -1,14 +1,14 @@
-//! T088, T094, T095 — команды заливки.
+//! T088, T094, T095 — the upload commands.
 //!
-//! Договор: `contracts/ipc-commands.md`, раздел «Заливка».
+//! The contract: `contracts/ipc-commands.md`, the "Upload" section.
 //!
-//! Здесь живёт то, что нельзя оставить в слое передачи: правила повторов и
-//! переподключения. Переподключение требует профиля и секрета, а тащить их в слой
-//! передачи значило бы разложить работу с доступами по двум местам вместо одного.
+//! What cannot be left in the transfer layer lives here: the rules for retrying and
+//! reconnecting. Reconnecting needs the profile and the secret, and dragging those into the
+//! transfer layer would spread the handling of credentials over two places instead of one.
 //!
-//! **Все проверки — до начала передачи** (FR-036, FR-037, FR-039). Узнать
-//! о нехватке места в середине заливки на тридцать гигабайт значит потерять час
-//! и оставить на сервере недокачанный хвост.
+//! **Every check happens before the transfer starts** (FR-036, FR-037, FR-039). Learning
+//! there is not enough room halfway through a thirty-gigabyte upload means losing an hour
+//! and leaving an unfinished tail on the server.
 
 use super::error::{AppError, DetailCode, ErrorCode, Result};
 use super::AppState;
@@ -24,44 +24,44 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Сколько раз пробуем переподключиться, прежде чем признать неудачу.
+/// How many times reconnecting is attempted before the failure is admitted.
 ///
-/// Обрыв на многочасовой передаче — обычное дело, а не поломка; сдаться после
-/// первой же неудачи значило бы потребовать от человека сидеть рядом с кнопкой.
+/// A break in a transfer that runs for hours is an ordinary thing rather than a fault;
+/// giving up after the very first one would demand that a person sit by the button.
 const MAX_ATTEMPTS: usize = 8;
 
-/// С какой паузы начинаем повторять и до какой она растёт.
+/// The pause retrying starts from, and the one it grows to.
 const FIRST_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
-/// Что интерфейс присылает для начала заливки.
+/// What the interface sends to start an upload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UploadRequest {
     pub server_id: String,
-    /// Локальный путь к готовому файлу.
+    /// The local path to the finished file.
     pub local_path: String,
-    /// Под каким именем файл станет виден зрителям.
+    /// The name the file will be visible to viewers under.
     pub remote_name: String,
-    /// К какому медиа отнести. Пусто — файл попадёт в «не распознано».
+    /// Which medium to attribute it to. Empty means it lands in "not recognised".
     pub media_id: Option<String>,
-    /// Предел скорости в байтах в секунду. Пусто — не ограничивать.
+    /// The speed limit in bytes per second. Empty means no limit.
     pub limit_bps: Option<u64>,
-    /// Согласие на последствия, о которых предупредили до старта.
+    /// Consent to the consequences warned about before the start.
     #[serde(default)]
     pub confirmed: bool,
 }
 
-/// Что приложение обязано сказать **до** начала передачи.
+/// What the application must say **before** the transfer starts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preflight {
-    /// Не хватает места: сколько нужно и сколько есть.
+    /// There is not enough room: how much is needed and how much there is.
     pub not_enough_space: Option<SpaceShortage>,
-    /// Сколько соединений сервер обслуживает прямо сейчас: заливка вымоет из его
-    /// памяти то, что смотрят, и просмотр подвиснет (FR-037).
+    /// How many connections the server is serving right now: an upload will wash out of
+    /// its memory what people are watching, and their playback will stall (FR-037).
     pub active_connections: usize,
-    /// Файл с таким именем уже раздаётся (FR-039).
+    /// A file of that name is already being served (FR-039).
     pub name_exists: bool,
-    /// При заданном CDN замена какое-то время будет отдаваться из кеша старой.
+    /// With a CDN set, a replacement will be served from the old file's cache for a while.
     pub cdn_cached: bool,
 }
 
@@ -73,12 +73,12 @@ pub struct SpaceShortage {
 }
 
 impl Preflight {
-    /// Есть ли о чём предупреждать.
+    /// Whether there is anything to warn about.
     pub fn has_warnings(&self) -> bool {
         self.not_enough_space.is_some() || self.active_connections > 0 || self.name_exists
     }
 
-    /// Нехватка места — не предупреждение, а запрет: подтверждением её не снять.
+    /// Too little room is not a warning but a bar: confirming does not lift it.
     pub fn is_blocking(&self) -> bool {
         self.not_enough_space.is_some()
     }
@@ -88,11 +88,11 @@ pub mod api {
     use super::*;
     use crate::store::profiles;
 
-    /// Начать заливку.
+    /// Start an upload.
     ///
-    /// Возвращает номер задачи немедленно; сама передача идёт в движке задач
-    /// (FR-080). Все проверки выполняются **до** постановки задачи: отказ должен
-    /// прийти сразу, а не через час.
+    /// It returns the task identifier immediately; the transfer itself runs in the task
+    /// engine (FR-080). Every check happens **before** the task is submitted: a refusal must
+    /// come at once rather than an hour later.
     pub async fn upload_start(state: &AppState, request: UploadRequest) -> Result<String> {
         let profile = profiles::get(&state.db, &request.server_id)?
             .ok_or_else(|| crate::commands::servers::no_such_server(&request.server_id))?;
@@ -112,7 +112,7 @@ pub mod api {
             return Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::UploadNameEmpty));
         }
 
-        // Проверки до передачи — по живому соединению.
+        // The pre-transfer checks go over a live connection.
         let conn = connect(state.secrets.as_ref(), &profile).await?;
         let checks = preflight(&profile, &conn, &clean_name, meta.len()).await?;
         conn.close().await;
@@ -125,12 +125,12 @@ pub mod api {
             return Err(warning_error(&checks, &clean_name));
         }
 
-        // Две заливки под одним именем на один сервер писали бы в один временный
-        // файл и затёрли бы работу друг друга — а узналось бы это только на сверке
-        // контрольных сумм. Запрещаем прямо: имя временного файла нарочно зависит
-        // только от конечного имени (см. `remote_name::staging_file`), и разводить
-        // их номерами задач бессмысленно — при вводе в раздачу они всё равно
-        // столкнутся.
+        // Two uploads under one name to one server would write into one staged file and
+        // wipe out each other's work — and it would only come to light at the checksum
+        // comparison. It is forbidden outright: the staged file's name deliberately depends
+        // only on the final name (see `remote_name::staging_file`), and telling them apart
+        // by task identifier is pointless — they would collide at the entry into serving
+        // regardless.
         if let Some(busy) = running_upload_for(state, &profile.id, &clean_name)? {
             return Err(AppError::new(ErrorCode::NameExists)
                 .with_detail(
@@ -139,7 +139,7 @@ pub mod api {
                 .with_cause(busy));
         }
 
-        // Всё проверено — ставим задачу.
+        // Everything is checked — the task goes in.
         let db = state.db.clone();
         let secrets = state.secrets.clone();
         let plan_request = request.clone();
@@ -155,14 +155,14 @@ pub mod api {
             })
             .await?;
 
-        // Позиция возобновления записывается **сразу после постановки**, а не когда
-        // задача дойдёт до работы. Разница видна только при перезапуске приложения:
-        // заливка, простоявшая в очереди и ни разу не начавшаяся, без этой записи
-        // не содержит ничего — ни пути к исходнику, ни имени, — и поднять её при
-        // следующем запуске нечем. Она осталась бы в списке навсегда, не двигаясь.
+        // The resume position is written **right after submitting** rather than when the
+        // task gets round to working. The difference shows only on a restart: an upload that
+        // stood in the queue and never once started holds nothing without this record —
+        // neither the path to the source nor the name — and there is nothing to raise it
+        // with at the next start. It would stay in the list forever, never moving.
         //
-        // Задача может успеть записать свою позицию раньше нас: содержимое выйдет
-        // то же самое, потому что берётся из того же запроса и того же файла.
+        // The task may manage to write its own position before we do: the contents come out
+        // the same, because they are taken from the same request and the same file.
         if let Some(staging) = remote_name::staging_dir(&profile.video_dir) {
             let token = ResumeToken {
                 remote_temp: remote_name::staging_file(&staging, &clean_name),
@@ -179,23 +179,23 @@ pub mod api {
         Ok(task_id)
     }
 
-    /// Продолжить приостановленную или прерванную заливку.
+    /// Carry on a paused or interrupted upload.
     pub fn upload_resume(state: &AppState, task_id: &str) -> Result<()> {
         Ok(state.tasks.resume(task_id)?)
     }
 
-    /// Вернуть к жизни заливки, оставшиеся от прошлого запуска (FR-031).
+    /// Bring back to life the uploads left over from the previous run (FR-031).
     ///
-    /// Вызывается один раз при старте приложения. Без этого заливка после закрытия
-    /// и повторного запуска видна в списке приостановленной, но продолжить её нечем:
-    /// рабочая часть живёт только в памяти и умирает вместе с приложением. Человеку
-    /// это выглядело бы как «задача есть, а кнопка не работает».
+    /// Called once when the application starts. Without it an upload, after the application
+    /// is closed and started again, shows in the list as paused with nothing to carry it on:
+    /// the working part lives only in memory and dies along with the application. To a
+    /// person that would look like "the task is there but the button does nothing".
     ///
-    /// Задачи поднимаются **приостановленными** и ждут решения человека: самовольно
-    /// продолжать многочасовую передачу при запуске нельзя — приложение могли закрыть
-    /// именно ради её прекращения.
+    /// The tasks come back **paused** and wait for a person's decision: carrying on a
+    /// transfer that runs for hours unbidden at start-up will not do — the application may
+    /// have been closed precisely to stop it.
     ///
-    /// Возвращает, сколько заливок поднято.
+    /// It returns how many uploads were raised.
     pub fn restore_uploads(state: &AppState) -> Result<usize> {
         let mut restored = 0;
 
@@ -204,25 +204,25 @@ pub mod api {
                 continue;
             }
             let Some(token) = task.resume_token.as_deref().and_then(ResumeToken::parse) else {
-                // Без позиции возобновления продолжать нечего: неизвестно ни куда
-                // передавали, ни под каким именем. Такая задача остаётся в списке,
-                // и её можно снять.
-                tracing::debug!(task = %task.id, "заливка без позиции возобновления не поднята");
+                // Without a resume position there is nothing to carry on: neither where it
+                // was sending nor under what name is known. Such a task stays in the list,
+                // and it can be dropped.
+                tracing::debug!(task = %task.id, "an upload with no resume position was not raised");
                 continue;
             };
             let Some(server_id) = task.server_id.clone() else {
                 continue;
             };
             let Ok(Some(_)) = profiles::get(&state.db, &server_id) else {
-                tracing::debug!(task = %task.id, "сервер этой заливки удалён, поднимать некуда");
+                tracing::debug!(task = %task.id, "this upload's server was deleted; there is nowhere to raise it");
                 continue;
             };
 
-            // Путь к исходнику знает только позиция возобновления. Записи прежних
-            // версий его не содержат — такую заливку продолжить нечем, но она
-            // остаётся в списке, и её можно снять.
+            // Only the resume position knows the path to the source. Records from earlier
+            // versions do not hold one — such an upload has nothing to carry it on, but it
+            // stays in the list, and it can be dropped.
             let Some(local_path) = token.local_path.clone() else {
-                tracing::warn!(task = %task.id, "в позиции возобновления нет пути к исходнику");
+                tracing::warn!(task = %task.id, "the resume position holds no path to the source");
                 continue;
             };
 
@@ -232,8 +232,8 @@ pub mod api {
                 remote_name: token.remote_name.clone(),
                 media_id: token.media_id.clone(),
                 limit_bps: token.limit_bps,
-                // Человек согласился на последствия, когда начинал: спрашивать
-                // второй раз о том же файле — значит не помнить его ответ.
+                // The person agreed to the consequences when they started: asking a second
+                // time about the same file means not remembering their answer.
                 confirmed: true,
             };
 
@@ -250,23 +250,28 @@ pub mod api {
 
             match result {
                 Ok(()) => restored += 1,
-                Err(e) => tracing::warn!(task = %task.id, error = %e, "заливку не поднять"),
+                Err(e) => {
+                    tracing::warn!(task = %task.id, error = %e, "the upload could not be raised")
+                }
             }
         }
 
         if restored > 0 {
-            tracing::info!(restored, "заливки прошлого запуска ждут продолжения");
+            tracing::info!(
+                restored,
+                "uploads from the previous run are waiting to carry on"
+            );
         }
         Ok(restored)
     }
 
-    /// Есть ли уже незавершённая заливка под этим именем на этот сервер.
+    /// Whether an unfinished upload under this name to this server already exists.
     ///
-    /// Оговорка про щель: позиция возобновления записывается уже внутри задачи,
-    /// поэтому две заливки, начатые в одно и то же мгновение, эту проверку пройдут.
-    /// Щель узкая и не последняя линия обороны: расхождение поймает сверка
-    /// контрольных сумм, и в раздачу такой файл не попадёт. Закрывать её замком
-    /// на всё время постановки задачи дороже, чем стоит случай.
+    /// A note about the gap: the resume position is written inside the task, so two uploads
+    /// begun at the very same instant will both pass this check. The gap is narrow and not
+    /// the last line of defence: the checksum comparison will catch the divergence, and such
+    /// a file never enters serving. Closing it with a lock held for the whole submission
+    /// costs more than the case is worth.
     fn running_upload_for(state: &AppState, server_id: &str, name: &str) -> Result<Option<String>> {
         for task in state.tasks.list()? {
             if task.kind != TaskKind::Upload
@@ -287,12 +292,12 @@ pub mod api {
         Ok(None)
     }
 
-    /// Проверки, которые обязаны пройти до начала передачи.
+    /// The checks that must pass before the transfer starts.
     ///
-    /// Отдельной командой наружу не выставлена намеренно: интерфейс узнаёт о
-    /// последствиях тем же способом, что и при удалении — вызовом без подтверждения,
-    /// на который приходит отказ с готовым текстом. Два разных способа спросить
-    /// «точно?» разошлись бы формулировками.
+    /// Deliberately not exposed as a command of its own: the interface learns the
+    /// consequences the same way it does for a deletion — by calling without confirmation
+    /// and getting back a refusal with the wording ready. Two different ways of asking "are
+    /// you sure?" would drift apart in their phrasing.
     async fn preflight(
         profile: &crate::domain::server_profile::ServerProfile,
         conn: &crate::ssh::Connection,
@@ -301,8 +306,8 @@ pub mod api {
     ) -> Result<Preflight> {
         let usage = disk::usage(conn, &profile.video_dir).await?;
 
-        // Сколько уже лежит во временном файле: при продолжении это место занято,
-        // и требовать его заново значило бы отказать в докачке почти дошедшего файла.
+        // How much already lies in the staged file: on a carry-on that room is taken, and
+        // demanding it afresh would refuse to finish a file that had almost arrived.
         let staging = remote_name::staging_dir(&profile.video_dir).ok_or_else(|| {
             AppError::new(ErrorCode::InvalidInput).detail(DetailCode::VideoDirAtRoot)
         })?;
@@ -346,11 +351,11 @@ pub mod api {
         })
     }
 
-    /// Отпечаток исходника: размер и время изменения.
+    /// The source's fingerprint: its size and its modification time.
     ///
-    /// Одного размера мало — файл могли пересобрать в тот же объём, и тогда
-    /// продолжение склеило бы две разные версии. Время изменения берётся как есть,
-    /// без разбора: это метка для сравнения, а не дата для показа.
+    /// The size alone is not enough — a file may have been rebuilt to the same size, and
+    /// then carrying on would glue two different versions together. The modification time is
+    /// taken as it stands, unparsed: it is a mark for comparing, not a date for showing.
     async fn source_fingerprint(
         path: &str,
     ) -> std::result::Result<(u64, Option<String>), AppError> {
@@ -364,11 +369,11 @@ pub mod api {
         Ok((meta.len(), modified_at(&meta)))
     }
 
-    /// Время изменения файла меткой для сравнения.
+    /// A file's modification time, as a mark for comparing.
     ///
-    /// Не датой для показа: разбирать и печатать её здесь незачем, а сравнивать
-    /// две такие метки можно как есть. Отсутствие времени — законный случай:
-    /// не всякая файловая система его хранит.
+    /// Not as a date for showing: there is no point parsing and printing it here, while two
+    /// such marks can be compared as they stand. A missing time is a legitimate case: not
+    /// every file system keeps one.
     pub(super) fn modified_at(meta: &std::fs::Metadata) -> Option<String> {
         meta.modified()
             .ok()
@@ -376,7 +381,7 @@ pub mod api {
             .map(|d| d.as_secs().to_string())
     }
 
-    /// Сама передача: попытки с переподключением, сверка, ввод в раздачу.
+    /// The transfer itself: attempts with reconnection, the comparison, the entry into serving.
     async fn run_upload(
         db: std::sync::Arc<crate::store::db::Db>,
         secrets: std::sync::Arc<dyn crate::store::secrets::SecretStore>,
@@ -399,12 +404,12 @@ pub mod api {
             AppError::new(ErrorCode::InvalidInput).detail(DetailCode::VideoDirAtRoot)
         })?;
 
-        // Тот ли это файл, с которого начинали.
+        // Is this the file we started from?
         //
-        // Проверка стоит **до** соединения с сервером: если исходник подменили,
-        // продолжение допишет к началу одного файла хвост другого. Поймала бы это
-        // и сверка контрольных сумм — но уже после того, как передача целиком
-        // закончится, то есть через час работы впустую.
+        // The check comes **before** connecting to the server: had the source been swapped,
+        // carrying on would append the tail of one file to the beginning of another. The
+        // checksum comparison would catch it too — but only after the whole transfer had
+        // finished, that is, after an hour of wasted work.
         let (size_now, modified_now) = source_fingerprint(&request.local_path).await?;
         let previous = ctx
             .resume_token()
@@ -413,9 +418,9 @@ pub mod api {
             .as_deref()
             .and_then(ResumeToken::parse);
         let source_changed = match &previous {
-            // Продолжение прошлой передачи — сверяем с тем, что записали тогда.
+            // Carrying on an earlier transfer — compared against what was written then.
             Some(prev) => !prev.matches_source(size_now, modified_now.as_deref()),
-            // Первый заход — исходник мог измениться между проверками и стартом задачи.
+            // A first attempt — the source could change between the checks and the start.
             None => size_now != total,
         };
         if source_changed {
@@ -432,8 +437,8 @@ pub mod api {
             limit_bps: request.limit_bps,
         };
 
-        // Позиция возобновления записывается сразу: если приложение убьют до первого
-        // окна, следующий запуск обязан знать, куда смотреть.
+        // The resume position is written at once: should the application be killed before
+        // the first window, the next start has to know where to look.
         if previous.is_none() {
             let token = ResumeToken {
                 remote_temp: plan.remote_temp.clone(),
@@ -481,9 +486,9 @@ pub mod api {
                     return Ok(());
                 }
                 Err(e) if e.is_retriable() && attempt < MAX_ATTEMPTS => {
-                    tracing::warn!(attempt, error = %e, "передача оборвалась, пробуем снова");
-                    // Оценка времени сбрасывается: накопленное до обрыва больше
-                    // не описывает происходящее.
+                    tracing::warn!(attempt, error = %e, "the transfer broke off; trying again");
+                    // The time estimate is reset: what was gathered before the break no
+                    // longer describes what is happening.
                     estimate.reset();
                     conn.close().await;
                     wait_before_retry(&ctx, &mut delay).await?;
@@ -500,7 +505,7 @@ pub mod api {
         ))
     }
 
-    /// Сверить суммы и ввести файл в раздачу.
+    /// Compare the checksums and enter the file into serving.
     async fn finish(
         conn: &crate::ssh::Connection,
         ctx: &crate::tasks::engine::TaskContext,
@@ -527,8 +532,8 @@ pub mod api {
             .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
 
         if !checksum::matches(&ours, &theirs) {
-            // Файл в раздачу не попадает, и мусор за собой убираем: испорченная
-            // передача не должна оставлять следов (FR-032, FR-038).
+            // The file does not enter serving, and we clean up after ourselves: a spoilt
+            // transfer must leave no trace (FR-032, FR-038).
             upload::cleanup(conn, &plan.remote_temp).await;
             return Err(AppError::new(ErrorCode::ChecksumMismatch)
                 .detail(DetailCode::UploadChecksumMismatch));
@@ -544,7 +549,7 @@ pub mod api {
         Ok(())
     }
 
-    /// Подождать перед повтором, не пропустив отмену.
+    /// Wait before retrying, without missing a cancellation.
     async fn wait_before_retry(
         ctx: &crate::tasks::engine::TaskContext,
         delay: &mut Duration,
@@ -559,7 +564,7 @@ pub mod api {
     }
 }
 
-/// Тонкие обёртки, которые оболочка выставляет интерфейсу.
+/// The thin wrappers the shell exposes to the interface.
 pub mod ipc {
     use super::*;
     use tauri::State;
@@ -578,12 +583,12 @@ pub mod ipc {
     }
 }
 
-/// Отказ по нехватке места на сервере.
+/// A refusal over too little room on the server.
 ///
-/// Подтверждением не снимается: место от согласия не появится. Отдельно от
-/// [`warning_error`] именно поэтому — спутать запрет с предупреждением значило бы
-/// предложить человеку кнопку «всё равно залить», после которой передача упрётся
-/// в конец диска на середине.
+/// Confirming does not lift it: room does not appear out of consent. That is exactly why it
+/// is kept apart from [`warning_error`] — confusing a bar with a warning would offer a
+/// person an "upload anyway" button, after which the transfer runs into the end of the disk
+/// halfway through.
 pub fn space_error(shortage: SpaceShortage) -> AppError {
     AppError::new(ErrorCode::RemoteDiskFull)
         .with_detail(
@@ -595,7 +600,7 @@ pub fn space_error(shortage: SpaceShortage) -> AppError {
         .with_cause(format!("short_by={}", shortage.short_by))
 }
 
-/// Отказ, который называет последствия и снимается подтверждением.
+/// A refusal that names the consequences and is lifted by confirming.
 pub fn warning_error(checks: &Preflight, name: &str) -> AppError {
     let mut details: Vec<Detail> = Vec::new();
 

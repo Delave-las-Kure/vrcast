@@ -1,12 +1,13 @@
-//! T015 — договорные тесты слоя команд.
+//! T015 — contract tests for the command layer.
 //!
-//! Проверяется форма ответа и коды ошибок, а не поведение внутри: за поведение отвечают
-//! тесты соответствующих слоёв. Смысл в том, чтобы договор нельзя было изменить незаметно —
-//! договор читает интерфейс, и его расхождение с ядром обнаружилось бы у пользователя.
+//! What is checked is the shape of the answer and the error codes, not the behaviour
+//! underneath: the behaviour is the business of each layer's own tests. The point is that
+//! the contract cannot be changed unnoticed — the interface reads the contract, and its
+//! drift from the core would come to light at a person's machine.
 //!
-//! Команды вызываются напрямую как обычные функции: тонкие обёртки для оболочки логики
-//! не содержат, а требовать для тестов живого окна с графикой в непрерывной интеграции
-//! нельзя.
+//! The commands are called directly, as ordinary functions: the thin wrappers for the shell
+//! hold no logic, and demanding a live window with graphics for tests in continuous
+//! integration will not do.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,26 +22,42 @@ fn state() -> AppState {
         Arc::new(Db::open_in_memory().unwrap()),
         Arc::new(InMemorySecretStore::new()),
     )
-    .expect("состояние приложения не собралось")
+    .expect("the application state would not assemble")
 }
 
-// ---------- полнота договора ----------
+// ---------- the contract's completeness ----------
 
-/// Прочитать словарь интерфейса.
+/// The secret-redaction registry is one per process, while the tests run in its threads in
+/// parallel. Two tests that each call `forget_all` and then register their own wipe each
+/// other out — and the loser reports a leak that never happened.
+///
+/// Caught on 2026-08-25 in the same run where this same race turned up in the unit checks:
+/// a second secrets check, added beside the first, made the failure visible. A flickering
+/// guard against leaking secrets is worse than none.
+static REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the registry for the length of a test and clear it.
+fn alone_with_registry() -> std::sync::MutexGuard<'static, ()> {
+    let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    vrcast_studio_lib::store::redact::forget_all();
+    guard
+}
+
+/// Read one of the interface's catalogues.
 fn catalogue(lang: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("нет родительского каталога у src-tauri")
+        .expect("src-tauri has no parent directory")
         .join(format!("src/shared/i18n/{lang}.ts"));
     std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("не прочитать {}: {e}", path.display()))
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()))
 }
 
-/// Есть ли в словаре запись с таким ключом.
+/// Whether the catalogue holds an entry under this key.
 ///
-/// Ключ ищется в начале строки, а не где попало: код, случайно упомянутый в
-/// комментарии, засчитываться не должен — иначе проверка пройдёт на словаре,
-/// в котором формулировки нет.
+/// The key is looked for at the start of a line rather than anywhere at all: a code
+/// mentioned in passing in a comment must not count — otherwise the check passes on a
+/// catalogue that holds no wording.
 fn has_entry(catalogue: &str, key: &str) -> bool {
     catalogue
         .lines()
@@ -48,61 +65,61 @@ fn has_entry(catalogue: &str, key: &str) -> bool {
 }
 
 #[test]
-fn у_каждого_кода_есть_формулировка_на_обоих_языках() {
-    // Прежде эта проверка требовала русского сообщения и подсказки прямо в ядре.
-    // Ядро больше не сочиняет фраз: оно называет случай кодом, а формулировки живут
-    // в словарях интерфейса — по одному на язык (FR-105, FR-106).
+fn every_code_has_a_wording_in_both_languages() {
+    // This check used to demand a Russian message and hint right there in the core. The core
+    // composes no sentences any more: it names the case with a code, while the wordings live
+    // in the interface's catalogues, one per language (FR-105, FR-106).
     //
-    // Требование от этого не ослабло, а усилилось: формулировка обязана быть в
-    // КАЖДОМ языке. Пропуск в одном из словарей означает пустое место на экране
-    // вместо объяснения — и увидел бы его пользователь, а не мы.
+    // The requirement did not weaken from that but grew stronger: a wording must be in EVERY
+    // language. A gap in one of the catalogues means an empty space on the screen instead of
+    // an explanation — and a person would see it, not us.
     //
-    // Полноту словарей проверяет и компилятор TypeScript (они объявлены как
-    // `Record<ErrorCode, …>`), но эта проверка не полагается на то, что сборку
-    // интерфейса кто-то запустил: она читает сами файлы.
+    // The TypeScript compiler checks the catalogues' completeness too (they are declared as
+    // `Record<ErrorCode, ...>`), but this check does not rely on anyone having run the
+    // interface build: it reads the files themselves.
     for lang in ["ru", "en"] {
         let text = catalogue(lang);
         for code in ErrorCode::ALL {
             assert!(
                 has_entry(&text, code.as_str()),
-                "в словаре {lang} нет формулировки для кода {code}"
+                "the {lang} catalogue has no wording for the code {code}"
             );
         }
         for detail in DetailCode::ALL {
             assert!(
                 has_entry(&text, detail.as_str()),
-                "в словаре {lang} нет формулировки для уточнения {detail}"
+                "the {lang} catalogue has no wording for the detail {detail}"
             );
         }
     }
 }
 
 #[test]
-fn коды_не_попадают_в_текст_для_человека() {
-    // Технический код в тексте — признак того, что формулировку не написали,
-    // а подставили заглушку.
+fn the_codes_do_not_reach_the_text_meant_for_a_person() {
+    // A technical code inside the text is a sign the wording was never written and a
+    // placeholder was put in instead.
     let ru = catalogue("ru");
     for code in ErrorCode::ALL {
         let key = format!("{}:", code.as_str());
         let line = ru
             .lines()
             .find(|l| l.trim_start().starts_with(&key))
-            .expect("запись словаря только что была найдена");
+            .expect("the catalogue entry was found a moment ago");
         let after = line.split_once(':').map(|(_, r)| r).unwrap_or("");
         assert!(
             !after.contains(code.as_str()),
-            "в формулировке кода {code} стоит сам код: {line}"
+            "the wording for the code {code} holds the code itself: {line}"
         );
     }
 }
 
 #[test]
-fn коды_ошибок_не_повторяются() {
+fn the_error_codes_do_not_repeat() {
     let mut seen = std::collections::HashSet::new();
     for code in ErrorCode::ALL {
         assert!(
             seen.insert(code.as_str()),
-            "код {} встречается дважды",
+            "the code {} turns up twice",
             code.as_str()
         );
     }
@@ -110,9 +127,10 @@ fn коды_ошибок_не_повторяются() {
 }
 
 #[test]
-fn ошибка_сериализуется_по_форме_договора() {
-    // Форма { code, details?, cause? } — правило 2 договора. Готовых фраз в ней нет:
-    // ядро называет случай, формулировку берёт интерфейс из словаря выбранного языка.
+fn an_error_serialises_in_the_shape_the_contract_names() {
+    // The shape { code, details?, cause? } is rule 2 of the contract. There are no ready
+    // sentences in it: the core names the case, and the interface takes the wording from the
+    // catalogue of the language in use.
     use vrcast_studio_lib::domain::wording::Detail;
 
     let err = AppError::new(ErrorCode::RemoteDiskFull)
@@ -122,53 +140,56 @@ fn ошибка_сериализуется_по_форме_договора() {
 
     assert_eq!(json["code"], "REMOTE_DISK_FULL");
     assert_eq!(json["details"][0]["key"], "NOT_ENOUGH_SPACE");
-    // Число уходит числом: единицы и разделитель дробной части у языков разные,
-    // и выбирать их — дело интерфейса, а не ядра.
+    // The number travels as a number: the units and the decimal separator differ between
+    // languages, and choosing them is the interface's business, not the core's.
     assert_eq!(json["details"][0]["params"]["short_by"], 1024);
     assert_eq!(json["cause"], "stream-test.example.ru");
 
     assert!(
         json.get("message").is_none() && json.get("hint").is_none(),
-        "ядро снова сочиняет фразы: {json}"
+        "the core is composing sentences again: {json}"
     );
 
-    // Пустые поля не появляются вовсе, а не приходят пустыми.
+    // Empty fields do not appear at all rather than arriving empty.
     let bare = serde_json::to_value(AppError::new(ErrorCode::Internal)).unwrap();
     assert!(
         bare.get("cause").is_none(),
-        "пустое уточнение попало в ответ"
+        "an empty cause reached the answer"
     );
     assert!(
         bare.get("details").is_none(),
-        "пустой перечень уточнений попал в ответ"
+        "an empty list of details reached the answer"
     );
 }
 
 #[test]
-fn уточнение_ошибки_проходит_вырезание_секретов() {
-    // Уточнение нередко приходит от чужой библиотеки, которая о наших правилах не знает
-    // (конституция, принцип IV).
-    vrcast_studio_lib::store::redact::forget_all();
-    let secret = "пароль-от-чужого-сервера-77";
+fn an_error_s_detail_goes_through_secret_redaction() {
+    // A detail often arrives from somebody else's library, which knows nothing of our rules
+    // (constitution, principle IV).
+    let _registry = alone_with_registry();
+    let secret = "another-server-s-password-77";
     vrcast_studio_lib::store::redact::register(secret);
 
     let err = AppError::new(ErrorCode::SshAuthFailed)
-        .with_cause(format!("вход не удался, использован {secret}"));
+        .with_cause(format!("the login failed, {secret} was used"));
     let json = serde_json::to_string(&err).unwrap();
 
-    assert!(!json.contains(secret), "СЕКРЕТ В ОТВЕТЕ КОМАНДЫ: {json}");
+    assert!(
+        !json.contains(secret),
+        "A SECRET IS IN THE COMMAND'S ANSWER: {json}"
+    );
 }
 
 #[test]
-fn подстановка_в_уточнении_проходит_вырезание_секретов() {
-    // Новый путь наружу, появившийся вместе с двумя языками: раньше подробность была
-    // одной строкой и вырезание стояло на ней, а теперь рядом идут подстановки —
-    // имя файла, путь, имя профиля. Любая из них может прийти оттуда же, откуда
-    // приходит подробность, и остаться незамеченной (конституция, принцип IV).
+fn a_substitution_in_a_detail_goes_through_secret_redaction() {
+    // A new way out that arrived along with the two languages: a detail used to be one
+    // string with the redaction standing on it, and now substitutions travel beside it — a
+    // file name, a path, a profile's name. Any of them can come from the same place the
+    // detail does, and go unnoticed (constitution, principle IV).
     use vrcast_studio_lib::domain::wording::Detail;
 
-    vrcast_studio_lib::store::redact::forget_all();
-    let secret = "парольная-фраза-ключа-4242";
+    let _registry = alone_with_registry();
+    let secret = "a-key-passphrase-4242";
     vrcast_studio_lib::store::redact::register(secret);
 
     let err = AppError::new(ErrorCode::InvalidInput).with_detail(
@@ -177,50 +198,55 @@ fn подстановка_в_уточнении_проходит_вырезан�
     );
     let json = serde_json::to_string(&err).unwrap();
 
-    assert!(!json.contains(secret), "СЕКРЕТ В ОТВЕТЕ КОМАНДЫ: {json}");
+    assert!(
+        !json.contains(secret),
+        "A SECRET IS IN THE COMMAND'S ANSWER: {json}"
+    );
 }
 
-// ---------- команды ----------
+// ---------- the commands ----------
 
 #[test]
-fn app_versions_возвращает_версии() {
+fn app_versions_returns_the_versions() {
     let s = state();
     let v = api::app_versions(&s).unwrap();
 
-    assert!(!v.app.is_empty(), "версия приложения пуста");
-    assert!(v.schema >= 1, "версия схемы не заполнена");
-    // Версия серверной части появится в Фазе 7 — пока её нет, и это честно.
+    assert!(!v.app.is_empty(), "the application's version is empty");
+    assert!(v.schema >= 1, "the schema version was not filled in");
+    // The server-side version arrives in Phase 7 — until then there is none, and that is
+    // honest.
     assert!(v.server.is_none());
 }
 
 #[test]
-fn список_задач_у_нового_приложения_пуст() {
+fn a_new_application_s_task_list_is_empty() {
     let s = state();
     assert!(api::tasks_list(&s).unwrap().is_empty());
 }
 
 #[test]
-fn обращение_к_несуществующей_задаче_даёт_код_договора() {
+fn reaching_for_a_task_that_does_not_exist_gives_the_contract_s_code() {
     let s = state();
-    let err = api::task_get(&s, "нет-такой").expect_err("несуществующая задача найдена");
+    let err = api::task_get(&s, "no-such-task").expect_err("a task that does not exist was found");
     assert_eq!(err.code, ErrorCode::TaskNotFound);
-    // Подробность сохранена: по ней можно найти, о какой задаче речь.
+    // The cause is kept: it is what tells which task was meant.
     assert!(err.cause.is_some());
 }
 
 #[test]
-fn отмена_несуществующей_задачи_даёт_код_договора() {
+fn cancelling_a_task_that_does_not_exist_gives_the_contract_s_code() {
     let s = state();
-    let err = api::task_cancel(&s, "нет-такой").expect_err("отменилась несуществующая задача");
+    let err =
+        api::task_cancel(&s, "no-such-task").expect_err("a task that does not exist was cancelled");
     assert_eq!(err.code, ErrorCode::TaskNotFound);
 }
 
 #[tokio::test]
-async fn приостановка_короткой_задачи_даёт_свой_код() {
+async fn pausing_a_short_task_gives_a_code_of_its_own() {
     let s = state();
-    // Работа долгая и отменяемая, а не «поспать 600 мс»: на загруженной машине
-    // короткая задача успевала бы завершиться до task_pause, и вместо проверяемого
-    // кода приходил бы TASK_NOT_FOUND — ложное падение.
+    // The work is long and cancellable rather than "sleep 600 ms": on a loaded machine a
+    // short task would manage to finish before task_pause, and instead of the code under
+    // test TASK_NOT_FOUND would arrive — a false failure.
     let id = s
         .tasks
         .submit(TaskKind::Probe, None, |ctx| async move {
@@ -235,7 +261,7 @@ async fn приостановка_короткой_задачи_даёт_сво�
         .await
         .unwrap();
 
-    // Ждём, пока задача действительно пойдёт.
+    // Wait until the task really gets going.
     for _ in 0..50 {
         if matches!(
             s.tasks.get(&id).unwrap().map(|t| t.state),
@@ -246,15 +272,16 @@ async fn приостановка_короткой_задачи_даёт_сво�
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
 
-    let err = api::task_pause(&s, &id).expect_err("короткая задача приостановилась");
+    let err = api::task_pause(&s, &id).expect_err("a short task was paused");
     assert_eq!(err.code, ErrorCode::TaskNotPausable);
 
     api::task_cancel(&s, &id).unwrap();
 }
 
 #[tokio::test]
-async fn при_закрытии_каждая_задача_объясняется_отдельно() {
-    // FR-086. Общего «идут задачи, закрыть?» недостаточно: оно не даёт принять решение.
+async fn on_closing_each_task_is_explained_separately() {
+    // FR-086. A general "tasks are running, close anyway?" is not enough: it gives nothing
+    // to decide on.
     let s = state();
 
     let upload = s
@@ -289,31 +316,33 @@ async fn при_закрытии_каждая_задача_объясняетс�
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let report = api::tasks_on_close(&s).unwrap();
-    assert_eq!(
-        report.len(),
-        2,
-        "не все выполняющиеся задачи попали в отчёт"
-    );
+    assert_eq!(report.len(), 2, "not every running task reached the report");
 
     let u = report
         .iter()
         .find(|t| t.id == upload)
-        .expect("нет передачи");
+        .expect("the transfer is missing");
     let c = report
         .iter()
         .find(|t| t.id == convert)
-        .expect("нет подготовки");
+        .expect("the preparation is missing");
 
-    // Разница между видами задач и есть суть требования.
-    assert_eq!(u.outcome, "resumes", "передача должна продолжаться с места");
-    assert_eq!(c.outcome, "restarts", "подготовка не переживёт закрытия");
-    // Объяснение — код с подстановкой, а не готовая фраза: формулировку подберёт
-    // интерфейс на том языке, который выбран сейчас.
+    // The difference between the kinds of task is the point of the requirement.
+    assert_eq!(
+        u.outcome, "resumes",
+        "a transfer must carry on from where it got to"
+    );
+    assert_eq!(
+        c.outcome, "restarts",
+        "a preparation will not survive the closing"
+    );
+    // The explanation is a code with a substitution rather than a ready sentence: the
+    // interface picks the wording in whichever language is chosen right now.
     assert_eq!(c.explanation.key, DetailCode::OnCloseRestartsLosing);
     assert_eq!(u.explanation.key, DetailCode::OnCloseResumesFrom);
     assert!(
         u.explanation.params.contains_key("percent"),
-        "объяснение не называет, сколько уже сделано: {:?}",
+        "the explanation does not say how much is already done: {:?}",
         u.explanation
     );
 
@@ -322,16 +351,16 @@ async fn при_закрытии_каждая_задача_объясняетс�
 }
 
 #[test]
-fn завершённые_задачи_в_отчёт_о_закрытии_не_попадают() {
+fn finished_tasks_do_not_reach_the_closing_report() {
     use vrcast_studio_lib::tasks::store;
     let s = state();
 
-    let mut done = store::TaskRecord::new("t-готова", TaskKind::Upload, None);
+    let mut done = store::TaskRecord::new("t-finished", TaskKind::Upload, None);
     done.state = TaskState::Completed;
     store::upsert(&s.db, &done).unwrap();
 
     assert!(
         api::tasks_on_close(&s).unwrap().is_empty(),
-        "завершённая задача попала в предупреждение о закрытии"
+        "a finished task reached the closing warning"
     );
 }

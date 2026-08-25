@@ -1,8 +1,9 @@
-//! Ядро VRCast Studio.
+//! The core of VRCast Studio.
 //!
-//! Здесь вся логика и всё общение с внешним миром: сервер, файлы, задачи.
-//! Интерфейс не знает ни про SSH, ни про FFmpeg — он общается с ядром только
-//! через слой команд (см. `specs/001-vrcast-studio/contracts/ipc-commands.md`).
+//! All the logic and all the dealings with the outside world live here: the server,
+//! files, tasks. The interface knows nothing of SSH or FFmpeg — it talks to the core
+//! only through the command layer (see
+//! `specs/001-vrcast-studio/contracts/ipc-commands.md`).
 
 use tauri::Manager;
 
@@ -18,16 +19,17 @@ pub mod tasks;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Первым делом — журнал с вырезанием секретов. До этой строки писать в журнал нельзя:
-    // всё, что выведено раньше, пройдёт мимо защиты (конституция, принцип IV).
+    // First of all, the log with secret redaction. Nothing may be logged before this
+    // line: anything written earlier goes past the guard (constitution, principle IV).
     logging::init();
 
     let state = match commands::AppState::bootstrap() {
         Ok(s) => s,
         Err(e) => {
-            // Без локального хранилища работать нельзя: задачи не переживут перезапуск,
-            // а профили негде держать. Честнее не запуститься, чем притвориться рабочим.
-            tracing::error!(error = %e, "не удалось подготовить хранилища");
+            // Without local storage there is no working: tasks would not survive a
+            // restart and there would be nowhere to keep profiles. Refusing to start
+            // is more honest than pretending to work.
+            tracing::error!(error = %e, "could not prepare the stores");
             // No catalogue and no window exist yet, so there is no language to
             // choose between. What goes out is the code and the particulars: they can
             // be searched for, which a translated sentence in the wrong language
@@ -41,10 +43,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        // Выбор файла — системным окном. Своё не годится: в веб-окне у выбранного
-        // файла нет пути на диске, а заливке нужен именно путь.
+        // File choosing through the system dialog. A web one will not do: a file
+        // chosen there has no path on disk, and a path is what an upload needs.
         .plugin(tauri_plugin_dialog::init())
-        // Уведомление о конце длительной задачи, когда окна не видно (FR-084).
+        // A notification when a long task ends and the window is out of sight (FR-084).
         .plugin(tauri_plugin_notification::init())
         .manage(state)
         .setup(move |app| {
@@ -52,18 +54,23 @@ pub fn run() {
             let state: tauri::State<'_, commands::AppState> = app.state();
             commands::events::bridge_app_events(app.handle().clone(), &state);
 
-            // Заливки прошлого запуска поднимаются здесь, а НЕ в `AppState::bootstrap`:
-            // поднятие порождает работу в исполнителе, а подготовка оболочки идёт
-            // до его появления. Прямой вызов оттуда роняет приложение при запуске —
-            // ровно так уже случалось с потоком событий (T027).
+            // Uploads from the previous run are restored here and NOT in
+            // `AppState::bootstrap`: restoring spawns work on the runtime, and the
+            // shell is prepared before the runtime exists. Calling it from there
+            // crashes the application at start-up — which is exactly what already
+            // happened with the event stream (T027).
             match commands::upload::api::restore_uploads(&state) {
                 Ok(0) => {}
-                Ok(n) => tracing::info!(restored = n, "заливки прошлого запуска ждут продолжения"),
-                Err(e) => tracing::error!(error = %e, "заливки прошлого запуска не подняты"),
+                Ok(n) => {
+                    tracing::info!(restored = n, "uploads from the previous run await resuming")
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "uploads from the previous run were not restored")
+                }
             }
 
-            // Окно создано скрытым и показывается, когда есть что показать: иначе
-            // пользователь видит белую вспышку до загрузки интерфейса.
+            // The window is created hidden and shown when there is something to show:
+            // otherwise a person sees a white flash before the interface loads.
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
             }

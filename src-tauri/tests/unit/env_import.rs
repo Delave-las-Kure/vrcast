@@ -1,28 +1,29 @@
-//! T043 — разбор `server.env` при переносе настроек в первый профиль.
+//! T043 — parsing `server.env` when carrying settings over into a first profile.
 //!
-//! Файл принадлежит прежнему порядку работы и продолжает им пользоваться
-//! (конституция, принцип VII). Приложение только читает его — и обязано читать
-//! правильно: неверно разобранный путь к ключу обернётся невозможностью войти
-//! на сервер, а причина будет неочевидна.
+//! The file belongs to the old way of working and goes on being used by it (constitution,
+//! principle VII). The application only reads it — and must read it correctly: a wrongly
+//! parsed path to a key turns into being unable to log in to the server, for a reason that
+//! is not obvious.
 
 use std::io::Write;
 use vrcast_studio_lib::domain::server_profile::AuthKind;
 use vrcast_studio_lib::server::env_import;
 
-/// Записать временный файл с заданным содержимым.
+/// Write a temporary file with the given contents.
 fn temp_env(content: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("vrcast-env-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::create_dir_all(&dir).expect("не создать временный каталог");
+    std::fs::create_dir_all(&dir).expect("could not create the temporary directory");
     let path = dir.join("server.env");
-    let mut f = std::fs::File::create(&path).expect("не создать файл");
-    f.write_all(content.as_bytes()).expect("не записать файл");
+    let mut f = std::fs::File::create(&path).expect("could not create the file");
+    f.write_all(content.as_bytes())
+        .expect("could not write the file");
     path
 }
 
 #[test]
-fn настоящий_образец_файла_разбирается_целиком() {
-    // Содержимое взято из server.env.example — того самого шаблона, которым
-    // пользуется прежний порядок работы.
+fn a_real_sample_of_the_file_parses_whole() {
+    // The contents are taken from server.env.example — the very template the old way of
+    // working uses, Russian comments and all: the parser meets it exactly like this.
     let path = temp_env(
         r#"
 # --- сервер ---
@@ -41,7 +42,7 @@ CDN_BASE=""
 "#,
     );
 
-    let imported = env_import::read_from(&path).expect("файл не разобрался");
+    let imported = env_import::read_from(&path).expect("the file would not parse");
     let input = &imported.input;
 
     assert_eq!(input.host, "203.0.113.10");
@@ -51,25 +52,25 @@ CDN_BASE=""
     assert_eq!(input.auth_kind, AuthKind::Key);
     assert_eq!(
         input.cdn_base, None,
-        "пустое значение CDN принято за адрес посредника"
+        "an empty CDN value was taken for a middleman's address"
     );
 
-    // Хвостовой комментарий не должен попасть в значение: путь с припиской
-    // «# IP VPS» не приведёт никуда.
+    // A trailing comment must not reach the value: an address with "# IP VPS" tacked on
+    // leads nowhere.
     assert!(
         !input.host.contains('#'),
         "в значение попал комментарий: {}",
-        input.host
+        "a comment reached the value: {}",
     );
 
-    // Парольной фразы в файле нет и быть не может — её вводит человек.
+    // There is no passphrase in the file and cannot be — a person types that in.
     assert!(imported.needs_passphrase);
 }
 
 #[test]
-fn домашний_каталог_в_пути_к_ключу_разворачивается() {
-    // В файле путь записан как «$HOME/.ssh/...» — оболочка развернула бы его сама,
-    // а мы файл не выполняем и обязаны развернуть сами.
+fn a_home_directory_in_the_key_path_is_expanded() {
+    // In the file the path is written as "$HOME/.ssh/..." — a shell would expand it itself,
+    // and we do not run the file, so we must expand it ourselves.
     let path = temp_env(
         r#"SERVER_IP="203.0.113.10"
 SERVER_DOMAIN="stream.example.com"
@@ -77,19 +78,26 @@ SSH_KEY="$HOME/.ssh/vrcast_ed25519"
 "#,
     );
 
-    let imported = env_import::read_from(&path).expect("файл не разобрался");
-    let key = imported.input.key_path.expect("путь к ключу потерян");
+    let imported = env_import::read_from(&path).expect("the file would not parse");
+    let key = imported
+        .input
+        .key_path
+        .expect("the path to the key was lost");
     assert!(
         !key.contains("$HOME") && !key.contains('~'),
-        "домашний каталог не развёрнут: {key}"
+        "the home directory was not expanded: {key}"
     );
-    assert!(key.ends_with(".ssh/vrcast_ed25519"), "путь испорчен: {key}");
+    assert!(
+        key.ends_with(".ssh/vrcast_ed25519"),
+        "the path is spoilt: {key}"
+    );
 }
 
 #[test]
-fn пароль_из_файла_не_переносится() {
-    // В файле пароль — это запасной вход через консоль хостера, а не рабочий способ.
-    // Перенести его значило бы приучить приложение ходить туда, куда не следует.
+fn the_password_from_the_file_is_not_carried_over() {
+    // In the file the password is the fallback way in through the hosting console rather
+    // than a working one. Carrying it over would teach the application to go where it
+    // should not.
     let path = temp_env(
         r#"SERVER_IP="203.0.113.10"
 SERVER_DOMAIN="stream.example.com"
@@ -98,23 +106,23 @@ ROOT_PASSWORD="очень-секретный-пароль-из-файла"
 "#,
     );
 
-    let imported = env_import::read_from(&path).expect("файл не разобрался");
-    let json = serde_json::to_string(&imported.input).expect("поля не сериализуются");
+    let imported = env_import::read_from(&path).expect("the file would not parse");
+    let json = serde_json::to_string(&imported.input).expect("the fields will not serialise");
     assert!(
         !json.contains("очень-секретный-пароль-из-файла"),
-        "пароль из файла попал в поля профиля: {json}"
+        "the password from the file reached the profile's fields: {json}"
     );
     assert_eq!(
         imported.input.auth_kind,
         AuthKind::Key,
-        "при наличии ключа способ входа должен быть по ключу"
+        "with a key present, the way in must be by key"
     );
 }
 
 #[test]
-fn файл_без_адреса_или_домена_не_годится_для_переноса() {
-    // Подставлять половину настроек хуже, чем не подставлять ничего: человек решит,
-    // что всё заполнено, и не заметит пустого поля.
+fn a_file_with_no_address_or_domain_is_unfit_to_carry_over() {
+    // Filling in half the settings is worse than filling in none: a person decides
+    // everything is filled and does not notice the empty field.
     let path = temp_env(r#"SSH_USER="root""#);
     assert!(env_import::read_from(&path).is_none());
 
@@ -125,19 +133,19 @@ SSH_USER="root"
     );
     assert!(
         env_import::read_from(&path).is_none(),
-        "принят файл без домена"
+        "a file with no domain was accepted"
     );
 }
 
 #[test]
-fn отсутствующий_файл_это_не_ошибка() {
-    // У большинства пользователей приложения этого файла нет и не будет.
-    let path = std::env::temp_dir().join("заведомо-нет-такого-файла-vrcast.env");
+fn a_missing_file_is_not_an_error() {
+    // Most people using the application have no such file and never will.
+    let path = std::env::temp_dir().join("definitely-no-such-file-vrcast.env");
     assert!(env_import::read_from(&path).is_none());
 }
 
 #[test]
-fn значение_без_кавычек_и_решётка_внутри_значения_разбираются_верно() {
+fn an_unquoted_value_and_a_hash_inside_a_value_parse_correctly() {
     let path = temp_env(
         r#"SERVER_IP=203.0.113.10
 SERVER_DOMAIN=stream.example.com
@@ -146,15 +154,15 @@ VIDEO_DIR=/var/lib/vrcast/videos   # с комментарием
 "#,
     );
 
-    let imported = env_import::read_from(&path).expect("файл не разобрался");
+    let imported = env_import::read_from(&path).expect("the file would not parse");
     assert_eq!(imported.input.host, "203.0.113.10");
     assert_eq!(imported.input.domain, "stream.example.com");
-    // Внутри кавычек решётка законна и обрезать по ней нельзя.
+    // Inside quotes a hash is legitimate and must not cut the value short.
     assert_eq!(
         imported.input.cdn_base.as_deref(),
         Some("https://zone.example.net/#anchor")
     );
-    // А без кавычек — это комментарий.
+    // Without quotes it is a comment.
     assert_eq!(
         imported.input.video_dir.as_deref(),
         Some("/var/lib/vrcast/videos")

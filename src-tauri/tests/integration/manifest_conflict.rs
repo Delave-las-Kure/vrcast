@@ -1,13 +1,13 @@
-//! T038 — конфликт описи между двумя экземплярами приложения.
+//! T038 — a catalogue conflict between two copies of the application.
 //!
-//! Граничный случай спеки: у пользователя открыто два экземпляра приложения (или
-//! приложение на двух компьютерах), и оба работают с одним сервером. Без защиты
-//! второй записавший молча сотрёт работу первого — и узнать об этом будет неоткуда,
-//! потому что опись не хранит истории.
+//! An edge case from the specification: a person has two copies of the application open (or
+//! the application on two computers), and both work with one server. Without a guard the
+//! second to write quietly wipes out the first one's work — and there is nowhere to learn of
+//! it, because the catalogue keeps no history.
 //!
-//! Конституция, принцип V: приложение обязано отказать, а не сделать вид, что
-//! получилось. Проверяется здесь именно это — и отдельно то, что при отказе
-//! на сервере остаётся **чужое** изменение, а не полуфабрикат.
+//! Constitution, principle V: the application must refuse rather than pretend it worked.
+//! That is exactly what is checked here — and, separately, that a refusal leaves **somebody
+//! else's** change on the server rather than a half-made one.
 
 use super::fixture::{key_path, TestServer, KEY_PASSPHRASE};
 use vrcast_studio_lib::domain::manifest::Manifest;
@@ -21,7 +21,7 @@ async fn connect(server: &TestServer) -> Connection {
     let addr = ServerAddress::new(server.host(), server.port);
     let fp = fingerprint::probe(&addr)
         .await
-        .expect("отпечаток не получен");
+        .expect("the fingerprint was not obtained");
     Connection::connect(
         addr,
         "root",
@@ -32,7 +32,7 @@ async fn connect(server: &TestServer) -> Connection {
         &fp,
     )
     .await
-    .expect("подключиться не удалось")
+    .expect("connecting failed")
 }
 
 fn with_media(base: &Manifest, id: &str, slug: &str) -> Manifest {
@@ -43,163 +43,171 @@ fn with_media(base: &Manifest, id: &str, slug: &str) -> Manifest {
 }
 
 #[tokio::test]
-async fn отсутствующая_опись_читается_как_пустая_библиотека() {
-    // На свежем сервере файла ещё нет. Это законное состояние, а не поломка:
-    // упасть здесь значило бы объявить пустую библиотеку неисправностью.
-    let server = TestServer::start().expect("контейнер не поднялся");
+async fn a_missing_catalogue_reads_as_an_empty_library() {
+    // On a fresh server the file is not there yet. That is a legitimate state rather than a
+    // fault: failing here would declare an empty library a malfunction.
+    let server = TestServer::start().expect("the container would not come up");
     let conn = connect(&server).await;
 
     let m = manifest_io::read(&conn, VIDEO_DIR)
         .await
-        .expect("отсутствующая опись не прочиталась");
+        .expect("a missing catalogue would not read");
     assert_eq!(m.generation, 0);
     assert!(m.media.is_empty());
 }
 
 #[tokio::test]
-async fn опись_переживает_запись_и_чтение() {
-    let server = TestServer::start().expect("контейнер не поднялся");
+async fn a_catalogue_survives_writing_and_reading() {
+    let server = TestServer::start().expect("the container would not come up");
     let conn = connect(&server).await;
 
     let base = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
     let next = with_media(&base, "m_1", "film");
     manifest_io::write(&conn, VIDEO_DIR, &next, base.generation)
         .await
-        .expect("опись не записалась");
+        .expect("the catalogue would not write");
 
     let back = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
-    assert_eq!(back.generation, 1, "поколение не выросло");
+    assert_eq!(back.generation, 1, "the generation did not grow");
     assert_eq!(back.media.len(), 1);
     assert_eq!(back.media[0].slug, "film");
 
-    // Проверяем средствами самого сервера, а не своим же кодом: иначе проверили бы,
-    // что чтение согласовано с записью, а не что на сервере лежит нужное.
+    // Checked by the server's own means rather than by our code: otherwise it would check
+    // that reading agrees with writing rather than that the right thing lies on the server.
     let on_server = server
         .exec_inside(&format!("cat {VIDEO_DIR}/library.json"))
-        .expect("опись не прочиталась средствами сервера");
+        .expect("the catalogue would not read by the server's own means");
     assert!(
         on_server.contains("\"film\"") && on_server.contains("\"generation\""),
-        "на сервере лежит не то: {on_server}"
+        "the wrong thing lies on the server: {on_server}"
     );
 }
 
 #[tokio::test]
-async fn второй_экземпляр_получает_отказ_и_не_затирает_чужое() {
-    // Соль теста: оба экземпляра прочитали одно и то же поколение. Первый записал,
-    // второй — опоздал, ничего об этом не зная.
-    let server = TestServer::start().expect("контейнер не поднялся");
-    let первый = connect(&server).await;
-    let второй = connect(&server).await;
+async fn the_second_copy_is_refused_and_does_not_clobber_the_other() {
+    // The point of the test: both copies read one and the same generation. The first wrote,
+    // the second was too late and knew nothing of it.
+    let server = TestServer::start().expect("the container would not come up");
+    let first = connect(&server).await;
+    let second = connect(&server).await;
 
-    let прочитано_первым = manifest_io::read(&первый, VIDEO_DIR).await.unwrap();
-    let прочитано_вторым = manifest_io::read(&второй, VIDEO_DIR).await.unwrap();
+    let read_by_first = manifest_io::read(&first, VIDEO_DIR).await.unwrap();
+    let read_by_second = manifest_io::read(&second, VIDEO_DIR).await.unwrap();
     assert_eq!(
-        прочитано_первым.generation, прочитано_вторым.generation,
-        "тест построен неверно: экземпляры прочитали разные поколения"
+        read_by_first.generation, read_by_second.generation,
+        "the test is built wrong: the copies read different generations"
     );
 
     manifest_io::write(
-        &первый,
+        &first,
         VIDEO_DIR,
-        &with_media(&прочитано_первым, "m_первый", "pervyy"),
-        прочитано_первым.generation,
+        &with_media(&read_by_first, "m_first", "pervyy"),
+        read_by_first.generation,
     )
     .await
-    .expect("первый экземпляр не смог записать");
+    .expect("the first copy could not write");
 
     let err = manifest_io::write(
-        &второй,
+        &second,
         VIDEO_DIR,
-        &with_media(&прочитано_вторым, "m_второй", "vtoroy"),
-        прочитано_вторым.generation,
+        &with_media(&read_by_second, "m_second", "vtoroy"),
+        read_by_second.generation,
     )
     .await
-    .expect_err("второй экземпляр затёр чужую запись");
+    .expect_err("the second copy clobbered the other's record");
 
     match err {
         ManifestIoError::Conflict { base, current } => {
-            assert_eq!(base, прочитано_вторым.generation);
+            assert_eq!(base, read_by_second.generation);
             assert!(
                 current > base,
-                "в отказе указано поколение не больше прочитанного: {current} и {base}"
+                "the refusal names a generation no greater than the one read: {current} and {base}"
             );
         }
-        other => panic!("получена не та ошибка: {other}"),
+        other => panic!("the wrong error came back: {other}"),
     }
 
-    // Главное: на сервере осталась запись ПЕРВОГО, целая и разбираемая.
-    let итог = manifest_io::read(&второй, VIDEO_DIR).await.unwrap();
-    assert_eq!(итог.media.len(), 1, "состав описи испорчен: {итог:?}");
+    // The main thing: the FIRST copy's record is left on the server, whole and parseable.
+    let outcome = manifest_io::read(&second, VIDEO_DIR).await.unwrap();
     assert_eq!(
-        итог.media[0].slug, "pervyy",
-        "чужая запись всё-таки затёрта"
+        outcome.media.len(),
+        1,
+        "the catalogue's contents are spoilt: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.media[0].slug, "pervyy",
+        "somebody else's record was clobbered after all"
     );
 }
 
 #[tokio::test]
-async fn после_перечитывания_запись_проходит() {
-    // Отказ — не тупик: приложение перечитывает опись и повторяет действие.
-    // Если бы после конфликта запись не проходила и со свежим поколением,
-    // пользователь оказался бы заперт.
-    let server = TestServer::start().expect("контейнер не поднялся");
-    let первый = connect(&server).await;
-    let второй = connect(&server).await;
+async fn after_re_reading_the_write_goes_through() {
+    // A refusal is not a dead end: the application re-reads the catalogue and repeats the
+    // action. Were a write not to go through even with a fresh generation after a conflict,
+    // a person would be locked out.
+    let server = TestServer::start().expect("the container would not come up");
+    let first = connect(&server).await;
+    let second = connect(&server).await;
 
-    let база = manifest_io::read(&первый, VIDEO_DIR).await.unwrap();
+    let base = manifest_io::read(&first, VIDEO_DIR).await.unwrap();
     manifest_io::write(
-        &первый,
+        &first,
         VIDEO_DIR,
-        &with_media(&база, "m_первый", "pervyy"),
-        база.generation,
+        &with_media(&base, "m_first", "pervyy"),
+        base.generation,
     )
     .await
     .unwrap();
 
-    let свежее = manifest_io::read(&второй, VIDEO_DIR).await.unwrap();
+    let fresh = manifest_io::read(&second, VIDEO_DIR).await.unwrap();
     manifest_io::write(
-        &второй,
+        &second,
         VIDEO_DIR,
-        &with_media(&свежее, "m_второй", "vtoroy"),
-        свежее.generation,
+        &with_media(&fresh, "m_second", "vtoroy"),
+        fresh.generation,
     )
     .await
-    .expect("запись со свежим поколением тоже отвергнута — пользователь заперт");
+    .expect("a write with a fresh generation was refused too — a person would be locked out");
 
-    let итог = manifest_io::read(&первый, VIDEO_DIR).await.unwrap();
-    assert_eq!(итог.media.len(), 2, "потеряна одна из записей: {итог:?}");
-    assert_eq!(итог.generation, 2);
+    let outcome = manifest_io::read(&first, VIDEO_DIR).await.unwrap();
+    assert_eq!(
+        outcome.media.len(),
+        2,
+        "one of the records was lost: {outcome:?}"
+    );
+    assert_eq!(outcome.generation, 2);
 }
 
 #[tokio::test]
-async fn неудачная_запись_не_оставляет_мусора_в_каталоге_раздачи() {
-    // Временный файл — деталь устройства записи, и он не имеет права остаться
-    // в каталоге, который приложение показывает пользователю как библиотеку:
-    // иначе он попадёт в группу «не распознано» и будет пугать.
-    let server = TestServer::start().expect("контейнер не поднялся");
-    let первый = connect(&server).await;
-    let второй = connect(&server).await;
+async fn a_failed_write_leaves_no_litter_in_the_serving_directory() {
+    // The staged file is a detail of how writing works, and it has no right to stay in the
+    // directory the application shows a person as their library: it would land in the "not
+    // recognised" group and alarm them.
+    let server = TestServer::start().expect("the container would not come up");
+    let first = connect(&server).await;
+    let second = connect(&server).await;
 
-    let база = manifest_io::read(&первый, VIDEO_DIR).await.unwrap();
+    let base = manifest_io::read(&first, VIDEO_DIR).await.unwrap();
     manifest_io::write(
-        &первый,
+        &first,
         VIDEO_DIR,
-        &with_media(&база, "m_1", "film"),
-        база.generation,
+        &with_media(&base, "m_1", "film"),
+        base.generation,
     )
     .await
     .unwrap();
 
     let _ = manifest_io::write(
-        &второй,
+        &second,
         VIDEO_DIR,
-        &with_media(&база, "m_2", "drugoe"),
-        база.generation,
+        &with_media(&base, "m_2", "drugoe"),
+        base.generation,
     )
     .await;
 
     let listing = server
         .exec_inside(&format!("ls -A {VIDEO_DIR}"))
-        .expect("каталог не прочитался");
+        .expect("the directory would not read");
     let leftovers: Vec<&str> = listing
         .lines()
         .map(str::trim)
@@ -207,6 +215,6 @@ async fn неудачная_запись_не_оставляет_мусора_в
         .collect();
     assert!(
         leftovers.is_empty(),
-        "после неудачной записи в каталоге остался мусор: {leftovers:?}"
+        "litter was left in the directory after a failed write: {leftovers:?}"
     );
 }
