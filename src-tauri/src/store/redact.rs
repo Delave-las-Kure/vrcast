@@ -71,13 +71,18 @@ pub fn redact(text: &str) -> Cow<'_, str> {
     out
 }
 
+/// Метки блока приватного ключа. Общие для замены и для построчного писателя:
+/// он обязан узнавать начатый блок, чтобы не выпустить его тело по частям.
+const KEY_BEGIN: &str = "-----BEGIN";
+const KEY_END: &str = "-----END";
+
 /// Приватный ключ узнаётся по форме, а не по регистрации.
 ///
 /// Это подстраховка на случай, когда ключ прочитан из файла и попал в вывод, минуя
 /// хранилище секретов — то есть ровно в том случае, когда регистрация не сработала.
 fn redact_key_blocks(text: &str) -> Cow<'_, str> {
-    const BEGIN: &str = "-----BEGIN";
-    const END_MARK: &str = "-----END";
+    const BEGIN: &str = KEY_BEGIN;
+    const END_MARK: &str = KEY_END;
 
     if !text.contains(BEGIN) {
         return Cow::Borrowed(text);
@@ -138,12 +143,46 @@ impl<W: Write> RedactingWriter<W> {
     }
 
     fn flush_complete_lines(&mut self) -> io::Result<()> {
-        while let Some(pos) = self.buf.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.buf.drain(..=pos).collect();
-            let text = String::from_utf8_lossy(&line);
+        loop {
+            let Some(pos) = self.buf.iter().position(|b| *b == b'\n') else {
+                return Ok(());
+            };
+
+            let first_line = String::from_utf8_lossy(&self.buf[..=pos]);
+            if !first_line.contains(KEY_BEGIN) {
+                let line: Vec<u8> = self.buf.drain(..=pos).collect();
+                let text = String::from_utf8_lossy(&line);
+                self.inner.write_all(redact(&text).as_bytes())?;
+                continue;
+            }
+
+            // Строка начинает блок приватного ключа. Выпускать его построчно нельзя:
+            // тело ключа — строки чистого base64, по отдельности неотличимые от
+            // безобидного вывода, и узнать блок можно только целиком. Пока конец блока
+            // не пришёл — держим буфер (flush замаскирует остаток как обрезанный блок).
+            if has_unclosed_key_block(&String::from_utf8_lossy(&self.buf)) {
+                return Ok(());
+            }
+
+            // Конец блока в буфере: выпускаем все накопленные полные строки одним
+            // куском через одну замену — она видит блок целиком и маскирует его.
+            let last_nl = self.buf.iter().rposition(|b| *b == b'\n').unwrap_or(pos);
+            let chunk: Vec<u8> = self.buf.drain(..=last_nl).collect();
+            let text = String::from_utf8_lossy(&chunk);
             self.inner.write_all(redact(&text).as_bytes())?;
         }
-        Ok(())
+    }
+}
+
+/// Есть ли в тексте начатый, но ещё не закрытый блок приватного ключа.
+fn has_unclosed_key_block(text: &str) -> bool {
+    let Some(start) = text.rfind(KEY_BEGIN) else {
+        return false;
+    };
+    let tail = &text[start..];
+    match tail.find(KEY_END) {
+        Some(e) => tail[e + KEY_END.len()..].find("-----").is_none(),
+        None => true,
     }
 }
 

@@ -161,6 +161,76 @@ fn обрезанный_ключ_тоже_вырезается_целиком() 
 }
 
 #[test]
+fn многострочный_ключ_не_просачивается_через_построчную_запись() {
+    let _g = lock();
+    redact::forget_all();
+
+    // Дефект, ради которого тест: журнал пишет событие одним куском с внутренними
+    // переводами строк, а писатель резал его построчно и маскировал только строку
+    // с «-----BEGIN». Тело ключа — строки чистого base64 — уходило в журнал целым:
+    // в отдельной строке нет ни метки блока, ни зарегистрированного секрета.
+    let captured = Captured::default();
+    {
+        let mut w = redact::RedactingWriter::new(captured.clone());
+        w.write_all(
+            "прочитан ключ:\n\
+             -----BEGIN OPENSSH PRIVATE KEY-----\n\
+             b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB\n\
+             QyNTUxOQAAACDLnp6PPO2Fk3rCC1aXY0P3zXNZDCLYPFHzVv1cnJ2d\n\
+             -----END OPENSSH PRIVATE KEY-----\n\
+             конец\n"
+                .as_bytes(),
+        )
+        .unwrap();
+        w.flush().unwrap();
+    }
+
+    let out = captured.text();
+    assert!(
+        !out.contains("b3BlbnNzaC1rZXktdjEA") && !out.contains("QyNTUxOQ"),
+        "ТЕЛО КЛЮЧА ПРОШЛО В ЖУРНАЛ: {out}"
+    );
+    assert!(
+        out.contains("прочитан ключ") && out.contains("конец"),
+        "вырезано лишнее: {out}"
+    );
+    assert!(out.contains(MASK), "замена не сработала: {out}");
+}
+
+#[test]
+fn ключ_пришедший_отдельными_записями_тоже_вырезается() {
+    let _g = lock();
+    redact::forget_all();
+
+    // Тот же дефект, другой путь: каждая строка ключа приходит отдельным вызовом
+    // записи. Писатель обязан копить начатый блок, а не выпускать строки по одной.
+    let captured = Captured::default();
+    {
+        let mut w = redact::RedactingWriter::new(captured.clone());
+        for part in [
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n",
+            "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB\n",
+            "-----END OPENSSH PRIVATE KEY-----\n",
+            "дальше обычный журнал\n",
+        ] {
+            w.write_all(part.as_bytes()).unwrap();
+        }
+        w.flush().unwrap();
+    }
+
+    let out = captured.text();
+    assert!(
+        !out.contains("b3BlbnNzaC1rZXktdjEA"),
+        "ТЕЛО КЛЮЧА ПРОШЛО В ЖУРНАЛ: {out}"
+    );
+    assert!(
+        out.contains("дальше обычный журнал"),
+        "вырезано лишнее: {out}"
+    );
+    assert!(out.contains(MASK));
+}
+
+#[test]
 fn слишком_короткое_значение_не_регистрируется() {
     let _g = lock();
     redact::forget_all();

@@ -102,6 +102,45 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
     })
 }
 
+/// Записать только позицию возобновления, не трогая остального.
+///
+/// Точечное обновление вместо «прочитать-изменить-записать» всей записи: токен пишет
+/// работающая задача, а состояние — пауза или отмена из другого потока, и полная
+/// перезапись с любой из сторон затирала бы чужое свежее поле.
+pub fn save_resume_token(db: &Db, id: &str, token: &str) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET resume_token = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, token, now_rfc3339()],
+        )?;
+        Ok(())
+    })
+}
+
+/// Записать только состояние и, при наличии, ошибку — не трогая остального.
+///
+/// Возвращает `false`, если записи о задаче нет. Причина точечности та же,
+/// что у [`save_resume_token`].
+pub fn save_state(
+    db: &Db,
+    id: &str,
+    state: TaskState,
+    error: Option<&str>,
+) -> Result<bool, DbError> {
+    db.with_conn(|c| {
+        let changed = c.execute(
+            "UPDATE tasks SET
+                state = ?2,
+                progress = CASE WHEN ?2 = 'completed' THEN 1.0 ELSE progress END,
+                error = COALESCE(?3, error),
+                updated_at = ?4
+             WHERE id = ?1",
+            rusqlite::params![id, state.as_str(), error, now_rfc3339()],
+        )?;
+        Ok(changed > 0)
+    })
+}
+
 /// Прочитать одну задачу.
 pub fn get(db: &Db, id: &str) -> Result<Option<TaskRecord>, DbError> {
     db.with_conn(|c| {

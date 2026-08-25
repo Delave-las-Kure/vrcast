@@ -255,11 +255,15 @@ async fn отмена_прерывает_выполняющуюся_задачу
 #[tokio::test]
 async fn отменённая_задача_не_считается_упавшей() {
     // Разница видна пользователю: снятая им задача не должна выглядеть ошибкой.
+    // Работа долгая с точками отмены, а не «поспать 200 мс»: короткая успевала бы
+    // завершиться до cancel на загруженной машине, и unwrap ронял бы тест ни за что.
     let e = engine();
     let id = e
         .submit(TaskKind::Convert, None, |ctx| async move {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            ctx.bail_if_cancelled().map_err(|e| e.to_string())?;
+            for _ in 0..600 {
+                ctx.bail_if_cancelled().map_err(|e| e.to_string())?;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
             Ok(())
         })
         .await
@@ -349,9 +353,11 @@ async fn приостановка_останавливает_работу_а_п�
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     e.pause(&id).unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // Начатой итерации даём долететь до точки приостановки с запасом: короткое окно
+    // здесь оборачивалось ложным «работа продолжалась» при преемпции под нагрузкой.
+    tokio::time::sleep(Duration::from_millis(400)).await;
     let frozen = steps.load(Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(
         steps.load(Ordering::SeqCst),
         frozen,
@@ -359,13 +365,86 @@ async fn приостановка_останавливает_работу_а_п�
     );
 
     e.resume(&id).unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(
         steps.load(Ordering::SeqCst) > frozen,
         "работа не возобновилась после продолжения"
     );
 
     e.cancel(&id).unwrap();
+}
+
+#[tokio::test]
+async fn отмена_будит_и_снимает_задачу_стоящую_на_паузе() {
+    // Дефект, ради которого тест: отмена не сбрасывает флаг приостановки, и задача,
+    // спящая в wait_while_paused, просыпалась от notify, видела «всё ещё пауза» и
+    // засыпала обратно — навсегда. Ни отмены, ни события, ни записи в базе.
+    let e = engine();
+    let id = e
+        .submit(TaskKind::Upload, None, move |ctx| async move {
+            for _ in 0..600 {
+                ctx.wait_while_paused().await;
+                if ctx.is_cancelled() {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    assert!(wait_for_state(&e, &id, TaskState::Running, Duration::from_secs(5)).await);
+    e.pause(&id).unwrap();
+    // Даём задаче дойти до точки приостановки и заснуть в ней по-настоящему.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    e.cancel(&id).unwrap();
+    assert!(
+        wait_for_state(&e, &id, TaskState::Cancelled, Duration::from_secs(5)).await,
+        "отменённая на паузе задача зависла навсегда"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn одновременный_старт_не_обходит_предел_полосы() {
+    // Дефект, ради которого тест: проверка места и смена состояния шли под разными
+    // захватами замка, и две задачи, проснувшиеся одновременно на разных потоках,
+    // обе видели одно свободное место — две подготовки в полосе на одну.
+    // Однопоточный исполнитель эту гонку скрывает, поэтому здесь многопоточный.
+    let e = engine();
+    let running = Arc::new(AtomicUsize::new(0));
+    let max_seen = Arc::new(AtomicUsize::new(0));
+
+    let mut ids = Vec::new();
+    for _ in 0..6 {
+        let r = running.clone();
+        let m = max_seen.clone();
+        let id = e
+            .submit(TaskKind::Convert, None, move |_ctx| async move {
+                let now = r.fetch_add(1, Ordering::SeqCst) + 1;
+                m.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(60)).await;
+                r.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+
+    for id in &ids {
+        assert!(
+            wait_for_state(&e, id, TaskState::Completed, Duration::from_secs(15)).await,
+            "задача {id} не завершилась"
+        );
+    }
+
+    assert_eq!(
+        max_seen.load(Ordering::SeqCst),
+        1,
+        "две задачи одновременно заняли полосу вычислений"
+    );
 }
 
 #[tokio::test]
@@ -419,6 +498,41 @@ async fn прерванная_задача_становится_приостан
         Some("12400000000"),
         "потеряна позиция возобновления"
     );
+}
+
+#[test]
+fn точечная_запись_не_затирает_чужие_поля() {
+    // Дефект, ради которого тест: и токен, и состояние писались через
+    // «прочитать-изменить-записать» всей записи, и параллельные пауза и запись токена
+    // затирали друг друга. Точечные обновления обязаны не трогать чужие поля.
+    let db = Db::open_in_memory().unwrap();
+    let mut rec = store::TaskRecord::new("t-точечная", TaskKind::Upload, None);
+    rec.resume_token = Some(String::from("старый-токен"));
+    store::upsert(&db, &rec).unwrap();
+
+    assert!(store::save_state(&db, "t-точечная", TaskState::Paused, None).unwrap());
+    store::save_resume_token(&db, "t-точечная", "свежий-токен").unwrap();
+
+    let after = store::get(&db, "t-точечная").unwrap().unwrap();
+    assert_eq!(
+        after.state,
+        TaskState::Paused,
+        "запись токена затёрла состояние"
+    );
+    assert_eq!(
+        after.resume_token.as_deref(),
+        Some("свежий-токен"),
+        "запись состояния затёрла токен"
+    );
+
+    // Ошибка дописывается, не стирая уже записанного токена.
+    assert!(store::save_state(&db, "t-точечная", TaskState::Failed, Some("обрыв связи")).unwrap());
+    let after = store::get(&db, "t-точечная").unwrap().unwrap();
+    assert_eq!(after.resume_token.as_deref(), Some("свежий-токен"));
+    assert_eq!(after.error.as_deref(), Some("обрыв связи"));
+
+    // Записи нет — save_state честно говорит об этом, а не молчит.
+    assert!(!store::save_state(&db, "t-нет-такой", TaskState::Failed, None).unwrap());
 }
 
 #[tokio::test]

@@ -144,10 +144,18 @@ fn отмена_несуществующей_задачи_даёт_код_дог
 #[tokio::test]
 async fn приостановка_короткой_задачи_даёт_свой_код() {
     let s = state();
+    // Работа долгая и отменяемая, а не «поспать 600 мс»: на загруженной машине
+    // короткая задача успевала бы завершиться до task_pause, и вместо проверяемого
+    // кода приходил бы TASK_NOT_FOUND — ложное падение.
     let id = s
         .tasks
-        .submit(TaskKind::Probe, None, |_c| async move {
-            tokio::time::sleep(Duration::from_millis(600)).await;
+        .submit(TaskKind::Probe, None, |ctx| async move {
+            for _ in 0..600 {
+                if ctx.is_cancelled() {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
             Ok(())
         })
         .await

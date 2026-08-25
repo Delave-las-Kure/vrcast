@@ -13,7 +13,7 @@
 use super::progress::ProgressThrottle;
 use super::state::{Lane, LaneLimits, TaskKind, TaskState};
 use super::store::{self, TaskRecord};
-use crate::store::db::{now_rfc3339, Db, DbError};
+use crate::store::db::{Db, DbError};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -116,13 +116,24 @@ impl TaskContext {
     ///
     /// Вызывать между единицами работы: между кусками передачи, между шагами
     /// развёртывания. Приостановка вступит в силу на ближайшей такой точке.
+    /// Отмена тоже будит: после возврата вызывающий обязан проверить `is_cancelled`.
     pub async fn wait_while_paused(&self) {
         loop {
-            let paused = *self.paused.lock().unwrap_or_else(|e| e.into_inner());
-            if !paused {
+            // Подписка на «продолжить» оформляется ДО чтения флага: notify_waiters
+            // не сохраняет разрешения для ещё не подписанных, и иначе «продолжить»,
+            // нажатое в щели между чтением флага и засыпанием, потерялось бы навсегда.
+            let resumed = self.resume.notified();
+
+            if self.is_cancelled() || !*self.paused.lock().unwrap_or_else(|e| e.into_inner()) {
                 return;
             }
-            self.resume.notified().await;
+
+            // Ждать одного лишь «продолжить» нельзя: при отмене флаг приостановки
+            // не сбрасывается, и задача, разбуженная отменой, тут же уснула бы снова.
+            tokio::select! {
+                _ = resumed => {}
+                _ = self.cancel.cancelled() => return,
+            }
         }
     }
 
@@ -165,13 +176,9 @@ impl TaskContext {
     /// Записать позицию возобновления.
     ///
     /// Это единственное, что имеет смысл писать в базу часто: без него прерванная
-    /// передача начнётся заново.
+    /// передача начнётся заново. Запись точечная — см. `store::save_resume_token`.
     pub fn save_resume_token(&self, token: &str) -> Result<()> {
-        if let Some(mut rec) = store::get(&self.db, &self.id)? {
-            rec.resume_token = Some(token.to_owned());
-            rec.updated_at = now_rfc3339();
-            store::upsert(&self.db, &rec)?;
-        }
+        store::save_resume_token(&self.db, &self.id, token)?;
         Ok(())
     }
 
@@ -179,6 +186,16 @@ impl TaskContext {
     pub fn resume_token(&self) -> Result<Option<String>> {
         Ok(store::get(&self.db, &self.id)?.and_then(|r| r.resume_token))
     }
+}
+
+/// Итог попытки занять место в полосе.
+enum ClaimOutcome {
+    /// Место занято, задача стала выполняющейся.
+    Started,
+    /// Полоса заполнена — подождать и попробовать снова.
+    Busy,
+    /// Задачи больше нет среди живых (снята или завершена) — не запускать.
+    Gone,
 }
 
 /// Механизм задач.
@@ -288,14 +305,13 @@ impl TaskEngine {
                     engine.finish(&task_id, TaskState::Cancelled, None);
                     return;
                 }
-                if engine.has_room_for(kind) {
-                    break;
+                match engine.try_claim_lane(&task_id) {
+                    ClaimOutcome::Started => break,
+                    ClaimOutcome::Busy => {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    ClaimOutcome::Gone => return,
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-
-            if !engine.set_state(&task_id, TaskState::Running) {
-                return;
             }
 
             let outcome = work(ctx).await;
@@ -391,24 +407,39 @@ impl TaskEngine {
         Ok(store::get(&self.db, id)?)
     }
 
-    fn set_state(&self, id: &str, next: TaskState) -> bool {
+    /// Занять место в полосе и стать выполняющейся — атомарно, под одним замком.
+    ///
+    /// Проверка места и смена состояния нарочно неразделимы: две задачи, проснувшиеся
+    /// одновременно, иначе обе увидели бы одно свободное место — и обе бы стартовали,
+    /// две подготовки в полосе на одну.
+    fn try_claim_lane(&self, id: &str) -> ClaimOutcome {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(t) = live.get_mut(id) else {
-            return false;
+        let Some(t) = live.get(id) else {
+            return ClaimOutcome::Gone;
         };
-        if !t.state.can_transition_to(next) {
+        let lane = t.kind.lane();
+        let used = live
+            .values()
+            .filter(|x| x.state.occupies_lane() && x.kind.lane() == lane)
+            .count();
+        if used >= self.limits.for_lane(lane) {
+            return ClaimOutcome::Busy;
+        }
+        let Some(t) = live.get_mut(id) else {
+            return ClaimOutcome::Gone;
+        };
+        if !t.state.can_transition_to(TaskState::Running) {
             tracing::warn!(
                 id,
                 from = t.state.as_str(),
-                to = next.as_str(),
-                "недопустимый переход"
+                "задача не может стать выполняющейся"
             );
-            return false;
+            return ClaimOutcome::Gone;
         }
-        t.state = next;
+        t.state = TaskState::Running;
         drop(live);
-        self.persist_state(id, next, None);
-        true
+        self.persist_state(id, TaskState::Running, None);
+        ClaimOutcome::Started
     }
 
     fn finish(&self, id: &str, state: TaskState, error: Option<String>) {
@@ -428,24 +459,13 @@ impl TaskEngine {
     }
 
     fn persist_state(&self, id: &str, state: TaskState, error: Option<String>) {
-        match store::get(&self.db, id) {
-            Ok(Some(mut rec)) => {
-                rec.state = state;
-                if state == TaskState::Completed {
-                    rec.progress = 1.0;
-                }
-                if let Some(e) = error {
-                    // Ошибка проходит вырезание секретов: она может прийти от чужой
-                    // библиотеки, которая о наших правилах не знает (принцип IV).
-                    rec.error = Some(crate::store::redact::redact(&e).into_owned());
-                }
-                rec.updated_at = now_rfc3339();
-                if let Err(e) = store::upsert(&self.db, &rec) {
-                    tracing::error!(id, error = %e, "не удалось сохранить состояние задачи");
-                }
-            }
-            Ok(None) => tracing::warn!(id, "состояние сохранять некуда: записи о задаче нет"),
-            Err(e) => tracing::error!(id, error = %e, "не удалось прочитать задачу"),
+        // Ошибка проходит вырезание секретов: она может прийти от чужой
+        // библиотеки, которая о наших правилах не знает (принцип IV).
+        let error = error.map(|e| crate::store::redact::redact(&e).into_owned());
+        match store::save_state(&self.db, id, state, error.as_deref()) {
+            Ok(true) => {}
+            Ok(false) => tracing::warn!(id, "состояние сохранять некуда: записи о задаче нет"),
+            Err(e) => tracing::error!(id, error = %e, "не удалось сохранить состояние задачи"),
         }
     }
 }
