@@ -8,3 +8,4 @@ pub mod convert;
 pub mod encoders;
 pub mod ffmpeg;
 pub mod probe;
+pub mod validate;

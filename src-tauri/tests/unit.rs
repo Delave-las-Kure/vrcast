@@ -63,3 +63,6 @@ mod encoders;
 
 #[path = "unit/convert.rs"]
 mod convert;
+
+#[path = "unit/validate.rs"]
+mod validate;

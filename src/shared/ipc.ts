@@ -26,7 +26,10 @@ import {
   type TaskOnClose,
   type TaskProgressEvent,
   type FfmpegInfo,
+  type ConvertPreview,
+  type ConvertStart,
   type SourceFile,
+  type Validation,
   type TestStep,
   type UploadRequest,
   type Versions,
@@ -127,6 +130,12 @@ export const ipc = {
   ffmpegProbeSelf: () => call<FfmpegInfo>("ffmpeg_probe_self"),
   /** Разобрать исходник. Быстрая операция, а не задача (FR-020). */
   sourceProbe: (path: string) => call<SourceFile>("source_probe", { path }),
+  /** Что подготовка будет делать — до того, как она начнётся. */
+  convertPreview: (request: ConvertStart) => call<ConvertPreview>("convert_preview", { request }),
+  /** Начать подготовку. Возвращает номер задачи немедленно (FR-080). */
+  convertStart: (request: ConvertStart) => call<string>("convert_start", { request }),
+  /** Проверить, что готовый файл воспроизводится (FR-027). */
+  convertValidate: (path: string) => call<Validation>("convert_validate", { path }),
 };
 
 // ---------- события ----------

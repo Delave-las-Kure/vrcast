@@ -96,6 +96,9 @@ pub fn run() {
             commands::library::ipc::file_move,
             commands::library::ipc::file_delete,
             commands::library::ipc::links_for,
+            commands::convert::ipc::convert_preview,
+            commands::convert::ipc::convert_start,
+            commands::convert::ipc::convert_validate,
             commands::upload::ipc::upload_start,
             commands::upload::ipc::upload_resume,
         ])

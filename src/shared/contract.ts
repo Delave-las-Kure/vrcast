@@ -360,3 +360,67 @@ export interface SourceFile {
   color_transfer: string | null;
   audio_tracks: AudioTrack[];
 }
+
+/** Что делать с видеопотоком (FR-022). */
+export type VideoAction =
+  | { kind: "copy" }
+  | { kind: "reencode"; reason: string; level: string }
+  | {
+      kind: "reencode_capped";
+      reason: string;
+      level: string;
+      target_kbps: number;
+      maxrate_kbps: number;
+      bufsize_kbps: number;
+    };
+
+/** Что делать со звуком. */
+export type AudioAction =
+  | { kind: "copy" }
+  | { kind: "reencode"; reason: string; bitrate_kbps: number; resample_fix: boolean };
+
+/** План подготовки файла. */
+export interface ConvertPlan {
+  video: VideoAction;
+  audio: AudioAction;
+  audio_track: number;
+  gop: number;
+  tonemap: boolean;
+  requested_height: number | null;
+  faststart: boolean;
+}
+
+/** Чем кодировать. */
+export type Encoder = { kind: "hardware"; name: string } | { kind: "software" };
+
+/** Что подготовка будет делать — показывается до её начала. */
+export interface ConvertPreview {
+  plan: ConvertPlan;
+  source: SourceFile;
+  encoder: Encoder;
+  /** Что сказать про выбор кодировщика. Пусто — говорить нечего. */
+  encoder_notice: string | null;
+  /** Истина = ничего не пересжимается: минуты вместо часов и без потерь. */
+  lossless: boolean;
+}
+
+/** Заявка на подготовку файла. */
+export interface ConvertStart {
+  path: string;
+  audio_track: number;
+  target_kbps: number | null;
+  height: number | null;
+  out_path: string;
+  /** Ложь = человек сам попросил кодировать процессором. */
+  prefer_hardware: boolean;
+}
+
+/** Итог проверки воспроизведения (FR-027). */
+export interface Validation {
+  /** Можно ли предлагать файл к заливке. */
+  ok: boolean;
+  /** Жалобы декодера, его же словами. */
+  problems: string[];
+  /** Жалобы упаковщика, намеренно не засчитанные файлу в вину. */
+  ignored: string[];
+}

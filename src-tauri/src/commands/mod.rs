@@ -9,6 +9,7 @@
 //! договорные тесты потребовали бы живого приложения с графикой, а в непрерывной
 //! интеграции его нет.
 
+pub mod convert;
 pub mod error;
 pub mod events;
 pub mod library;

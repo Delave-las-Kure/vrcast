@@ -1,124 +1,328 @@
-//! Договорные тесты команд подготовки (часть T112).
+//! T112 — contract tests for the file-preparation commands.
 //!
-//! Договор: `contracts/ipc-commands.md`, раздел «Подготовка файлов».
+//! Contract: `contracts/ipc-commands.md`, "Подготовка файлов".
 //!
-//! Здесь пока две команды из четырёх: `convert_start` и `convert_validate` ещё
-//! не написаны, и проверять у них нечего. Оставшиеся две закрываются целиком —
-//! форма ответа и коды отказов.
+//! Only what is visible from outside: the shape of the answer, and which refusal
+//! carries which code. The code is not a detail — it decides whether the interface
+//! highlights a field or shows a failure notice, and a typo is not a failure.
 //!
-//! Проверкам нужен вложенный FFmpeg. Он весит сто сорок мегабайт, в репозиторий
-//! не попадает и кладётся командой `npm run ffmpeg`; без него проверка объявляет,
-//! что пропущена, вслух — иначе она молча ничего не значила бы.
+//! These need the bundled FFmpeg. It weighs a hundred and forty megabytes, is not
+//! in the repository, and is put in place by `npm run ffmpeg`; without it each
+//! check says so out loud rather than quietly passing.
 
-use vrcast_studio_lib::commands::api;
+use std::sync::Arc;
+use vrcast_studio_lib::commands::convert::{api as convert, ConvertStart};
 use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::AppState;
 use vrcast_studio_lib::media::ffmpeg;
+use vrcast_studio_lib::store::db::Db;
+use vrcast_studio_lib::store::secrets::InMemorySecretStore;
 
-/// Есть ли вложенная сборка. Без неё половине проверок нечего делать.
-fn есть_ffmpeg() -> bool {
-    if ffmpeg::locate("ffprobe").is_ok() {
+/// Is the bundled build present? Half these checks have nothing to do without it.
+fn has_ffmpeg() -> bool {
+    if ffmpeg::locate("ffprobe").is_ok() && ffmpeg::locate("ffmpeg").is_ok() {
         return true;
     }
-    eprintln!(
-        "ПРОПУЩЕНО: вложенного FFmpeg нет. Выполните `npm run ffmpeg`, \
-         чтобы эта проверка что-то проверяла."
-    );
+    eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this check to check anything.");
     false
 }
 
-fn временный_файл(name: &str, содержимое: &[u8]) -> std::path::PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("vrcast-convert-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::create_dir_all(&dir).expect("не создать временный каталог");
-    let path = dir.join(name);
-    std::fs::write(&path, содержимое).expect("не записать файл");
-    path
+fn state() -> AppState {
+    AppState::with_db(
+        Arc::new(Db::open_in_memory().unwrap()),
+        Arc::new(InMemorySecretStore::new()),
+    )
+    .expect("could not assemble the application state")
 }
 
+/// A working directory that cleans up after itself.
+struct Workspace(std::path::PathBuf);
+
+impl Workspace {
+    fn new() -> Self {
+        let dir = std::env::temp_dir().join(format!("vrcast-c-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("could not make a working directory");
+        Self(dir)
+    }
+
+    fn path(&self, name: &str) -> String {
+        self.0.join(name).to_string_lossy().into_owned()
+    }
+
+    /// Encode a short, deliberately incompatible clip.
+    fn clip(&self, name: &str) -> String {
+        let out = self.path(name);
+        let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg");
+        let made = std::process::Command::new(ff)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x240:rate=24",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "ac3",
+                "-ac",
+                "6",
+            ])
+            .arg(&out)
+            .output()
+            .expect("could not run the bundled FFmpeg");
+        assert!(made.status.success(), "could not prepare a clip");
+        out
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn request(path: &str, out_path: &str) -> ConvertStart {
+    ConvertStart {
+        path: path.to_owned(),
+        audio_track: 0,
+        target_kbps: None,
+        height: None,
+        out_path: out_path.to_owned(),
+        prefer_hardware: true,
+    }
+}
+
+// ---------- probing ----------
+
 #[tokio::test]
-async fn проверка_вложенной_сборки_отдаёт_то_что_обещано_договором() {
-    if !есть_ffmpeg() {
+async fn probing_the_bundled_build_answers_what_the_contract_promises() {
+    if !has_ffmpeg() {
         return;
     }
-    let info = api::ffmpeg_probe_self()
+    let info = vrcast_studio_lib::commands::api::ffmpeg_probe_self()
         .await
-        .expect("вложенная сборка не прошла проверку");
+        .expect("the bundled build failed its own check");
 
     assert!(
         info.version.starts_with("ffmpeg version"),
         "{}",
         info.version
     );
-    assert!(!info.path.is_empty(), "не сказано, где лежит сборка");
+    assert!(
+        !info.path.is_empty(),
+        "it did not say where the build lives"
+    );
     assert!(
         info.has_x264,
-        "договор обещает отказ без libx264, а сборка объявила его отсутствие успехом"
+        "the contract promises a refusal without libx264, and this reported success"
     );
 }
 
 #[tokio::test]
-async fn разбор_несуществующего_файла_это_ошибка_ввода() {
-    if !есть_ffmpeg() {
+async fn probing_a_missing_file_is_an_input_error() {
+    if !has_ffmpeg() {
         return;
     }
-    // Опечатка в пути — не сбой приложения, и интерфейс обязан подсветить поле,
-    // а не показать уведомление об ошибке. Различить можно только по коду.
-    let err = api::source_probe("F:/такого/файла/нет.mp4")
+    // A typo in a path is not a failure of the application, and the interface is
+    // meant to highlight the field rather than show a failure notice. The code is
+    // the only thing that tells those apart.
+    let err = vrcast_studio_lib::commands::api::source_probe("F:/no/such/file.mp4")
         .await
-        .expect_err("разбор несуществующего файла прошёл");
+        .expect_err("probing a missing file succeeded");
 
     assert_eq!(err.code, ErrorCode::InvalidInput);
-    assert!(
-        !err.message.is_empty(),
-        "отказ без человеческой формулировки"
-    );
-    assert!(!err.hint.is_empty(), "отказ без подсказки, что делать");
+    assert!(!err.message.is_empty(), "a refusal with nothing to read");
+    assert!(!err.hint.is_empty(), "a refusal with no hint what to do");
 }
 
 #[tokio::test]
-async fn разбор_не_видео_называет_причину_а_не_ругается_кодами() {
-    if !есть_ffmpeg() {
+async fn probing_something_that_is_not_video_names_the_reason() {
+    if !has_ffmpeg() {
         return;
     }
-    // Человек выбрал не тот файл — обычное дело. Сказать надо про файл,
-    // а не про то, что разборщик вернул ненулевой код.
-    let path = временный_файл("заметки.txt", b"vrcast: not a video at all");
+    let work = Workspace::new();
+    let path = work.path("notes.txt");
+    std::fs::write(&path, "vrcast: not a video at all").unwrap();
 
-    let err = api::source_probe(&path.to_string_lossy())
+    let err = vrcast_studio_lib::commands::api::source_probe(&path)
         .await
-        .expect_err("текстовый файл разобрался как видео");
+        .expect_err("a text file was probed as video");
 
     assert_eq!(err.code, ErrorCode::InvalidInput);
+    // The prober's own complaint is kept: "moov atom not found" is cryptic but
+    // searchable, and "the file is bad" is neither.
+    assert!(err.cause.is_some(), "the prober's own words were dropped");
+}
+
+// ---------- previewing the work ----------
+
+#[tokio::test]
+async fn the_preview_says_whether_anything_will_be_re_encoded() {
+    if !has_ffmpeg() {
+        return;
+    }
+    // Re-encoding costs hours where copying costs minutes. Knowing which one is
+    // about to happen is the whole point of showing a preview at all.
+    let work = Workspace::new();
+    let src = work.clip("source.mp4");
+
+    let preview = convert::convert_preview(&request(&src, &work.path("ready.mp4")))
+        .await
+        .expect("the preview did not come together");
+
+    // Six-channel AC-3 against a stereo AAC target: the audio must be re-encoded.
     assert!(
-        err.message.contains("видео") || err.message.contains("разобрать"),
-        "по сообщению не понять, в чём дело: {}",
+        !preview.lossless,
+        "a six-channel AC-3 track was called lossless"
+    );
+    assert_eq!(preview.source.width, 320);
+    assert_eq!(preview.plan.audio_track, 0);
+}
+
+#[tokio::test]
+async fn asking_for_a_track_that_is_not_there_is_refused_before_anything_starts() {
+    if !has_ffmpeg() {
+        return;
+    }
+    let work = Workspace::new();
+    let src = work.clip("source.mp4");
+
+    let mut ask = request(&src, &work.path("ready.mp4"));
+    ask.audio_track = 7;
+
+    let err = convert::convert_preview(&ask)
+        .await
+        .expect_err("a track that does not exist was accepted");
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    // Numbered from one for people: "track 0 is missing" reads like a bug report.
+    assert!(
+        err.message.contains("дорожки 8"),
+        "the track number is not the one a person sees: {}",
         err.message
     );
-    // Жалоба разборщика сохраняется: она непонятна, но её можно найти поиском,
-    // а «файл плохой» — нельзя.
-    assert!(err.cause.is_some(), "потеряно уточнение от разборщика");
+}
 
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+// ---------- starting the work ----------
+
+#[tokio::test]
+async fn writing_over_the_source_is_refused() {
+    if !has_ffmpeg() {
+        return;
+    }
+    // The encoder opens the output for writing before it has read anything, so
+    // this would destroy the only copy of the original with no way back.
+    let work = Workspace::new();
+    let src = work.clip("source.mp4");
+    let state = state();
+
+    let err = convert::convert_start(&state, request(&src, &src))
+        .await
+        .expect_err("the source was accepted as its own destination");
+
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert!(
+        err.message.contains("исходник"),
+        "it does not say what is at stake: {}",
+        err.message
+    );
 }
 
 #[tokio::test]
-async fn разобранный_файл_переживает_передачу_через_границу() {
-    if !есть_ffmpeg() {
+async fn a_started_conversion_returns_a_task_number_at_once() {
+    if !has_ffmpeg() {
         return;
     }
-    // Ответ уходит в интерфейс как есть — значит обязан переноситься без потерь.
-    // Собирается из образца, а не из живого файла: живой потребовал бы кодирования
-    // на каждом прогоне договорных проверок.
-    let образец = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ffprobe-sample.json"),
-    )
-    .expect("образец ответа не прочитать");
+    // FR-080. Preparing takes minutes to hours; a command that returned when it
+    // was done would freeze the interface for exactly that long.
+    let work = Workspace::new();
+    let src = work.clip("source.mp4");
+    let out = work.path("ready.mp4");
+    let state = state();
 
-    let src = vrcast_studio_lib::media::probe::parse(&образец, "проба.mp4")
-        .expect("образец не разобрался");
+    let started = std::time::Instant::now();
+    let task = convert::convert_start(&state, request(&src, &out))
+        .await
+        .expect("the conversion did not start");
+    let took = started.elapsed();
 
-    let json = serde_json::to_string(&src).expect("не записалось");
-    let back: vrcast_studio_lib::domain::source::SourceFile =
-        serde_json::from_str(&json).expect("не прочиталось");
-    assert_eq!(back, src);
+    assert!(!task.is_empty(), "no task number came back");
+    assert!(
+        took < std::time::Duration::from_secs(10),
+        "the command took {took:?} before answering — it waited for the work"
+    );
+
+    // Let it finish, then check the file really is playable: this is the whole
+    // chain — encode, then validate — and it is what FR-027 is about.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let record = state.tasks.get(&task).ok().flatten();
+        if record.as_ref().is_some_and(|t| t.state.is_final()) {
+            let record = record.unwrap();
+            assert_eq!(
+                record.state,
+                vrcast_studio_lib::tasks::state::TaskState::Completed,
+                "the conversion did not succeed: {:?}",
+                record.error
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the conversion did not finish in time"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        std::path::Path::new(&out).exists(),
+        "the task succeeded but produced no file"
+    );
+    let verdict = convert::convert_validate(&out)
+        .await
+        .expect("validation did not run");
+    assert!(
+        verdict.ok,
+        "the prepared file does not play: {:?}",
+        verdict.problems
+    );
+}
+
+#[tokio::test]
+async fn validating_a_damaged_file_refuses_it() {
+    if !has_ffmpeg() {
+        return;
+    }
+    // FR-027: a file that does not pass must not be offered for upload. A broken
+    // encode opens fine and reports the right duration — only a full decode knows.
+    let work = Workspace::new();
+    let src = work.clip("source.mp4");
+
+    let damaged = work.path("damaged.mp4");
+    let mut bytes = std::fs::read(&src).unwrap();
+    let from = bytes.len() / 3;
+    let to = (from + bytes.len() / 4).min(bytes.len());
+    for b in &mut bytes[from..to] {
+        *b = 0x5A;
+    }
+    std::fs::write(&damaged, &bytes).unwrap();
+
+    let verdict = convert::convert_validate(&damaged)
+        .await
+        .expect("validation did not run");
+    assert!(!verdict.ok, "a damaged file passed validation");
+    assert!(
+        !verdict.problems.is_empty(),
+        "it was refused without saying why"
+    );
 }
