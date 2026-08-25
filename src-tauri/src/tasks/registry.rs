@@ -94,6 +94,35 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
     let mut report = SweepReport::default();
 
     for (pid, program, recorded_identity) in records {
+        // На Windows сверка и завершение делаются ОДНИМ описателем: между
+        // раздельными проверкой и убийством система вправе выдать освободившийся
+        // номер другой программе, и убита будет она. Уборка идёт при запуске
+        // приложения — то есть ровно тогда, когда номера раздаются пачками
+        // (задолженность T074).
+        #[cfg(windows)]
+        if let Some(identity) = recorded_identity.as_deref() {
+            match crate::tasks::process::verify_and_terminate(pid, identity) {
+                None => report.already_gone.push(pid),
+                Some(true) => {
+                    tracing::warn!(
+                        pid,
+                        program = %program,
+                        "добита программа, уцелевшая от предыдущего запуска"
+                    );
+                    report.killed.push(pid);
+                }
+                Some(false) => {
+                    tracing::debug!(
+                        pid,
+                        ожидалось = %program,
+                        "номер процесса переиспользован, запись забыта без завершения"
+                    );
+                    report.reused.push(pid);
+                }
+            }
+            continue;
+        }
+
         match process_name(pid) {
             None => report.already_gone.push(pid),
             Some(actual) => {

@@ -330,6 +330,20 @@ pub(crate) fn process_name(pid: u32) -> Option<String> {
 ///
 /// `None` означает «узнать не удалось» — тогда остаётся сверка по имени, которая
 /// хуже, но лучше, чем ничего.
+/// Сверить процесс по времени запуска и завершить его ОДНИМ описателем.
+///
+/// Только на Windows: там описатель, открытый на живой процесс, удерживает за собой
+/// его номер, и потому сверка с завершением относятся заведомо к одному и тому же
+/// процессу. На Unix номер удерживается тем, что процесс остаётся зомби до сбора
+/// родителем, и раздельные шаги там не опасны.
+///
+/// `Some(true)` — завершили; `Some(false)` — это уже другой процесс, не тронули;
+/// `None` — процесса нет или к нему не подступиться.
+#[cfg(windows)]
+pub(crate) fn verify_and_terminate(pid: u32, expected_created_at: &str) -> Option<bool> {
+    windows_job::verify_and_terminate(pid, expected_created_at)
+}
+
 pub(crate) fn process_identity(pid: u32) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
@@ -535,6 +549,56 @@ mod windows_job {
             let ok = TerminateProcess(h, 1) != 0;
             CloseHandle(h);
             ok
+        }
+    }
+
+    /// Убедиться, что это тот самый процесс, и завершить его — ОДНИМ описателем.
+    ///
+    /// Проверять и убивать по номеру раздельно нельзя, и это не теория: между
+    /// проверкой и убийством система вправе выдать освободившийся номер другой
+    /// программе, и убита будет она. Номера переиспользуются быстро, а уборка идёт
+    /// при запуске приложения — то есть ровно тогда, когда система раздаёт номера
+    /// пачками (задолженность T074).
+    ///
+    /// Описатель, открытый на живой процесс, номер за собой удерживает: пока он
+    /// открыт, тот же номер никому не достанется. Поэтому сверка времени запуска
+    /// и завершение относятся заведомо к одному и тому же процессу.
+    ///
+    /// `Some(true)` — завершили; `Some(false)` — это другой процесс, не тронули;
+    /// `None` — процесса уже нет или к нему не подступиться.
+    pub fn verify_and_terminate(pid: u32, expected_created_at: &str) -> Option<bool> {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const PROCESS_TERMINATE: u32 = 0x0001;
+        unsafe {
+            let h = OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                0,
+                pid,
+            );
+            if h.is_null() {
+                return None;
+            }
+
+            let mut creation = FileTime::default();
+            let mut ignored = FileTime::default();
+            let ok = GetProcessTimes(h, &mut creation, &mut ignored, &mut ignored, &mut ignored);
+            if ok == 0 {
+                CloseHandle(h);
+                return None;
+            }
+            let actual = format!(
+                "{}",
+                (u64::from(creation.high) << 32) | u64::from(creation.low)
+            );
+
+            if actual != expected_created_at {
+                CloseHandle(h);
+                return Some(false);
+            }
+
+            let killed = TerminateProcess(h, 1) != 0;
+            CloseHandle(h);
+            Some(killed)
         }
     }
 
