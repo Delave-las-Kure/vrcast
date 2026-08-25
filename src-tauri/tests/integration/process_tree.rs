@@ -4,7 +4,21 @@
 //! в системе копятся висящие серверы. Это ровно тот же класс ошибки, что осиротевший
 //! процесс кодирования, — только этажом выше.
 
-use super::fixture::{docker_available, TestServer};
+use super::fixture::{docker_available, TestServer, IMAGE};
+
+/// Сколько НАШИХ контейнеров сейчас работает.
+///
+/// Считать `docker ps -q` целиком нельзя: демон общий, и посторонний контейнер,
+/// стартовавший между двумя замерами, ронял бы тест ни за что. Сбой самого
+/// подсчёта — тоже падение, а не «пусть будет ноль».
+fn our_containers() -> usize {
+    let out = std::process::Command::new("docker")
+        .args(["ps", "-q", "--filter", &format!("ancestor={IMAGE}")])
+        .output()
+        .expect("не выполнить docker ps");
+    assert!(out.status.success(), "docker ps завершился с ошибкой");
+    String::from_utf8_lossy(&out.stdout).lines().count()
+}
 
 #[test]
 fn контейнер_удаляется_вместе_с_тестом() {
@@ -13,21 +27,12 @@ fn контейнер_удаляется_вместе_с_тестом() {
         "Docker не запущен — интеграционные тесты идти не могут"
     );
 
-    let id_before = std::process::Command::new("docker")
-        .args(["ps", "-q"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
-        .unwrap_or(0);
+    let before = our_containers();
 
     {
         let server = TestServer::start().expect("контейнер не поднялся");
-        let running = std::process::Command::new("docker")
-            .args(["ps", "-q"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
-            .unwrap_or(0);
         assert!(
-            running > id_before,
+            our_containers() > before,
             "контейнер не появился среди работающих"
         );
         drop(server);
@@ -36,11 +41,9 @@ fn контейнер_удаляется_вместе_с_тестом() {
     // Даём Docker миг на уборку.
     std::thread::sleep(std::time::Duration::from_secs(2));
 
-    let after = std::process::Command::new("docker")
-        .args(["ps", "-q"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
-        .unwrap_or(0);
-
-    assert_eq!(after, id_before, "после теста остался висящий контейнер");
+    assert_eq!(
+        our_containers(),
+        before,
+        "после теста остался висящий контейнер"
+    );
 }

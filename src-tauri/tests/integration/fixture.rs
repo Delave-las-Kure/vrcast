@@ -18,7 +18,11 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Имя образа. Собирается один раз и переиспользуется между запусками тестов.
-const IMAGE: &str = "vrcast-test-sshd:1";
+///
+/// Число в метке — версия содержимого: при изменении Dockerfile её НУЖНО поднять,
+/// иначе `ensure_image` переиспользует старый образ и правка молча не подействует.
+/// Та же метка стоит в шаге уборки в .github/workflows/build.yml.
+pub const IMAGE: &str = "vrcast-test-sshd:2";
 
 /// Парольная фраза ключа из `tests/fixtures`. Не секрет: ключ никуда не даёт доступа,
 /// кроме этого одноразового контейнера.
@@ -173,6 +177,40 @@ impl TestServer {
 
     pub fn host(&self) -> &'static str {
         "127.0.0.1"
+    }
+
+    /// Журнал sshd — то, что служба пишет в поток ошибок контейнера (запущена с `-e`).
+    ///
+    /// Отдельного файла журнала в контейнере нет: демона системного журнала там не
+    /// ставят. Раньше тест сверялся с /var/log/auth.log — файла не существовало,
+    /// и проверка «на сервер не ушла попытка входа» проходила при любом поведении.
+    pub fn sshd_log(&self) -> Result<String, String> {
+        let out = docker(&["logs", &self.id]).map_err(|e| format!("не прочитать журнал: {e}"))?;
+        // stdout и stderr складываем вместе: sshd пишет в stderr, но делить незачем.
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok(text)
+    }
+
+    /// Дождаться появления строки в журнале sshd.
+    ///
+    /// Журнал пишется асинхронно: проверять его сразу после действия — гонка.
+    /// По истечении срока возвращается ошибка с самим журналом — чтобы падение
+    /// сразу показывало, что сервер записал на самом деле.
+    pub fn wait_in_sshd_log(&self, needle: &str, limit: Duration) -> Result<String, String> {
+        let deadline = Instant::now() + limit;
+        loop {
+            let log = self.sshd_log()?;
+            if log.contains(needle) {
+                return Ok(log);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "строка «{needle}» не появилась в журнале sshd за отведённое время. Журнал:\n{log}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 }
 

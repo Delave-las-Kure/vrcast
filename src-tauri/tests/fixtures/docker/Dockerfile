@@ -11,10 +11,13 @@
 
 FROM ubuntu:24.04
 
+# iproute2 даёт ss: тест мультиплексирования каналов сверяет число соединений
+# средствами самого сервера. Без ss эта сверка молча вырождалась в «поверим на слово».
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       openssh-server \
       ca-certificates \
+      iproute2 \
  && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /run/sshd /root/.ssh \
