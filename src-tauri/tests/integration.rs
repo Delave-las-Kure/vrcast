@@ -23,6 +23,9 @@ mod test_key;
 #[path = "support/proc_check.rs"]
 mod proc_check;
 
+#[path = "integration/audio_sync.rs"]
+mod audio_sync;
+
 #[path = "integration/convert_kill.rs"]
 mod convert_kill;
 
