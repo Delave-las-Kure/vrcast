@@ -37,6 +37,9 @@ pub type Result<T> = std::result::Result<T, ProcessError>;
 ///
 /// Пока эта структура жива, дерево процессов удерживается; `kill_tree` завершает его целиком.
 pub struct ManagedProcess {
+    /// Заморожена ли программа. Хранится, чтобы повторная заморозка не сбивала
+    /// счётчик (см. `suspend`).
+    suspended: bool,
     child: Child,
     program: String,
     #[cfg(windows)]
@@ -149,6 +152,7 @@ impl ManagedProcess {
             program: program.to_owned(),
             #[cfg(windows)]
             job,
+            suspended: false,
         })
     }
 
@@ -207,13 +211,33 @@ impl ManagedProcess {
     }
 
     /// Приостановить выполнение, не теряя проделанной работы (FR-083a).
-    pub fn suspend(&self) -> Result<()> {
-        self.signal_stop(true)
+    ///
+    /// Повторный вызов ничего не делает, и это не удобство, а необходимость:
+    /// на Windows заморозка потока считается счётчиком, и две подряд требуют двух
+    /// продолжений. Задача, которую приостановили дважды, не оживала бы после
+    /// одного «продолжить» — и выглядело бы это как повисшая намертво (T070).
+    pub fn suspend(&mut self) -> Result<()> {
+        if self.suspended {
+            return Ok(());
+        }
+        self.signal_stop(true)?;
+        self.suspended = true;
+        Ok(())
     }
 
-    /// Продолжить приостановленное выполнение.
-    pub fn resume(&self) -> Result<()> {
-        self.signal_stop(false)
+    /// Продолжить приостановленное выполнение. Повтор так же безобиден.
+    pub fn resume(&mut self) -> Result<()> {
+        if !self.suspended {
+            return Ok(());
+        }
+        self.signal_stop(false)?;
+        self.suspended = false;
+        Ok(())
+    }
+
+    /// Заморожена ли программа прямо сейчас.
+    pub fn is_suspended(&self) -> bool {
+        self.suspended
     }
 
     #[cfg(unix)]
@@ -567,7 +591,36 @@ mod windows_job {
     ///
     /// В Windows нет средства приостановить процесс целиком одним вызовом — только
     /// поток за потоком.
+    /// Заморозить или отпустить все потоки процесса.
+    ///
+    /// Снимок потоков берётся НЕСКОЛЬКО РАЗ, пока не перестанут находиться новые.
+    /// Один снимок оставлял щель: поток, созданный между снятием списка и заморозкой,
+    /// продолжал работать, и «приостановленная» программа продолжала писать в файл
+    /// (задолженность T070). Для продолжения повтор не нужен — отпускать нечего,
+    /// кроме уже замороженного.
     pub fn suspend_process(pid: u32, stop: bool) -> Result<(), String> {
+        let mut known: Vec<u32> = Vec::new();
+        let mut rounds = 0;
+
+        loop {
+            let touched = touch_threads(pid, stop, &mut known)?;
+            rounds += 1;
+            // Ни одного нового потока — щель закрыта. Три круга как предел на случай
+            // программы, плодящей потоки без остановки: лучше выйти, чем встать здесь
+            // навсегда.
+            if !stop || touched == 0 || rounds >= 3 {
+                break;
+            }
+        }
+
+        if known.is_empty() {
+            return Err(String::from("у процесса не найдено ни одного потока"));
+        }
+        Ok(())
+    }
+
+    /// Один проход по потокам процесса. Возвращает, сколько НОВЫХ нашлось.
+    fn touch_threads(pid: u32, stop: bool, known: &mut Vec<u32>) -> Result<usize, String> {
         const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
         unsafe {
             let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -580,10 +633,10 @@ mod windows_job {
                 ..Default::default()
             };
 
-            let mut touched = 0;
+            let mut fresh = 0;
             let mut ok = Thread32First(snapshot, &mut entry);
             while ok != 0 {
-                if entry.owner_process_id == pid {
+                if entry.owner_process_id == pid && !known.contains(&entry.thread_id) {
                     let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.thread_id);
                     if !thread.is_null() {
                         if stop {
@@ -592,18 +645,15 @@ mod windows_job {
                             ResumeThread(thread);
                         }
                         CloseHandle(thread);
-                        touched += 1;
+                        known.push(entry.thread_id);
+                        fresh += 1;
                     }
                 }
                 entry.size = std::mem::size_of::<ThreadEntry32>() as u32;
                 ok = Thread32Next(snapshot, &mut entry);
             }
             CloseHandle(snapshot);
-
-            if touched == 0 {
-                return Err(String::from("у процесса не найдено ни одного потока"));
-            }
+            Ok(fresh)
         }
-        Ok(())
     }
 }

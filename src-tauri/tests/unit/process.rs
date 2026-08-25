@@ -110,11 +110,18 @@ async fn приостановка_и_продолжение_работают() {
     // FR-083a. На Unix проверяется по состоянию процесса; на Windows состояние потоков
     // так просто не прочитать, поэтому там это покрывается ручной проверкой.
     let (prog, args) = long_running();
-    let p = ManagedProcess::spawn(prog, &args).unwrap();
+    // Изменяемая: заморозка запоминается в самом процессе, чтобы повторная
+    // не сбивала счётчик приостановок (T070).
+    let mut p = ManagedProcess::spawn(prog, &args).unwrap();
     let pid = p.id().unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     p.suspend().expect("приостановка не удалась");
+    // Повтор обязан быть безобидным: иначе одного «продолжить» не хватит,
+    // и задача останется висеть намертво.
+    p.suspend()
+        .expect("повторная приостановка считается ошибкой");
+    assert!(p.is_suspended());
     tokio::time::sleep(Duration::from_millis(300)).await;
     let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
     assert!(
@@ -130,6 +137,5 @@ async fn приостановка_и_продолжение_работают() {
         "процесс не продолжил работу, состояние: {state}"
     );
 
-    let mut p = p;
     p.kill_tree().await.unwrap();
 }

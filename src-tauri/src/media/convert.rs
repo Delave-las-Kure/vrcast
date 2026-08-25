@@ -39,6 +39,12 @@ pub enum ConvertError {
 
 pub type Result<T> = std::result::Result<T, ConvertError>;
 
+/// How often to look at the pause flag while the encoder is quiet.
+///
+/// A fifth of a second: fast enough that "pause" feels immediate, rare enough to
+/// cost nothing over an encode that runs for hours.
+const PAUSE_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// Everything needed to build the command line.
 pub struct ConvertJob<'a> {
     pub source: &'a SourceFile,
@@ -300,18 +306,40 @@ pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<()> {
         use tokio::io::AsyncBufReadExt;
         let mut lines = tokio::io::BufReader::new(out).lines();
 
-        while let Ok(Some(line)) = lines.next_line().await {
+        loop {
+            // Reading a line cannot be the only thing waited on. A frozen encoder
+            // prints nothing, so a plain `await` on the next line would never come
+            // back — and pausing would hang the task instead of pausing it. The
+            // tick is what makes "resume" reachable while nothing is being printed.
+            let line = tokio::select! {
+                got = lines.next_line() => match got {
+                    Ok(Some(line)) => Some(line),
+                    _ => break,
+                },
+                _ = tokio::time::sleep(PAUSE_POLL) => None,
+            };
+
             if ctx.is_cancelled() {
                 let _ = child.kill_tree().await;
                 cleanup(job.out_path);
                 return Err(ConvertError::Cancelled);
             }
-            if let Some(done_us) = progress_position(&line) {
+
+            // Pausing has to actually stop the work (FR-083a). Without this the
+            // task would leave its place in the queue while the encoder carried on
+            // burning the machine — a pause that pauses nothing.
+            apply_pause(&mut child, ctx);
+
+            if let Some(done_us) = line.as_deref().and_then(progress_position) {
                 let fraction = (done_us as f64 / duration_us).clamp(0.0, 1.0);
                 ctx.report(fraction, "converting");
                 ctx.save_progress(fraction);
             }
         }
+
+        // Never leave the encoder frozen: a suspended process is never reaped, and
+        // waiting for it below would hang forever.
+        let _ = child.resume();
     }
 
     let status = child
@@ -331,6 +359,27 @@ pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Freeze or release the encoder to match the task's pause state.
+///
+/// Freezing rather than stopping: an encoder killed mid-file loses everything it
+/// has done, and "pause" would mean "start again from the beginning".
+fn apply_pause(child: &mut ManagedProcess, ctx: &TaskContext) {
+    let should = ctx.is_paused();
+    if should == child.is_suspended() {
+        return;
+    }
+    let outcome = if should {
+        child.suspend()
+    } else {
+        child.resume()
+    };
+    if let Err(e) = outcome {
+        // Not fatal: a pause that did not take is worth complaining about, but not
+        // worth throwing away hours of encoding for.
+        tracing::warn!(error = %e, paused = should, "не удалось изменить состояние кодировщика");
+    }
 }
 
 /// Position within the file, in microseconds, from a `-progress` line.

@@ -190,3 +190,139 @@ fn killing_the_application_leaves_no_encoder_behind() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Size of the output file, or zero while it does not exist yet.
+fn size_of(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Wait until the file has grown past `from`, or give up.
+///
+/// Sleeps the runtime's way, never the thread's. A `#[tokio::test]` runs on a
+/// single-threaded runtime: blocking the thread starves the very task being
+/// watched, and it sits in the queue for the whole timeout without ever starting.
+/// Caught exactly that way — the first version of this check blamed the encoder
+/// for never writing when nothing had been allowed to run.
+async fn grew_past(path: &std::path::Path, from: u64, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    while Instant::now() < deadline {
+        if size_of(path) > from {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+/// Pausing a conversion must actually stop it (FR-083a, debt T067/T070).
+///
+/// The check is the file, not the state in the database. A pause that only changed
+/// a label would look identical from the outside while the encoder carried on
+/// burning the machine and the task gave up its place in the queue — which is
+/// exactly the defect this closes.
+#[tokio::test]
+async fn pausing_a_conversion_actually_stops_the_encoder() {
+    use std::sync::Arc;
+    use vrcast_studio_lib::commands::convert::{api as convert, ConvertStart};
+    use vrcast_studio_lib::commands::AppState;
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::store::secrets::InMemorySecretStore;
+
+    let Ok(ff) = vrcast_studio_lib::media::ffmpeg::locate("ffmpeg") else {
+        eprintln!(
+            "SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this check to check anything."
+        );
+        return;
+    };
+
+    let dir = std::env::temp_dir().join(format!("vrcast-pause-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).expect("could not make a working directory");
+    let source = dir.join("source.mp4");
+    let out = dir.join("ready.mp4");
+
+    // Long enough to still be encoding when we pause it.
+    let made = std::process::Command::new(&ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=30",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            "90",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "ac3",
+            "-ac",
+            "6",
+        ])
+        .arg(&source)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(made.status.success(), "could not prepare a source clip");
+
+    let state = AppState::with_db(
+        Arc::new(Db::open_in_memory().unwrap()),
+        Arc::new(InMemorySecretStore::new()),
+    )
+    .expect("could not assemble the application state");
+
+    let task = convert::convert_start(
+        &state,
+        ConvertStart {
+            path: source.to_string_lossy().into_owned(),
+            audio_track: 0,
+            target_kbps: Some(6_000),
+            height: None,
+            out_path: out.to_string_lossy().into_owned(),
+            prefer_hardware: false,
+        },
+    )
+    .await
+    .expect("the conversion did not start");
+
+    if !grew_past(&out, 0, Duration::from_secs(60)).await {
+        let record = state.tasks.get(&task).ok().flatten();
+        panic!("nothing was ever written — there was nothing to pause. task: {record:?}");
+    }
+
+    state.tasks.pause(&task).expect("the task would not pause");
+
+    // Let the pause reach the encoder, then take a reading and see if it moves.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let frozen_at = size_of(&out);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let still = size_of(&out);
+
+    assert_eq!(
+        frozen_at, still,
+        "the file grew from {frozen_at} to {still} while the task was paused — \
+         the pause freed the task's place in the queue without stopping any work"
+    );
+
+    // And it must come back to life, or "pause" would mean "abandon".
+    state
+        .tasks
+        .resume(&task)
+        .expect("the task would not resume");
+    assert!(
+        grew_past(&out, still, Duration::from_secs(30)).await,
+        "the encoder never came back after resume"
+    );
+
+    let _ = state.tasks.cancel(&task);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
