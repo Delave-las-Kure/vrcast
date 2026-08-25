@@ -17,19 +17,29 @@
 //!
 //! **Сверка перед убийством обязательна.** Номера процессов переиспользуются, и за старым
 //! номером к моменту следующего запуска может стоять совершенно посторонняя программа —
-//! браузер пользователя, например. Поэтому перед завершением сверяется имя выполняемого
-//! файла, и при несовпадении запись просто забывается.
+//! браузер пользователя, например. Поэтому перед завершением проверяется, тот ли это
+//! процесс, и при несовпадении запись просто забывается.
+//!
+//! Сверяется **время запуска**, а не имя. Имя лжёт, и это выяснила непрерывная интеграция
+//! под Linux 2026-08-25: `sh -c "sleep 300"` заменяет себя на `sleep`, записанное имя
+//! перестаёт совпадать, и уцелевшая программа переживала уборку. Вдобавок система
+//! показывает не больше пятнадцати знаков имени, так что программа с длинным именем
+//! не совпала бы сама с собой. Имя осталось запасным путём — на случай, когда время
+//! узнать не удалось.
 
 use super::process::{kill_pid, process_name};
 use crate::store::db::{now_rfc3339, Db, DbError};
 
 /// Записать запущенную программу, чтобы её можно было добить после аварии.
 pub fn record(db: &Db, pid: u32, program: &str, task_id: Option<&str>) -> Result<(), DbError> {
+    // Опознавательный признак снимаем прямо сейчас, пока процесс заведомо жив
+    // и это точно он. Позже за этим номером может оказаться кто угодно.
+    let identity = crate::tasks::process::process_identity(pid);
     db.with_conn(|c| {
         c.execute(
-            "INSERT OR REPLACE INTO running_processes (pid, program, task_id, started_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![pid, program, task_id, now_rfc3339()],
+            "INSERT OR REPLACE INTO running_processes (pid, program, task_id, started_at, identity)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![pid, program, task_id, now_rfc3339(), identity],
         )?;
         Ok(())
     })
@@ -65,9 +75,15 @@ impl SweepReport {
 /// Вызывается один раз при старте, до того как появятся новые задачи. После уборки таблица
 /// очищается целиком: всё, что в ней было, относилось к прошлому запуску.
 pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
-    let records: Vec<(u32, String)> = db.with_conn(|c| {
-        let mut stmt = c.prepare("SELECT pid, program FROM running_processes")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, String>(1)?)))?;
+    let records: Vec<(u32, String, Option<String>)> = db.with_conn(|c| {
+        let mut stmt = c.prepare("SELECT pid, program, identity FROM running_processes")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, u32>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -77,11 +93,11 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
 
     let mut report = SweepReport::default();
 
-    for (pid, program) in records {
+    for (pid, program, recorded_identity) in records {
         match process_name(pid) {
             None => report.already_gone.push(pid),
             Some(actual) => {
-                if names_match(&actual, &program) {
+                if same_process(pid, &program, &actual, recorded_identity.as_deref()) {
                     if kill_pid(pid) {
                         tracing::warn!(
                             pid,
@@ -116,11 +132,39 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
     Ok(report)
 }
 
+/// Тот ли это процесс, который мы записали, — или за его номером уже кто-то другой.
+///
+/// Сверяется в первую очередь **время запуска**: оно не меняется при подмене образа
+/// и не обрезается. Имя — запасной путь на случай, когда время узнать не удалось
+/// (старая запись без него, не-Linux Unix, отказ в доступе).
+///
+/// Почему имени недостаточно, выяснила непрерывная интеграция под Linux 2026-08-25:
+/// `sh -c "sleep 300"` заменяет себя на `sleep`, записанное имя перестаёт совпадать,
+/// и уцелевшая программа переживала уборку. Вдобавок `/proc/<pid>/comm` обрезан
+/// пятнадцатью знаками — программа с длинным именем не совпала бы сама с собой.
+fn same_process(
+    pid: u32,
+    recorded_name: &str,
+    actual_name: &str,
+    recorded_identity: Option<&str>,
+) -> bool {
+    if let Some(recorded) = recorded_identity {
+        if let Some(actual) = crate::tasks::process::process_identity(pid) {
+            return actual == recorded;
+        }
+    }
+    names_match(actual_name, recorded_name)
+}
+
 /// Совпадают ли имена программ.
 ///
 /// Сравниваем без учёта расширения и регистра: в записи может стоять `ffmpeg`, а система
-/// покажет `ffmpeg.exe`.
+/// покажет `ffmpeg.exe`. Учитываем и обрезание: система показывает не больше
+/// пятнадцати знаков имени, и длинное имя иначе не совпало бы само с собой.
 fn names_match(actual: &str, recorded: &str) -> bool {
+    /// Сколько знаков имени показывает система. Больше не покажет никогда.
+    const SHOWN_CHARS: usize = 15;
+
     let norm = |s: &str| {
         let base = std::path::Path::new(s)
             .file_stem()
@@ -128,7 +172,13 @@ fn names_match(actual: &str, recorded: &str) -> bool {
             .unwrap_or_else(|| s.to_owned());
         base.to_lowercase()
     };
-    norm(actual) == norm(recorded)
+
+    let (a, r) = (norm(actual), norm(recorded));
+    if a == r {
+        return true;
+    }
+    // Показанное имя упёрлось в предел — сравниваем столько, сколько видно.
+    a.chars().count() == SHOWN_CHARS && r.chars().take(SHOWN_CHARS).collect::<String>() == a
 }
 
 #[cfg(test)]

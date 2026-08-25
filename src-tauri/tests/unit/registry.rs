@@ -14,28 +14,7 @@ use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::tasks::process::ManagedProcess;
 use vrcast_studio_lib::tasks::registry;
 
-fn long_running() -> (&'static str, Vec<String>) {
-    if cfg!(windows) {
-        (
-            "cmd",
-            vec!["/c".into(), "ping -n 300 127.0.0.1 >nul".into()],
-        )
-    } else {
-        ("sh", vec!["-c".into(), "sleep 300".into()])
-    }
-}
-
-fn alive(pid: u32) -> bool {
-    if cfg!(windows) {
-        std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
-            .unwrap_or(false)
-    } else {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
-    }
-}
+use super::proc_check::{alive, long_running};
 
 #[tokio::test]
 async fn уцелевшая_программа_добивается_при_запуске() {
@@ -78,6 +57,12 @@ async fn уцелевшая_программа_добивается_при_за�
 async fn посторонняя_программа_по_чужому_номеру_не_трогается() {
     // Главная проверка. Номера процессов переиспользуются: к следующему запуску за старым
     // номером вполне может стоять браузер пользователя. Убивать его недопустимо.
+    //
+    // Переиспользование имитируется так, как оно и происходит: в записи стоит
+    // опознавательный признак ДРУГОГО, уже умершего процесса, а номер занят живым.
+    // Прежняя имитация — подмена имени при живом процессе — с переходом на сверку
+    // по времени запуска перестала быть правдой: время честно говорит «это тот же
+    // процесс», и уборка была бы права, убив его.
     let db = Db::open_in_memory().unwrap();
 
     let (prog, args) = long_running();
@@ -86,8 +71,16 @@ async fn посторонняя_программа_по_чужому_номер�
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(alive(pid));
 
-    // Запись утверждает, что под этим номером был ffmpeg, — а там на самом деле другое.
-    registry::record(&db, pid, "ffmpeg", None).unwrap();
+    registry::record(&db, pid, prog, None).unwrap();
+    // Подменяем признак: теперь запись описывает процесс, которого больше нет.
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE running_processes SET identity = ?1 WHERE pid = ?2",
+            rusqlite::params!["заведомо-другой-процесс", pid],
+        )?;
+        Ok(())
+    })
+    .unwrap();
 
     let report = registry::sweep_on_startup(&db).unwrap();
     tokio::time::sleep(Duration::from_millis(400)).await;
@@ -98,9 +91,44 @@ async fn посторонняя_программа_по_чужому_номер�
     );
     assert!(
         report.reused.contains(&pid),
-        "несовпадение имени не замечено: {report:?}"
+        "переиспользование номера не замечено: {report:?}"
     );
-    assert!(alive(pid), "процесс {pid} убит, хотя имя не совпало");
+    assert!(alive(pid), "процесс {pid} убит, хотя за номером уже другой");
+
+    p.kill_tree().await.unwrap();
+}
+
+#[tokio::test]
+async fn старая_запись_без_признака_сверяется_по_имени() {
+    // Записи, сделанные до появления опознавательного признака, встретятся при первом
+    // запуске после обновления приложения. Для них остаётся сверка по имени — она хуже,
+    // но лучше, чем убить не глядя.
+    let db = Db::open_in_memory().unwrap();
+
+    let (prog, args) = long_running();
+    let mut p = ManagedProcess::spawn(prog, &args).unwrap();
+    let pid = p.id().unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    registry::record(&db, pid, "ffmpeg", None).unwrap();
+    // Признака нет — как в записи, сделанной прошлой версией приложения.
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE running_processes SET identity = NULL WHERE pid = ?1",
+            [pid],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    let report = registry::sweep_on_startup(&db).unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    assert!(
+        report.killed.is_empty(),
+        "убита программа, чьё имя не совпало с записанным: {report:?}"
+    );
+    assert!(alive(pid), "процесс {pid} убит при несовпадении имени");
 
     p.kill_tree().await.unwrap();
 }

@@ -29,4 +29,4 @@ RUN rustup component add rustfmt clippy
 # Каталог сборки — внутри образа, а не в примонтированном исходнике: иначе
 # сборки под Linux и под Windows затирали бы артефакты друг друга.
 ENV CARGO_TARGET_DIR=/build/target
-WORKDIR /src
+WORKDIR /app/src-tauri

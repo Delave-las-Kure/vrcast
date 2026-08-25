@@ -292,6 +292,44 @@ pub(crate) fn process_name(pid: u32) -> Option<String> {
     }
 }
 
+/// Опознавательный признак процесса — время его запуска.
+///
+/// Нужен уборке при запуске: перед тем как добить уцелевшую программу, надо
+/// убедиться, что за её номером не оказалась посторонняя. Номера переиспользуются,
+/// и убить чужое дороже, чем не добить своё.
+///
+/// **Почему не имя.** Имя лжёт, и это выяснилось на живом примере: `sh -c "sleep"`
+/// заменяет себя на `sleep`, и записанное имя перестаёт совпадать. Вдобавок
+/// `/proc/<pid>/comm` обрезан пятнадцатью знаками, так что программа с длинным
+/// именем не совпадёт сама с собой. Время запуска не меняется при подмене образа,
+/// не обрезается и различает два процесса с одним номером точно.
+///
+/// `None` означает «узнать не удалось» — тогда остаётся сверка по имени, которая
+/// хуже, но лучше, чем ничего.
+pub(crate) fn process_identity(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        // В /proc/<pid>/stat двадцать второе поле — время запуска в тактах от
+        // загрузки системы. Разбор осложняет второе поле: имя программы в скобках,
+        // и в нём бывают и пробелы, и сами скобки. Поэтому отсчитываем от ПОСЛЕДНЕЙ
+        // закрывающей скобки, а не разбиваем строку по пробелам с начала.
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let after_name = &stat[stat.rfind(')')? + 1..];
+        let field = after_name.split_whitespace().nth(19)?;
+        Some(field.to_owned())
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        // На прочих Unix надёжного способа без лишних зависимостей нет.
+        let _ = pid;
+        None
+    }
+    #[cfg(windows)]
+    {
+        windows_job::process_created_at(pid)
+    }
+}
+
 #[cfg(windows)]
 mod windows_job {
     //! Минимальная обвязка над объектом задания Windows.
@@ -364,6 +402,21 @@ mod windows_job {
             buf: *mut u16,
             size: *mut u32,
         ) -> i32;
+        fn GetProcessTimes(
+            process: Handle,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+    }
+
+    /// Время в системном виде: два тридцатидвухбитных слова.
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct FileTime {
+        low: u32,
+        high: u32,
     }
 
     #[repr(C)]
@@ -462,6 +515,31 @@ mod windows_job {
     }
 
     /// Имя выполняемого файла живого процесса — для сверки перед убийством.
+    /// Время запуска процесса — точный опознавательный признак.
+    ///
+    /// Номера процессов переиспользуются, а время запуска у нового процесса
+    /// с тем же номером будет другим. Этого достаточно, чтобы не убить чужое.
+    pub fn process_created_at(pid: u32) -> Option<String> {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut creation = FileTime::default();
+            let mut ignored = FileTime::default();
+            let ok = GetProcessTimes(h, &mut creation, &mut ignored, &mut ignored, &mut ignored);
+            CloseHandle(h);
+            if ok == 0 {
+                return None;
+            }
+            Some(format!(
+                "{}",
+                (u64::from(creation.high) << 32) | u64::from(creation.low)
+            ))
+        }
+    }
+
     pub fn process_name(pid: u32) -> Option<String> {
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
         unsafe {

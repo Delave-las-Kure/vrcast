@@ -12,64 +12,7 @@ use std::time::Duration;
 use vrcast_studio_lib::tasks::process::ManagedProcess;
 
 /// Долгая команда, доступная на обеих целевых ОС.
-fn long_running() -> (&'static str, Vec<String>) {
-    if cfg!(windows) {
-        // ping с большим числом попыток — самый переносимый «спящий» процесс в Windows.
-        (
-            "cmd",
-            vec!["/c".into(), "ping -n 300 127.0.0.1 >nul".into()],
-        )
-    } else {
-        ("sh", vec!["-c".into(), "sleep 300".into()])
-    }
-}
-
-fn alive(pid: u32) -> bool {
-    if cfg!(windows) {
-        let out = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output();
-        match out {
-            Ok(o) => {
-                let text = String::from_utf8_lossy(&o.stdout);
-                text.contains(&pid.to_string())
-            }
-            Err(_) => false,
-        }
-    } else {
-        std::path::Path::new(&format!("/proc/{pid}")).exists()
-    }
-}
-
-/// Идентификаторы прямых потомков указанного процесса.
-///
-/// Считать процессы по имени нельзя: тесты идут параллельно, и чужие потомки попадают
-/// в счёт. Проверять надо родство, а не совпадение имени.
-fn children_of(pid: u32) -> Vec<u32> {
-    let out = if cfg!(windows) {
-        std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "(Get-CimInstance Win32_Process -Filter 'ParentProcessId={pid}').ProcessId"
-                ),
-            ])
-            .output()
-    } else {
-        std::process::Command::new("pgrep")
-            .args(["-P", &pid.to_string()])
-            .output()
-    };
-
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .lines()
-            .filter_map(|l| l.trim().parse::<u32>().ok())
-            .collect(),
-        Err(_) => Vec::new(),
-    }
-}
+use super::proc_check::{alive, children_of, long_running};
 
 #[tokio::test]
 async fn отмена_завершает_запущенный_процесс() {

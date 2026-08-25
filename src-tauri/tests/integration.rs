@@ -37,5 +37,8 @@ mod manifest_conflict;
 #[path = "integration/process_tree.rs"]
 mod process_tree;
 
+#[path = "integration/upload_live.rs"]
+mod upload_live;
+
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;

@@ -13,6 +13,7 @@ pub mod error;
 pub mod events;
 pub mod library;
 pub mod servers;
+pub mod upload;
 
 use crate::store::db::Db;
 use crate::store::secrets::{OsSecretStore, SecretStore};

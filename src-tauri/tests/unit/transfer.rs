@@ -262,12 +262,25 @@ fn каталог_раздачи_в_корне_не_даёт_места_под_�
 }
 
 #[test]
-fn две_заливки_одного_имени_пишут_в_разные_файлы() {
+fn имя_временного_файла_зависит_только_от_конечного_имени() {
+    // На этом держится вся схема возобновления: позиция — это размер временного
+    // файла, и найти его нужно уметь до создания задачи (проверки перед стартом)
+    // и после перезапуска приложения. Привязка к номеру задачи это сломала бы.
     let dir = "/var/lib/vrcast/.vrcast-uploads";
-    let a = remote_name::staging_file(dir, "task-a", "film.mp4");
-    let b = remote_name::staging_file(dir, "task-b", "film.mp4");
-    assert_ne!(a, b, "две задачи пишут в один временный файл");
+    let a = remote_name::staging_file(dir, "film.mp4");
+    let b = remote_name::staging_file(dir, "film.mp4");
+    assert_eq!(a, b, "одно и то же имя дало разные временные файлы");
     assert!(a.ends_with(".part"));
+
+    // Разные конечные имена — разные временные файлы.
+    assert_ne!(a, remote_name::staging_file(dir, "другое.mp4"));
+
+    // Опасные знаки обезвреживаются и здесь: временный путь тоже уходит в команду.
+    let dangerous = remote_name::staging_file(dir, "../../etc/passwd");
+    assert!(
+        dangerous.starts_with(dir),
+        "временный файл ушёл за пределы каталога сборки: {dangerous}"
+    );
 }
 
 #[test]

@@ -204,9 +204,14 @@ pub async fn transfer_once(
         if !wait.is_zero() {
             // Ждём с оглядкой на отмену: иначе при ограничении в сотню килобайт
             // отмена ждала бы своей очереди десятки секунд.
+            //
+            // Токен именуется отдельной переменной намеренно: временное значение
+            // внутри `select!` живёт до конца выражения и до конца ожидания
+            // не доживает.
+            let cancel = ctx.cancel_token();
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
-                _ = ctx.cancel_token().cancelled() => return Err(UploadError::Cancelled),
+                _ = cancel.cancelled() => return Err(UploadError::Cancelled),
             }
         }
 
@@ -289,5 +294,8 @@ pub async fn cleanup(conn: &Connection, remote_temp: &str) {
 
 /// Полный путь конечного файла в каталоге раздачи.
 pub fn final_path(video_dir: &str, remote_name: &str) -> String {
-    join_remote(video_dir, &crate::domain::remote_name::sanitize(remote_name))
+    join_remote(
+        video_dir,
+        &crate::domain::remote_name::sanitize(remote_name),
+    )
 }

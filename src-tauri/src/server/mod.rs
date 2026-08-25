@@ -5,6 +5,8 @@
 //! `domain::manifest` и проверяются без сервера; порядок чтения и записи описи —
 //! здесь, и проверяется против настоящего OpenSSH.
 
+pub mod active_use;
+pub mod checksum;
 pub mod disk;
 pub mod env_import;
 pub mod free_space;
@@ -12,6 +14,7 @@ pub mod listing;
 pub mod manifest_io;
 pub mod probe_moov;
 pub mod reconcile;
+pub mod upload;
 
 /// Записи каталога раздачи, которые не являются видео и не показываются в библиотеке.
 ///

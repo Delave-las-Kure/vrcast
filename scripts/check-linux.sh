@@ -10,8 +10,13 @@
 # образ и зависимости (несколько минут), дальше всё берётся из кеша.
 #
 # Запуск из каталога приложения:
-#   bash scripts/check-linux.sh            # формат, clippy, сборка тестов
-#   bash scripts/check-linux.sh test       # то же плюс прогон тестов ядра
+#   bash scripts/check-linux.sh            # формат, clippy и ПРОГОН ТЕСТОВ
+#   bash scripts/check-linux.sh style      # только формат и clippy, быстрее
+#
+# Тесты идут по умолчанию намеренно. Первая же попытка обойтись без них пропустила
+# настоящую ошибку: уборка уцелевших программ не срабатывала именно под Linux,
+# и увидела это только непрерывная интеграция. Проверка, которая не гоняет то,
+# что ломается, экономит минуты и стоит часов.
 set -euo pipefail
 
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,7 +24,7 @@ IMAGE="vrcast-linux-check:1"
 # Именованный том под каталог сборки: без него каждый запуск пересобирал бы
 # все зависимости заново, и проверкой никто не пользовался бы.
 VOLUME="vrcast-linux-target"
-MODE="${1:-check}"
+MODE="${1:-test}"
 
 if ! docker info >/dev/null 2>&1; then
   echo "Docker не запущен. Откройте Docker Desktop и повторите." >&2
@@ -30,25 +35,32 @@ fi
 # зато правка состава подхватывается сама.
 docker build -q -t "$IMAGE" "$APP/scripts/linux-check" >/dev/null
 
+STYLE='cargo fmt --check && cargo clippy --all-targets --features integration -- -D warnings'
 case "$MODE" in
-  check) CMD='cargo fmt --check && cargo clippy --all-targets --features integration -- -D warnings' ;;
-  test)  CMD='cargo fmt --check && cargo clippy --all-targets --features integration -- -D warnings && cargo test' ;;
-  *) echo "Использование: $0 [check|test]" >&2; exit 2 ;;
+  test)  CMD="$STYLE && cargo test" ;;
+  style) CMD="$STYLE" ;;
+  *) echo "Использование: $0 [test|style]" >&2; exit 2 ;;
 esac
 
 echo "Проверка под Linux ($MODE)…"
-# Путь для Docker переводится в вид с буквой диска. Git Bash подсовывает свои
-# пути вида /f/…, Docker их не понимает и молча монтирует пустоту — а выглядит это
-# как «в примонтированном каталоге нет Cargo.toml» на каталоге, где он заведомо есть.
-# MSYS_NO_PATHCONV заодно не даёт переписать правую часть `:/src`.
-SRC_MOUNT="$(cygpath -m "$APP/src-tauri" 2>/dev/null || echo "$APP/src-tauri")"
+# Монтируется ПРИЛОЖЕНИЕ ЦЕЛИКОМ, а не только ядро. Договорные тесты читают
+# описание типов интерфейса этажом выше (src/shared/contract.ts) и сверяют его
+# с ядром в обе стороны; при монтировании одного лишь src-tauri они падали на
+# отсутствующем файле — проверка ругалась на код, который в порядке.
+#
+# Путь для Docker переводится в вид с буквой диска: Git Bash подсовывает свои пути
+# вида /f/…, Docker их не понимает и молча монтирует пустоту. Выглядит это как
+# «нет Cargo.toml» в каталоге, где он заведомо есть. MSYS_NO_PATHCONV заодно
+# не даёт переписать правую часть `:/app`.
+APP_MOUNT="$(cygpath -m "$APP" 2>/dev/null || echo "$APP")"
 
 # Оболочка без `-l`: логин-оболочка перечитывает /etc/profile и затирает PATH,
 # в котором лежит cargo. Ошибка выглядит как «cargo: command not found» на образе,
 # где cargo заведомо есть.
 MSYS_NO_PATHCONV=1 docker run --rm \
-  -v "$SRC_MOUNT:/src" \
+  -v "$APP_MOUNT:/app" \
   -v "$VOLUME:/build/target" \
+  -w /app/src-tauri \
   "$IMAGE" \
   bash -c "$CMD"
 
