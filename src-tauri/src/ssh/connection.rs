@@ -149,8 +149,39 @@ impl Connection {
         }
     }
 
-    pub(crate) fn handle(&self) -> &client::Handle<ClientHandler> {
-        &self.handle
+    /// Открыть канал-сессию, переживая мгновенный отказ сервера.
+    ///
+    /// Слот сессии на сервере освобождается не в момент обмена `close`: sshd сперва
+    /// прибирает дочерний процесс, а сигнал о его завершении приходит асинхронно.
+    /// Поэтому даже при соблюдении собственного предела (`MAX_CONCURRENT_CHANNELS`)
+    /// свежий канал может упереться в отжившую, но ещё не прибранную сессию — сервер
+    /// отвечает отказом, хотя место вот-вот освободится. Такой отказ — повод
+    /// подождать и повторить, а не ошибка: наблюдалось вживую 2026-08-25, когда
+    /// двенадцать очередей через семафор на восемь всё равно поймали
+    /// `ChannelOpenFailure(ConnectFailed)`.
+    pub(crate) async fn open_session(&self) -> Result<russh::Channel<client::Msg>> {
+        use russh::ChannelOpenFailure::{ConnectFailed, ResourceShortage};
+
+        let mut delay = std::time::Duration::from_millis(50);
+        let mut attempts_left = 8;
+        loop {
+            match self.handle.channel_open_session().await {
+                Ok(channel) => return Ok(channel),
+                Err(russh::Error::ChannelOpenFailure(
+                    reason @ (ConnectFailed | ResourceShortage),
+                )) if attempts_left > 0 => {
+                    attempts_left -= 1;
+                    tracing::debug!(
+                        ?reason,
+                        осталось_попыток = attempts_left,
+                        "сервер отказал в открытии канала, ждём и повторяем"
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(std::time::Duration::from_secs(1));
+                }
+                Err(e) => return Err(SshError::protocol(e)),
+            }
+        }
     }
 
     /// Занять место под канал, дождавшись очереди при необходимости.

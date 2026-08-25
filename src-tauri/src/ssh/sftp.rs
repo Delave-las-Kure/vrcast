@@ -31,11 +31,7 @@ impl Connection {
     pub async fn sftp(&self) -> Result<Sftp> {
         let permit = self.acquire_channel().await?;
 
-        let channel = self
-            .handle()
-            .channel_open_session()
-            .await
-            .map_err(SshError::protocol)?;
+        let channel = self.open_session().await?;
 
         channel
             .request_subsystem(true, "sftp")

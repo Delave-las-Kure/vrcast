@@ -53,11 +53,7 @@ impl Connection {
         // одновременных каналов в соединении, и превышать его нельзя (см. connection.rs).
         let _permit = self.acquire_channel().await?;
 
-        let mut channel = self
-            .handle()
-            .channel_open_session()
-            .await
-            .map_err(SshError::protocol)?;
+        let mut channel = self.open_session().await?;
 
         channel
             .exec(true, command)
