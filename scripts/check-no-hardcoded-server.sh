@@ -29,12 +29,28 @@ NEEDLES+=("/var/lib/vrcast/videos")   # путь по умолчанию доп�
 SCOPE=(src src-tauri/src src-tauri/tauri.conf.json)
 [ -d src-tauri/capabilities ] && SCOPE+=(src-tauri/capabilities)
 
+# Разрешённое исключение: строка, помеченная «FR-004-ok». Нужно ровно для одного
+# случая — значения по умолчанию, которое подставляется в новый профиль и тут же
+# доступно пользователю для правки. Исключения ПЕРЕСЧИТЫВАЮТСЯ и печатаются: молча
+# растущий список пометок — это тот же захардкоженный сервер, только с разрешением.
+ALLOW_MARK="FR-004-ok"
+
 fail=0
+exempted=0
 for needle in "${NEEDLES[@]}"; do
   hits="$(grep -rInF "$needle" "${SCOPE[@]}" 2>/dev/null || true)"
-  if [ -n "$hits" ]; then
+  [ -z "$hits" ] && continue
+
+  allowed="$(printf '%s\n' "$hits" | grep -F "$ALLOW_MARK" || true)"
+  forbidden="$(printf '%s\n' "$hits" | grep -vF "$ALLOW_MARK" || true)"
+
+  if [ -n "$allowed" ]; then
+    exempted=$((exempted + $(printf '%s\n' "$allowed" | grep -c .)))
+  fi
+
+  if [ -n "$forbidden" ]; then
     echo "НАЙДЕН захардкоженный сервер ($needle):" >&2
-    echo "$hits" >&2
+    echo "$forbidden" >&2
     fail=1
   fi
 done
@@ -42,6 +58,13 @@ done
 if [ "$fail" -ne 0 ]; then
   echo "" >&2
   echo "Нарушен FR-004. Адрес сервера обязан приходить только из профиля пользователя." >&2
+  echo "Если это законное значение по умолчанию — пометьте строку «$ALLOW_MARK»," >&2
+  echo "но помните: каждая пометка попадает в отчёт ниже и должна быть оправдана." >&2
   exit 1
 fi
-echo "Захардкоженных серверов не найдено."
+
+if [ "$exempted" -gt 0 ]; then
+  echo "Захардкоженных серверов не найдено (помеченных исключений: $exempted)."
+else
+  echo "Захардкоженных серверов не найдено."
+fi

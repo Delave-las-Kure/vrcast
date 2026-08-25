@@ -6,6 +6,12 @@
 #[path = "unit/db.rs"]
 mod db;
 
+#[path = "unit/domain_us1.rs"]
+mod domain_us1;
+
+#[path = "unit/moov.rs"]
+mod moov;
+
 #[path = "unit/engine.rs"]
 mod engine;
 
