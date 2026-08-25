@@ -26,3 +26,6 @@ mod servers;
 
 #[path = "contract/upload.rs"]
 mod upload;
+
+#[path = "contract/convert.rs"]
+mod convert;
