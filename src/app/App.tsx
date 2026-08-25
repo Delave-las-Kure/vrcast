@@ -1,7 +1,7 @@
 /**
  * T027 — оболочка приложения: разделы, оформление, подписка на поток событий.
  *
- * Работают разделы задач, серверов и библиотеки. Остальные честно говорят, в какой
+ * Работают разделы задач, серверов, библиотеки и заливки. Остальные честно говорят, в какой
  * фазе появятся и чем пользоваться до тех пор, — пустой экран без объяснения
  * выглядит поломкой.
  */
@@ -12,6 +12,7 @@ import { LibraryScreen } from "../features/library/LibraryScreen";
 import { ServerList } from "../features/servers/ServerList";
 import { ComingSoon } from "../features/shared/ComingSoon";
 import { TasksPanel } from "../features/tasks/TasksPanel";
+import { UploadScreen } from "../features/upload/UploadScreen";
 import { ipc } from "../shared/ipc";
 import { Sidebar } from "./Sidebar";
 import { ThemeProvider } from "./theme";
@@ -47,17 +48,7 @@ function AppShell() {
               />
             }
           />
-          <Route
-            path="/upload"
-            element={
-              <ComingSoon
-                title="Заливка"
-                phase="Фаза 2"
-                what="Передача с продолжением после обрыва, сверка контрольных сумм и ввод файла в раздачу одним неделимым действием."
-                fallback="скилл vrcast-upload"
-              />
-            }
-          />
+          <Route path="/upload" element={<UploadScreen />} />
           <Route
             path="/ladder"
             element={

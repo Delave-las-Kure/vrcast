@@ -39,6 +39,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Выбор файла — системным окном. Своё не годится: в веб-окне у выбранного
+        // файла нет пути на диске, а заливке нужен именно путь.
+        .plugin(tauri_plugin_dialog::init())
+        // Уведомление о конце длительной задачи, когда окна не видно (FR-084).
+        .plugin(tauri_plugin_notification::init())
         .manage(state)
         .setup(move |app| {
             commands::events::bridge_task_events(app.handle().clone(), &engine);
@@ -88,6 +93,8 @@ pub fn run() {
             commands::library::ipc::file_move,
             commands::library::ipc::file_delete,
             commands::library::ipc::links_for,
+            commands::upload::ipc::upload_start,
+            commands::upload::ipc::upload_resume,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

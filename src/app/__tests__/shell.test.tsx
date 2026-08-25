@@ -8,10 +8,12 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppError, Task } from "../../shared/contract";
+import type { AppError, Task, TaskOnClose } from "../../shared/contract";
 
 // Подмена обязана быть объявлена до импорта проверяемого кода.
 const mockTasksList = vi.fn<() => Promise<Task[]>>();
+const mockTasksOnClose = vi.fn<() => Promise<TaskOnClose[]>>();
+const mockTasksReorder = vi.fn<(ids: string[]) => Promise<number>>();
 const mockAppVersions = vi.fn();
 
 vi.mock("../../shared/ipc", async () => {
@@ -25,9 +27,11 @@ vi.mock("../../shared/ipc", async () => {
       taskCancel: vi.fn(),
       taskPause: vi.fn(),
       taskResume: vi.fn(),
-      tasksReorder: vi.fn(),
-      tasksQueueOrder: vi.fn(),
-      tasksOnClose: vi.fn(),
+      tasksReorder: mockTasksReorder,
+      tasksQueueOrder: vi.fn(async () => []),
+      // Возвращает список, а не ничего: настоящая команда всегда отдаёт перечень,
+      // и подмена, отдающая undefined, проверяла бы поведение, которого не бывает.
+      tasksOnClose: () => mockTasksOnClose(),
       serverProbeFingerprint: vi.fn(),
     },
     onTaskProgress: vi.fn(async () => () => {}),
@@ -63,6 +67,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAppVersions.mockResolvedValue({ app: "0.1.0", server: null, schema: 2 });
   mockTasksList.mockResolvedValue([]);
+  mockTasksOnClose.mockResolvedValue([]);
+  mockTasksReorder.mockResolvedValue(0);
   document.documentElement.dataset.theme = "";
   localStorage.clear();
   // HashRouter хранит адрес в самом окне, и он переживает размонтирование:
@@ -115,11 +121,11 @@ describe("оболочка", () => {
 describe("незаконченные разделы", () => {
   it("называют фазу и чем пользоваться до неё", async () => {
     // Пустой экран без объяснения выглядит поломкой, а «скоро будет» ничего не сообщает.
-    window.location.hash = "#/upload";
+    window.location.hash = "#/convert";
     render(<App />);
 
-    expect(await screen.findByText("Фаза 2")).toBeInTheDocument();
-    expect(await screen.findByText(/vrcast-upload/)).toBeInTheDocument();
+    expect(await screen.findByText("Фаза 3")).toBeInTheDocument();
+    expect(await screen.findByText(/vrcast-convert/)).toBeInTheDocument();
   });
 });
 

@@ -26,6 +26,7 @@ import {
   type TaskOnClose,
   type TaskProgressEvent,
   type TestStep,
+  type UploadRequest,
   type Versions,
 } from "./contract";
 
@@ -103,6 +104,17 @@ export const ipc = {
     call<void>("file_delete", { serverId, path, confirmed }),
   linksFor: (serverId: string, path: string) =>
     call<Links>("links_for", { serverId, path }),
+
+  // --- заливка ---
+  /**
+   * Начать заливку. Возвращает номер задачи немедленно (FR-080).
+   *
+   * Все проверки идут до старта: если есть о чём предупредить, команда откажется
+   * и назовёт последствия. Повторить с `confirmed: true` — согласиться с ними.
+   * Нехватка места этим не снимается: места от согласия не появится.
+   */
+  uploadStart: (request: UploadRequest) => call<string>("upload_start", { request }),
+  uploadResume: (taskId: string) => call<void>("upload_resume", { taskId }),
 };
 
 // ---------- события ----------

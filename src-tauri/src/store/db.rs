@@ -160,3 +160,13 @@ pub fn now_rfc3339() -> String {
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"))
 }
+
+/// Разобрать отметку времени обратно в секунды от начала эпохи.
+///
+/// Нужно там, где считают промежутки: сколько задача шла, давно ли обновляли опись.
+/// Возвращает ошибку, а не нуль: нуль здесь означал бы 1970 год и давал бы промежутки
+/// в полвека там, где на деле отметку просто не удалось разобрать.
+pub fn parse_rfc3339(s: &str) -> std::result::Result<u64, time::error::Parse> {
+    let t = time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)?;
+    Ok(t.unix_timestamp().max(0) as u64)
+}

@@ -45,3 +45,6 @@ mod transfer;
 
 #[path = "unit/ssh.rs"]
 mod ssh;
+
+#[path = "unit/notify.rs"]
+mod notify;

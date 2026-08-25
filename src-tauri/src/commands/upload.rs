@@ -524,6 +524,25 @@ pub mod api {
     }
 }
 
+/// Тонкие обёртки, которые оболочка выставляет интерфейсу.
+pub mod ipc {
+    use super::*;
+    use tauri::State;
+
+    #[tauri::command]
+    pub async fn upload_start(
+        state: State<'_, AppState>,
+        request: UploadRequest,
+    ) -> Result<String> {
+        api::upload_start(&state, request).await
+    }
+
+    #[tauri::command]
+    pub fn upload_resume(state: State<'_, AppState>, task_id: String) -> Result<()> {
+        api::upload_resume(&state, &task_id)
+    }
+}
+
 /// Отказ по нехватке места на сервере.
 ///
 /// Подтверждением не снимается: место от согласия не появится. Отдельно от

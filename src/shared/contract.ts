@@ -294,3 +294,20 @@ export interface LibraryChangedEvent {
   event: "library_changed";
   server_id: string;
 }
+
+// ---------- заливка ----------
+
+/** Заявка на заливку (FR-030…FR-039). */
+export interface UploadRequest {
+  server_id: string;
+  /** Путь к готовому файлу на этом компьютере. */
+  local_path: string;
+  /** Под каким именем файл станет виден зрителям. */
+  remote_name: string;
+  /** К какому медиа отнести. `null` — файл попадёт в «не распознано». */
+  media_id: string | null;
+  /** Предел скорости в **байтах** в секунду. `null` — не ограничивать. */
+  limit_bps: number | null;
+  /** Согласие на последствия, названные в предыдущем отказе. */
+  confirmed: boolean;
+}
