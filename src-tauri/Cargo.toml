@@ -44,6 +44,12 @@ futures = "0.3.34"
 russh = { version = "0.63.1", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.4.0"
 
+# Проверка отдачи по домену — с машины пользователя, а не с сервера (R-20, FR-125).
+# Проверять изнутри сервера бессмысленно: оттуда «работает» и то, что снаружи
+# недоступно. Своё шифрование (rustls), а не системное: иначе сборка под Linux
+# потребовала бы OpenSSL, а приложение собирают другие люди.
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "charset", "http2"] }
+
 # Локальное состояние: задачи, кеш библиотеки, отпечатки (R-09)
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 

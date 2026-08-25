@@ -19,7 +19,9 @@ const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 
 async fn connect(server: &TestServer) -> Connection {
     let addr = ServerAddress::new(server.host(), server.port);
-    let fp = fingerprint::probe(&addr).await.expect("отпечаток не получен");
+    let fp = fingerprint::probe(&addr)
+        .await
+        .expect("отпечаток не получен");
     Connection::connect(
         addr,
         "root",

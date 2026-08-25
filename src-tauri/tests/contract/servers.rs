@@ -237,7 +237,11 @@ async fn проверка_подключения_возвращает_все_ш�
         );
     }
     for step in &steps {
-        assert!(!step.title.trim().is_empty(), "у шага {} нет названия", step.id);
+        assert!(
+            !step.title.trim().is_empty(),
+            "у шага {} нет названия",
+            step.id
+        );
     }
 }
 

@@ -42,6 +42,8 @@ pub fn run() {
         .manage(state)
         .setup(move |app| {
             commands::events::bridge_task_events(app.handle().clone(), &engine);
+            let state: tauri::State<'_, commands::AppState> = app.state();
+            commands::events::bridge_app_events(app.handle().clone(), &state);
 
             // Окно создано скрытым и показывается, когда есть что показать: иначе
             // пользователь видит белую вспышку до загрузки интерфейса.
@@ -59,6 +61,21 @@ pub fn run() {
             commands::ipc::task_resume,
             commands::ipc::tasks_on_close,
             commands::ipc::server_probe_fingerprint,
+            commands::servers::ipc::servers_list,
+            commands::servers::ipc::server_add,
+            commands::servers::ipc::server_update,
+            commands::servers::ipc::server_remove,
+            commands::servers::ipc::server_set_active,
+            commands::servers::ipc::server_test,
+            commands::servers::ipc::server_fingerprint_confirm,
+            commands::servers::ipc::server_import_suggestion,
+            commands::library::ipc::library_list,
+            commands::library::ipc::media_create,
+            commands::library::ipc::media_rename,
+            commands::library::ipc::media_delete,
+            commands::library::ipc::file_move,
+            commands::library::ipc::file_delete,
+            commands::library::ipc::links_for,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

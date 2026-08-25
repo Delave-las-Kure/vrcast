@@ -126,7 +126,9 @@ async fn команды_библиотеки_для_несуществующег
             .await
             .err(),
         api::media_delete(&s, "нет-такого", "m1", true).await.err(),
-        api::file_delete(&s, "нет-такого", "a.mp4", true).await.err(),
+        api::file_delete(&s, "нет-такого", "a.mp4", true)
+            .await
+            .err(),
     ] {
         let err = err.expect("команда отработала на несуществующем сервере");
         assert_eq!(err.code, ErrorCode::InvalidInput, "неверный код: {err:?}");

@@ -20,6 +20,9 @@ mod fixture;
 #[path = "integration/library_completeness.rs"]
 mod library_completeness;
 
+#[path = "integration/library_ops.rs"]
+mod library_ops;
+
 #[path = "integration/manifest_conflict.rs"]
 mod manifest_conflict;
 

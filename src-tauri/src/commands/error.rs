@@ -372,6 +372,21 @@ impl From<crate::ssh::SshError> for AppError {
     }
 }
 
+impl From<crate::server::manifest_io::ManifestIoError> for AppError {
+    fn from(e: crate::server::manifest_io::ManifestIoError) -> Self {
+        use crate::server::manifest_io::ManifestIoError as M;
+        match e {
+            // Единственный случай, где отказ — это норма работы, а не поломка:
+            // с сервером работает ещё один экземпляр приложения.
+            M::Conflict { .. } => AppError::new(ErrorCode::ManifestConflict).with_cause(e),
+            M::Malformed(_) => AppError::new(ErrorCode::Internal)
+                .with_message("Опись библиотеки на сервере испорчена и не читается.")
+                .with_cause(e),
+            M::Ssh(inner) => AppError::from(inner),
+        }
+    }
+}
+
 impl From<crate::store::db::DbError> for AppError {
     fn from(e: crate::store::db::DbError) -> Self {
         AppError::new(ErrorCode::StorageFailed).with_cause(e)

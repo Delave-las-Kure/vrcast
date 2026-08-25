@@ -9,5 +9,7 @@
 //! | вырезание секретов из вывода | [`redact`] | защита стоит на выходе, а не в местах вызова |
 
 pub mod db;
+pub mod library_cache;
+pub mod profiles;
 pub mod redact;
 pub mod secrets;

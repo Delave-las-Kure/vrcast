@@ -55,9 +55,7 @@ fn profile_for(server: &TestServer) -> ServerInput {
 fn prepare(server: &TestServer) {
     for name in FILES {
         server
-            .exec_inside(&format!(
-                "head -c 4096 /dev/urandom > '{VIDEO_DIR}/{name}'"
-            ))
+            .exec_inside(&format!("head -c 4096 /dev/urandom > '{VIDEO_DIR}/{name}'"))
             .unwrap_or_else(|e| panic!("не создать {name}: {e}"));
     }
 
@@ -101,6 +99,7 @@ async fn ни_один_файл_каталога_не_теряется_в_биб
     let state = app_state();
     let server_id =
         servers_api::server_add(&state, profile_for(&server), KEY_PASSPHRASE).expect("нет профиля");
+    super::library_ops::confirm_fingerprint(&state, &server_id, &server).await;
 
     let view = library_api::library_list(&state, &server_id, true)
         .await
@@ -135,6 +134,7 @@ async fn нераспознанные_файлы_показываются_отд
     let state = app_state();
     let server_id =
         servers_api::server_add(&state, profile_for(&server), KEY_PASSPHRASE).expect("нет профиля");
+    super::library_ops::confirm_fingerprint(&state, &server_id, &server).await;
     let view = library_api::library_list(&state, &server_id, true)
         .await
         .expect("библиотека не прочиталась");
@@ -161,6 +161,7 @@ async fn опись_и_служебные_каталоги_не_показыва
     let state = app_state();
     let server_id =
         servers_api::server_add(&state, profile_for(&server), KEY_PASSPHRASE).expect("нет профиля");
+    super::library_ops::confirm_fingerprint(&state, &server_id, &server).await;
     let view = library_api::library_list(&state, &server_id, true)
         .await
         .expect("библиотека не прочиталась");
@@ -194,6 +195,7 @@ async fn файл_из_описи_которого_нет_на_сервере_п
     let state = app_state();
     let server_id =
         servers_api::server_add(&state, profile_for(&server), KEY_PASSPHRASE).expect("нет профиля");
+    super::library_ops::confirm_fingerprint(&state, &server_id, &server).await;
     let view = library_api::library_list(&state, &server_id, true)
         .await
         .expect("библиотека не прочиталась");
@@ -232,6 +234,7 @@ async fn параметры_файлов_читаются_из_заголовк�
     let state = app_state();
     let server_id =
         servers_api::server_add(&state, profile_for(&server), KEY_PASSPHRASE).expect("нет профиля");
+    super::library_ops::confirm_fingerprint(&state, &server_id, &server).await;
     let view = library_api::library_list(&state, &server_id, true)
         .await
         .expect("библиотека не прочиталась");
@@ -261,6 +264,7 @@ async fn место_на_диске_сервера_показывается() {
     let state = app_state();
     let server_id =
         servers_api::server_add(&state, profile_for(&server), KEY_PASSPHRASE).expect("нет профиля");
+    super::library_ops::confirm_fingerprint(&state, &server_id, &server).await;
     let view = library_api::library_list(&state, &server_id, true)
         .await
         .expect("библиотека не прочиталась");
@@ -287,6 +291,7 @@ async fn при_недоступном_сервере_показывается_�
     let state = app_state();
     let server_id =
         servers_api::server_add(&state, profile_for(&server), KEY_PASSPHRASE).expect("нет профиля");
+    super::library_ops::confirm_fingerprint(&state, &server_id, &server).await;
 
     let свежее = library_api::library_list(&state, &server_id, true)
         .await

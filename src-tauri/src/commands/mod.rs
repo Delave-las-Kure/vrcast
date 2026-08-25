@@ -23,12 +23,25 @@ use error::{AppError, ErrorCode, Result};
 use serde::Serialize;
 use std::sync::Arc;
 
+/// Событие о состоянии приложения, не связанное с задачами.
+///
+/// Ядро рассылает их в свой канал, а оболочка пересылает наружу (см. `events`).
+/// Так ядро не знает про окно и остаётся проверяемым без запуска графики.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum AppEvent {
+    /// Библиотека сервера изменилась: перечитайте её.
+    LibraryChanged { server_id: String },
+}
+
 /// Общее состояние приложения. Всё, что нужно командам, лежит здесь.
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Db>,
     pub tasks: TaskEngine,
     pub secrets: Arc<dyn SecretStore>,
+    /// Канал событий, не связанных с задачами.
+    events: tokio::sync::broadcast::Sender<AppEvent>,
 }
 
 impl AppState {
@@ -67,7 +80,28 @@ impl AppState {
             }
         }
 
-        Ok(Self { db, tasks, secrets })
+        let (events, _) = tokio::sync::broadcast::channel(64);
+        Ok(Self {
+            db,
+            tasks,
+            secrets,
+            events,
+        })
+    }
+
+    /// Подписаться на события приложения.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<AppEvent> {
+        self.events.subscribe()
+    }
+
+    /// Сообщить, что библиотека сервера изменилась.
+    ///
+    /// Отсутствие слушателей — норма, а не ошибка: события уходят в никуда, пока
+    /// интерфейс не открыт, и падать из-за этого было бы нелепо.
+    pub fn notify_library_changed(&self, server_id: &str) {
+        let _ = self.events.send(AppEvent::LibraryChanged {
+            server_id: server_id.to_owned(),
+        });
     }
 }
 

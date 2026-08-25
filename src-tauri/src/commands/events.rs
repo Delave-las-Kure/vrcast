@@ -6,6 +6,7 @@
 //!
 //! Имена событий закреплены договором `contracts/ipc-commands.md`.
 
+use crate::commands::{AppEvent, AppState};
 use crate::tasks::engine::{TaskEngine, TaskEvent};
 use tauri::{AppHandle, Emitter};
 
@@ -43,6 +44,29 @@ pub fn bridge_task_events(app: AppHandle, engine: &TaskEngine) {
                     // Интерфейс не поспевает за потоком. Терять события о продвижении
                     // не страшно — важные (завершение, ошибка) придут следующими и
                     // приведут показ в соответствие.
+                    tracing::debug!(skipped, "интерфейс отстал, часть событий пропущена");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+/// Начать пересылку прочих событий ядра в интерфейс.
+pub fn bridge_app_events(app: AppHandle, state: &AppState) {
+    let mut rx = state.subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let name = match &event {
+                        AppEvent::LibraryChanged { .. } => names::LIBRARY_CHANGED,
+                    };
+                    if let Err(e) = app.emit(name, &event) {
+                        tracing::debug!(error = %e, "событие не доставлено в интерфейс");
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     tracing::debug!(skipped, "интерфейс отстал, часть событий пропущена");
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

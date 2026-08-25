@@ -11,13 +11,14 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// Версия схемы, которую понимает эта сборка приложения.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Миграции применяются по порядку; номер = значение `user_version` после применения.
 /// Менять уже выпущенную миграцию нельзя — только добавлять следующую.
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("migrations/0001_initial.sql")),
     (2, include_str!("migrations/0002_running_processes.sql")),
+    (3, include_str!("migrations/0003_library_cache.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

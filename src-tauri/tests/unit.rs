@@ -9,6 +9,9 @@ mod db;
 #[path = "unit/domain_us1.rs"]
 mod domain_us1;
 
+#[path = "unit/env_import.rs"]
+mod env_import;
+
 #[path = "unit/moov.rs"]
 mod moov;
 
@@ -20,6 +23,9 @@ mod process;
 
 #[path = "unit/registry.rs"]
 mod registry;
+
+#[path = "unit/reconcile.rs"]
+mod reconcile;
 
 #[path = "unit/redact.rs"]
 mod redact;
