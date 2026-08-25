@@ -8,6 +8,7 @@ use tauri::Manager;
 
 pub mod commands;
 pub mod domain;
+pub mod error;
 pub mod logging;
 pub mod media;
 pub mod server;
@@ -27,11 +28,11 @@ pub fn run() {
             // Без локального хранилища работать нельзя: задачи не переживут перезапуск,
             // а профили негде держать. Честнее не запуститься, чем притвориться рабочим.
             tracing::error!(error = %e, "не удалось подготовить хранилища");
-            eprintln!(
-                "{}
-{}",
-                e.message, e.hint
-            );
+            // No catalogue and no window exist yet, so there is no language to
+            // choose between. What goes out is the code and the particulars: they can
+            // be searched for, which a translated sentence in the wrong language
+            // could not be.
+            eprintln!("{e}");
             std::process::exit(1);
         }
     };

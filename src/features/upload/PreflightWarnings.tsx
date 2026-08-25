@@ -1,23 +1,27 @@
 /**
- * T099 — предупреждения, которые ядро выдаёт до начала заливки.
+ * T099 — the warnings the core raises before an upload starts.
  *
- * Формулировки берутся у ядра как есть (FR-105): интерфейс их не сочиняет и не
- * переписывает, иначе одна и та же беда объяснялась бы по-разному на разных экранах.
+ * The wording comes from the shared catalogue by the codes the core sent (FR-105):
+ * the screen does not invent phrases of its own, or the same trouble would be
+ * explained differently on different screens.
  *
- * Здесь решается только одно, но важное: показать это как вопрос или как отказ.
- * Разница не косметическая. Нехватку места подтверждением не снять — места
- * от согласия не появится, и кнопка «всё равно залить» была бы обманом: передача
- * упрётся в конец диска на середине тридцати гигабайт. А занятое имя и идущий
- * просмотр — именно вопрос: человек может знать, что делает.
+ * Only one thing is decided here, and it matters: whether to show this as a question
+ * or as a refusal. The difference is not cosmetic. A shortage of room cannot be waved
+ * away by agreeing — agreement does not create space, and an "upload anyway" button
+ * would be a lie: the transfer would hit the end of the disk halfway through thirty
+ * gigabytes. A taken name and someone watching, on the other hand, are exactly a
+ * question: the person may well know what they are doing.
  */
 
 import type { AppError } from "../../shared/contract";
+import { useLang, useT } from "../../shared/i18n";
+import { renderError } from "../../shared/i18n/render";
 
-/** Отказы, которые снимаются согласием человека. */
-const СНИМАЕТСЯ_СОГЛАСИЕМ = ["NAME_EXISTS", "VIEWERS_ACTIVE", "CONFIRMATION_REQUIRED"];
+/** Refusals that a person's agreement lifts. */
+const LIFTED_BY_AGREEMENT = ["NAME_EXISTS", "VIEWERS_ACTIVE", "CONFIRMATION_REQUIRED"];
 
 export function canConfirm(error: AppError): boolean {
-  return СНИМАЕТСЯ_СОГЛАСИЕМ.includes(error.code);
+  return LIFTED_BY_AGREEMENT.includes(error.code);
 }
 
 export function PreflightWarnings({
@@ -31,31 +35,34 @@ export function PreflightWarnings({
   onCancel: () => void;
   busy: boolean;
 }) {
-  const снимается = canConfirm(error);
+  const t = useT();
+  const { lang } = useLang();
+  const liftable = canConfirm(error);
+  const { message, hint } = renderError(error, t, lang);
 
   return (
     <div
-      className={`notice ${снимается ? "notice--warning" : "notice--error"}`}
-      role={снимается ? "status" : "alert"}
+      className={`notice ${liftable ? "notice--warning" : "notice--error"}`}
+      role={liftable ? "status" : "alert"}
     >
       <div className="notice__body">
-        <strong className="notice__message">{error.message}</strong>
-        {error.hint && <p className="notice__hint">{error.hint}</p>}
-        {error.cause && !снимается && <p className="notice__cause">{error.cause}</p>}
+        <strong className="notice__message">{message}</strong>
+        {hint && <p className="notice__hint">{hint}</p>}
+        {error.cause && !liftable && <p className="notice__cause">{error.cause}</p>}
 
         <div className="notice__actions">
-          {снимается ? (
+          {liftable ? (
             <>
               <button onClick={onConfirm} disabled={busy}>
-                Всё равно залить
+                {t.ui.preflight.uploadAnyway}
               </button>
               <button className="button--quiet" onClick={onCancel} disabled={busy}>
-                Отмена
+                {t.ui.common.cancel}
               </button>
             </>
           ) : (
             <button className="button--quiet" onClick={onCancel}>
-              Понятно
+              {t.ui.preflight.understood}
             </button>
           )}
         </div>

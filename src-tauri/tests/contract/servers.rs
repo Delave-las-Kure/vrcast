@@ -6,7 +6,7 @@
 //! ровно затем, чтобы убедиться, что неудача выглядит как данные, а не как отказ.
 
 use super::support::{state, valid_input};
-use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::servers::{api, StepStatus, TEST_STEPS};
 use vrcast_studio_lib::domain::server_profile::AuthKind;
 use vrcast_studio_lib::store::secrets::SecretRef;
@@ -50,12 +50,17 @@ fn профиль_с_негодными_полями_не_создаётся() {
 
     let err = api::server_add(&s, input, SECRET).expect_err("профиль без домена создан");
     assert_eq!(err.code, ErrorCode::InvalidInput);
+    // Отказ называет именно то поле, которое не заполнено. Раньше это проверялось
+    // по куску русского слова в тексте — теперь по коду, и проверка не зависит
+    // от того, на каком языке смотрит пользователь.
     assert!(
-        err.message.contains("омен"),
-        "сообщение не называет поле: {}",
-        err.message
+        err.says(DetailCode::DomainEmpty),
+        "отказ не называет незаполненный домен: {err}"
     );
-    assert!(!err.hint.trim().is_empty(), "нет подсказки, что делать");
+    assert!(
+        err.cause.as_deref().unwrap_or_default().contains("domain"),
+        "в подробностях нет имени поля, которое подсветит интерфейс: {err}"
+    );
 
     assert!(
         api::servers_list(&s).unwrap().is_empty(),
@@ -220,8 +225,7 @@ async fn проверка_подключения_возвращает_все_ш�
         "вернулись не все шаги: {steps:?}"
     );
     let ids: Vec<&str> = steps.iter().map(|x| x.id.as_str()).collect();
-    let expected: Vec<&str> = TEST_STEPS.iter().map(|(id, _)| *id).collect();
-    assert_eq!(ids, expected, "порядок шагов изменён");
+    assert_eq!(ids, TEST_STEPS.to_vec(), "порядок шагов изменён");
 
     assert_eq!(steps[0].status, StepStatus::Failed, "сеть вдруг доступна");
     assert!(
@@ -236,10 +240,13 @@ async fn проверка_подключения_возвращает_все_ш�
             step.id
         );
     }
+    // Названия шагов ядро больше не шлёт: интерфейс берёт их по номеру шага из
+    // своего словаря, и одно и то же название не может разойтись между экранами.
+    // Здесь проверяется то, что от ядра осталось, — что номер шага узнаваем.
     for step in &steps {
         assert!(
-            !step.title.trim().is_empty(),
-            "у шага {} нет названия",
+            TEST_STEPS.contains(&step.id.as_str()),
+            "шаг с неизвестным номером: {}",
             step.id
         );
     }

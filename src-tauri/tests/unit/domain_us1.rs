@@ -12,6 +12,7 @@ use vrcast_studio_lib::domain::media::{self, Media, MediaFile, SlugError};
 use vrcast_studio_lib::domain::server_profile::{
     AuthKind, ServerProfile, DEFAULT_SSH_PORT, DEFAULT_VIDEO_DIR,
 };
+use vrcast_studio_lib::domain::wording::DetailCode;
 
 // ---------- профиль сервера (T029) ----------
 
@@ -46,11 +47,9 @@ fn профиль_без_домена_не_сохранить() {
         problems.iter().any(|x| x.field == "domain"),
         "не указано поле домена: {problems:?}"
     );
-    assert!(
-        problems[0].message.contains("ссылку"),
-        "подсказка не объясняет, зачем домен: {}",
-        problems[0].message
-    );
+    // Замечание называет случай кодом: формулировку подбирает интерфейс, и она
+    // существует на обоих языках (FR-105, FR-106).
+    assert_eq!(problems[0].detail.key, DetailCode::DomainEmpty);
 }
 
 #[test]

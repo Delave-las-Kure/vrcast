@@ -7,8 +7,10 @@
  * места от согласия не появится.
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { en, renderIn, ru } from "../../../test-utils";
+import { fill } from "../../../shared/i18n/render";
 import type { AppError, LibraryView, ServerProfile, Task, TaskOnClose } from "../../../shared/contract";
 
 const mockUploadStart = vi.fn<(request: unknown) => Promise<string>>();
@@ -81,7 +83,7 @@ beforeEach(() => {
 
 /** Выбрать файл и дождаться, пока экран это заметит. */
 async function выбрать_файл() {
-  fireEvent.click(await screen.findByText("Выбрать файл…"));
+  fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
   await screen.findByDisplayValue("фильм 22.mp4");
 }
 
@@ -89,25 +91,24 @@ describe("экран заливки", () => {
   it("подставляет имя в раздаче из имени выбранного файла", async () => {
     // Чаще всего нужно именно оно. Заставлять человека перепечатывать имя руками —
     // лишняя работа и лишний повод для опечатки.
-    render(<UploadScreen />);
+    renderIn(<UploadScreen />);
     await выбрать_файл();
-    expect(screen.getByLabelText("Имя в раздаче")).toHaveValue("фильм 22.mp4");
+    expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("фильм 22.mp4");
   });
 
   it("не даёт залить, пока файл не выбран", async () => {
-    render(<UploadScreen />);
-    const кнопка = await screen.findByText("Залить");
-    expect(кнопка).toBeDisabled();
+    renderIn(<UploadScreen />);
+    expect(await screen.findByText(ru.ui.upload.start)).toBeDisabled();
   });
 
   it("передаёт ядру путь, имя и предел скорости", async () => {
-    render(<UploadScreen />);
+    renderIn(<UploadScreen />);
     await выбрать_файл();
 
-    fireEvent.change(screen.getByLabelText("Ограничить скорость"), {
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldLimit), {
       target: { value: "1250000" },
     });
-    fireEvent.click(screen.getByText("Залить"));
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
 
     await waitFor(() => expect(mockUploadStart).toHaveBeenCalled());
     expect(mockUploadStart).toHaveBeenCalledWith(
@@ -124,45 +125,60 @@ describe("экран заливки", () => {
   it("говорит, что заливка продолжится после закрытия приложения", async () => {
     // FR-086. Человек не обязан знать, что «в фоне» здесь значит «переживёт
     // закрытие»: об этом надо сказать прямо.
-    render(<UploadScreen />);
+    renderIn(<UploadScreen />);
     await выбрать_файл();
-    fireEvent.click(screen.getByText("Залить"));
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    expect(await screen.findByText(/продолжится с достигнутого места/)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.upload.startedHint)).toBeInTheDocument();
   });
 
   it("не подключается к серверу без подтверждённого отпечатка", async () => {
     mockServersList.mockResolvedValue([профиль({ host_fingerprint: null })]);
-    render(<UploadScreen />);
-    expect(await screen.findByText(/не подтверждён отпечаток/)).toBeInTheDocument();
-    expect(screen.queryByText("Залить")).not.toBeInTheDocument();
+    renderIn(<UploadScreen />);
+    expect(
+      await screen.findByText(fill(ru.ui.upload.notReady, { name: "Боевой" }, ru, "ru")),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.upload.start)).not.toBeInTheDocument();
   });
 });
 
 describe("предупреждения до старта", () => {
   const занятое_имя: AppError = {
     code: "NAME_EXISTS",
-    message: "Файл «фильм 22.mp4» уже раздаётся — он будет заменён.",
-    hint: "Выберите другое имя, если заменять не нужно.",
+    details: [{ key: "NAME_WILL_BE_REPLACED", params: { name: "фильм 22.mp4" } }],
   };
+  const занятое_имя_словами = fill(
+    ru.details.NAME_WILL_BE_REPLACED,
+    { name: "фильм 22.mp4" },
+    ru,
+    "ru",
+  );
 
   const нет_места: AppError = {
     code: "REMOTE_DISK_FULL",
-    message: "На сервере не хватает 22.0 ГБ — нужно 32.0 ГБ, свободно 10.0 ГБ.",
-    hint: "Освободите место на сервере или залейте файл поменьше.",
+    details: [
+      {
+        key: "NOT_ENOUGH_SPACE",
+        params: {
+          short_by: 1024 ** 3 * 22,
+          needed: 1024 ** 3 * 32,
+          free: 1024 ** 3 * 10,
+        },
+      },
+    ],
   };
 
   it("занятое имя показывается вопросом и снимается согласием", async () => {
     mockUploadStart.mockRejectedValueOnce(занятое_имя);
-    render(<UploadScreen />);
+    renderIn(<UploadScreen />);
     await выбрать_файл();
-    fireEvent.click(screen.getByText("Залить"));
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    expect(await screen.findByText(занятое_имя.message)).toBeInTheDocument();
+    expect(await screen.findByText(занятое_имя_словами)).toBeInTheDocument();
 
     // Согласие уходит в ядро тем же запросом, но уже подтверждённым.
     mockUploadStart.mockResolvedValueOnce("t-2");
-    fireEvent.click(screen.getByText("Всё равно залить"));
+    fireEvent.click(screen.getByText(ru.ui.preflight.uploadAnyway));
 
     await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
     expect(mockUploadStart).toHaveBeenLastCalledWith(
@@ -174,24 +190,36 @@ describe("предупреждения до старта", () => {
     // Ради этого различия компонент и существует. Кнопка «всё равно залить» здесь
     // была бы обманом: передача упрётся в конец диска на середине.
     mockUploadStart.mockRejectedValue(нет_места);
-    render(<UploadScreen />);
+    renderIn(<UploadScreen />);
     await выбрать_файл();
-    fireEvent.click(screen.getByText("Залить"));
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    expect(await screen.findByText(нет_места.message)).toBeInTheDocument();
-    expect(screen.queryByText("Всё равно залить")).not.toBeInTheDocument();
+    // The numbers are the core's; the units and the separator are the language's.
+    const сказано = await screen.findByText(/На сервере не хватает 22,0 ГБ/);
+    expect(сказано).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.preflight.uploadAnyway)).not.toBeInTheDocument();
   });
 
   it("предупреждение показывается до начала передачи, а не после", async () => {
     // Задача не должна была поставиться: узнать о занятом имени после часа
     // передачи — то же самое, что не предупреждать вовсе.
     mockUploadStart.mockRejectedValue(занятое_имя);
-    render(<UploadScreen />);
+    renderIn(<UploadScreen />);
     await выбрать_файл();
-    fireEvent.click(screen.getByText("Залить"));
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    await screen.findByText(занятое_имя.message);
-    expect(screen.queryByText(/Заливка началась/)).not.toBeInTheDocument();
+    await screen.findByText(занятое_имя_словами);
+    expect(screen.queryByText(ru.ui.upload.started)).not.toBeInTheDocument();
+  });
+
+  it("говорит о нехватке места по-английски, когда выбран английский", async () => {
+    mockUploadStart.mockRejectedValue(нет_места);
+    renderIn(<UploadScreen />, "en");
+    fireEvent.click(await screen.findByText(en.ui.upload.pickFile));
+    await screen.findByDisplayValue("фильм 22.mp4");
+    fireEvent.click(screen.getByText(en.ui.upload.start));
+
+    expect(await screen.findByText(/The server is 22\.0 GB short/)).toBeInTheDocument();
   });
 });
 
@@ -216,7 +244,7 @@ describe("очередь", () => {
 
   it("поднимает задачу и отдаёт ядру новый порядок целиком", () => {
     const onReorder = vi.fn();
-    render(
+    renderIn(
       <QueueOrder
         queued={[задача("a", 1), задача("b", 2), задача("c", 3)]}
         busy={false}
@@ -225,20 +253,24 @@ describe("очередь", () => {
     );
 
     // Поднимаем третью.
-    fireEvent.click(screen.getAllByLabelText("Поднять в очереди")[2]);
+    fireEvent.click(screen.getAllByLabelText(ru.ui.tasks.moveUp)[2]);
     expect(onReorder).toHaveBeenCalledWith(["a", "c", "b"]);
   });
 
   it("первую поднять некуда, последнюю опустить некуда", () => {
-    render(
-      <QueueOrder queued={[задача("a", 1), задача("b", 2)]} busy={false} onReorder={vi.fn()} />,
+    renderIn(
+      <QueueOrder
+        queued={[задача("a", 1), задача("b", 2)]}
+        busy={false}
+        onReorder={vi.fn()}
+      />,
     );
-    expect(screen.getAllByLabelText("Поднять в очереди")[0]).toBeDisabled();
-    expect(screen.getAllByLabelText("Опустить в очереди")[1]).toBeDisabled();
+    expect(screen.getAllByLabelText(ru.ui.tasks.moveUp)[0]).toBeDisabled();
+    expect(screen.getAllByLabelText(ru.ui.tasks.moveDown)[1]).toBeDisabled();
   });
 
   it("пустая очередь не показывается вовсе", () => {
-    const { container } = render(
+    const { container } = renderIn(
       <QueueOrder queued={[]} busy={false} onReorder={vi.fn()} />,
     );
     expect(container).toBeEmptyDOMElement();
@@ -251,29 +283,33 @@ describe("последствия закрытия", () => {
     kind: "upload",
     progress: 0.6,
     outcome: "resumes",
-    explanation: "продолжится с 60 % при следующем запуске",
+    explanation: { key: "ON_CLOSE_RESUMES_FROM", params: { percent: 60 } },
   };
   const заново: TaskOnClose = {
     id: "b",
     kind: "convert",
     progress: 0.4,
     outcome: "restarts",
-    explanation: "придётся начать заново — потеряется 40 % работы",
+    explanation: { key: "ON_CLOSE_RESTARTS_LOSING", params: { percent: 40 } },
   };
 
   it("предупреждает, когда работа потеряется", () => {
-    render(<CloseConsequences items={[продолжится, заново]} />);
-    expect(screen.getByText(/часть работы потеряется/)).toBeInTheDocument();
-    expect(screen.getByText(заново.explanation)).toBeInTheDocument();
+    renderIn(<CloseConsequences items={[продолжится, заново]} />);
+    expect(screen.getByText(ru.ui.tasks.closeLosing)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        fill(ru.details.ON_CLOSE_RESTARTS_LOSING, { percent: 40 }, ru, "ru"),
+      ),
+    ).toBeInTheDocument();
   });
 
   it("успокаивает, когда всё продолжится", () => {
-    render(<CloseConsequences items={[продолжится]} />);
-    expect(screen.getByText(/можно закрыть/)).toBeInTheDocument();
+    renderIn(<CloseConsequences items={[продолжится]} />);
+    expect(screen.getByText(ru.ui.tasks.closeSafe)).toBeInTheDocument();
   });
 
   it("молчит, когда закрывать безопасно и говорить не о чем", () => {
-    const { container } = render(<CloseConsequences items={[]} />);
+    const { container } = renderIn(<CloseConsequences items={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

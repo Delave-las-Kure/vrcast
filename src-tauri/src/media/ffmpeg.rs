@@ -17,13 +17,13 @@ use std::process::Stdio;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FfmpegError {
-    #[error("вложенный FFmpeg не найден: искали {0}")]
+    #[error("bundled FFmpeg not found: looked in {0}")]
     NotFound(String),
 
-    #[error("вложенный FFmpeg не запускается: {0}")]
+    #[error("bundled FFmpeg will not start: {0}")]
     NotRunnable(String),
 
-    #[error("вложенный FFmpeg отвечает не тем, чем должен: {0}")]
+    #[error("bundled FFmpeg answers with something other than it should: {0}")]
     Unexpected(String),
 }
 

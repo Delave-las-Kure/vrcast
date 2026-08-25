@@ -38,7 +38,7 @@ impl Default for Manifest {
 /// Почему опись не удалось прочитать.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
-    #[error("опись не разобрать: {0}")]
+    #[error("catalogue could not be parsed: {0}")]
     Malformed(String),
 }
 

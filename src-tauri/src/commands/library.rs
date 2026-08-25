@@ -8,8 +8,9 @@
 //! (FR-015). Прятать нераспознанное нельзя: файл, которого не видно в приложении,
 //! всё равно занимает место на диске и всё равно раздаётся по ссылке.
 
-use super::error::{AppError, ErrorCode, Result};
+use super::error::{AppError, DetailCode, ErrorCode, Result};
 use super::AppState;
+use crate::domain::wording::Detail;
 use serde::{Deserialize, Serialize};
 
 /// Файл раздачи в том виде, в каком его показывает интерфейс.
@@ -223,37 +224,6 @@ fn file_view(
     }
 }
 
-/// Человеческий объём — для сообщений, которые читает пользователь.
-fn human_bytes(bytes: u64) -> String {
-    const ЕДИНИЦЫ: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < ЕДИНИЦЫ.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} {}", ЕДИНИЦЫ[0])
-    } else {
-        format!("{value:.1} {}", ЕДИНИЦЫ[unit])
-    }
-}
-
-/// Слово «файл» в нужном числе — сообщение читает человек, и «3 файла» звучит
-/// иначе, чем «3 файлов».
-fn files_word(n: usize) -> &'static str {
-    let (last_two, last) = (n % 100, n % 10);
-    if (11..=14).contains(&last_two) {
-        "файлов"
-    } else {
-        match last {
-            1 => "файл",
-            2..=4 => "файла",
-            _ => "файлов",
-        }
-    }
-}
-
 pub mod api {
     use super::*;
     use crate::domain::links::Links;
@@ -439,23 +409,17 @@ pub mod api {
 
         let title = title.trim();
         if title.is_empty() {
-            return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Название не может быть пустым — по нему вы будете искать медиа."));
+            return Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::MediaTitleEmpty));
         }
 
         let slug = match slug.map(str::trim).filter(|s| !s.is_empty()) {
             Some(s) => s.to_owned(),
             None => media::slugify(title).ok_or_else(|| {
-                AppError::new(ErrorCode::InvalidInput).with_message(
-                    "Из этого названия не составить короткое имя — задайте его сами: \
-                     латинские буквы, цифры, дефис и подчёркивание.",
-                )
+                AppError::new(ErrorCode::InvalidInput).detail(DetailCode::SlugUnmakeable)
             })?,
         };
-        media::validate_slug(&slug).map_err(|e| {
-            AppError::new(ErrorCode::InvalidInput)
-                .with_message(format!("Короткое имя не подходит. {e}"))
-        })?;
+        media::validate_slug(&slug)
+            .map_err(|e| AppError::new(ErrorCode::InvalidInput).with_detail(e.detail()))?;
 
         let conn = connect(state.secrets.as_ref(), &profile).await?;
         let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
@@ -497,14 +461,13 @@ pub mod api {
         let new_title = title.map(str::trim).filter(|t| !t.is_empty());
         let new_slug = slug.map(str::trim).filter(|s| !s.is_empty());
         if new_title.is_none() && new_slug.is_none() {
-            return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Нечего менять: не задано ни название, ни короткое имя."));
+            return Err(
+                AppError::new(ErrorCode::InvalidInput).detail(DetailCode::MediaNothingToChange)
+            );
         }
         if let Some(s) = new_slug {
-            media::validate_slug(s).map_err(|e| {
-                AppError::new(ErrorCode::InvalidInput)
-                    .with_message(format!("Короткое имя не подходит. {e}"))
-            })?;
+            media::validate_slug(s)
+                .map_err(|e| AppError::new(ErrorCode::InvalidInput).with_detail(e.detail()))?;
         }
 
         let conn = connect(state.secrets.as_ref(), &profile).await?;
@@ -595,7 +558,11 @@ pub mod api {
                 .await?;
             if !out.ok() {
                 return Err(AppError::new(ErrorCode::Internal)
-                    .with_message(format!("Не удалось переименовать «{old}» в «{new}»."))
+                    .with_detail(
+                        Detail::new(DetailCode::RenameFailed)
+                            .with("old", old.to_string())
+                            .with("new", new.to_string()),
+                    )
                     .with_cause(out.stderr.trim()));
             }
         }
@@ -715,8 +682,9 @@ pub mod api {
         };
         if SERVICE_ENTRIES.contains(&top) {
             conn.close().await;
-            return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Это служебная запись раздачи, её нельзя удалять отсюда."));
+            return Err(
+                AppError::new(ErrorCode::InvalidInput).detail(DetailCode::MediaIsServiceEntry)
+            );
         }
 
         if !confirmed {
@@ -762,30 +730,32 @@ pub mod api {
 
     fn no_such_media(id: &str) -> AppError {
         AppError::new(ErrorCode::InvalidInput)
-            .with_message("Такого медиа в библиотеке нет — обновите список.")
+            .detail(DetailCode::MediaNotFound)
             .with_cause(id)
     }
 
     /// Отказ, который называет последствия. Без чисел подтверждать было бы нечего.
+    /// A refusal that names the consequences. Without the numbers there would be
+    /// nothing to confirm.
     fn confirmation_needed(what: &str, impact: &DeletionImpact) -> AppError {
-        let mut message = format!(
-            "Удалить «{what}»? Будет снято {} {}, освободится {}.",
-            impact.files,
-            files_word(impact.files),
-            human_bytes(impact.bytes)
+        let mut error = AppError::new(ErrorCode::ConfirmationRequired).with_detail(
+            Detail::new(DetailCode::ConfirmDelete)
+                .with("what", what.to_string())
+                .with("files", impact.files)
+                .with("bytes", impact.bytes),
         );
+        // A second thing to say, not a longer first one: whether anyone is watching
+        // right now is a separate fact, and it is worded the same wherever it comes up.
         if impact.active_connections > 0 {
-            message.push_str(&format!(
-                " Прямо сейчас сервер отдаёт данные — открыто соединений: {}. Удаление может оборвать просмотр.",
-                impact.active_connections
-            ));
+            error = error.with_detail(
+                Detail::new(DetailCode::ViewersActiveDelete)
+                    .with("connections", impact.active_connections),
+            );
         }
-        AppError::new(ErrorCode::ConfirmationRequired)
-            .with_message(message)
-            .with_cause(format!(
-                "files={}, bytes={}, connections={}",
-                impact.files, impact.bytes, impact.active_connections
-            ))
+        error.with_cause(format!(
+            "files={}, bytes={}, connections={}",
+            impact.files, impact.bytes, impact.active_connections
+        ))
     }
 
     async fn impact_of(
@@ -853,7 +823,7 @@ pub mod api {
         let out = conn.exec(&format!("rm -rf -- {args}")).await?;
         if !out.ok() {
             return Err(AppError::new(ErrorCode::Internal)
-                .with_message("Не удалось удалить файлы на сервере.")
+                .detail(DetailCode::DeleteFilesFailed)
                 .with_cause(out.stderr.trim()));
         }
         Ok(())

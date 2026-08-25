@@ -8,9 +8,10 @@
 //! itself, a missing encoder. Learning any of those an hour in would waste the
 //! hour and leave a half-written file behind.
 
-use super::error::{AppError, ErrorCode, Result};
+use super::error::{AppError, DetailCode, ErrorCode, Result};
 use crate::domain::convert_plan::{self, ConvertPlan};
 use crate::domain::source::SourceFile;
+use crate::domain::wording::Detail;
 use crate::media::{convert, encoders, validate};
 use crate::tasks::state::TaskKind;
 use serde::{Deserialize, Serialize};
@@ -45,7 +46,7 @@ pub struct ConvertPreview {
     pub source: SourceFile,
     /// Which encoder will be used, and what to say about that choice.
     pub encoder: encoders::Encoder,
-    pub encoder_notice: Option<String>,
+    pub encoder_notice: Option<Detail>,
     /// True when nothing is re-encoded: minutes rather than hours, no loss.
     pub lossless: bool,
 }
@@ -77,17 +78,14 @@ pub mod api {
         let preview = convert_preview(&request).await?;
 
         if request.out_path.trim().is_empty() {
-            return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Не указано, куда класть подготовленный файл."));
+            return Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::ConvertNoOutPath));
         }
         if request.out_path == request.path {
             // Writing over the source destroys the only copy of the original the
             // moment the encoder opens the file for writing, and there is no way
             // back from that.
-            return Err(AppError::new(ErrorCode::InvalidInput).with_message(
-                "Подготовленный файл нельзя класть поверх исходника — \
-                               исходник будет потерян безвозвратно.",
-            ));
+            return Err(AppError::new(ErrorCode::InvalidInput)
+                .detail(DetailCode::ConvertOutOverwritesSource));
         }
 
         let source = preview.source.clone();
@@ -106,29 +104,32 @@ pub mod api {
                 };
 
                 convert::run(&job, &ctx).await.map_err(|e| match e {
-                    convert::ConvertError::Cancelled => String::from("задача отменена"),
-                    other => other.to_string(),
+                    convert::ConvertError::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+                    other => AppError::new(ErrorCode::Internal).with_cause(other),
                 })?;
 
                 // Validation is not optional (FR-027). A broken encode opens fine,
                 // reports the right duration, and falls apart where someone is
                 // watching — the only way to know is to decode the whole thing.
-                ctx.report_important(0.98, "проверяем воспроизведение");
+                ctx.report_important(0.98, DetailCode::StageValidating);
                 let verdict = validate::validate(std::path::Path::new(&out_path))
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| AppError::new(ErrorCode::FfmpegBroken).with_cause(e))?;
 
                 if !verdict.ok {
                     // The file is left on disk on purpose: it may be hours of work,
                     // and the person may want to look at it. What matters is that
                     // the application will not offer it for upload.
-                    return Err(format!(
-                        "{} Файл оставлен на месте: {out_path}",
-                        verdict.summary()
-                    ));
+                    return Err(
+                        AppError::new(ErrorCode::DecodeValidationFailed).with_detail(
+                            Detail::new(DetailCode::ConvertValidationFailed)
+                                .with("out_path", out_path.clone())
+                                .with("problems", verdict.problems.join(" ")),
+                        ),
+                    );
                 }
 
-                ctx.report_important(1.0, "готово");
+                ctx.report_important(1.0, DetailCode::StageDone);
                 Ok(())
             })
             .await?;
@@ -142,7 +143,7 @@ pub mod api {
             .await
             .map_err(|e| {
                 AppError::new(ErrorCode::FfmpegBroken)
-                    .with_message("Проверить воспроизведение нечем: вложенный FFmpeg не работает.")
+                    .detail(DetailCode::ConvertValidateNoFfmpeg)
                     .with_cause(e.to_string())
             })
     }
@@ -163,12 +164,7 @@ pub mod api {
             };
             // All objections at once: there is often more than one, and finding
             // them one round at a time is work that need not exist.
-            let text = problems
-                .iter()
-                .map(|p| p.message())
-                .collect::<Vec<_>>()
-                .join(" ");
-            AppError::new(code).with_message(text)
+            AppError::new(code).with_details(problems.iter().map(|p| p.detail()))
         })
     }
 
@@ -176,7 +172,7 @@ pub mod api {
     async fn pick_encoder(
         plan: &ConvertPlan,
         prefer_hardware: bool,
-    ) -> Result<(encoders::Encoder, Option<String>)> {
+    ) -> Result<(encoders::Encoder, Option<Detail>)> {
         // Copying needs no encoder at all, and demanding one would refuse work
         // that requires nothing of the kind.
         if plan.lossless() {
@@ -187,10 +183,7 @@ pub mod api {
         let choice =
             encoders::choose(&info.hardware, info.has_x264, prefer_hardware).map_err(|e| {
                 AppError::new(ErrorCode::NoHwEncoder)
-                    .with_message(
-                        "Кодировать нечем: во вложенной сборке нет ни аппаратного \
-                         кодировщика H.264, ни программного.",
-                    )
+                    .detail(DetailCode::ConvertNoEncoder)
                     .with_cause(e.to_string())
             })?;
         Ok((choice.encoder, choice.notice))

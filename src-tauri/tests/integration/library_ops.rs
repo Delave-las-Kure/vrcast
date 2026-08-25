@@ -9,7 +9,7 @@
 
 use super::fixture::{key_path, TestServer, KEY_PASSPHRASE};
 use std::sync::Arc;
-use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::library::api as library;
 use vrcast_studio_lib::commands::servers::{api as servers, ServerInput};
 use vrcast_studio_lib::commands::AppState;
@@ -127,15 +127,26 @@ async fn удаление_без_подтверждения_называет_п�
         .expect_err("медиа удалено без подтверждения");
 
     assert_eq!(err.code, ErrorCode::ConfirmationRequired);
-    assert!(
-        err.message.contains('2') && err.message.contains("файла"),
-        "в отказе не названо число файлов: {}",
-        err.message
+    // Отказ называет числа: без них подтверждать нечего. Сами по себе они уходят
+    // числами — во что их превратить, «2 файла» или "2 files", решает интерфейс.
+    let detail = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::ConfirmDelete)
+        .unwrap_or_else(|| panic!("в отказе не названы последствия: {err}"));
+    assert_eq!(
+        detail.params.get("files").and_then(|v| v.as_u64()),
+        Some(2),
+        "в отказе не названо число файлов: {detail:?}"
     );
     assert!(
-        err.message.contains("КБ") || err.message.contains("Б"),
-        "в отказе не назван объём: {}",
-        err.message
+        detail
+            .params
+            .get("bytes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            > 0,
+        "в отказе не назван объём: {detail:?}"
     );
 
     // Главное: без подтверждения ничего не произошло.
@@ -368,10 +379,7 @@ async fn второй_экземпляр_приложения_получает_�
     .expect_err("запись прошла поверх чужого изменения");
 
     let app_err = vrcast_studio_lib::commands::error::AppError::from(err);
+    // Код и есть ответ: подсказку «обновите список и повторите» интерфейс возьмёт
+    // из словаря — она одна на все места, где встречается этот код.
     assert_eq!(app_err.code, ErrorCode::ManifestConflict);
-    assert!(
-        app_err.hint.contains("бнов") || app_err.hint.contains("овтор"),
-        "подсказка не предлагает перечитать и повторить: {}",
-        app_err.hint
-    );
 }

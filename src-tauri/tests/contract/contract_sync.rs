@@ -18,7 +18,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
 
 fn frontend_file(rel: &str) -> PathBuf {
@@ -94,6 +94,24 @@ fn коды_ошибок_совпадают_в_обе_стороны() {
 }
 
 #[test]
+fn коды_уточнений_совпадают_в_обе_стороны() {
+    // Уточнения появились вместе с двумя языками: ядро перестало сочинять фразы и
+    // теперь называет случай кодом, а формулировку подбирает интерфейс. Забытый
+    // здесь код — это пустое место на экране вместо объяснения, и узналось бы это
+    // у пользователя.
+    //
+    // Полноту самих словарей проверяет компилятор TypeScript: они объявлены как
+    // `Record<DetailCode, ...>`, и пропущенный ключ роняет сборку интерфейса.
+    // Здесь сверяется звено перед этим — что перечень кодов в TS вообще тот же.
+    let rust: HashSet<String> = DetailCode::ALL
+        .iter()
+        .map(|c| c.as_str().to_owned())
+        .collect();
+    let ts = declared_strings(&contract_ts(), "export type DetailCode =");
+    assert_same_sets("коды уточнений", rust, ts);
+}
+
+#[test]
 fn виды_задач_совпадают_в_обе_стороны() {
     let rust: HashSet<String> = TaskKind::ALL
         .iter()
@@ -122,6 +140,7 @@ fn имена_событий_совпадают_в_обе_стороны() {
     let rust: HashSet<String> = [
         names::TASK_PROGRESS,
         names::TASK_DONE,
+        names::TASK_NOTIFY,
         names::LIBRARY_CHANGED,
         names::SERVER_STATE,
         names::VIEWERS_UPDATE,
@@ -227,7 +246,7 @@ fn форма_событий_о_задачах_совпадает_в_обе_ст
         id: String::from("t1"),
         state: TaskState::Running,
         progress: 0.5,
-        stage: Some(String::from("идём")),
+        stage: Some(DetailCode::StageConverting),
         speed_bps: Some(1),
         eta_s: Some(2),
     };

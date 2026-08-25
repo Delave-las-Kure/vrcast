@@ -16,6 +16,7 @@
 //! на рабочих битрейтах от четырнадцати и выше. Поэтому в сообщении о переходе
 //! честно сказано: потеряете время, а не качество.
 
+use crate::domain::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
 /// Чем кодировать.
@@ -40,19 +41,17 @@ impl Encoder {
 }
 
 /// Что выбрали и что об этом сказать человеку.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EncoderChoice {
     pub encoder: Encoder,
-    /// Готовое сообщение, если о выборе надо предупредить. Пусто — предупреждать
-    /// не о чем: взяли лучшее из доступного, и человек ничего не теряет.
-    pub notice: Option<String>,
+    /// What to say about the choice, if anything. Empty means there is nothing to
+    /// warn about: the best available was taken and nobody loses anything.
+    pub notice: Option<Detail>,
 }
 
 /// Почему выбрать не удалось.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "кодировать нечем: во вложенной сборке нет ни аппаратного кодировщика H.264, ни программного"
-)]
+#[error("nothing to encode with: the bundled build has neither a hardware H.264 encoder nor a software one")]
 pub struct NoEncoder;
 
 /// Порядок предпочтения.
@@ -61,17 +60,6 @@ pub struct NoEncoder;
 /// в процессор Intel, потом AMD, и последним общий путь Linux: он работает
 /// и с Intel, и с AMD, но выбирать его при наличии своего смысла нет.
 const PREFERRED: [&str; 4] = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_vaapi"];
-
-/// Человеческие названия — чтобы в сообщении не было `h264_qsv`.
-fn human_name(encoder: &str) -> &str {
-    match encoder {
-        "h264_nvenc" => "видеокарты NVIDIA",
-        "h264_qsv" => "встроенной графики Intel",
-        "h264_amf" => "видеокарты AMD",
-        "h264_vaapi" => "видеокарты (VAAPI)",
-        other => other,
-    }
-}
 
 /// Выбрать кодировщик.
 ///
@@ -106,18 +94,11 @@ pub fn choose(
 
     Ok(EncoderChoice {
         encoder: Encoder::Software,
-        notice: Some(if prefer_hardware {
-            String::from(
-                "Аппаратного ускорения на этой машине не нашлось — кодировать будет \
-                 процессор. Качество от этого не пострадает, а времени уйдёт в разы \
-                 больше: считайте час там, где видеокарта справилась бы за десять минут.",
-            )
+        notice: Some(Detail::new(if prefer_hardware {
+            DetailCode::NoticeNoHardwareFound
         } else {
-            String::from(
-                "Кодирует процессор, как вы и просили. Времени уйдёт в разы больше, \
-                 чем с аппаратным ускорением.",
-            )
-        }),
+            DetailCode::NoticeSoftwareAsAsked
+        })),
     })
 }
 
@@ -127,10 +108,6 @@ pub fn choose(
 /// блока, драйвер может быть старым, а на ноутбуке видеокарта — просто отключённой.
 /// Переход на процессор в этом случае — правильное поведение, но молчать о нём
 /// нельзя вдвойне: человек ждал десяти минут, а получит час.
-pub fn fallback_notice(failed: &str) -> String {
-    format!(
-        "Ускорение через {} не заработало — кодировать будет процессор. \
-         Качество от этого не пострадает, а времени уйдёт в разы больше.",
-        human_name(failed)
-    )
+pub fn fallback_notice(failed: &str) -> Detail {
+    Detail::new(DetailCode::NoticeHardwareFailed).with("encoder", failed.to_string())
 }

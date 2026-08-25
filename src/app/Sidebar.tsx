@@ -1,35 +1,44 @@
 import { NavLink } from "react-router-dom";
+import { LANGUAGES, useLang, useT } from "../shared/i18n";
+import { fill } from "../shared/i18n/render";
 import { useTheme, type ThemeChoice } from "./theme";
 
-/** Разделы приложения. Порядок — по ходу работы: сервер, библиотека, дела, разбор. */
+/**
+ * The sections, in the order work goes through them: server, library, doing, checking.
+ *
+ * The label is a key rather than a word: the sidebar is the one place every language
+ * has to agree on, and a hard-coded word here would be the first thing to go stale.
+ */
 export const SECTIONS = [
-  { path: "/servers", label: "Серверы", ready: true },
-  { path: "/library", label: "Библиотека", ready: true },
-  { path: "/convert", label: "Подготовка", ready: true },
-  { path: "/upload", label: "Заливка", ready: true },
-  { path: "/ladder", label: "Качества", ready: false },
-  { path: "/viewers", label: "Зрители", ready: false },
-  { path: "/limits", label: "Ограничения", ready: false },
-  { path: "/diagnostics", label: "Диагностика", ready: false },
-  { path: "/tasks", label: "Задачи", ready: true },
+  { path: "/servers", key: "servers", ready: true },
+  { path: "/library", key: "library", ready: true },
+  { path: "/convert", key: "convert", ready: true },
+  { path: "/upload", key: "upload", ready: true },
+  { path: "/ladder", key: "ladder", ready: false },
+  { path: "/viewers", key: "viewers", ready: false },
+  { path: "/limits", key: "limits", ready: false },
+  { path: "/diagnostics", key: "diagnostics", ready: false },
+  { path: "/tasks", key: "tasks", ready: true },
 ] as const;
 
-const THEME_LABEL: Record<ThemeChoice, string> = {
-  light: "Светлая",
-  dark: "Тёмная",
-  system: "Как в системе",
-};
+const THEME_ORDER: ThemeChoice[] = ["light", "dark", "system"];
 
 export function Sidebar({ version }: { version: string | null }) {
   const { choice, setChoice } = useTheme();
+  const { lang, setLang } = useLang();
+  const t = useT();
 
   return (
-    <nav className="sidebar" aria-label="Разделы">
+    <nav className="sidebar" aria-label={t.ui.sidebar.sections}>
       <div className="sidebar__brand">
         <span className="sidebar__title">VRCast Studio</span>
         {version && (
-          <NavLink to="/about" className="sidebar__version" title="О программе и лицензии">
-            версия {version}
+          <NavLink
+            to="/about"
+            className="sidebar__version"
+            title={t.ui.sidebar.aboutTitle}
+          >
+            {fill(t.ui.sidebar.version, { version }, t, lang)}
           </NavLink>
         )}
       </div>
@@ -43,10 +52,11 @@ export function Sidebar({ version }: { version: string | null }) {
                 `sidebar__link${isActive ? " sidebar__link--active" : ""}`
               }
             >
-              <span>{s.label}</span>
-              {/* Раздел, которого ещё нет, помечен честно, а не выглядит рабочим. */}
+              <span>{t.ui.sections[s.key]}</span>
+              {/* A section that does not exist yet is marked honestly rather than
+                  being left to look finished. */}
               {!s.ready && (
-                <span className="sidebar__soon" title="Ещё не сделано">
+                <span className="sidebar__soon" title={t.ui.sidebar.notReady}>
                   ·
                 </span>
               )}
@@ -57,15 +67,32 @@ export function Sidebar({ version }: { version: string | null }) {
 
       <div className="sidebar__footer">
         <label className="sidebar__theme">
-          <span>Оформление</span>
+          <span>{t.ui.common.language}</span>
+          <select
+            value={lang}
+            onChange={(e) => setLang(e.target.value as typeof lang)}
+            aria-label={t.ui.common.language}
+          >
+            {LANGUAGES.map((l) => (
+              // Each language is named in itself, never translated: someone who has
+              // landed in a language they cannot read must still find their own.
+              <option key={l.lang} value={l.lang}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="sidebar__theme">
+          <span>{t.ui.common.appearance}</span>
           <select
             value={choice}
             onChange={(e) => setChoice(e.target.value as ThemeChoice)}
-            aria-label="Оформление"
+            aria-label={t.ui.common.appearance}
           >
-            {(Object.keys(THEME_LABEL) as ThemeChoice[]).map((k) => (
+            {THEME_ORDER.map((k) => (
               <option key={k} value={k}>
-                {THEME_LABEL[k]}
+                {t.ui.common.theme[k]}
               </option>
             ))}
           </select>

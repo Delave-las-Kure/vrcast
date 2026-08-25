@@ -4,6 +4,7 @@
 //! (конституция, принцип IV). Это не соглашение, а свойство типа: поля под пароль
 //! здесь просто нет, и положить его в профиль некуда.
 
+use super::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
 /// Каталог раздачи по умолчанию.
@@ -101,26 +102,31 @@ pub struct ServerProfile {
 /// Проверка возвращает **все** замечания сразу, а не первое: в мастере настройки
 /// пользователь заполняет форму целиком, и показывать ошибки по одной — значит
 /// заставлять его проходить круг заново из-за каждой опечатки.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProfileProblem {
-    /// Имя поля — интерфейс подсвечивает его.
+    /// Which field to highlight in the form.
     pub field: &'static str,
-    /// Готовая формулировка на русском (FR-105).
-    pub message: String,
+    /// What to say about it. The wording is the interface's (FR-105, FR-106).
+    pub detail: Detail,
 }
 
 impl ProfileProblem {
-    fn new(field: &'static str, message: impl Into<String>) -> Self {
+    fn new(field: &'static str, key: DetailCode) -> Self {
         Self {
             field,
-            message: message.into(),
+            detail: Detail::new(key),
         }
+    }
+
+    /// An objection that names a number: a length limit, an allowed range.
+    fn with(field: &'static str, detail: Detail) -> Self {
+        Self { field, detail }
     }
 }
 
 impl std::fmt::Display for ProfileProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.field, self.message)
+        write!(f, "{}: {}", self.field, self.detail.key)
     }
 }
 
@@ -189,56 +195,41 @@ impl ServerProfile {
         let mut problems = Vec::new();
 
         if self.id.trim().is_empty() {
-            problems.push(ProfileProblem::new("id", "Внутренний номер профиля пуст."));
+            problems.push(ProfileProblem::new("id", DetailCode::ProfileIdEmpty));
         }
 
         if self.name.trim().is_empty() {
-            problems.push(ProfileProblem::new(
-                "name",
-                "Название профиля не может быть пустым — по нему вы будете отличать серверы.",
-            ));
+            problems.push(ProfileProblem::new("name", DetailCode::ProfileNameEmpty));
         } else if self.name.chars().count() > MAX_NAME_LEN {
-            problems.push(ProfileProblem::new(
+            problems.push(ProfileProblem::with(
                 "name",
-                format!("Название длиннее {MAX_NAME_LEN} знаков — сократите его."),
+                Detail::new(DetailCode::ProfileNameTooLong).with("max", MAX_NAME_LEN),
             ));
         }
 
         if self.host.is_empty() {
-            problems.push(ProfileProblem::new(
-                "host",
-                "Укажите адрес сервера — IP-адрес или имя.",
-            ));
+            problems.push(ProfileProblem::new("host", DetailCode::ProfileHostEmpty));
         } else if self.host.contains(char::is_whitespace) || self.host.contains('/') {
-            problems.push(ProfileProblem::new(
-                "host",
-                "Адрес сервера не должен содержать пробелов и косых черт — только адрес, без ссылки.",
-            ));
+            problems.push(ProfileProblem::new("host", DetailCode::ProfileHostNotBare));
         }
 
         if self.port == 0 {
-            problems.push(ProfileProblem::new(
-                "port",
-                "Порт должен быть от 1 до 65535. Обычный порт SSH — 22.",
-            ));
+            problems.push(ProfileProblem::new("port", DetailCode::ProfilePortRange));
         }
 
         if self.user.is_empty() {
-            problems.push(ProfileProblem::new(
-                "user",
-                "Укажите пользователя, под которым приложение входит на сервер.",
-            ));
+            problems.push(ProfileProblem::new("user", DetailCode::ProfileUserEmpty));
         } else if self.user.contains(char::is_whitespace) {
             problems.push(ProfileProblem::new(
                 "user",
-                "Имя пользователя не должно содержать пробелов.",
+                DetailCode::ProfileUserHasSpaces,
             ));
         }
 
         if self.secret_ref.is_empty() {
             problems.push(ProfileProblem::new(
                 "secret_ref",
-                "Не задана ссылка на секрет в хранилище системы.",
+                DetailCode::ProfileSecretRefEmpty,
             ));
         }
 
@@ -247,7 +238,7 @@ impl ServerProfile {
                 if self.key_path.as_deref().unwrap_or("").is_empty() {
                     problems.push(ProfileProblem::new(
                         "key_path",
-                        "При входе по ключу нужен путь к файлу приватного ключа.",
+                        DetailCode::ProfileKeyPathRequired,
                     ));
                 }
             }
@@ -255,23 +246,23 @@ impl ServerProfile {
                 if self.key_path.is_some() {
                     problems.push(ProfileProblem::new(
                         "key_path",
-                        "При входе по паролю путь к ключу не используется — уберите его.",
+                        DetailCode::ProfileKeyPathUnused,
                     ));
                 }
             }
         }
 
-        if let Err(msg) = check_domain(&self.domain) {
-            problems.push(ProfileProblem::new("domain", msg));
+        if let Err(key) = check_domain(&self.domain) {
+            problems.push(ProfileProblem::new("domain", key));
         }
 
-        if let Err(msg) = check_dir(&self.video_dir) {
-            problems.push(ProfileProblem::new("video_dir", msg));
+        if let Err(key) = check_dir(&self.video_dir) {
+            problems.push(ProfileProblem::new("video_dir", key));
         }
 
         if let Some(base) = &self.cdn_base {
-            if let Err(msg) = check_cdn_base(base) {
-                problems.push(ProfileProblem::new("cdn_base", msg));
+            if let Err(key) = check_cdn_base(base) {
+                problems.push(ProfileProblem::new("cdn_base", key));
             }
         }
 
@@ -310,83 +301,65 @@ fn normalize_dir(raw: &str) -> String {
     }
 }
 
-fn check_domain(domain: &str) -> Result<(), String> {
+fn check_domain(domain: &str) -> Result<(), DetailCode> {
     if domain.is_empty() {
-        return Err(String::from(
-            "Укажите домен раздачи — без него не выдать зрительскую ссылку и не проверить, что раздача работает.",
-        ));
+        return Err(DetailCode::DomainEmpty);
     }
     if domain.contains(char::is_whitespace) {
-        return Err(String::from("В домене не должно быть пробелов."));
+        return Err(DetailCode::DomainHasSpaces);
     }
     if domain.contains('/') {
-        return Err(String::from(
-            "Укажите только домен, без пути: например, stream.example.com.",
-        ));
+        return Err(DetailCode::DomainHasPath);
     }
     if domain.contains('@') || domain.contains(':') {
-        return Err(String::from(
-            "Укажите только домен — без пользователя и без порта.",
-        ));
+        return Err(DetailCode::DomainHasUserOrPort);
     }
     if domain.starts_with('.') || domain.ends_with('.') || domain.contains("..") {
-        return Err(String::from(
-            "Домен записан неверно: точки не могут стоять по краям и идти подряд.",
-        ));
+        return Err(DetailCode::DomainBadDots);
     }
     if !domain.contains('.') {
-        return Err(String::from(
-            "Домен должен содержать точку: например, stream.example.com.",
-        ));
+        return Err(DetailCode::DomainNoDot);
     }
     if domain
         .chars()
         .any(|c| !(c.is_alphanumeric() || c == '-' || c == '.'))
     {
-        return Err(String::from(
-            "В домене допустимы только буквы, цифры, дефис и точка.",
-        ));
+        return Err(DetailCode::DomainBadChars);
     }
     Ok(())
 }
 
-fn check_dir(dir: &str) -> Result<(), String> {
+fn check_dir(dir: &str) -> Result<(), DetailCode> {
     if dir.is_empty() {
-        return Err(String::from("Укажите каталог с видео на сервере."));
+        return Err(DetailCode::VideoDirEmpty);
     }
     if !dir.starts_with('/') {
-        return Err(String::from(
-            "Путь должен быть от корня и начинаться с косой черты.",
-        ));
+        return Err(DetailCode::VideoDirNotAbsolute);
     }
     // Отрезки `..` опасны не теоретически: путь отсюда попадает в команды на сервере,
     // и один такой отрезок выводит запись за пределы каталога раздачи.
     if dir.split('/').any(|part| part == "..") {
-        return Err(String::from(
-            "Путь не должен содержать «..» — укажите каталог целиком.",
-        ));
+        return Err(DetailCode::VideoDirHasDotDot);
     }
     if dir.contains('\n') || dir.contains('\r') {
-        return Err(String::from("Путь не должен содержать перевода строки."));
+        return Err(DetailCode::VideoDirHasNewline);
     }
     Ok(())
 }
 
-fn check_cdn_base(base: &str) -> Result<(), String> {
+fn check_cdn_base(base: &str) -> Result<(), DetailCode> {
     if !(base.starts_with("https://") || base.starts_with("http://")) {
-        return Err(String::from(
-            "Адрес CDN должен начинаться с https:// или http://.",
-        ));
+        return Err(DetailCode::CdnBaseNoScheme);
     }
     if base.contains(char::is_whitespace) {
-        return Err(String::from("В адресе CDN не должно быть пробелов."));
+        return Err(DetailCode::CdnBaseHasSpaces);
     }
     let rest = base
         .strip_prefix("https://")
         .or_else(|| base.strip_prefix("http://"))
         .unwrap_or("");
     if rest.is_empty() {
-        return Err(String::from("Адрес CDN указан не полностью."));
+        return Err(DetailCode::CdnBaseIncomplete);
     }
     Ok(())
 }

@@ -1,9 +1,11 @@
 /**
- * Заглушка раздела, который ещё не сделан.
+ * A placeholder for a section that does not exist yet.
  *
- * Честная: называет фазу и что появится. Пустой экран без объяснения выглядит поломкой,
- * а «скоро будет» ничего не сообщает.
+ * An honest one: it names the phase and what will appear. A blank screen with no
+ * explanation looks broken, and "coming soon" says nothing at all.
  */
+
+import { useT } from "../../shared/i18n";
 
 export function ComingSoon({
   title,
@@ -14,9 +16,11 @@ export function ComingSoon({
   title: string;
   phase: string;
   what: string;
-  /** Чем пользоваться, пока раздела нет. */
+  /** What to use while the section is missing. */
   fallback?: string;
 }) {
+  const t = useT();
+
   return (
     <div className="coming-soon">
       <h1>{title}</h1>
@@ -24,7 +28,7 @@ export function ComingSoon({
       <p>{what}</p>
       {fallback && (
         <p className="coming-soon__fallback">
-          <strong>Пока пользуйтесь прежним способом:</strong> {fallback}
+          <strong>{t.ui.comingSoon.useMeanwhile}</strong> {fallback}
         </p>
       )}
     </div>

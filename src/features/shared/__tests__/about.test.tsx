@@ -7,8 +7,9 @@
  * человеку на руки досталась конкретная сборка, и право у него на её исходники.
  */
 
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderIn } from "../../../test-utils";
 
 const mockAppVersions = vi.fn();
 
@@ -27,31 +28,31 @@ beforeEach(() => {
 
 describe("о программе", () => {
   it("называет лицензию", async () => {
-    render(<About />);
+    renderIn(<About />);
     expect(await screen.findByText(/GNU General Public License/)).toBeInTheDocument();
   });
 
   it("даёт адрес исходного кода ссылкой, по которой можно перейти", async () => {
-    render(<About />);
+    renderIn(<About />);
     const ссылка = await screen.findByRole("link", { name: /github\.com/ });
     expect(ссылка).toHaveAttribute("href", expect.stringContaining("github.com"));
   });
 
   it("привязывает исходный код к той версии, что на руках", async () => {
     // Обязательство GPL — про полученную сборку, а не про «последнюю вообще».
-    render(<About />);
+    renderIn(<About />);
     expect(await screen.findByText("v0.1.0")).toBeInTheDocument();
   });
 
   it("указывает, где перечень чужих работ", async () => {
-    render(<About />);
+    renderIn(<About />);
     expect(await screen.findByText("THIRD-PARTY.md")).toBeInTheDocument();
   });
 
   it("не молчит о лицензии, когда версию узнать не удалось", async () => {
     // Ядро может быть недоступно, но обязательство от этого никуда не девается.
     mockAppVersions.mockRejectedValue(new Error("ядро недоступно"));
-    render(<About />);
+    renderIn(<About />);
     expect(await screen.findByText(/GNU General Public License/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /github\.com/ })).toBeInTheDocument();
   });

@@ -10,11 +10,12 @@
 //! о нехватке места в середине заливки на тридцать гигабайт значит потерять час
 //! и оставить на сервере недокачанный хвост.
 
-use super::error::{AppError, ErrorCode, Result};
+use super::error::{AppError, DetailCode, ErrorCode, Result};
 use super::AppState;
 use crate::domain::progress_estimate::ProgressEstimate;
 use crate::domain::remote_name::{self, NameVerdict};
 use crate::domain::transfer::ResumeToken;
+use crate::domain::wording::Detail;
 use crate::server::free_space::{self, SpaceVerdict};
 use crate::server::upload::{self, UploadError, UploadPlan};
 use crate::server::{checksum, connect, disk, listing};
@@ -99,18 +100,16 @@ pub mod api {
         let local_path = PathBuf::from(&request.local_path);
         let meta = tokio::fs::metadata(&local_path).await.map_err(|e| {
             AppError::new(ErrorCode::InvalidInput)
-                .with_message("Файл не найден или недоступен для чтения.")
+                .detail(DetailCode::UploadFileUnreadable)
                 .with_cause(format!("{}: {e}", request.local_path))
         })?;
         if !meta.is_file() {
-            return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Указан не файл, а что-то другое."));
+            return Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::UploadNotAFile));
         }
 
         let clean_name = remote_name::sanitize(&request.remote_name);
         if clean_name.is_empty() {
-            return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Укажите имя, под которым файл станет виден зрителям."));
+            return Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::UploadNameEmpty));
         }
 
         // Проверки до передачи — по живому соединению.
@@ -134,10 +133,9 @@ pub mod api {
         // столкнутся.
         if let Some(busy) = running_upload_for(state, &profile.id, &clean_name)? {
             return Err(AppError::new(ErrorCode::NameExists)
-                .with_message(format!(
-                    "Файл «{clean_name}» уже заливается на этот сервер. \
-                     Дождитесь конца или отмените ту задачу."
-                ))
+                .with_detail(
+                    Detail::new(DetailCode::UploadAlreadyRunning).with("name", clean_name.clone()),
+                )
                 .with_cause(busy));
         }
 
@@ -306,10 +304,7 @@ pub mod api {
         // Сколько уже лежит во временном файле: при продолжении это место занято,
         // и требовать его заново значило бы отказать в докачке почти дошедшего файла.
         let staging = remote_name::staging_dir(&profile.video_dir).ok_or_else(|| {
-            AppError::new(ErrorCode::InvalidInput).with_message(
-                "Каталог раздачи указан в корне файловой системы — рядом с ним негде \
-                 собирать файл, а собирать внутри нельзя: недокачанное стало бы видно зрителям.",
-            )
+            AppError::new(ErrorCode::InvalidInput).detail(DetailCode::VideoDirAtRoot)
         })?;
         let already =
             upload::uploaded_so_far(conn, &remote_name::staging_file(&staging, clean_name))
@@ -336,8 +331,9 @@ pub mod api {
         let (name_exists, cdn_cached) = match verdict {
             NameVerdict::Exists { cdn_cached } => (true, cdn_cached),
             NameVerdict::Reserved => {
-                return Err(AppError::new(ErrorCode::InvalidInput)
-                    .with_message("Это имя занято служебной записью раздачи — выберите другое."))
+                return Err(
+                    AppError::new(ErrorCode::InvalidInput).detail(DetailCode::UploadNameReserved)
+                )
             }
             _ => (false, false),
         };
@@ -355,10 +351,16 @@ pub mod api {
     /// Одного размера мало — файл могли пересобрать в тот же объём, и тогда
     /// продолжение склеило бы две разные версии. Время изменения берётся как есть,
     /// без разбора: это метка для сравнения, а не дата для показа.
-    async fn source_fingerprint(path: &str) -> std::result::Result<(u64, Option<String>), String> {
-        let meta = tokio::fs::metadata(path)
-            .await
-            .map_err(|e| format!("исходный файл недоступен: {e}"))?;
+    async fn source_fingerprint(
+        path: &str,
+    ) -> std::result::Result<(u64, Option<String>), AppError> {
+        let meta = tokio::fs::metadata(path).await.map_err(|e| {
+            AppError::new(ErrorCode::InvalidInput)
+                .with_detail(
+                    Detail::new(DetailCode::UploadSourceUnreadable).with("path", path.to_owned()),
+                )
+                .with_cause(e)
+        })?;
         Ok((meta.len(), modified_at(&meta)))
     }
 
@@ -382,15 +384,20 @@ pub mod api {
         request: UploadRequest,
         clean_name: String,
         total: u64,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<(), AppError> {
         let profile = match crate::store::profiles::get(&db, &request.server_id) {
             Ok(Some(p)) => p,
-            Ok(None) => return Err(String::from("Профиль сервера удалён — заливать некуда.")),
-            Err(e) => return Err(e.to_string()),
+            Ok(None) => {
+                return Err(AppError::new(ErrorCode::InvalidInput)
+                    .detail(DetailCode::ProfileNotFound)
+                    .with_cause(&request.server_id))
+            }
+            Err(e) => return Err(e.into()),
         };
 
-        let staging = remote_name::staging_dir(&profile.video_dir)
-            .ok_or_else(|| String::from("Негде собирать файл рядом с каталогом раздачи."))?;
+        let staging = remote_name::staging_dir(&profile.video_dir).ok_or_else(|| {
+            AppError::new(ErrorCode::InvalidInput).detail(DetailCode::VideoDirAtRoot)
+        })?;
 
         // Тот ли это файл, с которого начинали.
         //
@@ -412,10 +419,9 @@ pub mod api {
             None => size_now != total,
         };
         if source_changed {
-            return Err(String::from(
-                "Исходный файл изменился с начала заливки. Продолжать нельзя: \
-                 на сервере получилась бы смесь двух файлов. Начните заливку заново.",
-            ));
+            return Err(
+                AppError::new(ErrorCode::ChecksumMismatch).detail(DetailCode::UploadSourceChanged)
+            );
         }
 
         let plan = UploadPlan {
@@ -449,7 +455,7 @@ pub mod api {
                 Ok(c) => c,
                 Err(e) => {
                     if attempt == MAX_ATTEMPTS {
-                        return Err(crate::store::redact::safe_display(&e));
+                        return Err(e.into());
                     }
                     wait_before_retry(&ctx, &mut delay).await?;
                     continue;
@@ -459,7 +465,7 @@ pub mod api {
             if attempt == 1 {
                 if let Err(e) = upload::ensure_staging(&conn, &staging, &profile.video_dir).await {
                     conn.close().await;
-                    return Err(e.to_string());
+                    return Err(AppError::new(ErrorCode::Internal).with_cause(e));
                 }
             }
 
@@ -484,13 +490,13 @@ pub mod api {
                 }
                 Err(e) => {
                     conn.close().await;
-                    return Err(e.to_string());
+                    return Err(AppError::new(ErrorCode::Internal).with_cause(e));
                 }
             }
         }
 
-        Err(String::from(
-            "Передача обрывалась слишком много раз подряд. Проверьте связь и продолжите задачу.",
+        Err(AppError::new(ErrorCode::SshUnreachable).with_detail(
+            Detail::new(DetailCode::UploadTooManyBreaks).with("attempts", MAX_ATTEMPTS),
         ))
     }
 
@@ -502,38 +508,37 @@ pub mod api {
         sent: u64,
         clean_name: &str,
         request: &UploadRequest,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<(), AppError> {
         if sent != plan.total_bytes {
-            return Err(format!(
-                "На сервер попало {sent} байт из {}. Файл в раздачу не введён.",
-                plan.total_bytes
+            return Err(AppError::new(ErrorCode::Internal).with_detail(
+                Detail::new(DetailCode::UploadShort)
+                    .with("sent", sent)
+                    .with("total", plan.total_bytes),
             ));
         }
 
-        ctx.report_important(0.98, "сверяем контрольные суммы");
+        ctx.report_important(0.98, DetailCode::StageChecksum);
 
         let ours = checksum::local(&plan.local_path)
             .await
-            .map_err(|e| format!("не посчитать контрольную сумму исходника: {e}"))?;
+            .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
         let theirs = checksum::remote(conn, &plan.remote_temp)
             .await
-            .map_err(|e| crate::store::redact::safe_display(&e))?;
+            .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
 
         if !checksum::matches(&ours, &theirs) {
             // Файл в раздачу не попадает, и мусор за собой убираем: испорченная
             // передача не должна оставлять следов (FR-032, FR-038).
             upload::cleanup(conn, &plan.remote_temp).await;
-            return Err(String::from(
-                "Переданный файл отличается от исходного. В раздачу он не введён, \
-                 временные данные убраны — запустите заливку снова.",
-            ));
+            return Err(AppError::new(ErrorCode::ChecksumMismatch)
+                .detail(DetailCode::UploadChecksumMismatch));
         }
 
         upload::publish(conn, plan)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
 
-        ctx.report_important(1.0, "готово");
+        ctx.report_important(1.0, DetailCode::StageDone);
         let _ = request;
         let _ = clean_name;
         Ok(())
@@ -543,11 +548,11 @@ pub mod api {
     async fn wait_before_retry(
         ctx: &crate::tasks::engine::TaskContext,
         delay: &mut Duration,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<(), AppError> {
         let cancel = ctx.cancel_token();
         tokio::select! {
             _ = tokio::time::sleep(*delay) => {}
-            _ = cancel.cancelled() => return Err(String::from("задача отменена")),
+            _ = cancel.cancelled() => return Err(AppError::new(ErrorCode::TaskCancelled)),
         }
         *delay = (*delay * 2).min(MAX_RETRY_DELAY);
         Ok(())
@@ -581,33 +586,30 @@ pub mod ipc {
 /// в конец диска на середине.
 pub fn space_error(shortage: SpaceShortage) -> AppError {
     AppError::new(ErrorCode::RemoteDiskFull)
-        .with_message(format!(
-            "На сервере не хватает {} — нужно {}, свободно {}.",
-            human(shortage.short_by),
-            human(shortage.needed),
-            human(shortage.free)
-        ))
+        .with_detail(
+            Detail::new(DetailCode::NotEnoughSpace)
+                .with("short_by", shortage.short_by)
+                .with("needed", shortage.needed)
+                .with("free", shortage.free),
+        )
         .with_cause(format!("short_by={}", shortage.short_by))
 }
 
 /// Отказ, который называет последствия и снимается подтверждением.
 pub fn warning_error(checks: &Preflight, name: &str) -> AppError {
-    let mut parts: Vec<String> = Vec::new();
+    let mut details: Vec<Detail> = Vec::new();
 
     if checks.name_exists {
-        parts.push(format!("Файл «{name}» уже раздаётся — он будет заменён."));
+        details.push(Detail::new(DetailCode::NameWillBeReplaced).with("name", name.to_string()));
         if checks.cdn_cached {
-            parts.push(String::from(
-                "У CDN какое-то время останется прежняя копия, и зрители будут получать старое.",
-            ));
+            details.push(Detail::new(DetailCode::CdnKeepsOldCopy));
         }
     }
     if checks.active_connections > 0 {
-        parts.push(format!(
-            "Прямо сейчас сервер отдаёт данные — открыто соединений: {}. \
-             Заливка вымоет из его памяти то, что смотрят, и просмотр подвиснет.",
-            checks.active_connections
-        ));
+        details.push(
+            Detail::new(DetailCode::ViewersActiveUpload)
+                .with("connections", checks.active_connections),
+        );
     }
 
     let code = if checks.name_exists {
@@ -615,20 +617,5 @@ pub fn warning_error(checks: &Preflight, name: &str) -> AppError {
     } else {
         ErrorCode::ViewersActive
     };
-    AppError::new(code).with_message(parts.join(" "))
-}
-
-fn human(bytes: u64) -> String {
-    const ЕДИНИЦЫ: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < ЕДИНИЦЫ.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} Б")
-    } else {
-        format!("{value:.1} {}", ЕДИНИЦЫ[unit])
-    }
+    AppError::new(code).with_details(details)
 }

@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 use vrcast_studio_lib::commands::convert::{api as convert, ConvertStart};
-use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::AppState;
 use vrcast_studio_lib::media::ffmpeg;
 use vrcast_studio_lib::store::db::Db;
@@ -142,8 +142,9 @@ async fn probing_a_missing_file_is_an_input_error() {
         .expect_err("probing a missing file succeeded");
 
     assert_eq!(err.code, ErrorCode::InvalidInput);
-    assert!(!err.message.is_empty(), "a refusal with nothing to read");
-    assert!(!err.hint.is_empty(), "a refusal with no hint what to do");
+    // The refusal names what is wrong, so the interface has something to say beyond
+    // the general "that will not do" the code alone carries.
+    assert!(!err.details.is_empty(), "a refusal with nothing to say");
 }
 
 #[tokio::test]
@@ -205,11 +206,17 @@ async fn asking_for_a_track_that_is_not_there_is_refused_before_anything_starts(
         .await
         .expect_err("a track that does not exist was accepted");
     assert_eq!(err.code, ErrorCode::InvalidInput);
+    let detail = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::PlanNoSuchTrack)
+        .unwrap_or_else(|| panic!("the missing track is not named: {err}"));
     // Numbered from one for people: "track 0 is missing" reads like a bug report.
-    assert!(
-        err.message.contains("дорожки 8"),
-        "the track number is not the one a person sees: {}",
-        err.message
+    // The conversion happens in the core, once, so no catalogue has to remember it.
+    assert_eq!(
+        detail.params.get("number").and_then(|v| v.as_u64()),
+        Some(8),
+        "the track number is not the one a person sees: {err}"
     );
 }
 
@@ -232,9 +239,8 @@ async fn writing_over_the_source_is_refused() {
 
     assert_eq!(err.code, ErrorCode::InvalidInput);
     assert!(
-        err.message.contains("исходник"),
-        "it does not say what is at stake: {}",
-        err.message
+        err.says(DetailCode::ConvertOutOverwritesSource),
+        "it does not say what is at stake: {err}"
     );
 }
 

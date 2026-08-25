@@ -16,12 +16,13 @@ pub mod library;
 pub mod servers;
 pub mod upload;
 
+use crate::domain::wording::Detail;
 use crate::store::db::Db;
 use crate::store::secrets::{OsSecretStore, SecretStore};
 use crate::tasks::engine::TaskEngine;
 use crate::tasks::state::PauseKind;
 use crate::tasks::store::TaskRecord;
-use error::{AppError, ErrorCode, Result};
+use error::{AppError, DetailCode, ErrorCode, Result};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -126,9 +127,9 @@ pub struct TaskOnClose {
     pub progress: f64,
     /// `resumes` — продолжится с достигнутого места; `restarts` — начнётся заново.
     pub outcome: &'static str,
-    /// Готовая к показу строка: общего «идут задачи, закрыть?» недостаточно,
-    /// оно не даёт принять решение.
-    pub explanation: String,
+    /// What exactly will happen to this one. A general "tasks are running, close
+    /// anyway?" is not enough: it gives nothing to decide on.
+    pub explanation: Detail,
 }
 
 /// Обычные функции — то, что на самом деле выполняется.
@@ -198,20 +199,17 @@ pub mod api {
             let (outcome, explanation) = match t.kind.pause_kind() {
                 PauseKind::ResumableAcrossRestart => (
                     "resumes",
-                    format!("продолжится с {percent} % при следующем запуске"),
+                    Detail::new(DetailCode::OnCloseResumesFrom).with("percent", percent),
                 ),
                 PauseKind::SuspendedProcess => (
                     "restarts",
-                    format!("придётся начать заново — потеряется {percent} % работы"),
+                    Detail::new(DetailCode::OnCloseRestartsLosing).with("percent", percent),
                 ),
                 PauseKind::NotPausable => {
                     if t.state == TaskState::Queued {
-                        (
-                            "resumes",
-                            String::from("ещё не начиналась, запустится позже"),
-                        )
+                        ("resumes", Detail::new(DetailCode::OnCloseNotStartedYet))
                     } else {
-                        ("restarts", String::from("придётся выполнить заново"))
+                        ("restarts", Detail::new(DetailCode::OnCloseMustRunAgain))
                     }
                 }
             };
@@ -235,9 +233,7 @@ pub mod api {
     pub async fn ffmpeg_probe_self() -> Result<crate::media::ffmpeg::FfmpegInfo> {
         let info = crate::media::ffmpeg::probe_self().await.map_err(|e| {
             AppError::new(ErrorCode::FfmpegBroken)
-                .with_message(
-                    "Вложенный FFmpeg не работает — готовить файлы нечем.                      Переустановите приложение: возможно, антивирус удалил часть файлов.",
-                )
+                .detail(DetailCode::FfmpegSelfBroken)
                 .with_cause(e.to_string())
         })?;
 
@@ -245,9 +241,7 @@ pub mod api {
         // видеокарты — то есть у части людей приложение молча оказалось бы бесполезным.
         if !info.has_x264 {
             return Err(AppError::new(ErrorCode::FfmpegBroken)
-                .with_message(
-                    "Вложенный FFmpeg собран без программного кодировщика H.264.                      На машине без подходящей видеокарты готовить файлы будет нечем.",
-                )
+                .detail(DetailCode::FfmpegNoX264)
                 .with_cause(info.version));
         }
         Ok(info)
@@ -265,17 +259,16 @@ pub mod api {
             .await
             .map_err(|e| match e {
                 ProbeError::Ffmpeg(_) => AppError::new(ErrorCode::FfmpegBroken)
-                    .with_message(
-                        "Вложенный FFmpeg не работает — разбирать файлы нечем.                          Переустановите приложение: возможно, антивирус удалил часть файлов.",
-                    )
+                    .detail(DetailCode::FfmpegSelfBroken)
                     .with_cause(e.to_string()),
                 ProbeError::NoVideo => AppError::new(ErrorCode::InvalidInput)
-                    .with_message("В этом файле нет видео — возможно, выбран не тот файл.")
+                    .detail(DetailCode::ProbeNoVideo)
                     .with_cause(path),
                 ProbeError::Unreadable(_) => AppError::new(ErrorCode::InvalidInput)
-                    .with_message("Файл не удалось разобрать: он повреждён или это не видео.")
-                    // Жалоба разборщика оставлена как есть: «moov atom not found»
-                    // непонятно, но её можно найти поиском, а «файл плохой» — нельзя.
+                    .detail(DetailCode::ProbeUnreadable)
+                    // The parser's own complaint is kept as it stands: "moov atom not
+                    // found" means nothing to most people, but it can be searched for,
+                    // and "bad file" cannot.
                     .with_cause(e.to_string()),
             })
     }

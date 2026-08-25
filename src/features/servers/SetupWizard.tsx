@@ -1,18 +1,19 @@
 /**
- * T052 — мастер настройки сервера.
+ * T052 — the server setup wizard.
  *
- * Три шага, и порядок между ними обязателен:
+ * Three steps, and the order between them is not optional:
  *
- * 1. **Данные.** Форма с полями профиля. Ошибки показываются все сразу — человек
- *    заполняет её целиком, и гонять его по кругу из-за каждой опечатки незачем.
- * 2. **Отпечаток.** Приложение узнаёт отпечаток сервера, **ничего ему не предъявляя**,
- *    и показывает человеку. Пока он не подтверждён, ни пароль, ни ключ на сервер
- *    не уходят (FR-092). Это единственный шаг, который нельзя пропустить.
- * 3. **Проверка.** Четыре шага подряд: сеть, вход, каталог с видео, отдача по домену.
- *    Показываются все — с отметкой, где остановилось (FR-003).
+ * 1. **Details.** A form of profile fields. Every objection is shown at once — a
+ *    person fills the form in whole, and sending them round again for each typo is
+ *    work that need not exist.
+ * 2. **Fingerprint.** The application learns the server's fingerprint **presenting it
+ *    nothing**, and shows it. Until it is confirmed, neither password nor key goes to
+ *    the server (FR-092). This is the one step that cannot be skipped.
+ * 3. **Check.** Four steps in a row: network, sign-in, video directory, serving over
+ *    the domain. All are shown, marked with where it stopped (FR-003).
  *
- * Если рядом нашёлся `server.env` от прежнего порядка работы, поля предлагается
- * заполнить из него (T043). Файл при этом только читается.
+ * If a `server.env` from the old way of working is found nearby, the fields can be
+ * filled in from it (T043). The file is only read, never changed.
  */
 
 import { useEffect, useState } from "react";
@@ -23,6 +24,8 @@ import type {
   TestStep,
 } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
+import { useLang, useT } from "../../shared/i18n";
+import { renderDetail } from "../../shared/i18n/render";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useServers } from "./store";
 
@@ -54,9 +57,11 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [steps, setSteps] = useState<TestStep[] | null>(null);
   const [suggestion, setSuggestion] = useState<ImportSuggestion | null>(null);
+  const t = useT();
+  const w = t.ui.wizard;
 
-  // Предложение перенести настройки ищется один раз при открытии. Его отсутствие —
-  // обычное дело, а не беда: у большинства пользователей файла нет и не будет.
+  // The import suggestion is looked for once, on opening. Its absence is ordinary
+  // rather than a problem: most people have no such file and never will.
   useEffect(() => {
     let cancelled = false;
     ipc
@@ -75,15 +80,15 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   const field = <K extends keyof ServerInput>(key: K, value: ServerInput[K]) =>
     setInput((prev) => ({ ...prev, [key]: value }));
 
-  /** Шаг 1 → 2: создать профиль и узнать отпечаток. */
+  /** Step 1 to 2: create the profile and learn the fingerprint. */
   const submitForm = async () => {
     setBusy(true);
     setError(null);
     try {
       const id = await ipc.serverAdd(input, secret);
       setServerId(id);
-      // Секрет из памяти интерфейса больше не нужен: он ушёл в хранилище системы
-      // и обратно не возвращается никогда.
+      // The secret is no longer needed in the interface's memory: it went into the
+      // system store and is never handed back.
       setSecret("");
       setFingerprint(await ipc.serverProbeFingerprint(input.host, input.port));
       setStage("fingerprint");
@@ -94,7 +99,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
     }
   };
 
-  /** Шаг 2 → 3: подтвердить отпечаток и прогнать проверку. */
+  /** Step 2 to 3: confirm the fingerprint and run the check. */
   const confirmFingerprint = async () => {
     if (!serverId || !fingerprint) return;
     setBusy(true);
@@ -111,14 +116,14 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
     }
   };
 
-  /** Отказ на шаге отпечатка: профиль уже создан, и оставлять его нельзя. */
+  /** Giving up at the fingerprint step: the profile exists already and must not stay. */
   const abandon = async () => {
     if (serverId) {
       try {
         await ipc.serverRemove(serverId);
       } catch {
-        // Уборка не удалась — покажется в списке, оттуда его можно удалить руками.
-        // Прерывать закрытие из-за этого нельзя: человек уже решил отказаться.
+        // Cleaning up failed — it will show in the list and can be deleted by hand.
+        // Closing must not be held up for it: the person has already decided.
       }
       await reload();
     }
@@ -131,20 +136,20 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="wizard" role="dialog" aria-label="Настройка сервера">
+    <div className="wizard" role="dialog" aria-label={w.dialogLabel}>
       <header className="wizard__head">
-        <h2>Новый сервер</h2>
+        <h2>{w.heading}</h2>
         <ol className="wizard__steps">
-          <li className={stage === "form" ? "is-current" : "is-done"}>Данные</li>
+          <li className={stage === "form" ? "is-current" : "is-done"}>{w.stepData}</li>
           <li
             className={
               stage === "fingerprint" ? "is-current" : stage === "form" ? "" : "is-done"
             }
           >
-            Отпечаток
+            {w.stepFingerprint}
           </li>
           <li className={stage === "test" || stage === "done" ? "is-current" : ""}>
-            Проверка
+            {w.stepTest}
           </li>
         </ol>
       </header>
@@ -156,14 +161,10 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
           {suggestion && (
             <div className="notice" role="status">
               <div className="notice__body">
-                <strong className="notice__message">
-                  Рядом нашлись настройки от прежнего способа работы
-                </strong>
+                <strong className="notice__message">{w.importFound}</strong>
                 <p className="notice__hint">
-                  {suggestion.source} — можно подставить адрес, домен, пользователя и путь
-                  к ключу. Файл только читается и не изменяется.
-                  {suggestion.needs_passphrase &&
-                    " Парольную фразу ключа придётся ввести: в файле её нет."}
+                  {suggestion.source} {w.importExplain}
+                  {suggestion.needs_passphrase && w.importNeedsPassphrase}
                 </p>
               </div>
               <button
@@ -172,7 +173,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
                   setSuggestion(null);
                 }}
               >
-                Подставить
+                {w.importApply}
               </button>
             </div>
           )}
@@ -185,27 +186,27 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             }}
           >
             <label>
-              <span>Название</span>
+              <span>{w.fieldName}</span>
               <input
                 value={input.name}
                 onChange={(e) => field("name", e.target.value)}
-                placeholder="Как отличать этот сервер от других"
+                placeholder={w.fieldNamePlaceholder}
                 required
               />
             </label>
 
             <div className="form__row">
               <label className="form__grow">
-                <span>Адрес</span>
+                <span>{w.fieldHost}</span>
                 <input
                   value={input.host}
                   onChange={(e) => field("host", e.target.value)}
-                  placeholder="IP-адрес или имя"
+                  placeholder={w.fieldHostPlaceholder}
                   required
                 />
               </label>
               <label className="form__narrow">
-                <span>Порт</span>
+                <span>{w.fieldPort}</span>
                 <input
                   type="number"
                   min={1}
@@ -216,12 +217,12 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
               </label>
             </div>
 
-            {/* Пояснение стоит рядом с полем, а НЕ внутри метки: иначе оно попадает
-                в название поля, и озвучиватель экрана читает его целиком вслух
-                при каждом переходе. */}
+            {/* The explanation sits beside the field and NOT inside the label:
+                inside, it becomes part of the field's name and a screen reader
+                reads the whole thing aloud on every visit. */}
             <div className="field">
               <label>
-                <span>Домен раздачи</span>
+                <span>{w.fieldDomain}</span>
                 <input
                   value={input.domain}
                   onChange={(e) => field("domain", e.target.value)}
@@ -229,15 +230,12 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
                   required
                 />
               </label>
-              <small className="muted">
-                По нему выдаются зрительские ссылки. Можно вставить прямо из адресной
-                строки — лишнее уберётся само.
-              </small>
+              <small className="muted">{w.fieldDomainHint}</small>
             </div>
 
             <div className="form__row">
               <label className="form__grow">
-                <span>Пользователь</span>
+                <span>{w.fieldUser}</span>
                 <input
                   value={input.user}
                   onChange={(e) => field("user", e.target.value)}
@@ -245,7 +243,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
                 />
               </label>
               <label className="form__grow">
-                <span>Вход</span>
+                <span>{w.fieldAuth}</span>
                 <select
                   value={input.auth_kind}
                   onChange={(e) =>
@@ -256,15 +254,15 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
                     }))
                   }
                 >
-                  <option value="key">По ключу</option>
-                  <option value="password">По паролю</option>
+                  <option value="key">{w.authKey}</option>
+                  <option value="password">{w.authPassword}</option>
                 </select>
               </label>
             </div>
 
             {input.auth_kind === "key" && (
               <label>
-                <span>Путь к приватному ключу</span>
+                <span>{w.fieldKeyPath}</span>
                 <input
                   value={input.key_path ?? ""}
                   onChange={(e) => field("key_path", e.target.value || null)}
@@ -277,7 +275,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             <div className="field">
               <label>
                 <span>
-                  {input.auth_kind === "key" ? "Парольная фраза ключа" : "Пароль"}
+                  {input.auth_kind === "key" ? w.fieldPassphrase : w.fieldPassword}
                 </span>
                 <input
                   type="password"
@@ -286,38 +284,35 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
                   autoComplete="off"
                 />
               </label>
-              <small className="muted">
-                Сохраняется в хранилище паролей системы, а не в файлах приложения.
-                Обратно приложению он не возвращается.
-              </small>
+              <small className="muted">{w.secretHint}</small>
             </div>
 
             <details className="form__extra">
-              <summary>Необязательное</summary>
+              <summary>{w.optional}</summary>
               <label>
-                <span>Каталог с видео на сервере</span>
+                <span>{w.fieldVideoDir}</span>
                 <input
                   value={input.video_dir ?? ""}
                   onChange={(e) => field("video_dir", e.target.value || null)}
-                  placeholder="оставьте пустым для значения по умолчанию"
+                  placeholder={w.fieldVideoDirPlaceholder}
                 />
               </label>
               <label>
-                <span>Адрес CDN</span>
+                <span>{w.fieldCdn}</span>
                 <input
                   value={input.cdn_base ?? ""}
                   onChange={(e) => field("cdn_base", e.target.value || null)}
-                  placeholder="пусто = ссылки только через сам сервер"
+                  placeholder={w.fieldCdnPlaceholder}
                 />
               </label>
             </details>
 
             <div className="form__actions">
               <button type="button" onClick={onClose} disabled={busy}>
-                Отмена
+                {t.ui.common.cancel}
               </button>
               <button type="submit" disabled={busy}>
-                {busy ? "Проверяем…" : "Дальше"}
+                {busy ? w.checking : w.next}
               </button>
             </div>
           </form>
@@ -326,22 +321,15 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
 
       {stage === "fingerprint" && fingerprint && (
         <section className="wizard__stage">
-          <p>
-            Сервер представился вот этим отпечатком. Сверьте его с тем, что показывает
-            панель управления вашего хостера, — и подтвердите.
-          </p>
+          <p>{w.fingerprintLead}</p>
           <code className="fingerprint">{fingerprint}</code>
-          <p className="muted">
-            До подтверждения приложение не отправит серверу ни пароль, ни ключ. Так
-            подменённый сервер не получит ваши учётные данные, даже если сумеет
-            притвориться нужным адресом.
-          </p>
+          <p className="muted">{w.fingerprintWhy}</p>
           <div className="form__actions">
             <button type="button" onClick={() => void abandon()} disabled={busy}>
-              Отказаться
+              {w.abandon}
             </button>
             <button type="button" onClick={() => void confirmFingerprint()} disabled={busy}>
-              {busy ? "Проверяем…" : "Отпечаток верный"}
+              {busy ? w.checking : w.fingerprintOk}
             </button>
           </div>
         </section>
@@ -364,10 +352,10 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
               }}
               disabled={busy}
             >
-              Проверить снова
+              {w.testAgain}
             </button>
             <button type="button" onClick={() => void finish()} disabled={busy}>
-              Готово
+              {w.done}
             </button>
           </div>
         </section>
@@ -377,26 +365,36 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * Показ шагов проверки.
+ * Showing the steps of the check.
  *
- * Показываются **все** шаги, включая невыполнявшиеся: человеку нужно видеть,
- * что успело пройти, а не только последнюю беду (FR-003).
+ * **Every** step is shown, including the ones not attempted: a person needs to see
+ * what got through, not only the last thing that went wrong (FR-003).
+ *
+ * The title comes from the step's id rather than travelling with it: the core stopped
+ * composing prose, and one catalogue means one wording per step on every screen.
  */
 export function TestSteps({ steps }: { steps: TestStep[] | null }) {
-  if (!steps) return <p className="muted">Проверяем подключение…</p>;
+  const t = useT();
+  const { lang } = useLang();
+
+  if (!steps) return <p className="muted">{t.ui.wizard.testRunning}</p>;
 
   return (
     <ol className="steps">
-      {steps.map((s) => (
-        <li key={s.id} className={`step step--${s.status}`}>
+      {steps.map((step) => (
+        <li key={step.id} className={`step step--${step.status}`}>
           <span className="step__mark" aria-hidden="true">
-            {s.status === "ok" ? "✓" : s.status === "failed" ? "✕" : "·"}
+            {step.status === "ok" ? "✓" : step.status === "failed" ? "✕" : "·"}
           </span>
           <div className="step__body">
-            <span className="step__title">{s.title}</span>
-            {s.detail && <span className="step__detail">{s.detail}</span>}
-            {s.status === "skipped" && !s.detail && (
-              <span className="step__detail muted">не проверяли: остановились раньше</span>
+            <span className="step__title">
+              {t.ui.servers.steps[step.id as keyof typeof t.ui.servers.steps] ?? step.id}
+            </span>
+            {step.detail && (
+              <span className="step__detail">{renderDetail(step.detail, t, lang)}</span>
+            )}
+            {step.status === "skipped" && !step.detail && (
+              <span className="step__detail muted">{t.ui.wizard.stepSkipped}</span>
             )}
           </div>
         </li>

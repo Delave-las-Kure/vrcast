@@ -50,34 +50,34 @@ impl std::fmt::Display for ServerAddress {
 /// `contracts/ipc-commands.md` и своей подсказке пользователю (FR-105).
 #[derive(Debug, thiserror::Error)]
 pub enum SshError {
-    #[error("сервер {addr} недоступен: {reason}")]
+    #[error("server {addr} is unreachable: {reason}")]
     Unreachable { addr: ServerAddress, reason: String },
 
     /// FR-092. Самая опасная из ошибок здесь: она означает либо смену сервера,
     /// либо перехват соединения, и молча её проглатывать нельзя.
-    #[error("отпечаток сервера {addr} изменился. Ожидался {expected}, получен {actual}")]
+    #[error("fingerprint of server {addr} has changed: expected {expected}, got {actual}")]
     HostKeyChanged {
         addr: ServerAddress,
         expected: String,
         actual: String,
     },
 
-    #[error("отпечаток сервера {addr} ещё не подтверждён")]
+    #[error("fingerprint of server {addr} has not been confirmed yet")]
     HostKeyUnconfirmed { addr: ServerAddress },
 
-    #[error("сервер предъявил сертификат вместо ключа — такой сервер не поддерживается")]
+    #[error("the server presented a certificate instead of a key, which is not supported")]
     HostKeyIsCertificate,
 
-    #[error("вход на сервер не удался. Сервер предлагает способы: {methods}")]
+    #[error("sign-in failed; the server offers: {methods}")]
     AuthFailed { methods: String },
 
-    #[error("ключ {path} защищён парольной фразой — укажите её")]
+    #[error("key {path} is protected by a passphrase")]
     KeyNeedsPassphrase { path: String },
 
-    #[error("не удалось прочитать ключ {path}: {reason}")]
+    #[error("could not read key {path}: {reason}")]
     KeyUnreadable { path: String, reason: String },
 
-    #[error("команда на сервере не выполнилась: {0}")]
+    #[error("command on the server failed: {0}")]
     Exec(String),
 
     /// Файловая операция на сервере не удалась.
@@ -87,10 +87,10 @@ pub enum SshError {
     /// «проверьте владельца каталога» — при полном диске человек шёл чинить то,
     /// что не сломано, а настоящая причина лежала на виду в тексте ошибки
     /// (задолженность T071).
-    #[error("файловая операция на сервере не удалась: {reason}")]
+    #[error("file operation on the server failed: {reason}")]
     Sftp { kind: SftpFailure, reason: String },
 
-    #[error("ошибка протокола SSH: {0}")]
+    #[error("SSH protocol error: {0}")]
     Protocol(String),
 }
 

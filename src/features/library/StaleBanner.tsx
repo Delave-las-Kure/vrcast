@@ -1,24 +1,24 @@
 /**
- * T058 — пометка, что показано последнее известное состояние.
+ * T058 — the mark that says this is the last known state.
  *
- * Появляется, когда сервер недоступен. Альтернативы хуже обе: пустой экран
- * неотличим от «библиотека пропала», а бесконечная загрузка — от «приложение
- * зависло». Человеку нужно знать ровно две вещи: данные настоящие, но старые,
- * и связи с сервером сейчас нет.
+ * It appears when the server is out of reach. Both alternatives are worse: a blank
+ * screen is indistinguishable from "the library is gone", and an endless spinner from
+ * "the application has hung". A person needs exactly two things: the data is real but
+ * old, and there is no connection to the server right now.
  */
 
+import { useT } from "../../shared/i18n";
+
 export function StaleBanner({ onRetry }: { onRetry?: () => void }) {
+  const t = useT();
+
   return (
     <div className="notice notice--stale" role="status">
       <div className="notice__body">
-        <strong className="notice__message">Сервер сейчас недоступен</strong>
-        <p className="notice__hint">
-          Показано последнее, что приложение успело узнать. Файлы на сервере никуда
-          не делись — не отвечает связь. Действия, меняющие библиотеку, до восстановления
-          связи выполнить не получится.
-        </p>
+        <strong className="notice__message">{t.ui.library.staleTitle}</strong>
+        <p className="notice__hint">{t.ui.library.staleHint}</p>
       </div>
-      {onRetry && <button onClick={onRetry}>Попробовать снова</button>}
+      {onRetry && <button onClick={onRetry}>{t.ui.library.staleRetry}</button>}
     </div>
   );
 }

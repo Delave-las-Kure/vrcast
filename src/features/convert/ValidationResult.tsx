@@ -11,8 +11,13 @@
  */
 
 import type { Validation } from "../../shared/contract";
+import { useLang, useT } from "../../shared/i18n";
+import { fill } from "../../shared/i18n/render";
 
 export function ValidationResult({ result }: { result: Validation }) {
+  const t = useT();
+  const { lang } = useLang();
+
   return (
     <section
       className={`notice ${result.ok ? "notice--ok" : "notice--error"}`}
@@ -20,14 +25,12 @@ export function ValidationResult({ result }: { result: Validation }) {
     >
       <div className="notice__body">
         <strong className="notice__message">
-          {result.ok
-            ? "Файл воспроизводится целиком — можно заливать."
-            : "Файл не прошёл проверку воспроизведения. Заливать его нельзя: у зрителя он развалится там же, где развалился здесь."}
+          {result.ok ? t.ui.validation.ok : t.ui.validation.failed}
         </strong>
 
         {result.problems.length > 0 && (
           <>
-            <p className="notice__hint">Что сказал декодер:</p>
+            <p className="notice__hint">{t.ui.validation.decoderSaid}</p>
             <ul className="notice__list">
               {result.problems.map((p) => (
                 <li key={p}>
@@ -47,8 +50,12 @@ export function ValidationResult({ result }: { result: Validation }) {
            */
           <details className="notice__details">
             <summary>
-              Замечаний к меткам времени: {result.ignored.length} — на воспроизведение
-              не влияют
+              {fill(
+                t.ui.validation.ignoredSummary,
+                { n: result.ignored.length },
+                t,
+                lang,
+              )}
             </summary>
             <ul className="notice__list">
               {result.ignored.map((p) => (

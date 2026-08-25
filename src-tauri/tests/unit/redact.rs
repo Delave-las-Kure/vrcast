@@ -10,6 +10,26 @@ use std::sync::{Arc, Mutex};
 use vrcast_studio_lib::store::redact::{self, MASK};
 use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretRef, SecretStore};
 
+/// The redaction registry is one per process, and cargo runs tests in parallel
+/// threads of that process. Two tests each calling `forget_all` and then registering
+/// their own secrets clobber one another: one wipes what the other has just put in,
+/// and the loser reports a leak that never happened.
+///
+/// Caught 2026-08-25: the check failed about one run in five, always on a different
+/// test. A flaky guard against secret leaks is worse than none — it teaches people to
+/// re-run until it passes, which is exactly how a real leak would get waved through.
+static REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the registry for the duration of a test.
+///
+/// A poisoned lock is taken anyway: it means some other test panicked, and that test
+/// will report its own failure. Refusing to run here would bury it under a second one.
+fn alone_with_registry() -> std::sync::MutexGuard<'static, ()> {
+    let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    redact::forget_all();
+    guard
+}
+
 /// Общий буфер, куда пишет журнал во время теста.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);
@@ -47,7 +67,7 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 #[test]
 fn секрет_не_попадает_в_журнал() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Значение выдумано целиком. Брать образцом настоящий пароль — даже
     // недействующий — нельзя: тест уходит в общедоступный репозиторий вместе
@@ -78,7 +98,7 @@ fn секрет_не_попадает_в_журнал() {
 #[test]
 fn секрет_не_попадает_в_сообщение_об_ошибке() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     let secret = "парольная-фраза-ключа-9f3a2b";
     redact::register(secret);
@@ -104,7 +124,7 @@ fn секрет_не_попадает_в_сообщение_об_ошибке() 
 #[test]
 fn секрет_из_хранилища_регистрируется_сам() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Ключевое свойство: вызывающий код НЕ регистрирует секрет вручную.
     // Достаточно того, что секрет прошёл через хранилище.
@@ -124,7 +144,7 @@ fn секрет_из_хранилища_регистрируется_сам() {
 #[test]
 fn приватный_ключ_вырезается_даже_без_регистрации() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Подстраховка для случая, когда ключ прочитан из файла и попал в вывод мимо хранилища —
     // то есть ровно тогда, когда регистрация не сработала.
@@ -151,7 +171,7 @@ fn приватный_ключ_вырезается_даже_без_регист
 #[test]
 fn обрезанный_ключ_тоже_вырезается_целиком() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Журнал мог оборваться на середине блока. Лучше потерять хвост, чем показать половину ключа.
     let text = "начало\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk";
@@ -166,7 +186,7 @@ fn обрезанный_ключ_тоже_вырезается_целиком() 
 #[test]
 fn многострочный_ключ_не_просачивается_через_построчную_запись() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Дефект, ради которого тест: журнал пишет событие одним куском с внутренними
     // переводами строк, а писатель резал его построчно и маскировал только строку
@@ -203,7 +223,7 @@ fn многострочный_ключ_не_просачивается_чере�
 #[test]
 fn ключ_пришедший_отдельными_записями_тоже_вырезается() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Тот же дефект, другой путь: каждая строка ключа приходит отдельным вызовом
     // записи. Писатель обязан копить начатый блок, а не выпускать строки по одной.
@@ -236,7 +256,7 @@ fn ключ_пришедший_отдельными_записями_тоже_в
 #[test]
 fn слишком_короткое_значение_не_регистрируется() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Секрет из трёх символов встретится в журнале случайно сотни раз и превратит его
     // в решето из масок, скрыв заодно всё полезное. Такая «защита» вредна.
@@ -252,7 +272,7 @@ fn слишком_короткое_значение_не_регистрируе�
 #[test]
 fn из_двух_вложенных_секретов_вырезается_длинный() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     // Если сначала заменить короткий, от длинного останется хвост — а хвост пароля
     // это всё ещё утечка.
@@ -273,7 +293,7 @@ fn из_двух_вложенных_секретов_вырезается_дли
 #[test]
 fn запись_по_частям_не_пропускает_разорванный_секрет() {
     let _g = lock();
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     let secret = "секрет-разорванный-между-записями";
     redact::register(secret);
@@ -298,7 +318,7 @@ fn forgetting_one_secret_leaves_the_others_masked() {
     // T073, принцип IV. Удаление одного профиля не должно снимать маскировку
     // с секретов остальных: они живы, и первая же ошибка вынесла бы чужой пароль
     // в журнал — до перезапуска приложения и без единого признака, что что-то не так.
-    redact::forget_all();
+    let _registry = alone_with_registry();
 
     let удаляемый = "пароль-удаляемого-профиля-1234";
     let оставшийся = "пароль-другого-профиля-5678";
@@ -324,7 +344,7 @@ fn deleting_a_profile_unmasks_only_its_own_secret() {
     // `forget` работает, а то, что удаление профиля зовёт именно его.
     use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretRef, SecretStore};
 
-    redact::forget_all();
+    let _registry = alone_with_registry();
     let store = InMemorySecretStore::new();
 
     let первый = SecretRef::for_server("профиль-один");

@@ -1,53 +1,46 @@
 /**
- * T100 — единый экран задач (FR-082).
+ * T100 — the single task screen (FR-082).
  *
- * Все задачи в одном месте: и заливки, и подготовка, и всё, что появится позже.
- * Держать для каждого вида свой список значило бы заставить человека обходить
- * приложение кругом, чтобы понять, чем оно занято.
+ * Every task in one place: uploads, preparation, and whatever comes later. A separate
+ * list per kind would mean walking round the whole application to find out what it is
+ * busy with.
  *
- * Продвижение приходит событиями, а не опросом, — иначе показ многочасовой задачи
- * сам стал бы причиной подтормаживания (SC-009, R-15).
+ * Progress arrives as events rather than by polling — otherwise showing a task that
+ * runs for hours would itself become the cause of the stuttering we avoid
+ * (SC-009, R-15).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AppError, Task, TaskOnClose, TaskState } from "../../shared/contract";
+import type { AppError, Task, TaskKind } from "../../shared/contract";
+import type { TaskOnClose } from "../../shared/contract";
 import { ipc, onTaskDone, onTaskProgress, toAppError } from "../../shared/ipc";
+import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
+import { fill, renderError, renderStage } from "../../shared/i18n/render";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { CloseConsequences } from "./CloseConsequences";
 import { QueueOrder } from "./QueueOrder";
 
-const STATE_LABEL: Record<TaskState, string> = {
-  queued: "в очереди",
-  running: "выполняется",
-  paused: "приостановлена",
-  completed: "завершена",
-  failed: "не удалась",
-  cancelled: "отменена",
-};
-
-const KIND_LABEL: Record<string, string> = {
-  probe: "разбор исходника",
-  convert: "подготовка файла",
-  upload: "заливка на сервер",
-  build_ladder: "сборка набора качеств",
-  deploy: "развёртывание",
-  upgrade_server: "обновление сервера",
-  diagnose: "диагностика",
-};
-
-function formatSpeed(bps: number | null): string | null {
+/**
+ * Speed and time left, in the language in use.
+ *
+ * Both take the catalogue rather than composing a sentence, because both need a unit
+ * and a separator that differ between languages — and a number formatted one way here
+ * and another way on the library screen is what stops people trusting either.
+ */
+function formatSpeed(bps: number | null, t: Catalogue, lang: Lang): string | null {
   if (bps === null || bps <= 0) return null;
   const mbit = (bps * 8) / 1_000_000;
-  return `${mbit.toFixed(1)} Мбит/с`;
+  const shown = lang === "ru" ? mbit.toFixed(1).replace(".", ",") : mbit.toFixed(1);
+  return fill(t.ui.tasks.speed, { mbit: shown }, t, lang);
 }
 
-function formatEta(seconds: number | null): string | null {
+function formatEta(seconds: number | null, t: Catalogue, lang: Lang): string | null {
   if (seconds === null || seconds <= 0) return null;
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `осталось ~${h} ч ${m} мин`;
-  if (m > 0) return `осталось ~${m} мин`;
-  return "осталось меньше минуты";
+  if (h > 0) return fill(t.ui.tasks.etaHours, { h, m }, t, lang);
+  if (m > 0) return fill(t.ui.tasks.etaMinutes, { m }, t, lang);
+  return t.ui.tasks.etaSoon;
 }
 
 export function TasksPanel() {
@@ -56,6 +49,8 @@ export function TasksPanel() {
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const t = useT();
+  const { lang } = useLang();
 
   const reload = useCallback(async () => {
     try {
@@ -66,9 +61,9 @@ export function TasksPanel() {
     } finally {
       setLoading(false);
     }
-    // Последствия закрытия — отдельным запросом: их считает ядро, и повторять
-    // этот счёт в интерфейсе значило бы однажды разойтись с ним в ответах.
-    // Неудача здесь не ломает список задач: это подсказка, а не сам список.
+    // The consequences of closing come in a separate request: the core works them
+    // out, and repeating that arithmetic here would mean disagreeing with it one day.
+    // A failure here does not break the task list: this is an aside, not the list.
     try {
       setOnClose(await ipc.tasksOnClose());
     } catch {
@@ -80,13 +75,13 @@ export function TasksPanel() {
     void reload();
   }, [reload]);
 
-  // Продвижение приходит потоком; полный список перечитываем только на завершении,
-  // когда меняется состав, а не значение показателя.
+  // Progress arrives as a stream; the full list is read again only on completion,
+  // when the membership changes rather than a number.
   useEffect(() => {
-    // Подписка оформляется асинхронно, и размонтирование может случиться раньше,
-    // чем она завершится (в dev это гарантирует StrictMode). Тогда отписку уже
-    // некому вызвать из cleanup — подписку, пришедшую после него, гасим на месте,
-    // иначе обработчики копятся до конца сеанса с каждым заходом в раздел.
+    // Subscribing is asynchronous, and unmounting can happen before it finishes (in
+    // development StrictMode guarantees it). Then there is nobody left to unsubscribe
+    // from cleanup — so a subscription arriving after it is cancelled on the spot, or
+    // handlers pile up for the rest of the session with every visit to the section.
     let cancelled = false;
     const unlisten: Array<() => void> = [];
     const keep = (fn: () => void) => {
@@ -96,17 +91,17 @@ export function TasksPanel() {
 
     void onTaskProgress((e) => {
       setTasks((prev) =>
-        prev.map((t) =>
-          t.id === e.id
+        prev.map((task) =>
+          task.id === e.id
             ? {
-                ...t,
+                ...task,
                 state: e.state,
                 progress: e.progress,
                 stage: e.stage,
                 speed_bps: e.speed_bps,
                 eta_s: e.eta_s,
               }
-            : t,
+            : task,
         ),
       );
     }).then(keep);
@@ -131,21 +126,21 @@ export function TasksPanel() {
     }
   };
 
-  // Ждущие — в том порядке, в каком они пойдут в работу, а не в порядке появления
-  // в списке: иначе номера в очереди не совпали бы с тем, что делает ядро.
+  // Waiting tasks in the order they will run, not the order they appear in the list:
+  // otherwise the queue numbers would not match what the core actually does.
   const queued = useMemo(
     () =>
       tasks
-        .filter((t) => t.state === "queued")
+        .filter((task) => task.state === "queued")
         .sort((a, b) => a.queue_order - b.queue_order),
     [tasks],
   );
 
-  if (loading) return <div className="panel">Читаем список задач…</div>;
+  if (loading) return <div className="panel">{t.ui.tasks.reading}</div>;
 
   return (
     <div className="panel">
-      <h1>Задачи</h1>
+      <h1>{t.ui.tasks.heading}</h1>
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
       <CloseConsequences items={onClose} />
@@ -157,57 +152,66 @@ export function TasksPanel() {
       />
 
       {tasks.length === 0 ? (
-        <p className="muted">
-          Задач пока нет. Они появятся, когда вы начнёте готовить или заливать видео.
-        </p>
+        <p className="muted">{t.ui.tasks.empty}</p>
       ) : (
         <ul className="task-list">
-          {tasks.map((t) => (
-            <li key={t.id} className={`task task--${t.state}`}>
+          {tasks.map((task) => (
+            <li key={task.id} className={`task task--${task.state}`}>
               <div className="task__head">
-                <span className="task__kind">{KIND_LABEL[t.kind] ?? t.kind}</span>
-                <span className="task__state">{STATE_LABEL[t.state]}</span>
+                <span className="task__kind">
+                  {t.ui.tasks.kinds[task.kind as TaskKind] ?? task.kind}
+                </span>
+                <span className="task__state">{t.ui.tasks.states[task.state]}</span>
               </div>
 
-              {(t.state === "running" || t.state === "paused") && (
+              {(task.state === "running" || task.state === "paused") && (
                 <div
                   className="progress"
                   role="progressbar"
-                  aria-valuenow={Math.round(t.progress * 100)}
+                  aria-valuenow={Math.round(task.progress * 100)}
                   aria-valuemin={0}
                   aria-valuemax={100}
                 >
-                  <div className="progress__fill" style={{ width: `${t.progress * 100}%` }} />
+                  <div
+                    className="progress__fill"
+                    style={{ width: `${task.progress * 100}%` }}
+                  />
                 </div>
               )}
 
               <div className="task__meta">
-                {t.stage && <span>{t.stage}</span>}
-                {formatSpeed(t.speed_bps) && <span>{formatSpeed(t.speed_bps)}</span>}
-                {formatEta(t.eta_s) && <span>{formatEta(t.eta_s)}</span>}
+                {task.stage && <span>{renderStage(task.stage, t, lang)}</span>}
+                {formatSpeed(task.speed_bps, t, lang) && (
+                  <span>{formatSpeed(task.speed_bps, t, lang)}</span>
+                )}
+                {formatEta(task.eta_s, t, lang) && (
+                  <span>{formatEta(task.eta_s, t, lang)}</span>
+                )}
               </div>
 
-              {t.error && <p className="task__error">{t.error}</p>}
+              {task.error && (
+                <p className="task__error">{renderError(task.error, t, lang).message}</p>
+              )}
 
               <div className="task__actions">
-                {t.state === "running" && (
-                  <button onClick={() => void act(() => ipc.taskPause(t.id))}>
-                    Приостановить
+                {task.state === "running" && (
+                  <button onClick={() => void act(() => ipc.taskPause(task.id))}>
+                    {t.ui.tasks.pause}
                   </button>
                 )}
-                {t.state === "paused" && (
-                  <button onClick={() => void act(() => ipc.taskResume(t.id))}>
-                    Продолжить
+                {task.state === "paused" && (
+                  <button onClick={() => void act(() => ipc.taskResume(task.id))}>
+                    {t.ui.tasks.resume}
                   </button>
                 )}
-                {(t.state === "running" ||
-                  t.state === "paused" ||
-                  t.state === "queued") && (
+                {(task.state === "running" ||
+                  task.state === "paused" ||
+                  task.state === "queued") && (
                   <button
                     className="button--danger"
-                    onClick={() => void act(() => ipc.taskCancel(t.id))}
+                    onClick={() => void act(() => ipc.taskCancel(task.id))}
                   >
-                    Отменить
+                    {t.ui.tasks.stop}
                   </button>
                 )}
               </div>

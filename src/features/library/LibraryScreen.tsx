@@ -1,24 +1,27 @@
 /**
- * T054 — библиотека: медиа и их файлы.
+ * T054 — the library: media and their files.
  *
- * Библиотека медиа-центрична: человек думает о произведении, а файлы — его варианты
- * по качеству. Поэтому список — это список медиа, а файлы раскрываются внутри.
+ * The library is medium-centric: a person thinks about the work, and the files are
+ * its quality variants. So the list is a list of media, and the files open inside.
  *
- * Показ идёт из кеша мгновенно, обновление приходит следом (FR-080): ждать ответа
- * сервера, чтобы показать список, который и так известен, незачем — по медленному
- * каналу это секунды пустого экрана.
+ * It shows from cache at once and the refresh follows (FR-080): waiting for the
+ * server before showing a list that is already known is pointless — over a slow
+ * connection it is seconds of blank screen.
  *
- * Удаление устроено в два вызова, и это не лишний оборот. Первый вызов — без
- * подтверждения — ядро отклоняет и в отказе называет последствия: сколько файлов,
- * сколько места, идёт ли прямо сейчас раздача. Их и показывает диалог. Спрашивать
- * «вы уверены?», не назвав ничего, — значит получить «да», не сообщив ничего.
+ * Deletion takes two calls, and that is not a wasted round. The first — without
+ * confirmation — is refused by the core, and the refusal names the consequences: how
+ * many files, how much room, whether anything is being served right now. Those are
+ * what the dialog shows. Asking "are you sure?" having named nothing is a way of
+ * getting a yes while telling someone nothing.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { AppError, LibraryView, MediaView } from "../../shared/contract";
-import { countOf, formatBytes, usedFraction } from "../../shared/format";
 import { ipc, onLibraryChanged, toAppError } from "../../shared/ipc";
+import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
+import { formatBytes, usedFraction } from "../../shared/i18n/format";
+import { fill, renderError } from "../../shared/i18n/render";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { FileRow } from "./FileRow";
@@ -30,7 +33,7 @@ import {
   RenameMediaDialog,
 } from "./dialogs/MediaDialogs";
 
-/** Что сейчас открыто поверх списка. */
+/** What is open on top of the list right now. */
 type Dialog =
   | { kind: "create" }
   | { kind: "rename"; media: MediaView }
@@ -49,6 +52,8 @@ export function LibraryScreen() {
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [dialogError, setDialogError] = useState<AppError | null>(null);
+  const t = useT();
+  const { lang } = useLang();
 
   useEffect(() => {
     void reloadServers();
@@ -73,13 +78,13 @@ export function LibraryScreen() {
     [active],
   );
 
-  // Первый показ — из кеша, мгновенно.
+  // The first showing comes from the cache, immediately.
   useEffect(() => {
     setLoading(true);
     void load(false);
   }, [load]);
 
-  // Обновление из ядра: и то, что пришло фоном, и то, что вызвали мы сами.
+  // Refreshes from the core: both what arrives in the background and what we asked for.
   useEffect(() => {
     let cancelled = false;
     const unlisten: Array<() => void> = [];
@@ -96,7 +101,7 @@ export function LibraryScreen() {
     };
   }, [load]);
 
-  /** Выполнить изменение и перечитать библиотеку. */
+  /** Carry out a change and read the library again. */
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setDialogError(null);
@@ -112,22 +117,28 @@ export function LibraryScreen() {
   };
 
   /**
-   * Спросить у ядра последствия удаления и показать их.
+   * Ask the core what deleting would cost, and show it.
    *
-   * Отказ с кодом CONFIRMATION_REQUIRED — не ошибка, а ожидаемый ответ: это и есть
-   * запрос подтверждения вместе с числами, которых интерфейс сам не знает.
+   * A refusal with the code CONFIRMATION_REQUIRED is not an error but the expected
+   * answer: it *is* the request for confirmation, carrying the numbers the interface
+   * has no way of knowing itself.
    */
   const askBeforeDelete = async (media: MediaView) => {
     if (!active) return;
     try {
       await ipc.mediaDelete(active.id, media.id, false);
-      // Ядро согласилось без подтверждения — такого быть не должно, но если
-      // случилось, список надо привести в соответствие.
+      // The core agreed without confirmation. That should not happen, but if it
+      // has, the list has to be brought into line with what is really there.
       await load(true);
     } catch (e) {
       const err = toAppError(e);
       if (err.code === "CONFIRMATION_REQUIRED") {
-        setDialog({ kind: "delete", media, consequences: err.message });
+        // The refusal carries the numbers; the wording of them is ours.
+        setDialog({
+          kind: "delete",
+          media,
+          consequences: renderError(err, t, lang).message,
+        });
       } else {
         setError(err);
       }
@@ -142,7 +153,11 @@ export function LibraryScreen() {
     } catch (e) {
       const err = toAppError(e);
       if (err.code === "CONFIRMATION_REQUIRED") {
-        setDialog({ kind: "delete-file", path, consequences: err.message });
+        setDialog({
+          kind: "delete-file",
+          path,
+          consequences: renderError(err, t, lang).message,
+        });
       } else {
         setError(err);
       }
@@ -150,19 +165,16 @@ export function LibraryScreen() {
   };
 
   if (serversLoading || loading) {
-    return <div className="panel">Читаем библиотеку…</div>;
+    return <div className="panel">{t.ui.library.reading}</div>;
   }
 
   if (!active) {
     return (
       <div className="panel">
-        <h1>Библиотека</h1>
-        <p className="muted">
-          Активный сервер не выбран. Библиотека живёт на сервере — сначала нужно его
-          добавить.
-        </p>
+        <h1>{t.ui.library.heading}</h1>
+        <p className="muted">{t.ui.library.noActiveServer}</p>
         <Link className="button-link" to="/servers">
-          Перейти к серверам
+          {t.ui.library.goToServers}
         </Link>
       </div>
     );
@@ -171,24 +183,24 @@ export function LibraryScreen() {
   return (
     <div className="panel">
       <div className="panel__head">
-        <h1>Библиотека</h1>
+        <h1>{t.ui.library.heading}</h1>
         <div className="panel__head-actions">
           <button onClick={() => void load(true)} disabled={busy}>
-            Обновить
+            {t.ui.common.refresh}
           </button>
           <button onClick={() => setDialog({ kind: "create" })} disabled={busy}>
-            Новое медиа
+            {t.ui.library.newMedia}
           </button>
         </div>
       </div>
 
       <p className="muted library__server">
-        Сервер: <strong>{active.name}</strong> · {active.domain}
+        {t.ui.library.serverLine} <strong>{active.name}</strong> · {active.domain}
       </p>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
       {view?.stale && <StaleBanner onRetry={() => void load(true)} />}
-      {view?.disk && <DiskBar disk={view.disk} />}
+      {view?.disk && <DiskBar disk={view.disk} t={t} lang={lang} />}
 
       {dialog?.kind === "create" && (
         <CreateMediaDialog
@@ -233,15 +245,15 @@ export function LibraryScreen() {
       )}
 
       {view && view.media.length === 0 && view.unrecognized.length === 0 ? (
-        <p className="muted">
-          На сервере пока пусто. Создайте медиа — и заливайте в него файлы.
-        </p>
+        <p className="muted">{t.ui.library.empty}</p>
       ) : (
         <div className="media-list">
           {view?.media.map((m) => (
             <MediaCard
               key={m.id}
               media={m}
+              t={t}
+              lang={lang}
               disabled={busy || view.stale}
               onRename={() => setDialog({ kind: "rename", media: m })}
               onDelete={() => void askBeforeDelete(m)}
@@ -271,12 +283,16 @@ function MediaCard({
   onRename,
   onDelete,
   onDeleteFile,
+  t,
+  lang,
 }: {
   media: MediaView;
   disabled?: boolean;
   onRename: () => void;
   onDelete: () => void;
   onDeleteFile: (path: string) => void;
+  t: Catalogue;
+  lang: Lang;
 }) {
   const [open, setOpen] = useState(false);
   const missing = media.files.filter((f) => !f.exists_on_server).length;
@@ -286,11 +302,17 @@ function MediaCard({
       <button className="media__head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="media__title">{media.title}</span>
         <span className="media__facts">
-          {countOf(media.files.length, "файл", "файла", "файлов")} ·{" "}
-          {formatBytes(media.total_bytes)}
-          {media.ladders.length > 0 && " · набор качеств"}
+          {fill(
+            t.ui.library.mediaFacts,
+            { n: media.files.length, bytes: media.total_bytes },
+            t,
+            lang,
+          )}
+          {media.ladders.length > 0 && t.ui.library.hasLadder}
           {missing > 0 && (
-            <em className="media__missing"> · {missing} не найдено на сервере</em>
+            <em className="media__missing">
+              {fill(t.ui.library.missingOnServer, { n: missing }, t, lang)}
+            </em>
           )}
         </span>
       </button>
@@ -298,7 +320,7 @@ function MediaCard({
       {open && (
         <>
           <p className="muted media__note">
-            Короткое имя: <code>{media.slug}</code>
+            {t.ui.library.shortName} <code>{media.slug}</code>
           </p>
 
           <ul className="file-list">
@@ -313,16 +335,16 @@ function MediaCard({
 
           {media.ladders.length > 0 && (
             <p className="muted media__note">
-              Наборы качеств: {media.ladders.join(", ")}
+              {fill(t.ui.library.ladders, { list: media.ladders.join(", ") }, t, lang)}
             </p>
           )}
 
           <div className="media__actions">
             <button onClick={onRename} disabled={disabled}>
-              Переименовать
+              {t.ui.library.renameMedia}
             </button>
             <button className="button--danger" onClick={onDelete} disabled={disabled}>
-              Удалить медиа
+              {t.ui.library.deleteMedia}
             </button>
           </div>
         </>
@@ -331,18 +353,27 @@ function MediaCard({
   );
 }
 
-/** Место на диске сервера (FR-017). */
-function DiskBar({ disk }: { disk: NonNullable<LibraryView["disk"]> }) {
+/** Room on the server's disk (FR-017). */
+function DiskBar({
+  disk,
+  t,
+  lang,
+}: {
+  disk: NonNullable<LibraryView["disk"]>;
+  t: Catalogue;
+  lang: Lang;
+}) {
   const used = usedFraction(disk.total_bytes, disk.free_bytes);
   return (
     <div className="disk">
       <div className="disk__facts">
         <span>
-          Свободно <strong>{formatBytes(disk.free_bytes)}</strong> из{" "}
-          {formatBytes(disk.total_bytes)}
+          {t.ui.library.diskFree}{" "}
+          <strong>{formatBytes(disk.free_bytes, lang)}</strong> {t.ui.library.diskOf}{" "}
+          {formatBytes(disk.total_bytes, lang)}
         </span>
         <span className="muted">
-          видео занимают {formatBytes(disk.used_by_videos_bytes)}
+          {fill(t.ui.library.diskVideos, { bytes: disk.used_by_videos_bytes }, t, lang)}
         </span>
       </div>
       <div
@@ -351,7 +382,7 @@ function DiskBar({ disk }: { disk: NonNullable<LibraryView["disk"]> }) {
         aria-valuenow={Math.round(used * 100)}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label="Занято места на диске сервера"
+        aria-label={t.ui.library.diskLabel}
       >
         <div
           className={`progress__fill ${used > 0.9 ? "progress__fill--alarm" : ""}`}

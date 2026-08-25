@@ -1,23 +1,29 @@
 /**
- * T056 — копирование зрительской ссылки (FR-016).
+ * T056 — copying a viewer link (FR-016).
  *
- * Когда CDN задан, ссылок две, и выбор оставляется человеку: у вариантов разная
- * цена. Ссылка через сам сервер в России не блокируется; через CDN быстрее, но
- * зависит от посредника и какое-то время отдаёт из кеша даже заменённый файл.
+ * When a CDN is configured there are two links, and the choice is left to the person:
+ * they cost different things. A link through the server itself is not blocked in
+ * Russia; through a CDN it is faster, but it depends on an intermediary and will serve
+ * a replaced file from cache for a while.
  *
- * Подтверждение копирования обязательно и держится пару секунд: без него человек
- * не знает, сработало ли нажатие, и жмёт ещё раз.
+ * Confirming the copy is not optional, and it stays for a couple of seconds: without
+ * it a person does not know whether the click worked and clicks again.
  */
 
 import { useEffect, useRef, useState } from "react";
 import type { FileView } from "../../shared/contract";
+import { useT } from "../../shared/i18n";
+
+/** Which of the two links was copied — or that copying failed. */
+type Copied = "server" | "cdn" | "failed";
 
 export function CopyLink({ file }: { file: FileView }) {
-  const [copied, setCopied] = useState<string | null>(null);
+  const [copied, setCopied] = useState<Copied | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const t = useT();
 
-  // Отметку о копировании снимаем по таймеру, а таймер обязаны погасить при
-  // размонтировании: иначе он сработает на уже убранном со страницы узле.
+  // The copied mark is cleared by a timer, and the timer must be stopped on unmount:
+  // otherwise it fires on a node already taken off the page.
   useEffect(
     () => () => {
       if (timer.current) clearTimeout(timer.current);
@@ -25,14 +31,14 @@ export function CopyLink({ file }: { file: FileView }) {
     [],
   );
 
-  const copy = async (url: string, what: string) => {
+  const copy = async (url: string, what: Copied) => {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(what);
     } catch {
-      // Буфер обмена может быть недоступен. Молчать нельзя: человек решит,
-      // что ссылка скопирована, и вставит не то.
-      setCopied("не удалось");
+      // The clipboard may be unavailable. Staying quiet is not an option: a person
+      // would take it as copied and paste the wrong thing.
+      setCopied("failed");
     }
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(null), 2000);
@@ -40,25 +46,32 @@ export function CopyLink({ file }: { file: FileView }) {
 
   if (!file.exists_on_server) {
     return (
-      <span className="copy-link__dead" title="Файла нет на сервере">
-        ссылка нерабочая
+      <span className="copy-link__dead" title={t.ui.library.linkDeadTitle}>
+        {t.ui.library.linkDead}
       </span>
     );
   }
 
+  const said =
+    copied === "failed"
+      ? t.ui.library.linkCopyFailed
+      : copied === "cdn"
+        ? t.ui.library.linkCopiedCdn
+        : t.ui.library.linkCopiedServer;
+
   return (
     <span className="copy-link">
-      <button onClick={() => void copy(file.origin_url, "с сервера")}>
-        {file.cdn_url ? "Ссылка с сервера" : "Копировать ссылку"}
+      <button onClick={() => void copy(file.origin_url, "server")}>
+        {file.cdn_url ? t.ui.library.linkFromServer : t.ui.library.linkCopy}
       </button>
       {file.cdn_url && (
-        <button onClick={() => void copy(file.cdn_url!, "через CDN")}>
-          Ссылка через CDN
+        <button onClick={() => void copy(file.cdn_url!, "cdn")}>
+          {t.ui.library.linkViaCdn}
         </button>
       )}
       {copied && (
         <span className="copy-link__done" role="status">
-          {copied === "не удалось" ? "скопировать не вышло" : `скопирована ${copied}`}
+          {said}
         </span>
       )}
     </span>

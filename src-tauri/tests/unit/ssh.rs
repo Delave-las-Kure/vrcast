@@ -173,12 +173,9 @@ fn full_disk_is_not_reported_as_a_permission_problem() {
 
     let err = SshError::sftp("write failed: No space left on device");
     let app: vrcast_studio_lib::commands::error::AppError = err.into();
+    // Код и есть ответ: по нему интерфейс возьмёт из словаря и объяснение, и совет
+    // освободить место — на том языке, который выбран.
     assert_eq!(app.code, ErrorCode::RemoteDiskFull);
-    assert!(
-        app.hint.to_lowercase().contains("мест"),
-        "подсказка не про место: {}",
-        app.hint
-    );
 }
 
 #[test]

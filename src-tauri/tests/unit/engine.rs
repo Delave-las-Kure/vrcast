@@ -3,8 +3,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use vrcast_studio_lib::commands::error::{AppError, DetailCode, ErrorCode};
 use vrcast_studio_lib::store::db::Db;
-use vrcast_studio_lib::tasks::engine::{TaskEngine, TaskEvent};
+use vrcast_studio_lib::tasks::engine::{TaskEngine, TaskError, TaskEvent};
 use vrcast_studio_lib::tasks::progress::ProgressThrottle;
 use vrcast_studio_lib::tasks::state::{Lane, LaneLimits, PauseKind, TaskKind, TaskState};
 use vrcast_studio_lib::tasks::store;
@@ -148,7 +149,7 @@ async fn задача_выполняется_и_завершается() {
     let e = engine();
     let id = e
         .submit(TaskKind::Probe, None, |ctx| async move {
-            ctx.report_important(0.5, "середина");
+            ctx.report_important(0.5, DetailCode::StageConverting);
             Ok(())
         })
         .await
@@ -171,14 +172,18 @@ async fn неудача_записывается_как_неудача_а_не_�
     let e = engine();
     let id = e
         .submit(TaskKind::Probe, None, |_ctx| async move {
-            Err(String::from("файл не читается"))
+            Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::ProbeUnreadable))
         })
         .await
         .unwrap();
 
     assert!(wait_for_state(&e, &id, TaskState::Failed, Duration::from_secs(5)).await);
     let rec = e.get(&id).unwrap().unwrap();
-    assert!(rec.error.unwrap().contains("не читается"));
+    // Ошибка хранится объектом, а не фразой: задача, упавшая неделю назад,
+    // объяснится на том языке, который выбран сегодня.
+    let error = rec.error.expect("неудача записана без причины");
+    assert_eq!(error.code, ErrorCode::InvalidInput);
+    assert!(error.says(DetailCode::ProbeUnreadable));
     assert!(
         rec.progress < 1.0,
         "у неудавшейся задачи прогресс не должен быть полным"
@@ -268,7 +273,7 @@ async fn отмена_прерывает_выполняющуюся_задачу
     let id = e
         .submit(TaskKind::Convert, None, move |ctx| async move {
             for _ in 0..100 {
-                ctx.bail_if_cancelled().map_err(|e| e.to_string())?;
+                ctx.bail_if_cancelled()?;
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             fw.fetch_add(1, Ordering::SeqCst);
@@ -300,7 +305,7 @@ async fn отменённая_задача_не_считается_упавше�
     let id = e
         .submit(TaskKind::Convert, None, |ctx| async move {
             for _ in 0..600 {
-                ctx.bail_if_cancelled().map_err(|e| e.to_string())?;
+                ctx.bail_if_cancelled()?;
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             Ok(())
@@ -501,9 +506,11 @@ async fn короткую_задачу_приостановить_нельзя()
     let err = e
         .pause(&id)
         .expect_err("разбор исходника не должен приостанавливаться");
+    // Проверяется вид отказа, а не его текст: текст ошибки нижнего слоя —
+    // подробность для журнала, а человеку интерфейс скажет своими словами.
     assert!(
-        err.to_string().contains("нельзя приостановить"),
-        "получено: {err}"
+        matches!(err, TaskError::NotPausable),
+        "приостановка отклонена не тем видом отказа: {err}"
     );
 }
 
@@ -864,10 +871,15 @@ fn точечная_запись_не_затирает_чужие_поля() {
     );
 
     // Ошибка дописывается, не стирая уже записанного токена.
-    assert!(store::save_state(&db, "t-точечная", TaskState::Failed, Some("обрыв связи")).unwrap());
+    let сбой = AppError::new(ErrorCode::SshUnreachable);
+    assert!(store::save_state(&db, "t-точечная", TaskState::Failed, Some(&сбой)).unwrap());
     let after = store::get(&db, "t-точечная").unwrap().unwrap();
     assert_eq!(after.resume_token.as_deref(), Some("свежий-токен"));
-    assert_eq!(after.error.as_deref(), Some("обрыв связи"));
+    assert_eq!(
+        after.error,
+        Some(сбой),
+        "ошибка не пережила запись и чтение"
+    );
 
     // Записи нет — save_state честно говорит об этом, а не молчит.
     assert!(!store::save_state(&db, "t-нет-такой", TaskState::Failed, None).unwrap());
@@ -882,8 +894,7 @@ async fn позиция_возобновления_сохраняется_и_ч�
                 ctx.resume_token().unwrap().is_none(),
                 "позиция взялась из ниоткуда"
             );
-            ctx.save_resume_token("8388608")
-                .map_err(|e| e.to_string())?;
+            ctx.save_resume_token("8388608")?;
             assert_eq!(ctx.resume_token().unwrap().as_deref(), Some("8388608"));
             Ok(())
         })
@@ -906,7 +917,7 @@ async fn о_завершении_сообщается_событием() {
 
     let id = e
         .submit(TaskKind::Probe, None, |ctx| async move {
-            ctx.report_important(0.5, "работаем");
+            ctx.report_important(0.5, DetailCode::StageConverting);
             Ok(())
         })
         .await

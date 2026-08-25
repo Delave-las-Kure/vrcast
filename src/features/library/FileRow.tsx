@@ -1,22 +1,23 @@
 /**
- * Строка файла раздачи с его параметрами (FR-012).
+ * A row for a served file and its particulars (FR-012).
  *
- * Неизвестное показывается прочерком, а не пропускается и не подменяется нулём.
- * Разница существенная: «—» означает «мы не смогли прочитать», а «0» читалось бы
- * как «в файле этого нет».
+ * What is unknown shows as a dash rather than being skipped or replaced with a zero.
+ * The difference matters: "—" means "we could not read it", while "0" would read as
+ * "the file does not have any".
  *
- * Отдельно отмечается файл, у которого заголовок лежит не в начале: зритель начнёт
- * смотреть его только после скачивания хвоста, и знать об этом полезнее, чем
- * разрешение и битрейт вместе взятые.
+ * A file whose header is not at the start is called out separately: a viewer will only
+ * start watching it after downloading the tail, and knowing that is more use than the
+ * resolution and the bitrate put together.
  */
 
 import type { FileView } from "../../shared/contract";
+import { useLang, useT } from "../../shared/i18n";
 import {
   formatBitrate,
   formatBytes,
   formatDuration,
   formatResolution,
-} from "../../shared/format";
+} from "../../shared/i18n/format";
 import { CopyLink } from "./CopyLink";
 
 export function FileRow({
@@ -26,39 +27,35 @@ export function FileRow({
   file: FileView;
   onDelete?: (path: string) => void;
 }) {
+  const t = useT();
+  const { lang } = useLang();
+  const l = t.ui.library;
+
   return (
     <li className={`file ${file.exists_on_server ? "" : "file--missing"}`}>
       <div className="file__head">
         <span className="file__name">{file.path}</span>
-        <span className="file__size">{formatBytes(file.size_bytes)}</span>
+        <span className="file__size">{formatBytes(file.size_bytes, lang)}</span>
       </div>
 
       <div className="file__meta">
-        <span title="Разрешение">{formatResolution(file.width, file.height)}</span>
-        <span title="Длительность">{formatDuration(file.duration_s)}</span>
-        <span title="Средний битрейт">{formatBitrate(file.bitrate_bps)}</span>
-        {file.video_codec && <span title="Видео">{file.video_codec}</span>}
-        {file.audio_codec && <span title="Звук">{file.audio_codec}</span>}
+        <span title={l.resolution}>{formatResolution(file.width, file.height)}</span>
+        <span title={l.duration}>{formatDuration(file.duration_s)}</span>
+        <span title={l.bitrate}>{formatBitrate(file.bitrate_bps, lang)}</span>
+        {file.video_codec && <span title={l.video}>{file.video_codec}</span>}
+        {file.audio_codec && <span title={l.audio}>{file.audio_codec}</span>}
       </div>
 
       {file.faststart_ok === false && (
-        <p className="file__warning">
-          Заголовок не в начале файла — зритель начнёт смотреть только после того, как
-          скачает его целиком. Такой файл стоит подготовить заново.
-        </p>
+        <p className="file__warning">{l.faststartWarning}</p>
       )}
-      {!file.exists_on_server && (
-        <p className="file__warning">
-          Файла нет на сервере: его удалили или переименовали мимо приложения. Ссылка
-          на него не работает.
-        </p>
-      )}
+      {!file.exists_on_server && <p className="file__warning">{l.missingWarning}</p>}
 
       <div className="file__actions">
         <CopyLink file={file} />
         {onDelete && (
           <button className="button--danger" onClick={() => onDelete(file.path)}>
-            Удалить файл
+            {l.deleteFile}
           </button>
         )}
       </div>

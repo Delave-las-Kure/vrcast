@@ -1,38 +1,44 @@
 /**
- * T098 — экран заливки.
+ * T098 — the upload screen.
  *
- * Что здесь происходит: выбрать готовый файл, сказать, под каким именем он станет
- * виден зрителям и к какому медиа относится, при желании ограничить скорость —
- * и поставить задачу. Дальше всё видно в разделе задач: заливка идёт часами,
- * и держать ради неё открытым этот экран человек не обязан.
+ * What happens here: choose a prepared file, say what name viewers will see it under
+ * and which medium it belongs to, cap the speed if wanted, and queue the task. After
+ * that everything is visible in the task section: an upload runs for hours, and
+ * nobody should have to keep this screen open for it.
  *
- * Окно выбора файла — системное (плагин `dialog`). Своё, из веб-окна, не годится:
- * у выбранного там файла нет пути на диске, а заливке нужен именно путь.
+ * The file chooser is the system one (the `dialog` plugin). A web one will not do: a
+ * file chosen there has no path on disk, and a path is exactly what an upload needs.
  *
- * Проверки до старта в интерфейсе не дублируются. Их делает ядро — оно одно знает
- * состояние сервера, — а экран лишь показывает готовый ответ и спрашивает согласия
- * там, где оно уместно (см. `PreflightWarnings`).
+ * The pre-flight checks are not repeated here. The core does them — it alone knows the
+ * state of the server — and this screen only shows the answer and asks for agreement
+ * where agreement is meaningful (see `PreflightWarnings`).
  */
 
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AppError, LibraryView, UploadRequest } from "../../shared/contract";
-import { formatBytes } from "../../shared/format";
 import { ipc, toAppError } from "../../shared/ipc";
+import { useLang, useT, type Catalogue } from "../../shared/i18n";
+import { fill } from "../../shared/i18n/render";
 import { isReady, useActiveServer, useServers } from "../servers/store";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { PreflightWarnings, canConfirm } from "./PreflightWarnings";
 
-/** Пределы скорости на выбор. Значения — байты в секунду, как их ждёт ядро. */
-const ПРЕДЕЛЫ: Array<{ label: string; value: number | null }> = [
-  { label: "не ограничивать", value: null },
-  { label: "10 Мбит/с", value: 1_250_000 },
-  { label: "25 Мбит/с", value: 3_125_000 },
-  { label: "50 Мбит/с", value: 6_250_000 },
-  { label: "100 Мбит/с", value: 12_500_000 },
+/**
+ * Speed caps on offer. The values are bytes per second, as the core expects them.
+ *
+ * The value is fixed and the label is a catalogue key: the number means the same in
+ * every language, the words around it do not.
+ */
+const LIMITS: Array<{ key: keyof Catalogue["ui"]["upload"]; value: number | null }> = [
+  { key: "limitNone", value: null },
+  { key: "limit10", value: 1_250_000 },
+  { key: "limit25", value: 3_125_000 },
+  { key: "limit50", value: 6_250_000 },
+  { key: "limit100", value: 12_500_000 },
 ];
 
-/** Имя файла из полного пути — с любым разделителем. */
+/** The file name out of a full path — with either separator. */
 function basename(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] ?? path;
@@ -50,56 +56,60 @@ export function UploadScreen() {
 
   const [library, setLibrary] = useState<LibraryView | null>(null);
   const [error, setError] = useState<AppError | null>(null);
-  /** Отказ до старта: его показывает `PreflightWarnings`, а не общий показ ошибок. */
+  /** A refusal before starting: shown by `PreflightWarnings`, not by the error notice. */
   const [preflight, setPreflight] = useState<AppError | null>(null);
   const [busy, setBusy] = useState(false);
   const [startedTask, setStartedTask] = useState<string | null>(null);
+  const t = useT();
+  const { lang } = useLang();
+  const u = t.ui.upload;
 
   useEffect(() => {
     void reloadServers();
   }, [reloadServers]);
 
-  // Список медиа нужен, чтобы отнести файл сразу. Недоступный сервер — не повод
-  // ломать экран: заливать всё равно нельзя, и об этом сказано отдельно.
+  // The media list is needed so the file can be assigned straight away. A server out
+  // of reach is no reason to break the screen: uploading is impossible anyway, and
+  // that is said separately.
   useEffect(() => {
     if (!active) {
       setLibrary(null);
       return;
     }
-    let живо = true;
+    let live = true;
     void ipc
       .libraryList(active.id)
       .then((v) => {
-        if (живо) setLibrary(v);
+        if (live) setLibrary(v);
       })
       .catch(() => {
-        if (живо) setLibrary(null);
+        if (live) setLibrary(null);
       });
     return () => {
-      живо = false;
+      live = false;
     };
   }, [active]);
 
   const media = useMemo(() => library?.media ?? [], [library]);
 
-  const выбрать = async () => {
-    const выбранное = await open({
+  const pick = async () => {
+    const chosen = await open({
       multiple: false,
       directory: false,
-      title: "Выберите готовый файл",
-      filters: [{ name: "Видео", extensions: ["mp4", "mkv", "mov", "webm", "m4v"] }],
+      title: u.pickTitle,
+      filters: [{ name: u.pickFilter, extensions: ["mp4", "mkv", "mov", "webm", "m4v"] }],
     });
-    if (typeof выбранное !== "string") return;
+    if (typeof chosen !== "string") return;
 
-    setLocalPath(выбранное);
-    // Имя в раздаче подставляется из имени файла: чаще всего оно и нужно, а поле
-    // остаётся открытым для правки.
-    if (!remoteName) setRemoteName(basename(выбранное));
+    setLocalPath(chosen);
+    // The name in service is filled in from the file name: that is usually the one
+    // wanted, and the field stays open for editing.
+    if (!remoteName) setRemoteName(basename(chosen));
     setPreflight(null);
     setStartedTask(null);
   };
 
-  const залить = async (confirmed: boolean) => {
+  const send = async (confirmed: boolean) => {
     if (!active || !localPath) return;
     setBusy(true);
     setError(null);
@@ -119,8 +129,8 @@ export function UploadScreen() {
       setPreflight(null);
     } catch (e) {
       const err = toAppError(e);
-      // Отказ, о котором можно спросить, и отказ, с которым спорить нечем,
-      // показываются по-разному — но оба здесь, рядом с кнопкой, а не где-то ещё.
+      // A refusal that can be argued with and one that cannot are shown differently
+      // — but both here, beside the button, rather than somewhere else.
       if (canConfirm(err) || err.code === "REMOTE_DISK_FULL") setPreflight(err);
       else setError(err);
     } finally {
@@ -128,52 +138,44 @@ export function UploadScreen() {
     }
   };
 
-  const готово =
+  const ready =
     active !== null && isReady(active) && localPath !== null && remoteName.trim() !== "";
 
   if (profiles.length === 0) {
     return (
       <div className="panel">
-        <h1>Заливка</h1>
-        <p className="muted">
-          Сначала заведите сервер в разделе «Серверы» — заливать пока некуда.
-        </p>
+        <h1>{u.heading}</h1>
+        <p className="muted">{u.noServers}</p>
       </div>
     );
   }
 
   return (
     <div className="panel">
-      <h1>Заливка</h1>
+      <h1>{u.heading}</h1>
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
       {active === null ? (
-        <p className="muted">Выберите активный сервер в разделе «Серверы».</p>
+        <p className="muted">{u.noActive}</p>
       ) : !isReady(active) ? (
-        <p className="muted">
-          У сервера «{active.name}» не подтверждён отпечаток. Пока это не сделано,
-          приложение к нему не подключится.
-        </p>
+        <p className="muted">{fill(u.notReady, { name: active.name }, t, lang)}</p>
       ) : (
         <>
-          <p className="muted">
-            Файл уйдёт на сервер «{active.name}». Заливка идёт в фоне — этот экран
-            можно закрыть, а следить за ней в разделе «Задачи».
-          </p>
+          <p className="muted">{fill(u.lead, { name: active.name }, t, lang)}</p>
 
           <div className="form">
             <div className="form__row">
-              <label htmlFor="upload-file">Файл</label>
+              <label htmlFor="upload-file">{u.fieldFile}</label>
               <div className="form__inline">
-                <button id="upload-file" onClick={() => void выбрать()} disabled={busy}>
-                  Выбрать файл…
+                <button id="upload-file" onClick={() => void pick()} disabled={busy}>
+                  {u.pickFile}
                 </button>
                 {localPath && <span className="form__value">{localPath}</span>}
               </div>
             </div>
 
             <div className="form__row">
-              <label htmlFor="upload-name">Имя в раздаче</label>
+              <label htmlFor="upload-name">{u.fieldName}</label>
               <input
                 id="upload-name"
                 value={remoteName}
@@ -183,19 +185,17 @@ export function UploadScreen() {
                 }}
                 placeholder="film_22.mp4"
               />
-              <p className="form__hint">
-                Под этим именем файл увидят зрители и по нему же строится ссылка.
-              </p>
+              <p className="form__hint">{u.nameHint}</p>
             </div>
 
             <div className="form__row">
-              <label htmlFor="upload-media">Отнести к медиа</label>
+              <label htmlFor="upload-media">{u.fieldMedia}</label>
               <select
                 id="upload-media"
                 value={mediaId}
                 onChange={(e) => setMediaId(e.target.value)}
               >
-                <option value="">не относить — попадёт в «не распознано»</option>
+                <option value="">{u.mediaNone}</option>
                 {media.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.title}
@@ -205,7 +205,7 @@ export function UploadScreen() {
             </div>
 
             <div className="form__row">
-              <label htmlFor="upload-limit">Ограничить скорость</label>
+              <label htmlFor="upload-limit">{u.fieldLimit}</label>
               <select
                 id="upload-limit"
                 value={limitBps === null ? "" : String(limitBps)}
@@ -213,17 +213,20 @@ export function UploadScreen() {
                   setLimitBps(e.target.value === "" ? null : Number(e.target.value))
                 }
               >
-                {ПРЕДЕЛЫ.map((p) => (
-                  <option key={p.label} value={p.value === null ? "" : String(p.value)}>
-                    {p.label}
+                {LIMITS.map((limit) => (
+                  <option
+                    key={limit.key}
+                    value={limit.value === null ? "" : String(limit.value)}
+                  >
+                    {u[limit.key] as string}
                   </option>
                 ))}
               </select>
               <p className="form__hint">
-                Пригодится, если во время заливки нужно ещё и смотреть:{" "}
+                {u.limitHintLead}{" "}
                 {limitBps === null
-                  ? "без предела заливка займёт весь канал"
-                  : `не быстрее ${formatBytes(limitBps)} в секунду`}
+                  ? u.limitHintUnlimited
+                  : fill(u.limitHintCapped, { bytes: limitBps }, t, lang)}
                 .
               </p>
             </div>
@@ -233,7 +236,7 @@ export function UploadScreen() {
             <PreflightWarnings
               error={preflight}
               busy={busy}
-              onConfirm={() => void залить(true)}
+              onConfirm={() => void send(true)}
               onCancel={() => setPreflight(null)}
             />
           )}
@@ -241,11 +244,8 @@ export function UploadScreen() {
           {startedTask && (
             <div className="notice notice--ok" role="status">
               <div className="notice__body">
-                <strong className="notice__message">Заливка началась.</strong>
-                <p className="notice__hint">
-                  Следить за ней — в разделе «Задачи». Если закрыть приложение,
-                  она продолжится с достигнутого места при следующем запуске.
-                </p>
+                <strong className="notice__message">{u.started}</strong>
+                <p className="notice__hint">{u.startedHint}</p>
               </div>
             </div>
           )}
@@ -253,10 +253,10 @@ export function UploadScreen() {
           <div className="form__actions">
             <button
               className="button--primary"
-              disabled={!готово || busy}
-              onClick={() => void залить(false)}
+              disabled={!ready || busy}
+              onClick={() => void send(false)}
             >
-              {busy ? "Проверяем…" : "Залить"}
+              {busy ? u.checking : u.start}
             </button>
           </div>
         </>

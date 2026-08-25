@@ -7,9 +7,11 @@
  * its playback check is visibly unusable.
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConvertPreview, SourceFile, Validation } from "../../../shared/contract";
+import { en, renderIn, ru } from "../../../test-utils";
+import { fill } from "../../../shared/i18n/render";
 
 const mockSourceProbe = vi.fn<() => Promise<SourceFile>>();
 const mockConvertPreview = vi.fn<() => Promise<ConvertPreview>>();
@@ -71,7 +73,11 @@ function preview(over: Partial<ConvertPreview> = {}): ConvertPreview {
   return {
     source: source(),
     plan: {
-      video: { kind: "reencode", reason: "видео в hevc — плеер VRChat играет только H.264", level: "4.1" },
+      video: {
+        kind: "reencode",
+        reason: { key: "REASON_VIDEO_NOT_H264", params: { codec: "hevc" } },
+        level: "4.1",
+      },
       audio: { kind: "copy" },
       audio_track: 0,
       gop: 24,
@@ -97,14 +103,14 @@ beforeEach(() => {
 
 /** Pick a source and wait for the screen to catch up. */
 async function pickSource() {
-  fireEvent.click(await screen.findByText("Выбрать файл…"));
+  fireEvent.click(await screen.findByText(ru.ui.convert.pickFile));
   await screen.findByText(/1920×1080/);
 }
 
 describe("preparation screen", () => {
   it("shows what is actually in the file", async () => {
     // FR-020. Choosing a bitrate without knowing what the source is means guessing.
-    render(<ConvertScreen />);
+    renderIn(<ConvertScreen />);
     await pickSource();
     // One line, matched whole: "hevc" also appears in the preview's explanation,
     // and matching it alone would find either and prove neither.
@@ -124,12 +130,18 @@ describe("preparation screen", () => {
   it("says plainly that re-encoding is about to happen, and why", async () => {
     // The whole reason this screen is not just a button: copying takes minutes,
     // re-encoding takes hours, and from the outside both look the same.
-    render(<ConvertScreen />);
+    renderIn(<ConvertScreen />);
     await pickSource();
 
-    expect(await screen.findByText(/придётся пересжать/)).toBeInTheDocument();
-    expect(screen.getByText(/это часы работы/i)).toBeInTheDocument();
-    expect(screen.getByText(/играет только H\.264/)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.convert.lossy)).toBeInTheDocument();
+    // And the reason, with the codec put into it. Matched whole: "hevc" alone also
+    // appears in the line listing what is in the file, and would prove nothing.
+    const reason = fill(ru.details.REASON_VIDEO_NOT_H264, { codec: "hevc" }, ru, "ru");
+    const lines = screen.getAllByRole("listitem");
+    expect(
+      lines.some((el) => el.textContent?.includes(reason)),
+      `ни одна строка плана не называет причину: ${reason}`,
+    ).toBe(true);
   });
 
   it("says when nothing will be re-encoded", async () => {
@@ -139,26 +151,54 @@ describe("preparation screen", () => {
         plan: { ...preview().plan, video: { kind: "copy" }, audio: { kind: "copy" } },
       }),
     );
-    render(<ConvertScreen />);
+    renderIn(<ConvertScreen />);
     await pickSource();
 
-    expect(await screen.findByText(/без потерь и за минуты/)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.convert.lossless)).toBeInTheDocument();
   });
 
   it("passes on what the core says about the encoder", async () => {
-    // FR-026: the move to the processor must not be silent. The wording comes from
-    // the core so it cannot drift from what the core actually decided.
+    // FR-026: the move to the processor must not be silent. The core sends the code
+    // and the interface words it, so the two cannot drift apart.
     mockConvertPreview.mockResolvedValue(
       preview({
         encoder: { kind: "software" },
-        encoder_notice:
-          "Аппаратного ускорения на этой машине не нашлось — кодировать будет процессор.",
+        encoder_notice: { key: "NOTICE_NO_HARDWARE_FOUND" },
       }),
     );
-    render(<ConvertScreen />);
+    renderIn(<ConvertScreen />);
     await pickSource();
 
-    expect(await screen.findByText(/кодировать будет процессор/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(ru.details.NOTICE_NO_HARDWARE_FOUND),
+    ).toBeInTheDocument();
+  });
+
+  it("names the accelerator that failed in a way a person recognises", async () => {
+    // The core sends `h264_nvenc`; nobody outside a terminal knows what that is.
+    mockConvertPreview.mockResolvedValue(
+      preview({
+        encoder: { kind: "software" },
+        encoder_notice: {
+          key: "NOTICE_HARDWARE_FAILED",
+          params: { encoder: "h264_nvenc" },
+        },
+      }),
+    );
+    renderIn(<ConvertScreen />);
+    await pickSource();
+
+    expect(await screen.findByText(/видеокарты NVIDIA/)).toBeInTheDocument();
+    expect(screen.queryByText(/h264_nvenc/)).not.toBeInTheDocument();
+  });
+
+  it("explains the same preparation in English when English is chosen", async () => {
+    renderIn(<ConvertScreen />, "en");
+    fireEvent.click(await screen.findByText(en.ui.convert.pickFile));
+    await screen.findByText(/1920×1080/);
+
+    expect(await screen.findByText(en.ui.convert.lossy)).toBeInTheDocument();
+    expect(screen.getByText(/only plays H\.264/)).toBeInTheDocument();
   });
 
   it("shows a track with no language by its number", async () => {
@@ -172,7 +212,7 @@ describe("preparation screen", () => {
         ],
       }),
     );
-    render(<ConvertScreen />);
+    renderIn(<ConvertScreen />);
     await pickSource();
 
     expect(screen.getByText(/Дорожка 1, стерео/)).toBeInTheDocument();
@@ -181,28 +221,28 @@ describe("preparation screen", () => {
 
   it("does not let a file without sound be prepared silently", async () => {
     mockSourceProbe.mockResolvedValue(source({ audio_tracks: [] }));
-    render(<ConvertScreen />);
+    renderIn(<ConvertScreen />);
     await pickSource();
 
-    expect(screen.getByText(/нет ни одной звуковой дорожки/)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.convert.noTracks)).toBeInTheDocument();
   });
 
   it("cannot be started before a source is chosen", async () => {
-    render(<ConvertScreen />);
-    expect(await screen.findByText("Подготовить")).toBeDisabled();
+    renderIn(<ConvertScreen />);
+    expect(await screen.findByText(ru.ui.convert.start)).toBeDisabled();
   });
 
   it("hands the core the track and bitrate that were chosen", async () => {
-    render(<ConvertScreen />);
+    renderIn(<ConvertScreen />);
     await pickSource();
 
-    fireEvent.change(screen.getByLabelText("Целевой битрейт"), {
+    fireEvent.change(screen.getByLabelText(ru.ui.convert.fieldBitrate), {
       target: { value: "22000" },
     });
-    fireEvent.click(screen.getByText("Подготовить"));
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
 
     await waitFor(() => expect(mockConvertStart).toHaveBeenCalled());
-    expect(await screen.findByText(/Подготовка началась/)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.convert.started)).toBeInTheDocument();
   });
 });
 
@@ -212,30 +252,33 @@ describe("playback check", () => {
   }
 
   it("says a passing file may be uploaded", () => {
-    render(<ValidationResult result={verdict()} />);
-    expect(screen.getByText(/можно заливать/)).toBeInTheDocument();
+    renderIn(<ValidationResult result={verdict()} />);
+    expect(screen.getByText(ru.ui.validation.ok)).toBeInTheDocument();
   });
 
   it("makes a failing file visibly unusable and keeps the decoder's words", () => {
     // FR-027. "Invalid NAL unit size" is cryptic but searchable; "the file is
     // broken" is neither.
-    render(
+    renderIn(
       <ValidationResult
-        result={verdict({ ok: false, problems: ["[h264 @ 0x1] Invalid NAL unit size (-56 > 271)."] })}
+        result={verdict({
+          ok: false,
+          problems: ["[h264 @ 0x1] Invalid NAL unit size (-56 > 271)."],
+        })}
       />,
     );
-    expect(screen.getByText(/Заливать его нельзя/)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.validation.failed)).toBeInTheDocument();
     expect(screen.getByText(/Invalid NAL unit size/)).toBeInTheDocument();
   });
 
   it("does not hide the complaints it decided to forgive", () => {
     // Otherwise someone later wonders why a file with warnings was accepted, and
     // there is nothing on screen to answer them.
-    render(
+    renderIn(
       <ValidationResult
         result={verdict({ ignored: ["[null @ 0x1] non monotonically increasing dts"] })}
       />,
     );
-    expect(screen.getByText(/на воспроизведение\s+не влияют/)).toBeInTheDocument();
+    expect(screen.getByText(/на воспроизведение не влияют/)).toBeInTheDocument();
   });
 });

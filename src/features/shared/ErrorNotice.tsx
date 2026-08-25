@@ -1,12 +1,15 @@
 /**
- * Показ ошибки.
+ * Showing an error.
  *
- * Сообщение и подсказка приходят от ядра уже готовыми (FR-105) — интерфейс их не сочиняет
- * и не переписывает. Иначе формулировки разойдутся между экранами, и одна и та же беда
- * будет объясняться по-разному.
+ * The core names the situation and the values that go with it; the wording is looked
+ * up here, in the catalogue of the chosen language (FR-105, FR-106). One catalogue
+ * means one wording per situation, so the same trouble is never explained two ways on
+ * two screens — which is what the rule was written for.
  */
 
 import type { AppError } from "../../shared/contract";
+import { useLang, useT } from "../../shared/i18n";
+import { renderError } from "../../shared/i18n/render";
 
 export function ErrorNotice({
   error,
@@ -15,15 +18,23 @@ export function ErrorNotice({
   error: AppError;
   onDismiss?: () => void;
 }) {
+  const t = useT();
+  const { lang } = useLang();
+  const { message, hint } = renderError(error, t, lang);
+
   return (
     <div className="notice notice--error" role="alert">
       <div className="notice__body">
-        <strong className="notice__message">{error.message}</strong>
-        <p className="notice__hint">{error.hint}</p>
+        <strong className="notice__message">{message}</strong>
+        {hint && <p className="notice__hint">{hint}</p>}
         {error.cause && <p className="notice__cause">{error.cause}</p>}
       </div>
       {onDismiss && (
-        <button className="notice__close" onClick={onDismiss} aria-label="Скрыть">
+        <button
+          className="notice__close"
+          onClick={onDismiss}
+          aria-label={t.ui.common.dismiss}
+        >
           ×
         </button>
       )}

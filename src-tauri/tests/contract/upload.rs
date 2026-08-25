@@ -11,7 +11,7 @@
 //! договорный тест не должен зависеть от того, есть ли под рукой сеть.
 
 use super::support::{state, valid_input};
-use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::servers::api as servers;
 use vrcast_studio_lib::commands::upload::{
     api as upload, space_error, warning_error, Preflight, SpaceShortage, UploadRequest,
@@ -62,9 +62,8 @@ async fn заливка_на_несуществующий_сервер_отве�
 
     assert_eq!(err.code, ErrorCode::InvalidInput);
     assert!(
-        err.message.contains("сервера нет"),
-        "по сообщению не понять, что дело в сервере: {}",
-        err.message
+        err.says(DetailCode::ProfileNotFound),
+        "не сказано, что дело в сервере: {err}"
     );
 }
 
@@ -80,9 +79,8 @@ async fn отсутствующий_файл_называется_отдельн
 
     assert_eq!(err.code, ErrorCode::InvalidInput);
     assert!(
-        err.message.contains("не найден") || err.message.contains("недоступен"),
-        "по сообщению не понять, что дело в файле: {}",
-        err.message
+        err.says(DetailCode::UploadFileUnreadable),
+        "не сказано, что дело в файле: {err}"
     );
 }
 
@@ -155,10 +153,8 @@ fn продолжение_несуществующей_задачи_не_мол�
     let state = state();
     let err = upload::upload_resume(&state, "нет-такой-задачи")
         .expect_err("продолжение несуществующей задачи прошло молча");
-    assert!(
-        !err.message.is_empty(),
-        "отказ без человеческой формулировки"
-    );
+    // Код обязан быть узнаваемым: по нему интерфейс и найдёт, что сказать.
+    assert_eq!(err.code, ErrorCode::TaskNotFound);
 }
 
 // ---------- отказы до начала передачи ----------
@@ -184,16 +180,26 @@ fn нехватка_места_подтверждением_не_снимает�
 
     let err = space_error(checks.not_enough_space.unwrap());
     assert_eq!(err.code, ErrorCode::RemoteDiskFull);
-    assert!(
-        err.message.contains("22.0 ГБ"),
-        "в отказе не названа нехватка: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("32.0 ГБ") && err.message.contains("10.0 ГБ"),
-        "не названо, сколько нужно и сколько есть: {}",
-        err.message
-    );
+
+    // Числа уходят как числа, а не как «22.0 ГБ»: единицы и разделитель дробной
+    // части у языков разные, и выбирать их — дело интерфейса. Ядро отвечает за то,
+    // что все три числа названы, — без них подтверждать нечего.
+    let detail = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::NotEnoughSpace)
+        .unwrap_or_else(|| panic!("в отказе не названа нехватка: {err}"));
+    for (name, expected) in [
+        ("short_by", 23_622_320_128_u64),
+        ("needed", 34_359_738_368),
+        ("free", 10_737_418_240),
+    ] {
+        assert_eq!(
+            detail.params.get(name).and_then(|v| v.as_u64()),
+            Some(expected),
+            "в отказе нет значения «{name}»: {detail:?}"
+        );
+    }
 }
 
 #[test]
@@ -210,15 +216,15 @@ fn идущий_просмотр_называется_своим_кодом_и_�
 
     let err = warning_error(&checks, "film_22.mp4");
     assert_eq!(err.code, ErrorCode::ViewersActive);
-    assert!(
-        err.message.contains('3'),
-        "не сказано, сколько соединений открыто: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("подвиснет") || err.message.contains("просмотр"),
-        "названа помеха, но не названо последствие: {}",
-        err.message
+    let detail = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::ViewersActiveUpload)
+        .unwrap_or_else(|| panic!("не сказано, что идёт просмотр: {err}"));
+    assert_eq!(
+        detail.params.get("connections").and_then(|v| v.as_u64()),
+        Some(3),
+        "не сказано, сколько соединений открыто: {detail:?}"
     );
 }
 
@@ -233,15 +239,19 @@ fn занятое_имя_называется_своим_кодом() {
 
     let err = warning_error(&checks, "film_22.mp4");
     assert_eq!(err.code, ErrorCode::NameExists);
-    assert!(
-        err.message.contains("film_22.mp4") && err.message.contains("заменён"),
-        "не сказано, какой файл будет заменён: {}",
-        err.message
+    let detail = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::NameWillBeReplaced)
+        .unwrap_or_else(|| panic!("не сказано, что файл будет заменён: {err}"));
+    assert_eq!(
+        detail.params.get("name").and_then(|v| v.as_str()),
+        Some("film_22.mp4"),
+        "не сказано, какой именно файл: {detail:?}"
     );
     assert!(
-        !err.message.contains("CDN"),
-        "про кеш CDN сказано там, где CDN не задан: {}",
-        err.message
+        !err.says(DetailCode::CdnKeepsOldCopy),
+        "про кеш CDN сказано там, где CDN не задан: {err}"
     );
 }
 
@@ -259,9 +269,8 @@ fn при_заданном_кеше_замена_предупреждает_и_�
     let err = warning_error(&checks, "film_22.mp4");
     assert_eq!(err.code, ErrorCode::NameExists);
     assert!(
-        err.message.contains("CDN"),
-        "про закешированную копию не сказано: {}",
-        err.message
+        err.says(DetailCode::CdnKeepsOldCopy),
+        "про закешированную копию не сказано: {err}"
     );
 }
 

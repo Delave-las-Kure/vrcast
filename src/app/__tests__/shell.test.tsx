@@ -1,16 +1,22 @@
 /**
- * T028 — тесты оболочки интерфейса.
+ * T028 — tests for the interface shell.
  *
- * Ядро здесь подменено: тест интерфейса не должен требовать живого приложения, сервера
- * или базы. Проверяется поведение показа — что разделы на месте, что незаконченные
- * помечены честно, что ошибка от ядра доходит до человека неизменной.
+ * The core is replaced here: a test of the interface must not need a live application,
+ * a server or a database. What is checked is behaviour on screen — that the sections
+ * are there, that the unfinished ones are marked honestly, that an error from the core
+ * reaches a person intact, and that both languages actually work.
+ *
+ * Assertions read the words out of the catalogue rather than repeating them. A test
+ * that repeats the text passes when the wording drifts and fails when it is corrected,
+ * which is exactly backwards.
  */
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppError, Task, TaskOnClose } from "../../shared/contract";
+import { en, renderIn, ru } from "../../test-utils";
 
-// Подмена обязана быть объявлена до импорта проверяемого кода.
+// The replacement has to be declared before the code under test is imported.
 const mockTasksList = vi.fn<() => Promise<Task[]>>();
 const mockTasksOnClose = vi.fn<() => Promise<TaskOnClose[]>>();
 const mockTasksReorder = vi.fn<(ids: string[]) => Promise<number>>();
@@ -29,13 +35,15 @@ vi.mock("../../shared/ipc", async () => {
       taskResume: vi.fn(),
       tasksReorder: mockTasksReorder,
       tasksQueueOrder: vi.fn(async () => []),
-      // Возвращает список, а не ничего: настоящая команда всегда отдаёт перечень,
-      // и подмена, отдающая undefined, проверяла бы поведение, которого не бывает.
+      // Returns a list rather than nothing: the real command always hands back a
+      // list, and a replacement returning undefined would test behaviour that
+      // does not happen.
       tasksOnClose: () => mockTasksOnClose(),
       serverProbeFingerprint: vi.fn(),
     },
     onTaskProgress: vi.fn(async () => () => {}),
     onTaskDone: vi.fn(async () => () => {}),
+    onTaskNotify: vi.fn(async () => () => {}),
     onLibraryChanged: vi.fn(async () => () => {}),
   };
 });
@@ -51,7 +59,7 @@ function makeTask(over: Partial<Task> = {}): Task {
     server_id: null,
     state: "running",
     progress: 0.42,
-    stage: "передаём",
+    stage: "STAGE_CHECKSUM",
     speed_bps: 2_500_000,
     eta_s: 900,
     resume_token: null,
@@ -71,146 +79,222 @@ beforeEach(() => {
   mockTasksReorder.mockResolvedValue(0);
   document.documentElement.dataset.theme = "";
   localStorage.clear();
-  // HashRouter хранит адрес в самом окне, и он переживает размонтирование:
-  // без сброса следующий тест откроется на разделе, оставшемся от предыдущего.
+  // The application picks its language from the system when nothing is stored, and
+  // `navigator.language` differs between a developer's machine and CI. Pinning it
+  // keeps a failure here about the code rather than about where it ran.
+  localStorage.setItem("vrcast.lang", "ru");
+  // HashRouter keeps the address in the window itself and it survives unmounting:
+  // without a reset the next test opens on whatever section the last one left.
   window.location.hash = "#/";
 });
 
-describe("оболочка", () => {
-  it("показывает все разделы приложения", async () => {
-    render(<App />);
-    // Ищем внутри меню: название открытого раздела встречается ещё и заголовком,
-    // и поиск по всей странице нашёл бы два совпадения.
-    const nav = await screen.findByRole("navigation", { name: "Разделы" });
-    for (const label of [
-      "Серверы",
-      "Библиотека",
-      "Подготовка",
-      "Заливка",
-      "Качества",
-      "Зрители",
-      "Ограничения",
-      "Диагностика",
-      "Задачи",
-    ]) {
+describe("the shell", () => {
+  it("shows every section of the application", async () => {
+    renderIn(<App />);
+    // Looked for inside the menu: the name of the open section also appears as a
+    // heading, and a search across the page would find two matches.
+    const nav = await screen.findByRole("navigation", { name: ru.ui.sidebar.sections });
+    for (const label of Object.values(ru.ui.sections)) {
       expect(within(nav).getByText(label)).toBeInTheDocument();
     }
   });
 
-  it("показывает версию приложения, когда ядро её вернуло", async () => {
-    render(<App />);
+  it("shows the application version when the core returned one", async () => {
+    renderIn(<App />);
     expect(await screen.findByText(/версия 0\.1\.0/)).toBeInTheDocument();
   });
 
-  it("не падает, когда версию получить не удалось", async () => {
-    // Версия — украшение. Её отсутствие не повод показывать ошибку на весь экран.
-    mockAppVersions.mockRejectedValue(new Error("ядро недоступно"));
-    render(<App />);
-    expect(await screen.findByText("Задачи")).toBeInTheDocument();
+  it("does not fall over when the version could not be had", async () => {
+    // The version is decoration. Its absence is no reason for a full-screen error.
+    mockAppVersions.mockRejectedValue(new Error("core unavailable"));
+    renderIn(<App />);
+    expect(await screen.findByText(ru.ui.sections.tasks)).toBeInTheDocument();
     expect(screen.queryByText(/версия/)).not.toBeInTheDocument();
   });
 
-  it("открывает раздел задач по умолчанию", async () => {
-    render(<App />);
-    expect(
-      await screen.findByText(/Задач пока нет/),
-    ).toBeInTheDocument();
+  it("opens the task section by default", async () => {
+    renderIn(<App />);
+    expect(await screen.findByText(ru.ui.tasks.empty)).toBeInTheDocument();
   });
 });
 
-describe("незаконченные разделы", () => {
-  it("называют фазу и чем пользоваться до неё", async () => {
-    // Пустой экран без объяснения выглядит поломкой, а «скоро будет» ничего не сообщает.
-    // Взят раздел САМОЙ ДАЛЬНЕЙ фазы. Проверка уже дважды падала оттого, что
-    // раздел, на который она смотрела, доделали, — а падать она должна от поломки,
-    // а не от успеха.
-    window.location.hash = "#/diagnostics";
-    render(<App />);
+describe("language", () => {
+  it("shows the interface in English when English is chosen", async () => {
+    localStorage.setItem("vrcast.lang", "en");
+    renderIn(<App />, "en");
 
-    expect(await screen.findByText("Фаза 8")).toBeInTheDocument();
+    const nav = await screen.findByRole("navigation", { name: en.ui.sidebar.sections });
+    expect(within(nav).getByText(en.ui.sections.tasks)).toBeInTheDocument();
+    expect(await screen.findByText(en.ui.tasks.empty)).toBeInTheDocument();
+    // And nothing of the other language is left over on the screen.
+    expect(screen.queryByText(ru.ui.tasks.empty)).not.toBeInTheDocument();
+  });
+
+  it("changes the whole screen when the language is switched", async () => {
+    // The point of the feature: switching is immediate and total, not a reload with
+    // half the screen left behind.
+    renderIn(<App />);
+    expect(await screen.findByText(ru.ui.tasks.empty)).toBeInTheDocument();
+
+    const chooser = await screen.findByLabelText(ru.ui.common.language);
+    fireEvent.change(chooser, { target: { value: "en" } });
+
+    expect(await screen.findByText(en.ui.tasks.empty)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.tasks.empty)).not.toBeInTheDocument();
+  });
+
+  it("remembers the choice for the next start", async () => {
+    renderIn(<App />);
+    const chooser = await screen.findByLabelText(ru.ui.common.language);
+    fireEvent.change(chooser, { target: { value: "en" } });
+
+    expect(localStorage.getItem("vrcast.lang")).toBe("en");
+  });
+
+  it("names each language in itself", async () => {
+    // Someone who has landed in a language they cannot read must still be able to
+    // find their own. Translating the names of languages would hide it from them.
+    renderIn(<App />);
+    const chooser = await screen.findByLabelText(ru.ui.common.language);
+    expect(within(chooser).getByText("English")).toBeInTheDocument();
+    expect(within(chooser).getByText("Русский")).toBeInTheDocument();
+  });
+});
+
+describe("unfinished sections", () => {
+  it("name the phase and what to use until then", async () => {
+    // A blank screen with no explanation looks broken, and "coming soon" says
+    // nothing. The section of the FURTHEST phase is used: this check has already
+    // failed twice because the section it looked at got finished — and it should
+    // fail from a breakage, not from success.
+    window.location.hash = "#/diagnostics";
+    renderIn(<App />);
+
+    expect(
+      await screen.findByText(ru.ui.comingSoon.diagnostics.phase),
+    ).toBeInTheDocument();
     expect(await screen.findByText(/vrcast-diagnose/)).toBeInTheDocument();
   });
 });
 
-describe("список задач", () => {
-  it("показывает задачу с её состоянием и продвижением", async () => {
+describe("the task list", () => {
+  it("shows a task with its state and its progress", async () => {
     mockTasksList.mockResolvedValue([makeTask()]);
-    render(<App />);
+    renderIn(<App />);
 
-    expect(await screen.findByText("заливка на сервер")).toBeInTheDocument();
-    expect(await screen.findByText("выполняется")).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.tasks.kinds.upload)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.tasks.states.running)).toBeInTheDocument();
 
     const bar = await screen.findByRole("progressbar");
     expect(bar).toHaveAttribute("aria-valuenow", "42");
   });
 
-  it("переводит показатели в человеческий вид", async () => {
-    mockTasksList.mockResolvedValue([makeTask({ speed_bps: 2_500_000, eta_s: 5400 })]);
-    render(<App />);
+  it("shows the stage in words rather than as a code", async () => {
+    mockTasksList.mockResolvedValue([makeTask({ stage: "STAGE_CHECKSUM" })]);
+    renderIn(<App />);
 
-    // 2 500 000 байт/с — это 20 Мбит/с; показывать байты пользователю бессмысленно.
-    expect(await screen.findByText("20.0 Мбит/с")).toBeInTheDocument();
+    expect(await screen.findByText(ru.details.STAGE_CHECKSUM)).toBeInTheDocument();
+    expect(screen.queryByText("STAGE_CHECKSUM")).not.toBeInTheDocument();
+  });
+
+  it("puts the figures into human terms", async () => {
+    mockTasksList.mockResolvedValue([makeTask({ speed_bps: 2_500_000, eta_s: 5400 })]);
+    renderIn(<App />);
+
+    // 2 500 000 bytes/s is 20 Mbit/s; showing bytes to a person is pointless.
+    expect(await screen.findByText("20,0 Мбит/с")).toBeInTheDocument();
     expect(await screen.findByText(/осталось ~1 ч 30 мин/)).toBeInTheDocument();
   });
 
-  it("предлагает приостановить выполняющуюся и продолжить приостановленную", async () => {
+  it("offers to pause a running task and resume a paused one", async () => {
     mockTasksList.mockResolvedValue([
       makeTask({ id: "a", state: "running" }),
       makeTask({ id: "b", state: "paused" }),
     ]);
-    render(<App />);
+    renderIn(<App />);
 
-    expect(await screen.findByText("Приостановить")).toBeInTheDocument();
-    expect(await screen.findByText("Продолжить")).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.tasks.pause)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.tasks.resume)).toBeInTheDocument();
   });
 
-  it("не предлагает действий у завершённой задачи", async () => {
+  it("offers no actions on a finished task", async () => {
     mockTasksList.mockResolvedValue([makeTask({ state: "completed", progress: 1 })]);
-    render(<App />);
+    renderIn(<App />);
 
-    expect(await screen.findByText("завершена")).toBeInTheDocument();
-    expect(screen.queryByText("Отменить")).not.toBeInTheDocument();
-    expect(screen.queryByText("Приостановить")).not.toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.tasks.states.completed)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.tasks.stop)).not.toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.tasks.pause)).not.toBeInTheDocument();
   });
 
-  it("показывает ошибку ядра, когда список прочитать не удалось", async () => {
-    const err: AppError = {
-      code: "STORAGE_FAILED",
-      message: "Не удалось обратиться к локальному хранилищу",
-      hint: "Проверьте, что на диске есть место.",
-    };
+  it("explains a failed task in the language in use", async () => {
+    // The error was recorded as codes, so a task that failed a week ago still
+    // explains itself in whatever language is chosen today.
+    mockTasksList.mockResolvedValue([
+      makeTask({
+        state: "failed",
+        error: { code: "CHECKSUM_MISMATCH", details: [{ key: "UPLOAD_CHECKSUM_MISMATCH" }] },
+      }),
+    ]);
+    renderIn(<App />);
+
+    expect(
+      await screen.findByText(ru.details.UPLOAD_CHECKSUM_MISMATCH),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the core's error when the list could not be read", async () => {
+    const err: AppError = { code: "STORAGE_FAILED" };
     mockTasksList.mockRejectedValue(err);
-    render(<App />);
+    renderIn(<App />);
 
     expect(await screen.findByRole("alert")).toBeInTheDocument();
-    expect(await screen.findByText(err.message)).toBeInTheDocument();
-    expect(await screen.findByText(err.hint)).toBeInTheDocument();
+    expect(
+      await screen.findByText(ru.errors.STORAGE_FAILED.message),
+    ).toBeInTheDocument();
+    expect(await screen.findByText(ru.errors.STORAGE_FAILED.hint)).toBeInTheDocument();
   });
 });
 
-describe("показ ошибок", () => {
-  it("выводит сообщение и подсказку ядра дословно", () => {
-    // Интерфейс не сочиняет своих формулировок: иначе одна и та же беда будет
-    // объясняться по-разному на разных экранах (FR-105).
+describe("showing errors", () => {
+  it("words the core's code from the catalogue, with its particulars", () => {
+    // The interface does not invent phrases: one catalogue means the same trouble
+    // is explained the same way on every screen (FR-105).
     const err: AppError = {
       code: "HOST_KEY_CHANGED",
-      message: "Отпечаток сервера изменился",
-      hint: "Если сервер не менялся, не подключайтесь: возможна подмена.",
-      cause: "ожидался SHA256:aaa, получен SHA256:bbb",
+      cause: "expected SHA256:aaa, got SHA256:bbb",
     };
-    render(<ErrorNotice error={err} />);
+    renderIn(<ErrorNotice error={err} />);
 
-    expect(screen.getByText(err.message)).toBeInTheDocument();
-    expect(screen.getByText(err.hint)).toBeInTheDocument();
+    expect(screen.getByText(ru.errors.HOST_KEY_CHANGED.message)).toBeInTheDocument();
+    expect(screen.getByText(ru.errors.HOST_KEY_CHANGED.hint)).toBeInTheDocument();
+    // The particulars are shown as they arrived: they can be searched for.
     expect(screen.getByText(err.cause!)).toBeInTheDocument();
+  });
+
+  it("words the same error in English when English is chosen", () => {
+    const err: AppError = { code: "HOST_KEY_CHANGED" };
+    renderIn(<ErrorNotice error={err} />, "en");
+
+    expect(screen.getByText(en.errors.HOST_KEY_CHANGED.message)).toBeInTheDocument();
+    expect(screen.queryByText(ru.errors.HOST_KEY_CHANGED.message)).not.toBeInTheDocument();
+  });
+
+  it("says the specific thing the core named, not just the general code", () => {
+    const err: AppError = {
+      code: "INVALID_INPUT",
+      details: [{ key: "PROFILE_PORT_RANGE" }],
+    };
+    renderIn(<ErrorNotice error={err} />);
+
+    expect(screen.getByText(ru.details.PROFILE_PORT_RANGE)).toBeInTheDocument();
   });
 });
 
-describe("оформление", () => {
-  it("по умолчанию следует системе", async () => {
-    render(
+describe("appearance", () => {
+  it("follows the system by default", async () => {
+    renderIn(
       <ThemeProvider>
-        <span>содержимое</span>
+        <span>content</span>
       </ThemeProvider>,
     );
     await waitFor(() => {
@@ -218,11 +302,11 @@ describe("оформление", () => {
     });
   });
 
-  it("запоминает выбор между запусками", async () => {
+  it("remembers the choice between starts", async () => {
     localStorage.setItem("vrcast.theme", "dark");
-    render(
+    renderIn(
       <ThemeProvider>
-        <span>содержимое</span>
+        <span>content</span>
       </ThemeProvider>,
     );
     await waitFor(() => {
@@ -230,18 +314,17 @@ describe("оформление", () => {
     });
   });
 
-  it("не падает, когда локальное хранилище недоступно", async () => {
-    // В части окружений обращение к нему бросает исключение — приложение
-    // всё равно обязано запуститься.
+  it("does not fall over when local storage is unavailable", async () => {
+    // In some environments touching it throws — the application still has to start.
     const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("хранилище недоступно");
+      throw new Error("storage unavailable");
     });
-    render(
+    renderIn(
       <ThemeProvider>
-        <span>содержимое</span>
+        <span>content</span>
       </ThemeProvider>,
     );
-    expect(screen.getByText("содержимое")).toBeInTheDocument();
+    expect(screen.getByText("content")).toBeInTheDocument();
     spy.mockRestore();
   });
 });

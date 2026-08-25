@@ -1,8 +1,8 @@
 /**
- * Оформление: тёмная, светлая и следование системе (FR-100).
+ * Appearance: dark, light, and following the system (FR-100).
  *
- * Выбор хранится локально и переживает перезапуск. Значение по умолчанию — «как в системе»:
- * это то, чего человек ждёт, не заходя в настройки вовсе.
+ * The choice is stored locally and survives a restart. The default is "as in the
+ * system": that is what a person expects without opening the settings at all.
  */
 
 import {
@@ -33,7 +33,7 @@ function readStored(): ThemeChoice {
     const v = localStorage.getItem(STORAGE_KEY);
     if (v === "light" || v === "dark" || v === "system") return v;
   } catch {
-    // Хранилище может быть недоступно — это не повод не запускаться.
+    // Storage can be unavailable. Not a reason to refuse to start.
   }
   return "system";
 }
@@ -47,8 +47,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [choice, setChoiceState] = useState<ThemeChoice>(readStored);
   const [system, setSystem] = useState<ResolvedTheme>(systemTheme);
 
-  // Следим за системой, даже когда выбран не системный режим: пользователь может
-  // переключиться на него в любой момент, и подхватить надо сразу.
+  // The system is watched even when the system mode is not the chosen one: a person
+  // can switch to it at any moment, and it has to take effect straight away.
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -68,7 +68,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try {
       localStorage.setItem(STORAGE_KEY, c);
     } catch {
-      // Не сохранилось — переживём: на этот запуск выбор всё равно действует.
+      // Not saved — survivable: the choice still applies for this run.
     }
   }, []);
 
@@ -82,6 +82,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
 export function useTheme(): ThemeContextValue {
   const ctx = useContext(ThemeContext);
-  if (!ctx) throw new Error("useTheme вызван вне ThemeProvider");
+  if (!ctx) throw new Error("useTheme used outside ThemeProvider");
   return ctx;
 }

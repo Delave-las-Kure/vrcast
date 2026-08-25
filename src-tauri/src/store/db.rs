@@ -25,10 +25,10 @@ const MIGRATIONS: &[(u32, &str)] = &[
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
-    #[error("не удалось открыть локальную базу: {0}")]
+    #[error("could not open the local database: {0}")]
     Open(#[source] rusqlite::Error),
 
-    #[error("не удалось применить миграцию {version}: {source}")]
+    #[error("could not apply migration {version}: {source}")]
     Migration {
         version: u32,
         #[source]
@@ -37,10 +37,10 @@ pub enum DbError {
 
     /// Тот же принцип, что и с версией серверной части (FR-130): встретив состояние новее,
     /// чем понимаем, мы отказываемся работать, а не портим его молча.
-    #[error("локальная база создана более новой версией приложения (версия схемы {found}, эта сборка знает до {known}). Обновите приложение")]
+    #[error("the local database was made by a newer version of the application (schema {found}, this build knows up to {known})")]
     TooNew { found: u32, known: u32 },
 
-    #[error("не удалось определить каталог данных приложения")]
+    #[error("could not determine the application data directory")]
     NoDataDir,
 
     #[error(transparent)]

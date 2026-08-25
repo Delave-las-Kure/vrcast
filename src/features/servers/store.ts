@@ -1,9 +1,9 @@
 /**
- * Общее состояние: профили серверов.
+ * Shared state: the server profiles.
  *
- * Вынесено из экранов потому, что активный сервер нужен и разделу серверов,
- * и библиотеке. Держать его в каждом экране отдельно значит однажды показать
- * библиотеку одного сервера, когда выбран другой.
+ * Kept out of the screens because the active server is needed by the servers section
+ * and by the library alike. Holding it in each screen separately means showing one
+ * server's library while another is selected, sooner or later.
  */
 
 import { create } from "zustand";
@@ -12,7 +12,7 @@ import { ipc, toAppError } from "../../shared/ipc";
 
 interface ServersState {
   profiles: ServerProfile[];
-  /** Истина только до первой загрузки: обновления идут незаметно. */
+  /** True only until the first load: refreshes happen without a spinner. */
   loading: boolean;
   error: AppError | null;
   reload: () => Promise<void>;
@@ -47,12 +47,12 @@ export const useServers = create<ServersState>((set, get) => ({
   clearError: () => set({ error: null }),
 }));
 
-/** Активный профиль. `null`, если серверов нет или ни один не выбран. */
+/** The active profile. `null` when there are no servers, or none is chosen. */
 export function useActiveServer(): ServerProfile | null {
   return useServers((s) => s.profiles.find((p) => p.is_active) ?? null);
 }
 
-/** Готов ли профиль к работе: без подтверждённого отпечатка подключения не будет. */
+/** Whether the profile is usable: without a confirmed fingerprint there is no connection. */
 export function isReady(profile: ServerProfile): boolean {
   return profile.host_fingerprint !== null;
 }

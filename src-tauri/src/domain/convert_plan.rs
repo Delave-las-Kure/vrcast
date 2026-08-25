@@ -15,6 +15,7 @@
 //! и переизобретение гарантированно повторило бы её (R-13).
 
 use super::source::{AudioTrack, SourceFile};
+use super::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
 /// Целевой битрейт звука по умолчанию, килобит в секунду.
@@ -41,21 +42,21 @@ const MAXRATE_PERCENT: u32 = 110;
 const PEAK_OVER_MAXRATE: u32 = 106;
 
 /// Что делать с видеопотоком.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum VideoAction {
     /// Перенести как есть — ноль потерь и минуты вместо часов.
     Copy,
     /// Пересжать без заданного битрейта: «визуально без потерь».
     Reencode {
-        /// Почему не удалось перенести. Показывается человеку: пересжатие занимает
-        /// часы, и он вправе знать, за что платит.
-        reason: String,
+        /// Why it could not simply be carried across. Shown to a person: re-encoding
+        /// takes hours, and they are entitled to know what they are paying for.
+        reason: Detail,
         level: String,
     },
     /// Пересжать под заданный битрейт с ограничением пиков.
     ReencodeCapped {
-        reason: String,
+        reason: Detail,
         level: String,
         target_kbps: u32,
         maxrate_kbps: u32,
@@ -64,12 +65,12 @@ pub enum VideoAction {
 }
 
 /// Что делать со звуком.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AudioAction {
     Copy,
     Reencode {
-        reason: String,
+        reason: Detail,
         bitrate_kbps: u32,
         /// Выравнивание звука относительно картинки.
         ///
@@ -88,23 +89,43 @@ pub enum PlanProblem {
     NoAudioTracks,
     /// Указанной дорожки в файле нет.
     NoSuchTrack { index: usize, available: usize },
-    /// Заданы взаимоисключающие требования.
-    Contradiction { message: String },
+    /// Задана нулевая высота кадра.
+    HeightZero,
+    /// Просят больше строк, чем есть в источнике.
+    HeightAboveSource { asked: u32, source: u32 },
+    /// Задан нулевой битрейт.
+    BitrateZero,
+    /// Просят битрейт заметно выше исходного.
+    BitrateAboveSource { asked_kbps: u32, source_kbps: u64 },
 }
 
 impl PlanProblem {
-    /// Человеческая формулировка. Ядро не показывает коды (FR-105).
-    pub fn message(&self) -> String {
+    /// What to say about it. The wording belongs to the interface (FR-105, FR-106).
+    ///
+    /// Contradictions used to carry a ready sentence built where they were detected,
+    /// which meant the same complaint could be worded two ways depending on which
+    /// check raised it. A code cannot drift like that.
+    pub fn detail(&self) -> Detail {
         match self {
-            Self::NoAudioTracks => String::from(
-                "В файле нет ни одной звуковой дорожки. Проверьте, тот ли это файл: \
-                 без звука видео в раздачу не идёт.",
-            ),
-            Self::NoSuchTrack { index, available } => format!(
-                "Звуковой дорожки {} в файле нет — всего их {available}.",
-                index + 1
-            ),
-            Self::Contradiction { message } => message.clone(),
+            Self::NoAudioTracks => Detail::new(DetailCode::PlanNoAudioTracks),
+            // Tracks are counted from one for a person and from zero for ffmpeg. The
+            // conversion happens here, once, instead of in each catalogue entry.
+            Self::NoSuchTrack { index, available } => Detail::new(DetailCode::PlanNoSuchTrack)
+                .with("number", index + 1)
+                .with("available", *available),
+            Self::HeightZero => Detail::new(DetailCode::PlanHeightZero),
+            Self::HeightAboveSource { asked, source } => {
+                Detail::new(DetailCode::PlanHeightAboveSource)
+                    .with("asked", *asked)
+                    .with("source", *source)
+            }
+            Self::BitrateZero => Detail::new(DetailCode::PlanBitrateZero),
+            Self::BitrateAboveSource {
+                asked_kbps,
+                source_kbps,
+            } => Detail::new(DetailCode::PlanBitrateAboveSource)
+                .with("asked_kbps", *asked_kbps)
+                .with("source_kbps", *source_kbps),
         }
     }
 }
@@ -122,7 +143,7 @@ pub struct ConvertRequest {
 }
 
 /// Готовый план подготовки.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConvertPlan {
     pub video: VideoAction,
     pub audio: AudioAction,
@@ -217,36 +238,25 @@ pub fn plan(
 
     if let Some(h) = request.height {
         if h == 0 {
-            problems.push(PlanProblem::Contradiction {
-                message: String::from("Высота кадра не может быть нулевой."),
-            });
+            problems.push(PlanProblem::HeightZero);
         } else if h > source.height {
             // Растягивать нечего: подробностей, которых нет в источнике, не прибавится,
             // а файл раздуется. Это ровно тот случай, о котором FR-029 говорит
             // «не позволять молча».
-            problems.push(PlanProblem::Contradiction {
-                message: format!(
-                    "Просите {h} строк, а в источнике {}. Растянуть картинку можно, \
-                     но подробностей от этого не появится — только вырастет файл и время.",
-                    source.height
-                ),
+            problems.push(PlanProblem::HeightAboveSource {
+                asked: h,
+                source: source.height,
             });
         }
     }
 
     if let Some(kbps) = request.target_kbps {
         if kbps == 0 {
-            problems.push(PlanProblem::Contradiction {
-                message: String::from("Целевой битрейт не может быть нулевым."),
-            });
+            problems.push(PlanProblem::BitrateZero);
         } else if u64::from(kbps) * 1000 > source.bitrate_bps.saturating_mul(2) {
-            problems.push(PlanProblem::Contradiction {
-                message: format!(
-                    "Просите {kbps} кбит/с при источнике в {} кбит/с. Кодировать выше \
-                     источника бессмысленно: подробности, которой нет, не добавится, \
-                     а место и канал уйдут впустую.",
-                    source.bitrate_bps / 1000
-                ),
+            problems.push(PlanProblem::BitrateAboveSource {
+                asked_kbps: kbps,
+                source_kbps: source.bitrate_bps / 1000,
             });
         }
     }
@@ -290,22 +300,14 @@ fn video_action(
     // любое изменение картинки требует её раскодировать, а раскодировав, обратно
     // «как было» уже не сложить.
     let reason = if !source.video_codec.eq_ignore_ascii_case("h264") {
-        Some(format!(
-            "видео в {} — плеер VRChat играет только H.264",
-            source.video_codec
-        ))
+        Some(Detail::new(DetailCode::ReasonVideoNotH264).with("codec", source.video_codec.clone()))
     } else if !source.pix_fmt.eq_ignore_ascii_case("yuv420p") {
-        // Десятибитный H.264 формально тот же кодек, но строгий декодер его не берёт.
-        Some(format!(
-            "видео H.264, но в формате {} вместо yuv420p — строгий плеер такое не берёт",
-            source.pix_fmt
-        ))
+        // Ten-bit H.264 is formally the same codec, but a strict decoder refuses it.
+        Some(Detail::new(DetailCode::ReasonVideoPixFmt).with("pix_fmt", source.pix_fmt.clone()))
     } else if tonemap {
-        Some(String::from(
-            "исходник в расширенном динамическом диапазоне, его надо привести к обычному",
-        ))
+        Some(Detail::new(DetailCode::ReasonTonemap))
     } else if downscale {
-        Some(String::from("меняется размер кадра"))
+        Some(Detail::new(DetailCode::ReasonResize))
     } else {
         None
     };
@@ -317,7 +319,7 @@ fn video_action(
         (reason, Some(kbps)) => {
             let (maxrate_kbps, bufsize_kbps) = peak_control(kbps);
             VideoAction::ReencodeCapped {
-                reason: reason.unwrap_or_else(|| String::from("задан целевой битрейт")),
+                reason: reason.unwrap_or_else(|| Detail::new(DetailCode::ReasonTargetBitrate)),
                 level: level.to_owned(),
                 target_kbps: kbps,
                 maxrate_kbps,
@@ -345,11 +347,11 @@ fn audio_action(track: &AudioTrack) -> AudioAction {
     }
 
     let reason = if !подходит_кодек {
-        format!("звук в {} — целевой формат AAC", track.codec)
+        Detail::new(DetailCode::ReasonAudioNotAac).with("codec", track.codec.clone())
     } else if !стерео {
-        format!("звук {}-канальный — целевой формат стерео", track.channels)
+        Detail::new(DetailCode::ReasonAudioChannels).with("channels", track.channels)
     } else {
-        String::from("дорожка толще целевого битрейта")
+        Detail::new(DetailCode::ReasonAudioTooFat)
     };
 
     AudioAction::Reencode {

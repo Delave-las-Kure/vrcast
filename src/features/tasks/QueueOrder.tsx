@@ -1,73 +1,65 @@
 /**
- * T101 — перестановка очереди (FR-083).
+ * T101 — reordering the queue (FR-083).
  *
- * Кнопки «выше»/«ниже», а не перетаскивание: перетаскивание требует мыши, точности
- * и не работает с клавиатуры, а очередь чаще всего правят на одну позицию — «вот это
- * нужно раньше». Список тут короткий, и двух кнопок достаточно.
+ * Up/down buttons rather than dragging: dragging needs a mouse and precision and does
+ * not work from the keyboard, while a queue is most often corrected by one position —
+ * "this one should go first". The list is short, and two buttons are enough.
  *
- * Переставляются только ждущие задачи. Выполняющаяся в этом списке не появляется
- * вовсе: прервать начатую передачу ради изменения порядка значило бы выбросить часы
- * работы, и показывать для неё кнопку было бы обещанием того, чего не будет.
+ * Only waiting tasks are reordered. A running one does not appear in this list at all:
+ * interrupting a transfer under way to change the order would throw away hours of
+ * work, and showing a button for it would be promising something that will not happen.
  */
 
-import type { Task } from "../../shared/contract";
-
-const KIND_LABEL: Record<string, string> = {
-  probe: "разбор исходника",
-  convert: "подготовка файла",
-  upload: "заливка на сервер",
-  build_ladder: "сборка набора качеств",
-  deploy: "развёртывание",
-  upgrade_server: "обновление сервера",
-  diagnose: "диагностика",
-};
+import type { Task, TaskKind } from "../../shared/contract";
+import { useT } from "../../shared/i18n";
 
 export function QueueOrder({
   queued,
   onReorder,
   busy,
 }: {
-  /** Ждущие задачи в том порядке, в каком они пойдут в работу. */
+  /** Waiting tasks, in the order they will run. */
   queued: Task[];
   onReorder: (orderedIds: string[]) => void;
   busy: boolean;
 }) {
+  const t = useT();
+
   if (queued.length === 0) return null;
 
-  const переставить = (from: number, to: number) => {
+  const move = (from: number, to: number) => {
     if (to < 0 || to >= queued.length) return;
-    const ids = queued.map((t) => t.id);
-    const [взятая] = ids.splice(from, 1);
-    ids.splice(to, 0, взятая);
+    const ids = queued.map((task) => task.id);
+    const [taken] = ids.splice(from, 1);
+    ids.splice(to, 0, taken);
     onReorder(ids);
   };
 
+  const kindLabel = (kind: TaskKind) => t.ui.tasks.kinds[kind] ?? kind;
+
   return (
     <section className="queue">
-      <h2>В очереди</h2>
-      <p className="muted">
-        Задачи пойдут в этом порядке. Уже начатую перестановка не трогает — её
-        пришлось бы прервать, потеряв сделанное.
-      </p>
+      <h2>{t.ui.tasks.queueHeading}</h2>
+      <p className="muted">{t.ui.tasks.queueExplain}</p>
       <ol className="queue__list">
-        {queued.map((t, i) => (
-          <li key={t.id} className="queue__item">
+        {queued.map((task, i) => (
+          <li key={task.id} className="queue__item">
             <span className="queue__position">{i + 1}</span>
-            <span className="queue__kind">{KIND_LABEL[t.kind] ?? t.kind}</span>
+            <span className="queue__kind">{kindLabel(task.kind)}</span>
             <span className="queue__actions">
               <button
-                aria-label="Поднять в очереди"
-                title="Поднять в очереди"
+                aria-label={t.ui.tasks.moveUp}
+                title={t.ui.tasks.moveUp}
                 disabled={busy || i === 0}
-                onClick={() => переставить(i, i - 1)}
+                onClick={() => move(i, i - 1)}
               >
                 ↑
               </button>
               <button
-                aria-label="Опустить в очереди"
-                title="Опустить в очереди"
+                aria-label={t.ui.tasks.moveDown}
+                title={t.ui.tasks.moveDown}
                 disabled={busy || i === queued.length - 1}
-                onClick={() => переставить(i, i + 1)}
+                onClick={() => move(i, i + 1)}
               >
                 ↓
               </button>

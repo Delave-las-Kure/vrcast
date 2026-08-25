@@ -6,9 +6,10 @@
  * превращается в пустой экран.
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { en, renderIn, ru } from "../../../test-utils";
 import type {
   AppError,
   FileView,
@@ -109,11 +110,12 @@ function view(over: Partial<LibraryView> = {}): LibraryView {
   };
 }
 
-const draw = () =>
-  render(
+const draw = (lang: "ru" | "en" = "ru") =>
+  renderIn(
     <MemoryRouter>
       <LibraryScreen />
     </MemoryRouter>,
+    lang,
   );
 
 beforeEach(() => {
@@ -129,8 +131,8 @@ describe("библиотека", () => {
     mockServersList.mockResolvedValue([]);
     draw();
 
-    expect(await screen.findByText(/Активный сервер не выбран/)).toBeInTheDocument();
-    expect(screen.getByText("Перейти к серверам")).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.library.noActiveServer)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.library.goToServers)).toBeInTheDocument();
   });
 
   it("показывает медиа с числом файлов и объёмом", async () => {
@@ -175,7 +177,7 @@ describe("библиотека", () => {
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
 
-    expect(await screen.findByText(/Заголовок не в начале файла/)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.library.faststartWarning)).toBeInTheDocument();
   });
 
   it("помечает пропавший файл и не предлагает его ссылку", async () => {
@@ -187,9 +189,9 @@ describe("библиотека", () => {
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
 
-    expect(await screen.findByText(/Файла нет на сервере/)).toBeInTheDocument();
-    expect(screen.getByText("ссылка нерабочая")).toBeInTheDocument();
-    expect(screen.queryByText("Копировать ссылку")).not.toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.library.missingWarning)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.library.linkDead)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.library.linkCopy)).not.toBeInTheDocument();
   });
 
   it("предлагает обе ссылки, когда задан CDN", async () => {
@@ -205,8 +207,8 @@ describe("библиотека", () => {
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
 
-    expect(await screen.findByText("Ссылка с сервера")).toBeInTheDocument();
-    expect(screen.getByText("Ссылка через CDN")).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.library.linkFromServer)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.library.linkViaCdn)).toBeInTheDocument();
   });
 });
 
@@ -219,9 +221,9 @@ describe("нераспознанное", () => {
     );
     draw();
 
-    fireEvent.click(await screen.findByText("Не распознано"));
+    fireEvent.click(await screen.findByText(ru.ui.library.unrecognizedTitle));
     expect(await screen.findByText("одинокий ролик.mp4")).toBeInTheDocument();
-    expect(screen.getByText(/не числятся ни за одним медиа/)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.library.unrecognizedNote)).toBeInTheDocument();
   });
 
   it("позволяет отнести файл к медиа, но не делает этого сам", async () => {
@@ -230,8 +232,8 @@ describe("нераспознанное", () => {
     );
     draw();
 
-    fireEvent.click(await screen.findByText("Не распознано"));
-    const select = await screen.findByLabelText("Отнести к медиа");
+    fireEvent.click(await screen.findByText(ru.ui.library.unrecognizedTitle));
+    const select = await screen.findByLabelText(ru.ui.library.assignTo);
     expect(mockFileMove).not.toHaveBeenCalled();
 
     fireEvent.change(select, { target: { value: "m1" } });
@@ -247,21 +249,29 @@ describe("удаление", () => {
     // Именно их и показывает диалог: интерфейс не сочиняет своих формулировок.
     const refusal: AppError = {
       code: "CONFIRMATION_REQUIRED",
-      message: "Удалить «Название фильма»? Будет снято 3 файла, освободится 4,2 ГБ.",
-      hint: "Прочитайте, что именно произойдёт, и подтвердите.",
+      details: [
+        {
+          key: "CONFIRM_DELETE",
+          params: { what: "Название фильма", files: 3, bytes: 4_509_715_660 },
+        },
+      ],
     };
     mockMediaDelete.mockRejectedValueOnce(refusal);
     draw();
 
     fireEvent.click(await screen.findByText("Название фильма"));
-    fireEvent.click(await screen.findByText("Удалить медиа"));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
 
-    expect(await screen.findByText(refusal.message)).toBeInTheDocument();
+    // The numbers come from the core; the sentence around them is ours, and it
+    // counts in Russian: three files is «3 файла», not «3 файл».
+    const spelled = await screen.findByText(/Будет снято 3 файла/);
+    expect(spelled).toBeInTheDocument();
+    expect(spelled.textContent).toContain("4,2 ГБ");
     expect(mockMediaDelete).toHaveBeenCalledWith("srv_1", "m1", false);
     expect(mockMediaDelete).not.toHaveBeenCalledWith("srv_1", "m1", true);
 
     mockMediaDelete.mockResolvedValueOnce("m1");
-    fireEvent.click(screen.getByText("Удалить"));
+    fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
     await waitFor(() =>
       expect(mockMediaDelete).toHaveBeenCalledWith("srv_1", "m1", true),
     );
@@ -270,17 +280,21 @@ describe("удаление", () => {
   it("отказ от удаления ничего не удаляет", async () => {
     mockMediaDelete.mockRejectedValueOnce({
       code: "CONFIRMATION_REQUIRED",
-      message: "Удалить «Название фильма»? Будет снят 1 файл.",
-      hint: "Подтвердите.",
+      details: [
+        {
+          key: "CONFIRM_DELETE",
+          params: { what: "Название фильма", files: 1, bytes: 1024 },
+        },
+      ],
     } satisfies AppError);
     draw();
 
     fireEvent.click(await screen.findByText("Название фильма"));
-    fireEvent.click(await screen.findByText("Удалить медиа"));
-    fireEvent.click(await screen.findByText("Не удалять"));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteNo));
 
     await waitFor(() =>
-      expect(screen.queryByText(/Будет снят 1 файл/)).not.toBeInTheDocument(),
+      expect(screen.queryByText(/Будет снято 1 файл/)).not.toBeInTheDocument(),
     );
     expect(mockMediaDelete).not.toHaveBeenCalledWith("srv_1", "m1", true);
   });
@@ -290,22 +304,22 @@ describe("переименование", () => {
   it("предупреждает о поломке ссылок только при смене короткого имени", async () => {
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
-    fireEvent.click(await screen.findByText("Переименовать"));
+    fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
 
-    const слово = /все выданные раньше ссылки перестанут работать/;
-    expect(screen.queryByText(слово)).not.toBeInTheDocument();
+    const warning = ru.ui.library.slugChangeWarning;
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
 
-    // Меняем только название — предупреждения быть не должно.
-    fireEvent.change(screen.getByLabelText("Название"), {
+    // Changing only the title — there must be no warning.
+    fireEvent.change(screen.getByLabelText(ru.ui.library.fieldTitle), {
       target: { value: "Другое название" },
     });
-    expect(screen.queryByText(слово)).not.toBeInTheDocument();
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
 
-    // А вот смена короткого имени переименует файлы на сервере.
-    fireEvent.change(screen.getByLabelText("Короткое имя"), {
+    // Changing the short name, on the other hand, renames the files on the server.
+    fireEvent.change(screen.getByLabelText(ru.ui.library.fieldSlug), {
       target: { value: "drugoe" },
     });
-    expect(await screen.findByText(слово)).toBeInTheDocument();
+    expect(await screen.findByText(warning)).toBeInTheDocument();
   });
 });
 
@@ -314,7 +328,7 @@ describe("недоступный сервер", () => {
     mockLibraryList.mockResolvedValue(view({ stale: true }));
     draw();
 
-    expect(await screen.findByText("Сервер сейчас недоступен")).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.library.staleTitle)).toBeInTheDocument();
     // Данные при этом на месте: библиотека не пропала, пропала связь.
     expect(screen.getByText("Название фильма")).toBeInTheDocument();
   });
@@ -324,8 +338,8 @@ describe("недоступный сервер", () => {
     draw();
 
     fireEvent.click(await screen.findByText("Название фильма"));
-    expect(await screen.findByText("Удалить медиа")).toBeDisabled();
-    expect(screen.getByText("Переименовать")).toBeDisabled();
+    expect(await screen.findByText(ru.ui.library.deleteMedia)).toBeDisabled();
+    expect(screen.getByText(ru.ui.library.renameMedia)).toBeDisabled();
   });
 });
 
@@ -345,9 +359,26 @@ describe("место на диске", () => {
     expect(await screen.findByText(/25,0 ГБ/)).toBeInTheDocument();
     expect(screen.getByText(/видео занимают 60,0 ГБ/)).toBeInTheDocument();
 
-    const bar = screen.getByRole("progressbar", {
-      name: "Занято места на диске сервера",
-    });
+    const bar = screen.getByRole("progressbar", { name: ru.ui.library.diskLabel });
+    expect(bar).toHaveAttribute("aria-valuenow", "75");
+  });
+
+  it("writes the same figures in English units when English is chosen", async () => {
+    // The arithmetic is shared, so the two languages can never disagree about how
+    // full the disk is — only about how the number is written.
+    mockLibraryList.mockResolvedValue(
+      view({
+        disk: {
+          total_bytes: 1024 ** 3 * 100,
+          free_bytes: 1024 ** 3 * 25,
+          used_by_videos_bytes: 1024 ** 3 * 60,
+        },
+      }),
+    );
+    draw("en");
+
+    expect(await screen.findByText(/25\.0 GB/)).toBeInTheDocument();
+    const bar = screen.getByRole("progressbar", { name: en.ui.library.diskLabel });
     expect(bar).toHaveAttribute("aria-valuenow", "75");
   });
 });

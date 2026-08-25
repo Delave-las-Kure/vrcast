@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
+use vrcast_studio_lib::commands::error::{AppError, DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::{api, AppState};
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::InMemorySecretStore;
@@ -26,36 +26,72 @@ fn state() -> AppState {
 
 // ---------- полнота договора ----------
 
+/// Прочитать словарь интерфейса.
+fn catalogue(lang: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("нет родительского каталога у src-tauri")
+        .join(format!("src/shared/i18n/{lang}.ts"));
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("не прочитать {}: {e}", path.display()))
+}
+
+/// Есть ли в словаре запись с таким ключом.
+///
+/// Ключ ищется в начале строки, а не где попало: код, случайно упомянутый в
+/// комментарии, засчитываться не должен — иначе проверка пройдёт на словаре,
+/// в котором формулировки нет.
+fn has_entry(catalogue: &str, key: &str) -> bool {
+    catalogue
+        .lines()
+        .any(|line| line.trim_start().starts_with(&format!("{key}:")))
+}
+
 #[test]
-fn у_каждого_кода_ошибки_есть_сообщение_и_подсказка() {
-    // Конституция, раздел «Ограничения качества исполнения»: сообщение без подсказки
-    // оставляет человека наедине с проблемой, о которой он ничего не знает.
-    // Проверяется здесь, а не оставлено на внимательность при добавлении нового кода.
+fn у_каждого_кода_есть_формулировка_на_обоих_языках() {
+    // Прежде эта проверка требовала русского сообщения и подсказки прямо в ядре.
+    // Ядро больше не сочиняет фраз: оно называет случай кодом, а формулировки живут
+    // в словарях интерфейса — по одному на язык (FR-105, FR-106).
+    //
+    // Требование от этого не ослабло, а усилилось: формулировка обязана быть в
+    // КАЖДОМ языке. Пропуск в одном из словарей означает пустое место на экране
+    // вместо объяснения — и увидел бы его пользователь, а не мы.
+    //
+    // Полноту словарей проверяет и компилятор TypeScript (они объявлены как
+    // `Record<ErrorCode, …>`), но эта проверка не полагается на то, что сборку
+    // интерфейса кто-то запустил: она читает сами файлы.
+    for lang in ["ru", "en"] {
+        let text = catalogue(lang);
+        for code in ErrorCode::ALL {
+            assert!(
+                has_entry(&text, code.as_str()),
+                "в словаре {lang} нет формулировки для кода {code}"
+            );
+        }
+        for detail in DetailCode::ALL {
+            assert!(
+                has_entry(&text, detail.as_str()),
+                "в словаре {lang} нет формулировки для уточнения {detail}"
+            );
+        }
+    }
+}
+
+#[test]
+fn коды_не_попадают_в_текст_для_человека() {
+    // Технический код в тексте — признак того, что формулировку не написали,
+    // а подставили заглушку.
+    let ru = catalogue("ru");
     for code in ErrorCode::ALL {
-        let msg = code.message();
-        let hint = code.hint();
-
-        assert!(!msg.trim().is_empty(), "у кода {code} нет сообщения");
-        assert!(!hint.trim().is_empty(), "у кода {code} нет подсказки");
-
+        let key = format!("{}:", code.as_str());
+        let line = ru
+            .lines()
+            .find(|l| l.trim_start().starts_with(&key))
+            .expect("запись словаря только что была найдена");
+        let after = line.split_once(':').map(|(_, r)| r).unwrap_or("");
         assert!(
-            msg.chars().any(|c| ('а'..='я').contains(&c)),
-            "сообщение кода {code} не на русском: {msg}"
-        );
-        assert!(
-            hint.chars().any(|c| ('а'..='я').contains(&c)),
-            "подсказка кода {code} не на русском: {hint}"
-        );
-
-        // Технический код в тексте для человека — признак того, что формулировку
-        // не написали, а подставили.
-        assert!(
-            !msg.contains(code.as_str()),
-            "в сообщении кода {code} стоит сам код"
-        );
-        assert!(
-            hint.len() > msg.len() / 2,
-            "подсказка кода {code} подозрительно коротка: «{hint}»"
+            !after.contains(code.as_str()),
+            "в формулировке кода {code} стоит сам код: {line}"
         );
     }
 }
@@ -75,20 +111,36 @@ fn коды_ошибок_не_повторяются() {
 
 #[test]
 fn ошибка_сериализуется_по_форме_договора() {
-    // Форма { code, message, hint?, cause? } — правило 2 договора.
-    let err = AppError::new(ErrorCode::DomainNotPointed).with_cause("stream-test.example.ru");
+    // Форма { code, details?, cause? } — правило 2 договора. Готовых фраз в ней нет:
+    // ядро называет случай, формулировку берёт интерфейс из словаря выбранного языка.
+    use vrcast_studio_lib::domain::wording::Detail;
+
+    let err = AppError::new(ErrorCode::RemoteDiskFull)
+        .with_detail(Detail::new(DetailCode::NotEnoughSpace).with("short_by", 1024_u64))
+        .with_cause("stream-test.example.ru");
     let json = serde_json::to_value(&err).unwrap();
 
-    assert_eq!(json["code"], "DOMAIN_NOT_POINTED");
-    assert!(json["message"].is_string());
-    assert!(json["hint"].is_string());
+    assert_eq!(json["code"], "REMOTE_DISK_FULL");
+    assert_eq!(json["details"][0]["key"], "NOT_ENOUGH_SPACE");
+    // Число уходит числом: единицы и разделитель дробной части у языков разные,
+    // и выбирать их — дело интерфейса, а не ядра.
+    assert_eq!(json["details"][0]["params"]["short_by"], 1024);
     assert_eq!(json["cause"], "stream-test.example.ru");
 
-    // Без уточнения поле не появляется вовсе, а не приходит пустым.
+    assert!(
+        json.get("message").is_none() && json.get("hint").is_none(),
+        "ядро снова сочиняет фразы: {json}"
+    );
+
+    // Пустые поля не появляются вовсе, а не приходят пустыми.
     let bare = serde_json::to_value(AppError::new(ErrorCode::Internal)).unwrap();
     assert!(
         bare.get("cause").is_none(),
         "пустое уточнение попало в ответ"
+    );
+    assert!(
+        bare.get("details").is_none(),
+        "пустой перечень уточнений попал в ответ"
     );
 }
 
@@ -102,6 +154,27 @@ fn уточнение_ошибки_проходит_вырезание_секр�
 
     let err = AppError::new(ErrorCode::SshAuthFailed)
         .with_cause(format!("вход не удался, использован {secret}"));
+    let json = serde_json::to_string(&err).unwrap();
+
+    assert!(!json.contains(secret), "СЕКРЕТ В ОТВЕТЕ КОМАНДЫ: {json}");
+}
+
+#[test]
+fn подстановка_в_уточнении_проходит_вырезание_секретов() {
+    // Новый путь наружу, появившийся вместе с двумя языками: раньше подробность была
+    // одной строкой и вырезание стояло на ней, а теперь рядом идут подстановки —
+    // имя файла, путь, имя профиля. Любая из них может прийти оттуда же, откуда
+    // приходит подробность, и остаться незамеченной (конституция, принцип IV).
+    use vrcast_studio_lib::domain::wording::Detail;
+
+    vrcast_studio_lib::store::redact::forget_all();
+    let secret = "парольная-фраза-ключа-4242";
+    vrcast_studio_lib::store::redact::register(secret);
+
+    let err = AppError::new(ErrorCode::InvalidInput).with_detail(
+        Detail::new(DetailCode::UploadSourceUnreadable)
+            .with("path", format!("F:/{secret}/film.mp4")),
+    );
     let json = serde_json::to_string(&err).unwrap();
 
     assert!(!json.contains(secret), "СЕКРЕТ В ОТВЕТЕ КОМАНДЫ: {json}");
@@ -131,7 +204,8 @@ fn обращение_к_несуществующей_задаче_даёт_ко
     let s = state();
     let err = api::task_get(&s, "нет-такой").expect_err("несуществующая задача найдена");
     assert_eq!(err.code, ErrorCode::TaskNotFound);
-    assert!(!err.hint.is_empty());
+    // Подробность сохранена: по ней можно найти, о какой задаче речь.
+    assert!(err.cause.is_some());
 }
 
 #[test]
@@ -233,12 +307,15 @@ async fn при_закрытии_каждая_задача_объясняетс�
     // Разница между видами задач и есть суть требования.
     assert_eq!(u.outcome, "resumes", "передача должна продолжаться с места");
     assert_eq!(c.outcome, "restarts", "подготовка не переживёт закрытия");
+    // Объяснение — код с подстановкой, а не готовая фраза: формулировку подберёт
+    // интерфейс на том языке, который выбран сейчас.
+    assert_eq!(c.explanation.key, DetailCode::OnCloseRestartsLosing);
+    assert_eq!(u.explanation.key, DetailCode::OnCloseResumesFrom);
     assert!(
-        c.explanation.contains("заново"),
-        "объяснение не называет последствие: {}",
-        c.explanation
+        u.explanation.params.contains_key("percent"),
+        "объяснение не называет, сколько уже сделано: {:?}",
+        u.explanation
     );
-    assert!(u.explanation.contains("продолжится"), "{}", u.explanation);
 
     api::task_cancel(&s, &upload).unwrap();
     api::task_cancel(&s, &convert).unwrap();

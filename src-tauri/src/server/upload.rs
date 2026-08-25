@@ -42,16 +42,16 @@ pub struct UploadPlan {
 pub enum UploadError {
     /// Связь оборвалась. Это не поломка, а обычное дело на многочасовой передаче:
     /// переподключиться и продолжить с достигнутого.
-    #[error("передача прервана: {0}")]
+    #[error("transfer interrupted: {0}")]
     Interrupted(String),
 
     /// На сервере лежит больше, чем есть в источнике. Продолжать нельзя: получится
     /// склейка двух разных файлов, и обнаружится это только на сверке — когда время
     /// уже потрачено.
-    #[error("временный файл на сервере ({temp} Б) больше исходного ({total} Б)")]
+    #[error("the staged file on the server ({temp} B) is larger than the source ({total} B)")]
     SourceChanged { temp: u64, total: u64 },
 
-    #[error("задача отменена")]
+    #[error("task cancelled")]
     Cancelled,
 
     #[error("{0}")]

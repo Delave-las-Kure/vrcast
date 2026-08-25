@@ -12,27 +12,48 @@
 import { useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { AppError, ConvertPreview, ConvertStart, SourceFile } from "../../shared/contract";
-import { formatBytes, formatDuration } from "../../shared/format";
 import { ipc, toAppError } from "../../shared/ipc";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
+import { formatBytes, formatDuration } from "../../shared/i18n/format";
+import { fill, renderDetail } from "../../shared/i18n/render";
 
-/** Bitrate choices, in kilobits — the unit the core expects. */
-const BITRATES: Array<{ label: string; value: number | null }> = [
-  { label: "как в источнике", value: null },
-  { label: "9 Мбит/с — надёжно под слабый канал", value: 9_000 },
-  { label: "14 Мбит/с", value: 14_000 },
-  { label: "22 Мбит/с — хорошо для 1080p", value: 22_000 },
-  { label: "35 Мбит/с", value: 35_000 },
+/**
+ * Bitrate choices, in kilobits — the unit the core expects.
+ *
+ * The value is fixed and the label is a catalogue key: the numbers mean the same in
+ * every language, the words around them do not.
+ */
+const BITRATES: Array<{ key: keyof Catalogue["ui"]["convert"]; value: number | null }> = [
+  { key: "bitrateSource", value: null },
+  { key: "bitrate9", value: 9_000 },
+  { key: "bitrate14", value: 14_000 },
+  { key: "bitrate22", value: 22_000 },
+  { key: "bitrate35", value: 35_000 },
 ];
 
 /** Name a track the way a person can choose between two of them. */
-function trackLabel(t: SourceFile["audio_tracks"][number]): string {
-  const named = [t.language, t.title].filter(Boolean).join(" — ");
+function trackLabel(
+  track: SourceFile["audio_tracks"][number],
+  t: Catalogue,
+  lang: Lang,
+): string {
+  const named = [track.language, track.title].filter(Boolean).join(" — ");
   // Numbered from one: "track 0" reads like a bug report, not a choice.
-  const base = named || `Дорожка ${t.index + 1}`;
+  const base =
+    named || fill(t.ui.convert.trackFallback, { n: track.index + 1 }, t, lang);
   const channels =
-    t.channels === 1 ? "моно" : t.channels === 2 ? "стерео" : `${t.channels} каналов`;
-  return `${base}, ${channels}${t.is_default ? " (основная)" : ""}`;
+    track.channels === 1
+      ? t.ui.convert.mono
+      : track.channels === 2
+        ? t.ui.convert.stereo
+        : fill(t.ui.convert.channels, { n: track.channels }, t, lang);
+  return fill(
+    t.ui.convert.trackLine,
+    { base, channels, main: track.is_default ? t.ui.convert.trackDefault : "" },
+    t,
+    lang,
+  );
 }
 
 /** Suggest where to put the result, next to the source. */
@@ -53,6 +74,9 @@ export function ConvertScreen() {
   const [error, setError] = useState<AppError | null>(null);
   const [busy, setBusy] = useState(false);
   const [startedTask, setStartedTask] = useState<string | null>(null);
+  const t = useT();
+  const { lang } = useLang();
+  const c = t.ui.convert;
 
   const request: ConvertStart | null = useMemo(
     () =>
@@ -100,8 +124,13 @@ export function ConvertScreen() {
     const chosen = await open({
       multiple: false,
       directory: false,
-      title: "Выберите исходное видео",
-      filters: [{ name: "Видео", extensions: ["mp4", "mkv", "mov", "webm", "m4v", "avi", "ts"] }],
+      title: c.pickSourceTitle,
+      filters: [
+        {
+          name: c.pickSourceFilter,
+          extensions: ["mp4", "mkv", "mov", "webm", "m4v", "avi", "ts"],
+        },
+      ],
     });
     if (typeof chosen !== "string") return;
 
@@ -114,7 +143,7 @@ export function ConvertScreen() {
       setOutPath(suggestOutput(chosen));
       // The track marked as the main one, or the first — never a silent zero when
       // the file has none.
-      setTrack(probed.audio_tracks.find((t) => t.is_default)?.index ?? 0);
+      setTrack(probed.audio_tracks.find((track) => track.is_default)?.index ?? 0);
       setError(null);
     } catch (e) {
       setSource(null);
@@ -127,7 +156,7 @@ export function ConvertScreen() {
 
   const pickOutput = async () => {
     const chosen = await save({
-      title: "Куда положить подготовленный файл",
+      title: c.pickOutputTitle,
       defaultPath: outPath || undefined,
       filters: [{ name: "MP4", extensions: ["mp4"] }],
     });
@@ -151,15 +180,15 @@ export function ConvertScreen() {
 
   return (
     <div className="panel">
-      <h1>Подготовка</h1>
+      <h1>{c.heading}</h1>
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
       <div className="form">
         <div className="form__row">
-          <label htmlFor="convert-file">Исходник</label>
+          <label htmlFor="convert-file">{c.fieldSource}</label>
           <div className="form__inline">
             <button id="convert-file" onClick={() => void pickSource()} disabled={busy}>
-              Выбрать файл…
+              {c.pickFile}
             </button>
             {sourcePath && <span className="form__value">{sourcePath}</span>}
           </div>
@@ -168,27 +197,35 @@ export function ConvertScreen() {
         {source && (
           <>
             <p className="form__hint">
-              {source.width}×{source.height}, {source.fps} кадр/с,{" "}
-              {formatDuration(source.duration_s)}, {formatBytes(source.size_bytes)},{" "}
-              {source.video_codec}
+              {fill(
+                c.sourceFacts,
+                {
+                  width: source.width,
+                  height: source.height,
+                  fps: source.fps,
+                  duration: formatDuration(source.duration_s),
+                  size: formatBytes(source.size_bytes, lang),
+                  codec: source.video_codec,
+                },
+                t,
+                lang,
+              )}
               {source.color_transfer ? `, ${source.color_transfer}` : ""}
             </p>
 
             <div className="form__row">
-              <label htmlFor="convert-track">Звуковая дорожка</label>
+              <label htmlFor="convert-track">{c.fieldTrack}</label>
               {source.audio_tracks.length === 0 ? (
-                <p className="form__hint">
-                  В файле нет ни одной звуковой дорожки — проверьте, тот ли это файл.
-                </p>
+                <p className="form__hint">{c.noTracks}</p>
               ) : (
                 <select
                   id="convert-track"
                   value={track}
                   onChange={(e) => setTrack(Number(e.target.value))}
                 >
-                  {source.audio_tracks.map((t) => (
-                    <option key={t.index} value={t.index}>
-                      {trackLabel(t)}
+                  {source.audio_tracks.map((track) => (
+                    <option key={track.index} value={track.index}>
+                      {trackLabel(track, t, lang)}
                     </option>
                   ))}
                 </select>
@@ -196,7 +233,7 @@ export function ConvertScreen() {
             </div>
 
             <div className="form__row">
-              <label htmlFor="convert-bitrate">Целевой битрейт</label>
+              <label htmlFor="convert-bitrate">{c.fieldBitrate}</label>
               <select
                 id="convert-bitrate"
                 value={targetKbps === null ? "" : String(targetKbps)}
@@ -205,22 +242,23 @@ export function ConvertScreen() {
                 }
               >
                 {BITRATES.map((b) => (
-                  <option key={b.label} value={b.value === null ? "" : String(b.value)}>
-                    {b.label}
+                  <option key={b.key} value={b.value === null ? "" : String(b.value)}>
+                    {c[b.key] as string}
                   </option>
                 ))}
               </select>
-              <p className="form__hint">
-                Заданный битрейт означает пересжатие, даже если файл и так подходит:
-                иначе требование осталось бы невыполненным.
-              </p>
+              <p className="form__hint">{c.bitrateHint}</p>
             </div>
 
             <div className="form__row">
-              <label htmlFor="convert-out">Куда положить</label>
+              <label htmlFor="convert-out">{c.fieldOutput}</label>
               <div className="form__inline">
-                <button id="convert-out" onClick={() => void pickOutput()} disabled={busy}>
-                  Выбрать…
+                <button
+                  id="convert-out"
+                  onClick={() => void pickOutput()}
+                  disabled={busy}
+                >
+                  {c.pick}
                 </button>
                 {outPath && <span className="form__value">{outPath}</span>}
               </div>
@@ -233,26 +271,36 @@ export function ConvertScreen() {
         <section className={`notice ${preview.lossless ? "notice--ok" : "notice--warning"}`} role="status">
           <div className="notice__body">
             <strong className="notice__message">
-              {preview.lossless
-                ? "Пересжатия не будет — файл перенесётся как есть, без потерь и за минуты."
-                : "Файл придётся пересжать. Это часы работы там, где перенос занял бы минуты."}
+              {preview.lossless ? c.lossless : c.lossy}
             </strong>
             <ul className="notice__list">
               <li>
-                Видео:{" "}
+                {c.videoLine}{" "}
                 {preview.plan.video.kind === "copy"
-                  ? "перенести как есть"
-                  : `пересжать — ${preview.plan.video.reason}`}
+                  ? c.copyAsIs
+                  : fill(
+                      c.reencodeBecause,
+                      { reason: renderDetail(preview.plan.video.reason, t, lang) },
+                      t,
+                      lang,
+                    )}
               </li>
               <li>
-                Звук:{" "}
+                {c.audioLine}{" "}
                 {preview.plan.audio.kind === "copy"
-                  ? "перенести как есть"
-                  : `пересжать — ${preview.plan.audio.reason}`}
+                  ? c.copyAsIs
+                  : fill(
+                      c.reencodeBecause,
+                      { reason: renderDetail(preview.plan.audio.reason, t, lang) },
+                      t,
+                      lang,
+                    )}
               </li>
             </ul>
             {preview.encoder_notice && (
-              <p className="notice__hint">{preview.encoder_notice}</p>
+              <p className="notice__hint">
+                {renderDetail(preview.encoder_notice, t, lang)}
+              </p>
             )}
           </div>
         </section>
@@ -261,11 +309,8 @@ export function ConvertScreen() {
       {startedTask && (
         <div className="notice notice--ok" role="status">
           <div className="notice__body">
-            <strong className="notice__message">Подготовка началась.</strong>
-            <p className="notice__hint">
-              Следить за ней — в разделе «Задачи». В конце файл будет проверен
-              на воспроизведение: не прошедший проверку к заливке не предлагается.
-            </p>
+            <strong className="notice__message">{c.started}</strong>
+            <p className="notice__hint">{c.startedHint}</p>
           </div>
         </div>
       )}
@@ -276,7 +321,7 @@ export function ConvertScreen() {
           disabled={!ready || busy}
           onClick={() => void start()}
         >
-          {busy ? "Считаем…" : "Подготовить"}
+          {busy ? c.computing : c.start}
         </button>
       </div>
     </div>

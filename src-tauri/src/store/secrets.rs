@@ -47,12 +47,12 @@ impl std::fmt::Display for SecretRef {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
-    #[error("секрет не найден в хранилище операционной системы")]
+    #[error("secret not found in the operating system store")]
     NotFound,
 
     /// Сообщение нижележащей библиотеки проходит через вырезание: она о наших правилах
     /// не знает и вполне может вставить в текст ошибки то, что мы прячем.
-    #[error("хранилище учётных данных операционной системы недоступно: {0}")]
+    #[error("the operating system credential store is unavailable: {0}")]
     Backend(String),
 }
 

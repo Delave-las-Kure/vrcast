@@ -20,10 +20,10 @@ pub const MANIFEST_NAME: &str = "library.json";
 pub enum ManifestIoError {
     /// Опись изменена другим экземпляром приложения между чтением и записью.
     /// Запись **не выполнена**: на сервере осталось чужое изменение.
-    #[error("опись изменена другим приложением: прочитано поколение {base}, на сервере {current}")]
+    #[error("the catalogue was changed by another application: read generation {base}, server has {current}")]
     Conflict { base: u64, current: u64 },
 
-    #[error("опись не разобрать: {0}")]
+    #[error("catalogue could not be parsed: {0}")]
     Malformed(String),
 
     #[error(transparent)]

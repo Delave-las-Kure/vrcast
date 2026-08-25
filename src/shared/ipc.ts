@@ -1,12 +1,12 @@
 /**
- * Обращение к ядру.
+ * Talking to the core.
  *
- * Единственное место в интерфейсе, знающее, как устроен вызов. Всё остальное вызывает
- * отсюда типизированные функции и не догадывается ни про оболочку, ни про её события.
+ * The one place in the interface that knows how a call is made. Everything else calls
+ * the typed functions from here and knows nothing of the shell or its events.
  *
- * Здесь же ошибка приводится к виду договора. Ядро всегда отвечает объектом
- * `{ code, message, hint }`, но до ядра вызов может и не дойти — тогда наружу прилетит
- * что угодно, и показывать это пользователю нельзя.
+ * Errors are brought to the shape of the contract here too. The core always answers
+ * with `{ code, details, cause }`, but a call may never reach the core — and then
+ * anything at all comes back, which must not be shown to a person as it is.
  */
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
@@ -24,6 +24,7 @@ import {
   type Task,
   type TaskDoneEvent,
   type TaskOnClose,
+  type TaskNotifyRequest,
   type TaskProgressEvent,
   type FfmpegInfo,
   type ConvertPreview,
@@ -35,13 +36,17 @@ import {
   type Versions,
 } from "./contract";
 
-/** Ошибка, которую можно показать, даже если она пришла не от ядра. */
+/**
+ * An error that can be shown even when it did not come from the core.
+ *
+ * There is no wording here and there cannot be: it comes from the catalogue by code,
+ * like every other error. Otherwise this one path would carry text living outside the
+ * translation — and it would stay Russian under an English interface.
+ */
 export function toAppError(e: unknown): AppError {
   if (isAppError(e)) return e;
   return {
     code: "INTERNAL",
-    message: "Внутренняя ошибка приложения",
-    hint: "Сообщите об этой ошибке. Если она повторяется, помогут журналы из раздела диагностики.",
     cause: typeof e === "string" ? e : e instanceof Error ? e.message : undefined,
   };
 }
@@ -54,7 +59,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
-// ---------- команды ----------
+// ---------- commands ----------
 
 export const ipc = {
   appVersions: () => call<Versions>("app_versions"),
@@ -65,18 +70,18 @@ export const ipc = {
   taskPause: (id: string) => call<void>("task_pause", { id }),
   taskResume: (id: string) => call<void>("task_resume", { id }),
   /**
-   * Переставить ждущие задачи (FR-083). `ordered` — номера в желаемом порядке.
-   * Возвращает, сколько переставлено: часть могла начаться, пока список был на экране.
+   * Reorder the waiting tasks (FR-083). `ordered` is the ids in the wanted order.
+   * Returns how many were moved: some may have started while the list was on screen.
    */
   tasksReorder: (ordered: string[]) => call<number>("tasks_reorder", { ordered }),
-  /** Номера ждущих задач в том порядке, в каком они пойдут в работу. */
+  /** The ids of waiting tasks, in the order they will run. */
   tasksQueueOrder: () => call<string[]>("tasks_queue_order"),
   tasksOnClose: () => call<TaskOnClose[]>("tasks_on_close"),
 
   serverProbeFingerprint: (host: string, port: number) =>
     call<string>("server_probe_fingerprint", { host, port }),
 
-  // --- серверы ---
+  // --- servers ---
   serversList: () => call<ServerProfile[]>("servers_list"),
   serverAdd: (input: ServerInput, secret: string) =>
     call<string>("server_add", { input, secret }),
@@ -90,7 +95,7 @@ export const ipc = {
   serverImportSuggestion: () =>
     call<ImportSuggestion | null>("server_import_suggestion"),
 
-  // --- библиотека ---
+  // --- library ---
   libraryList: (serverId: string, refresh = false) =>
     call<LibraryView>("library_list", { serverId, refresh }),
   mediaCreate: (serverId: string, title: string, slug: string | null) =>
@@ -110,41 +115,42 @@ export const ipc = {
   linksFor: (serverId: string, path: string) =>
     call<Links>("links_for", { serverId, path }),
 
-  // --- заливка ---
+  // --- upload ---
   /**
-   * Начать заливку. Возвращает номер задачи немедленно (FR-080).
+   * Start an upload. Returns the task id at once (FR-080).
    *
-   * Все проверки идут до старта: если есть о чём предупредить, команда откажется
-   * и назовёт последствия. Повторить с `confirmed: true` — согласиться с ними.
-   * Нехватка места этим не снимается: места от согласия не появится.
+   * Every check happens before the start: if there is anything to warn about, the
+   * command refuses and names the consequences. Repeating with `confirmed: true` is
+   * agreeing to them. A shortage of room is not lifted that way: agreement does not
+   * create space.
    */
   uploadStart: (request: UploadRequest) => call<string>("upload_start", { request }),
   uploadResume: (taskId: string) => call<void>("upload_resume", { taskId }),
 
-  // --- подготовка файлов ---
+  // --- preparing files ---
   /**
-   * Проверить вложенный FFmpeg. Зовётся при запуске и перед подготовкой:
-   * узнать о неработающем FFmpeg в начале — значит сказать, что чинить;
-   * узнать в середине двухчасовой подготовки — значит отнять эти два часа.
+   * Check the bundled FFmpeg. Called at start-up and before preparation: learning
+   * that FFmpeg does not work at the beginning means telling someone what to fix;
+   * learning it halfway through a two-hour job means taking those two hours away.
    */
   ffmpegProbeSelf: () => call<FfmpegInfo>("ffmpeg_probe_self"),
-  /** Разобрать исходник. Быстрая операция, а не задача (FR-020). */
+  /** Examine a source file. A quick operation, not a task (FR-020). */
   sourceProbe: (path: string) => call<SourceFile>("source_probe", { path }),
-  /** Что подготовка будет делать — до того, как она начнётся. */
+  /** What preparation is going to do — before it starts. */
   convertPreview: (request: ConvertStart) => call<ConvertPreview>("convert_preview", { request }),
-  /** Начать подготовку. Возвращает номер задачи немедленно (FR-080). */
+  /** Start preparation. Returns the task id at once (FR-080). */
   convertStart: (request: ConvertStart) => call<string>("convert_start", { request }),
-  /** Проверить, что готовый файл воспроизводится (FR-027). */
+  /** Check that a prepared file plays (FR-027). */
   convertValidate: (path: string) => call<Validation>("convert_validate", { path }),
 };
 
-// ---------- события ----------
+// ---------- events ----------
 
 /**
- * Подписка на продвижение задач.
+ * Subscribing to task progress.
  *
- * Интерфейс слушает, а не опрашивает: показывать продвижение многочасовой задачи опросом
- * значило бы самому стать причиной подтормаживания, которого мы избегаем.
+ * The interface listens rather than polls: showing the progress of a task that runs
+ * for hours by polling would make it the cause of the very stuttering we avoid.
  */
 export function onTaskProgress(
   handler: (e: TaskProgressEvent) => void,
@@ -157,10 +163,23 @@ export function onTaskDone(handler: (e: TaskDoneEvent) => void): Promise<Unliste
 }
 
 /**
- * Библиотека изменилась.
+ * The core has decided a task is worth a system notification (FR-084).
  *
- * Полезная нагрузка — объект, а не строка: ядро рассылает событие с меткой вида,
- * как и события задач, чтобы одно нельзя было принять за другое.
+ * The decision is the core's — only it knows whether the window is out of sight and
+ * how long the task ran. The wording is the interface's: a notification is read by
+ * the same person as everything else, and in the same language.
+ */
+export function onTaskNotify(
+  handler: (e: TaskNotifyRequest) => void,
+): Promise<UnlistenFn> {
+  return tauriListen<TaskNotifyRequest>(EVENTS.taskNotify, (ev) => handler(ev.payload));
+}
+
+/**
+ * The library has changed.
+ *
+ * The payload is an object rather than a string: the core tags the event with its
+ * kind, as it does for task events, so that one cannot be mistaken for another.
  */
 export function onLibraryChanged(handler: (serverId: string) => void): Promise<UnlistenFn> {
   return tauriListen<LibraryChangedEvent>(EVENTS.libraryChanged, (ev) =>

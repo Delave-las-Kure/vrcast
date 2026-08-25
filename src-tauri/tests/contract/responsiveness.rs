@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use vrcast_studio_lib::commands::error::DetailCode;
 use vrcast_studio_lib::commands::servers::api as servers;
 use vrcast_studio_lib::commands::{api, AppState};
 use vrcast_studio_lib::store::db::Db;
@@ -51,7 +52,7 @@ async fn читающие_команды_отвечают_быстро_пока_
                 // Работа, которая всё время что-то сообщает: события прогресса —
                 // самый плотный поток, какой бывает у приложения.
                 for i in 0..2_000 {
-                    ctx.report(i as f64 / 2_000.0, "работаем");
+                    ctx.report(i as f64 / 2_000.0, DetailCode::StageConverting);
                     if ctx.is_cancelled() {
                         return Ok(());
                     }

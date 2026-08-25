@@ -332,7 +332,10 @@ pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<()> {
 
             if let Some(done_us) = line.as_deref().and_then(progress_position) {
                 let fraction = (done_us as f64 / duration_us).clamp(0.0, 1.0);
-                ctx.report(fraction, "converting");
+                ctx.report(
+                    fraction,
+                    crate::domain::wording::DetailCode::StageConverting,
+                );
                 ctx.save_progress(fraction);
             }
         }

@@ -6,6 +6,7 @@
 //! домен или подключит CDN, — и приложение начнёт выдавать нерабочие адреса, о чём
 //! никто не узнает, пока их не откроет зритель.
 
+use super::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 
 /// Предел длины `slug`. Имя файла складывается как `<slug>_<битрейт>.mp4`, а предел
@@ -126,21 +127,33 @@ pub enum SlugError {
     Reserved,
 }
 
+impl SlugError {
+    /// What to say about it. The wording belongs to the interface (FR-105, FR-106).
+    pub fn detail(&self) -> Detail {
+        match self {
+            Self::Empty => Detail::new(DetailCode::SlugEmpty),
+            Self::TooLong { len } => Detail::new(DetailCode::SlugTooLong)
+                .with("len", *len)
+                .with("max", MAX_SLUG_LEN),
+            // The character goes out as text: naming it is the whole point, and a
+            // person cannot find it in their input from a code alone.
+            Self::BadChars { first_bad } => {
+                Detail::new(DetailCode::SlugBadChar).with("char", first_bad.to_string())
+            }
+            Self::Reserved => Detail::new(DetailCode::SlugReserved),
+        }
+    }
+}
+
+/// Developer-facing, for logs and for `?`. What a person is shown comes from
+/// [`SlugError::detail`] instead.
 impl std::fmt::Display for SlugError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Empty => f.write_str("Короткое имя не может быть пустым."),
-            Self::TooLong { len } => write!(
-                f,
-                "Короткое имя длиной {len} знаков не поместится в имя файла — сократите до {MAX_SLUG_LEN}."
-            ),
-            Self::BadChars { first_bad } => write!(
-                f,
-                "Знак «{first_bad}» в коротком имени недопустим: разрешены латинские буквы, цифры, дефис и подчёркивание."
-            ),
-            Self::Reserved => f.write_str(
-                "Такое короткое имя занято служебным назначением — выберите другое.",
-            ),
+            Self::Empty => f.write_str("slug is empty"),
+            Self::TooLong { len } => write!(f, "slug is {len} bytes, limit is {MAX_SLUG_LEN}"),
+            Self::BadChars { first_bad } => write!(f, "slug has a bad character: {first_bad:?}"),
+            Self::Reserved => f.write_str("slug is reserved"),
         }
     }
 }

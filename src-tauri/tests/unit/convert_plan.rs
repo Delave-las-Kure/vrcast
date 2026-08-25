@@ -9,6 +9,7 @@ use vrcast_studio_lib::domain::convert_plan::{
     self as plan, AudioAction, ConvertRequest, PlanProblem, VideoAction,
 };
 use vrcast_studio_lib::domain::source::{AudioTrack, SourceFile};
+use vrcast_studio_lib::domain::wording::DetailCode;
 
 fn дорожка(codec: &str, channels: u16) -> AudioTrack {
     AudioTrack {
@@ -70,9 +71,14 @@ fn hevc_пересжимается_несмотря_на_то_что_уже_сж
     let p = plan::plan(&src, &как_есть()).expect("план не составился");
     match p.video {
         VideoAction::Reencode { reason, .. } => {
-            assert!(
-                reason.contains("H.264"),
-                "причина не названа человеческими словами: {reason}"
+            // Причина — код с подстановкой, а не фраза: формулировку подберёт
+            // интерфейс, и она существует на обоих языках. Кодек назван значением,
+            // потому что «видео в hevc» без самого hevc ничего не объясняет.
+            assert_eq!(reason.key, DetailCode::ReasonVideoNotH264);
+            assert_eq!(
+                reason.params.get("codec").and_then(|v| v.as_str()),
+                Some("hevc"),
+                "причина не называет кодек исходника: {reason:?}"
             );
         }
         иное => panic!("HEVC перенесён без пересжатия: {иное:?}"),
@@ -130,7 +136,12 @@ fn многоканальный_aac_не_переносится_вопреки_�
     let p = plan::plan(&src, &как_есть()).expect("план не составился");
     match p.audio {
         AudioAction::Reencode { reason, .. } => {
-            assert!(reason.contains("канальный"), "причина неясна: {reason}");
+            assert_eq!(reason.key, DetailCode::ReasonAudioChannels);
+            assert_eq!(
+                reason.params.get("channels").and_then(|v| v.as_u64()),
+                Some(6),
+                "причина не называет, сколько каналов: {reason:?}"
+            );
         }
         иное => panic!("шестиканальная дорожка перенесена как есть: {иное:?}"),
     }
@@ -187,7 +198,7 @@ fn файл_без_звука_отвергается_отдельным_заме
 
     let problems = plan::plan(&src, &как_есть()).expect_err("файл без звука принят");
     assert!(problems.contains(&PlanProblem::NoAudioTracks));
-    assert!(problems[0].message().contains("нет ни одной"));
+    assert_eq!(problems[0].detail().key, DetailCode::PlanNoAudioTracks);
 }
 
 #[test]
@@ -200,10 +211,14 @@ fn несуществующая_дорожка_называется_по_чел�
 
     let problems = plan::plan(&src, &req).expect_err("несуществующая дорожка принята");
     // Человеку номера показываются с единицы: «дорожки 0 нет» читается как ошибка.
-    assert!(
-        problems[0].message().contains("дорожки 6"),
-        "получено: {}",
-        problems[0].message()
+    // Перевод делает ядро, один раз, — иначе о нём пришлось бы помнить каждому
+    // словарю по отдельности.
+    let detail = problems[0].detail();
+    assert_eq!(detail.key, DetailCode::PlanNoSuchTrack);
+    assert_eq!(
+        detail.params.get("number").and_then(|v| v.as_u64()),
+        Some(6),
+        "номер дорожки не тот, что видит человек: {detail:?}"
     );
 }
 
@@ -339,10 +354,17 @@ fn битрейт_заметно_выше_источника_отвергает�
     };
 
     let problems = plan::plan(&src, &req).expect_err("битрейт выше источника принят");
-    assert!(
-        problems[0].message().contains("бессмысленно"),
-        "получено: {}",
-        problems[0].message()
+    let detail = problems[0].detail();
+    assert_eq!(detail.key, DetailCode::PlanBitrateAboveSource);
+    // Оба числа названы: без них замечание не объясняет, насколько именно просьба
+    // выше источника, и спорить с ним нечем.
+    assert_eq!(
+        detail.params.get("asked_kbps").and_then(|v| v.as_u64()),
+        Some(40_000)
+    );
+    assert_eq!(
+        detail.params.get("source_kbps").and_then(|v| v.as_u64()),
+        Some(9_000)
     );
 }
 
@@ -355,7 +377,16 @@ fn растягивание_кадра_отвергается_с_объясне�
     };
 
     let problems = plan::plan(&src, &req).expect_err("растягивание принято");
-    assert!(problems[0].message().contains("не появится"));
+    let detail = problems[0].detail();
+    assert_eq!(detail.key, DetailCode::PlanHeightAboveSource);
+    assert_eq!(
+        detail.params.get("asked").and_then(|v| v.as_u64()),
+        Some(2160)
+    );
+    assert_eq!(
+        detail.params.get("source").and_then(|v| v.as_u64()),
+        Some(1080)
+    );
 }
 
 #[test]

@@ -7,9 +7,11 @@
  * профиль без подтверждённого отпечатка не выглядит рабочим.
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { en, renderIn, ru } from "../../../test-utils";
+import { fill } from "../../../shared/i18n/render";
 import type { ServerProfile, TestStep } from "../../../shared/contract";
 
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
@@ -65,18 +67,23 @@ function makeProfile(over: Partial<ServerProfile> = {}): ServerProfile {
 
 function steps(): TestStep[] {
   return [
-    { id: "network", title: "Сервер доступен по сети", status: "failed", detail: "порт закрыт" },
-    { id: "login", title: "Вход на сервер", status: "skipped", detail: null },
-    { id: "video_dir", title: "Каталог с видео доступен", status: "skipped", detail: null },
-    { id: "domain", title: "Раздача отвечает по домену", status: "skipped", detail: null },
+    {
+      id: "network",
+      status: "failed",
+      detail: { key: "STEP_NET_TIMEOUT", params: { seconds: 10 } },
+    },
+    { id: "login", status: "skipped", detail: null },
+    { id: "video_dir", status: "skipped", detail: null },
+    { id: "domain", status: "skipped", detail: null },
   ];
 }
 
-const draw = () =>
-  render(
+const draw = (lang: "ru" | "en" = "ru") =>
+  renderIn(
     <MemoryRouter>
       <ServerList />
     </MemoryRouter>,
+    lang,
   );
 
 beforeEach(() => {
@@ -91,7 +98,7 @@ beforeEach(() => {
 describe("список серверов", () => {
   it("объясняет пустоту, а не показывает пустой экран", async () => {
     draw();
-    expect(await screen.findByText(/Серверов пока нет/)).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.servers.empty)).toBeInTheDocument();
   });
 
   it("показывает адрес и домен сервера", async () => {
@@ -110,7 +117,7 @@ describe("список серверов", () => {
     draw();
 
     expect(
-      await screen.findByText(/Отпечаток сервера не подтверждён/),
+      await screen.findByText(ru.ui.servers.fingerprintUnconfirmed),
     ).toBeInTheDocument();
   });
 
@@ -120,11 +127,11 @@ describe("список серверов", () => {
     mockServersList.mockResolvedValue([makeProfile()]);
     draw();
 
-    fireEvent.click(await screen.findByText("Удалить"));
-    expect(await screen.findByText(/Пароль или ключ.*тоже будут забыты/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByText(ru.ui.servers.remove));
+    expect(await screen.findByText(ru.ui.servers.confirmRemoval)).toBeInTheDocument();
     expect(mockServerRemove).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByText("Да, удалить"));
+    fireEvent.click(screen.getByText(ru.ui.servers.removeYes));
     await waitFor(() => expect(mockServerRemove).toHaveBeenCalledWith("srv_1"));
   });
 
@@ -134,14 +141,32 @@ describe("список серверов", () => {
     mockServerTest.mockResolvedValue(steps());
     draw();
 
-    fireEvent.click(await screen.findByText("Проверить подключение"));
+    fireEvent.click(await screen.findByText(ru.ui.servers.test));
 
-    expect(await screen.findByText("Сервер доступен по сети")).toBeInTheDocument();
-    expect(screen.getByText("порт закрыт")).toBeInTheDocument();
-    // Шаги после сломавшегося тоже на экране — с пояснением, почему их не смотрели.
-    expect(screen.getByText("Вход на сервер")).toBeInTheDocument();
-    expect(screen.getByText("Раздача отвечает по домену")).toBeInTheDocument();
-    expect(screen.getAllByText(/остановились раньше/).length).toBe(3);
+    // The title comes from the step's id now, not from the core.
+    expect(await screen.findByText(ru.ui.servers.steps.network)).toBeInTheDocument();
+    expect(
+      screen.getByText(fill(ru.details.STEP_NET_TIMEOUT, { seconds: 10 }, ru, "ru")),
+    ).toBeInTheDocument();
+    // The steps after the broken one are on screen too, with a note saying why they
+    // were not looked at.
+    expect(screen.getByText(ru.ui.servers.steps.login)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.servers.steps.domain)).toBeInTheDocument();
+    expect(screen.getAllByText(ru.ui.wizard.stepSkipped).length).toBe(3);
+  });
+
+  it("shows the same check in English when English is chosen", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    mockServerTest.mockResolvedValue(steps());
+    draw("en");
+
+    fireEvent.click(await screen.findByText(en.ui.servers.test));
+
+    expect(await screen.findByText(en.ui.servers.steps.network)).toBeInTheDocument();
+    expect(
+      screen.getByText(fill(en.details.STEP_NET_TIMEOUT, { seconds: 10 }, en, "en")),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.servers.steps.network)).not.toBeInTheDocument();
   });
 });
 
@@ -154,24 +179,24 @@ describe("мастер настройки", () => {
     mockServerTest.mockResolvedValue(steps());
     draw();
 
-    fireEvent.click(await screen.findByText("Добавить сервер"));
+    fireEvent.click(await screen.findByText(ru.ui.servers.add));
 
-    fireEvent.change(screen.getByLabelText("Название"), { target: { value: "Тест" } });
-    fireEvent.change(screen.getByLabelText("Адрес"), { target: { value: "203.0.113.10" } });
-    fireEvent.change(screen.getByLabelText("Домен раздачи"), {
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldName), { target: { value: "Тест" } });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldHost), { target: { value: "203.0.113.10" } });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldDomain), {
       target: { value: "stream.example.com" },
     });
-    fireEvent.change(screen.getByLabelText("Путь к приватному ключу"), {
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldKeyPath), {
       target: { value: "/home/u/.ssh/k" },
     });
-    fireEvent.click(screen.getByText("Дальше"));
+    fireEvent.click(screen.getByText(ru.ui.wizard.next));
 
     // Отпечаток показан, проверка ещё не запускалась.
     expect(await screen.findByText("SHA256:ОтпечатокНовогоСервера")).toBeInTheDocument();
     expect(mockServerTest).not.toHaveBeenCalled();
     expect(mockConfirmFingerprint).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByText("Отпечаток верный"));
+    fireEvent.click(screen.getByText(ru.ui.wizard.fingerprintOk));
     await waitFor(() =>
       expect(mockConfirmFingerprint).toHaveBeenCalledWith(
         "srv_new",
@@ -188,18 +213,18 @@ describe("мастер настройки", () => {
     mockProbeFingerprint.mockResolvedValue("SHA256:чужой");
     draw();
 
-    fireEvent.click(await screen.findByText("Добавить сервер"));
-    fireEvent.change(screen.getByLabelText("Название"), { target: { value: "Тест" } });
-    fireEvent.change(screen.getByLabelText("Адрес"), { target: { value: "203.0.113.10" } });
-    fireEvent.change(screen.getByLabelText("Домен раздачи"), {
+    fireEvent.click(await screen.findByText(ru.ui.servers.add));
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldName), { target: { value: "Тест" } });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldHost), { target: { value: "203.0.113.10" } });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldDomain), {
       target: { value: "stream.example.com" },
     });
-    fireEvent.change(screen.getByLabelText("Путь к приватному ключу"), {
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldKeyPath), {
       target: { value: "/home/u/.ssh/k" },
     });
-    fireEvent.click(screen.getByText("Дальше"));
+    fireEvent.click(screen.getByText(ru.ui.wizard.next));
 
-    fireEvent.click(await screen.findByText("Отказаться"));
+    fireEvent.click(await screen.findByText(ru.ui.wizard.abandon));
     await waitFor(() => expect(mockServerRemove).toHaveBeenCalledWith("srv_new"));
   });
 
@@ -222,14 +247,14 @@ describe("мастер настройки", () => {
     });
     draw();
 
-    fireEvent.click(await screen.findByText("Добавить сервер"));
-    expect(await screen.findByText(/Рядом нашлись настройки/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByText(ru.ui.servers.add));
+    expect(await screen.findByText(ru.ui.wizard.importFound)).toBeInTheDocument();
     // Про парольную фразу сказано честно: в файле её нет и не может быть.
-    expect(screen.getByText(/Парольную фразу ключа придётся ввести/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(ru.ui.wizard.importNeedsPassphrase.trim()))).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("Подставить"));
+    fireEvent.click(screen.getByText(ru.ui.wizard.importApply));
     await waitFor(() =>
-      expect(screen.getByLabelText("Адрес")).toHaveValue("203.0.113.10"),
+      expect(screen.getByLabelText(ru.ui.wizard.fieldHost)).toHaveValue("203.0.113.10"),
     );
   });
 });

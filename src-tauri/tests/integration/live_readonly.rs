@@ -114,8 +114,8 @@ async fn живой_сервер_только_чтение() {
                 StepStatus::Failed => "СБОЙ  ",
                 StepStatus::Skipped => "мимо  ",
             },
-            s.title,
-            s.detail.as_deref().unwrap_or("")
+            s.id,
+            s.detail.as_ref().map(|d| d.key.as_str()).unwrap_or("")
         );
     }
     assert!(

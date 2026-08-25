@@ -5,6 +5,8 @@
 //! иначе диск станет узким местом у задачи, которая должна упираться в канал.
 
 use super::state::{TaskKind, TaskState};
+use crate::domain::wording::DetailCode;
+use crate::error::AppError;
 use crate::store::db::{now_rfc3339, Db, DbError};
 use serde::{Deserialize, Serialize};
 
@@ -16,13 +18,17 @@ pub struct TaskRecord {
     pub server_id: Option<String>,
     pub state: TaskState,
     pub progress: f64,
-    pub stage: Option<String>,
+    /// Which stage it is at. A code, not a phrase: the wording belongs to the
+    /// interface, and a task outlives the language it was started in.
+    pub stage: Option<DetailCode>,
     pub speed_bps: Option<i64>,
     pub eta_s: Option<i64>,
     /// Позиция возобновления: переданные байты, готовые ступени, выполненные шаги.
     pub resume_token: Option<String>,
-    /// Человеческая формулировка, уже прошедшая вырезание секретов.
-    pub error: Option<String>,
+    /// Why it failed, if it did. Stored as an object rather than a sentence: a task
+    /// finished a week ago must still explain itself in whatever language is chosen
+    /// today. Secrets are already redacted.
+    pub error: Option<AppError>,
     /// Место в очереди: меньше — раньше.
     ///
     /// Отдельно от времени создания, потому что перестановка (FR-083) обязана менять
@@ -62,11 +68,17 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
         server_id: row.get("server_id")?,
         state: TaskState::parse(&state).unwrap_or(TaskState::Failed),
         progress: row.get("progress")?,
-        stage: row.get("stage")?,
+        // An unknown code means a task stored by a newer version of the application.
+        // Showing nothing beats showing a key nobody can read.
+        stage: row
+            .get::<_, Option<String>>("stage")?
+            .and_then(|s| DetailCode::parse(&s)),
         speed_bps: row.get("speed_bps")?,
         eta_s: row.get("eta_s")?,
         resume_token: row.get("resume_token")?,
-        error: row.get("error")?,
+        error: row
+            .get::<_, Option<String>>("error")?
+            .and_then(|s| serde_json::from_str(&s).ok()),
         queue_order: row.get("queue_order")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -96,11 +108,13 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
                 task.server_id,
                 task.state.as_str(),
                 task.progress,
-                task.stage,
+                task.stage.map(|s| s.as_str()),
                 task.speed_bps,
                 task.eta_s,
                 task.resume_token,
-                task.error,
+                task.error
+                    .as_ref()
+                    .and_then(|e| serde_json::to_string(e).ok()),
                 task.queue_order,
                 task.created_at,
                 task.updated_at,
@@ -153,7 +167,7 @@ pub fn save_state(
     db: &Db,
     id: &str,
     state: TaskState,
-    error: Option<&str>,
+    error: Option<&AppError>,
 ) -> Result<bool, DbError> {
     db.with_conn(|c| {
         let changed = c.execute(
@@ -163,7 +177,12 @@ pub fn save_state(
                 error = COALESCE(?3, error),
                 updated_at = ?4
              WHERE id = ?1",
-            rusqlite::params![id, state.as_str(), error, now_rfc3339()],
+            rusqlite::params![
+                id,
+                state.as_str(),
+                error.and_then(|e| serde_json::to_string(e).ok()),
+                now_rfc3339()
+            ],
         )?;
         Ok(changed > 0)
     })

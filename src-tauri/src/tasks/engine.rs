@@ -13,6 +13,8 @@
 use super::progress::ProgressThrottle;
 use super::state::{Lane, LaneLimits, TaskKind, TaskState};
 use super::store::{self, TaskRecord};
+use crate::domain::wording::DetailCode;
+use crate::error::AppError;
 use crate::store::db::{Db, DbError};
 use std::collections::HashMap;
 use std::future::Future;
@@ -22,20 +24,20 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TaskError {
-    #[error("задача {0} не найдена")]
+    #[error("task {0} not found")]
     NotFound(String),
 
-    #[error("переход {from} → {to} для задачи {id} недопустим")]
+    #[error("transition {from} -> {to} is not allowed for task {id}")]
     BadTransition {
         id: String,
         from: &'static str,
         to: &'static str,
     },
 
-    #[error("задачу этого вида нельзя приостановить")]
+    #[error("a task of this kind cannot be paused")]
     NotPausable,
 
-    #[error("задача отменена")]
+    #[error("task cancelled")]
     Cancelled,
 
     #[error("{0}")]
@@ -61,14 +63,14 @@ pub enum TaskEvent {
         id: String,
         state: TaskState,
         progress: f64,
-        stage: Option<String>,
+        stage: Option<DetailCode>,
         speed_bps: Option<i64>,
         eta_s: Option<i64>,
     },
     Done {
         id: String,
         state: TaskState,
-        error: Option<String>,
+        error: Option<AppError>,
     },
 }
 
@@ -161,8 +163,8 @@ impl TaskContext {
     }
 
     /// Сообщить о продвижении. Частота ограничена (T020).
-    pub fn report(&self, progress: f64, stage: impl Into<String>) {
-        self.report_full(progress, Some(stage.into()), None, None, false);
+    pub fn report(&self, progress: f64, stage: DetailCode) {
+        self.report_full(progress, Some(stage), None, None, false);
     }
 
     /// Сообщить о продвижении с показателями передачи.
@@ -171,14 +173,14 @@ impl TaskContext {
     }
 
     /// Сообщение, которое обязано пройти независимо от частоты: смена этапа, конец работы.
-    pub fn report_important(&self, progress: f64, stage: impl Into<String>) {
-        self.report_full(progress, Some(stage.into()), None, None, true);
+    pub fn report_important(&self, progress: f64, stage: DetailCode) {
+        self.report_full(progress, Some(stage), None, None, true);
     }
 
     fn report_full(
         &self,
         progress: f64,
-        stage: Option<String>,
+        stage: Option<DetailCode>,
         speed_bps: Option<i64>,
         eta_s: Option<i64>,
         important: bool,
@@ -311,7 +313,7 @@ impl TaskEngine {
     ) -> Result<String>
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<(), String>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
         let id = uuid::Uuid::new_v4().to_string();
         let mut record = TaskRecord::new(id.clone(), kind, server_id);
@@ -343,7 +345,7 @@ impl TaskEngine {
     pub fn resubmit_paused<F, Fut>(&self, id: &str, work: F) -> Result<()>
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<(), String>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
         let record = store::get(&self.db, id)?.ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
         if record.state.is_final() {
@@ -379,7 +381,7 @@ impl TaskEngine {
     fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, position: i64, work: F)
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<(), String>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
         let cancel = CancellationToken::new();
         let paused = Arc::new(Mutex::new(initial == TaskState::Paused));
@@ -700,7 +702,7 @@ impl TaskEngine {
         ClaimOutcome::Started
     }
 
-    fn finish(&self, id: &str, state: TaskState, error: Option<String>) {
+    fn finish(&self, id: &str, state: TaskState, error: Option<AppError>) {
         {
             let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(t) = live.get_mut(id) {
@@ -716,14 +718,27 @@ impl TaskEngine {
         });
     }
 
-    fn persist_state(&self, id: &str, state: TaskState, error: Option<String>) {
-        // Ошибка проходит вырезание секретов: она может прийти от чужой
-        // библиотеки, которая о наших правилах не знает (принцип IV).
-        let error = error.map(|e| crate::store::redact::redact(&e).into_owned());
-        match store::save_state(&self.db, id, state, error.as_deref()) {
+    fn persist_state(&self, id: &str, state: TaskState, error: Option<AppError>) {
+        match store::save_state(&self.db, id, state, error.as_ref()) {
             Ok(true) => {}
             Ok(false) => tracing::warn!(id, "состояние сохранять некуда: записи о задаче нет"),
             Err(e) => tracing::error!(id, error = %e, "не удалось сохранить состояние задачи"),
         }
+    }
+}
+
+impl From<TaskError> for crate::error::AppError {
+    fn from(e: TaskError) -> Self {
+        use crate::error::{AppError, ErrorCode};
+        use TaskError as T;
+        let code = match &e {
+            T::NotFound(_) => ErrorCode::TaskNotFound,
+            T::BadTransition { .. } => ErrorCode::TaskBadTransition,
+            T::NotPausable => ErrorCode::TaskNotPausable,
+            T::Cancelled => ErrorCode::TaskCancelled,
+            T::Db(_) => ErrorCode::StorageFailed,
+            T::Failed(_) => ErrorCode::Internal,
+        };
+        AppError::new(code).with_cause(e)
     }
 }

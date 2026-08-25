@@ -21,13 +21,13 @@ use tokio::process::{Child, Command};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProcessError {
-    #[error("не удалось запустить {program}: {reason}")]
+    #[error("could not start {program}: {reason}")]
     Spawn { program: String, reason: String },
 
-    #[error("не удалось завершить дерево процессов: {0}")]
+    #[error("could not kill the process tree: {0}")]
     Kill(String),
 
-    #[error("приостановка процесса не удалась: {0}")]
+    #[error("suspending the process failed: {0}")]
     Suspend(String),
 }
 

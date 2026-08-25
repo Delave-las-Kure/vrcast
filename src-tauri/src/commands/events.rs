@@ -22,6 +22,9 @@ const LONG_TASK: std::time::Duration = std::time::Duration::from_secs(30);
 pub mod names {
     pub const TASK_PROGRESS: &str = "task:progress";
     pub const TASK_DONE: &str = "task:done";
+    /// The core has decided a system notification is warranted; the interface
+    /// composes the text and shows it.
+    pub const TASK_NOTIFY: &str = "task:notify";
     pub const LIBRARY_CHANGED: &str = "library:changed";
     pub const SERVER_STATE: &str = "server:state";
     pub const VIEWERS_UPDATE: &str = "viewers:update";
@@ -47,8 +50,8 @@ pub fn bridge_task_events(app: AppHandle, engine: &TaskEngine) {
                     if let Err(e) = app.emit(name, &event) {
                         tracing::debug!(error = %e, "событие не доставлено в интерфейс");
                     }
-                    if let TaskEvent::Done { id, state, .. } = &event {
-                        notify_if_long(&app, id, *state);
+                    if let TaskEvent::Done { id, state, error } = &event {
+                        notify_if_long(&app, id, *state, error.as_ref());
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -63,22 +66,27 @@ pub fn bridge_task_events(app: AppHandle, engine: &TaskEngine) {
     });
 }
 
-/// Сообщить системным уведомлением, что длительная задача кончилась (FR-084).
+/// Ask for a system notification about a long task that has ended (FR-084).
 ///
-/// Уведомление показывается **только когда окна не видно**: если человек смотрит
-/// в список задач, он уже всё увидел, и второе сообщение о том же — не забота,
-/// а помеха. И только для задач, шедших дольше [`LONG_TASK`]: заливка на тридцать
-/// гигабайт идёт часами, и человек за это время успевает заняться другим делом,
-/// а разбор исходника укладывается в секунду и никого ждать не заставляет.
+/// The notification is asked for **only when the window is out of sight**: someone
+/// looking at the task list has already seen it, and a second message about the same
+/// thing is a nuisance rather than a courtesy. And only for tasks that ran longer than
+/// [`LONG_TASK`]: a thirty-gigabyte upload takes hours and a person gets on with
+/// something else meanwhile, while probing a source file takes a second.
 ///
-/// Неудача здесь ничего не ломает: уведомление — любезность, а не работа. На Linux
-/// его может не быть вовсе (нет службы уведомлений), и это не повод для сообщений
-/// об ошибке.
-fn notify_if_long(app: &AppHandle, id: &str, state: TaskState) {
-    use tauri_plugin_notification::NotificationExt;
-
-    // Окно на виду — человек уже всё видит сам.
-    let видно = app
+/// The text is **not** composed here. The core no longer writes prose in any language
+/// (FR-105, FR-106), so what goes out is the fact — which task, how it ended — and the
+/// interface words it from the catalogue of the language in use. Showing the
+/// notification from the core would mean a second set of wordings that could drift
+/// from the first.
+fn notify_if_long(
+    app: &AppHandle,
+    id: &str,
+    state: TaskState,
+    error: Option<&crate::error::AppError>,
+) {
+    // The window is in front of them — they can see it for themselves.
+    let visible = app
         .get_webview_window("main")
         .map(|w| {
             w.is_focused().unwrap_or(false)
@@ -86,7 +94,7 @@ fn notify_if_long(app: &AppHandle, id: &str, state: TaskState) {
                 && !w.is_minimized().unwrap_or(false)
         })
         .unwrap_or(false);
-    if видно {
+    if visible {
         return;
     }
 
@@ -99,33 +107,31 @@ fn notify_if_long(app: &AppHandle, id: &str, state: TaskState) {
     if !long_enough(&task.created_at, &task.updated_at) {
         return;
     }
+    // Cancelling is something a person does themselves and already knows about.
+    if !matches!(state, TaskState::Completed | TaskState::Failed) {
+        return;
+    }
 
-    let (title, body) = match state {
-        TaskState::Completed => ("Задача выполнена", done_text(task.kind)),
-        TaskState::Failed => (
-            "Задача не удалась",
-            task.error
-                .clone()
-                .unwrap_or_else(|| String::from("Подробности — в разделе «Задачи».")),
-        ),
-        // Отмену человек делает сам и знает о ней; сообщать ему об этом незачем.
-        _ => return,
+    let request = NotifyRequest {
+        id: id.to_owned(),
+        kind: task.kind,
+        state,
+        error: error.cloned(),
     };
-
-    if let Err(e) = app.notification().builder().title(title).body(body).show() {
-        tracing::debug!(error = %e, "уведомление не показано");
+    if let Err(e) = app.emit(names::TASK_NOTIFY, &request) {
+        tracing::debug!(error = %e, "просьба об уведомлении не доставлена");
     }
 }
 
-fn done_text(kind: TaskKind) -> String {
-    match kind {
-        TaskKind::Upload => String::from("Файл залит на сервер и введён в раздачу."),
-        TaskKind::Convert => String::from("Файл подготовлен и готов к заливке."),
-        TaskKind::BuildLadder => String::from("Набор качеств собран."),
-        TaskKind::Deploy => String::from("Раздача развёрнута."),
-        TaskKind::UpgradeServer => String::from("Серверная часть обновлена."),
-        _ => String::from("Подробности — в разделе «Задачи»."),
-    }
+/// What the interface needs in order to word a notification.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NotifyRequest {
+    pub id: String,
+    pub kind: TaskKind,
+    pub state: TaskState,
+    /// Present when the task failed. Worded by the interface, like any other error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<crate::error::AppError>,
 }
 
 /// Шла ли задача дольше порога.

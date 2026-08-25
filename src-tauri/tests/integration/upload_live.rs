@@ -327,10 +327,11 @@ async fn испорченная_передача_не_попадает_в_раз
     );
 
     let record = state.tasks.get(&task).unwrap().unwrap();
-    let error = record.error.unwrap_or_default();
-    assert!(
-        error.contains("отличается"),
-        "в ошибке не сказано, что содержимое разошлось: {error}"
+    let error = record.error.expect("неудача записана без причины");
+    assert_eq!(
+        error.code,
+        vrcast_studio_lib::commands::error::ErrorCode::ChecksumMismatch,
+        "расхождение сумм названо не своим кодом: {error}"
     );
 
     assert!(
@@ -827,10 +828,12 @@ async fn подменённый_между_запусками_исходник_�
         .unwrap()
         .unwrap()
         .error
-        .unwrap_or_default();
+        .expect("отказ записан без причины");
+    // Именно «исходник подменили», а не «суммы разошлись»: это разные беды, и
+    // человеку они говорят разное. Раньше их различал текст, теперь — код.
     assert!(
-        error.contains("изменился"),
-        "причина отказа не названа человеческими словами: {error}"
+        error.says(vrcast_studio_lib::commands::error::DetailCode::UploadSourceChanged),
+        "причина отказа не названа: {error}"
     );
 
     // И главное: в раздачу склейка не попала.

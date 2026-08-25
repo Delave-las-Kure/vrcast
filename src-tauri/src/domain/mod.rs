@@ -21,3 +21,4 @@ pub mod remote_name;
 pub mod server_profile;
 pub mod source;
 pub mod transfer;
+pub mod wording;

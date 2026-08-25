@@ -8,9 +8,10 @@
 //! здесь нет и не может быть поля под секрет: возвращается `ServerProfile`, в котором
 //! лежит только ссылка на запись в хранилище ОС.
 
-use super::error::{AppError, ErrorCode, Result};
+use super::error::{AppError, DetailCode, ErrorCode, Result};
 use super::AppState;
 use crate::domain::server_profile::{AuthKind, Ipv6Mode, ServerProfile};
+use crate::domain::wording::Detail;
 use serde::{Deserialize, Serialize};
 
 /// Поля профиля в том виде, в каком их присылает интерфейс.
@@ -49,13 +50,12 @@ pub enum StepStatus {
 /// Один шаг проверки подключения.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestStep {
-    /// Устойчивое имя шага: `network`, `login`, `video_dir`, `domain`.
+    /// Stable step name: `network`, `login`, `video_dir`, `domain`. The interface
+    /// looks up its title by this, so the title no longer travels with every step.
     pub id: String,
-    /// Название для показа.
-    pub title: String,
     pub status: StepStatus,
-    /// Подробность: что именно ответил сервер, чего не хватило.
-    pub detail: Option<String>,
+    /// What to say about the outcome: what the server answered, what was missing.
+    pub detail: Option<Detail>,
 }
 
 /// Порядок шагов проверки. Он же — порядок показа.
@@ -63,12 +63,7 @@ pub struct TestStep {
 /// Порядок не произволен: каждый следующий шаг имеет смысл только при успехе
 /// предыдущего. Проверять отдачу по домену, не сумев войти на сервер, — значит
 /// сообщить пользователю вторую беду, не назвав первую.
-pub const TEST_STEPS: [(&str, &str); 4] = [
-    ("network", "Сервер доступен по сети"),
-    ("login", "Вход на сервер"),
-    ("video_dir", "Каталог с видео доступен"),
-    ("domain", "Раздача отвечает по домену"),
-];
+pub const TEST_STEPS: [&str; 4] = ["network", "login", "video_dir", "domain"];
 
 /// Предложение перенести настройки из `server.env` (T043).
 #[derive(Debug, Clone, Serialize)]
@@ -107,13 +102,10 @@ fn profile_from(input: ServerInput, id: String, secret_ref: String) -> ServerPro
 /// и человеку нужно увидеть все сразу, а не по одному за круг.
 fn check(profile: &ServerProfile) -> Result<()> {
     profile.validate().map_err(|problems| {
-        let text = problems
-            .iter()
-            .map(|p| p.message.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
         AppError::new(ErrorCode::InvalidInput)
-            .with_message(text)
+            .with_details(problems.iter().map(|p| p.detail.clone()))
+            // The fields are named in the particulars: the interface highlights them,
+            // and a support log should say which ones were wrong without the wording.
             .with_cause(
                 problems
                     .iter()
@@ -128,7 +120,7 @@ fn check(profile: &ServerProfile) -> Result<()> {
 /// на все команды: пользователь не должен гадать, одно ли это и то же.
 pub(crate) fn no_such_server(id: &str) -> AppError {
     AppError::new(ErrorCode::InvalidInput)
-        .with_message("Такого сервера нет — возможно, его профиль удалили.")
+        .detail(DetailCode::ProfileNotFound)
         .with_cause(id)
 }
 
@@ -153,7 +145,9 @@ pub mod api {
 
         if profiles::name_taken(&state.db, &profile.name, None)? {
             return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Профиль с таким названием уже есть — выберите другое.")
+                .with_detail(
+                    Detail::new(DetailCode::ProfileNameTaken).with("name", profile.name.clone()),
+                )
                 .with_cause(&profile.name));
         }
 
@@ -192,7 +186,9 @@ pub mod api {
 
         if profiles::name_taken(&state.db, &profile.name, Some(id))? {
             return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Профиль с таким названием уже есть — выберите другое.")
+                .with_detail(
+                    Detail::new(DetailCode::ProfileNameTaken).with("name", profile.name.clone()),
+                )
                 .with_cause(&profile.name));
         }
 
@@ -278,8 +274,7 @@ pub mod api {
     pub fn server_fingerprint_confirm(state: &AppState, id: &str, fingerprint: &str) -> Result<()> {
         let fingerprint = fingerprint.trim();
         if fingerprint.is_empty() {
-            return Err(AppError::new(ErrorCode::InvalidInput)
-                .with_message("Отпечаток пуст — подтверждать нечего."));
+            return Err(AppError::new(ErrorCode::InvalidInput).detail(DetailCode::FingerprintEmpty));
         }
         if profiles::set_fingerprint(&state.db, id, fingerprint)? {
             tracing::info!(server = %id, "отпечаток сервера подтверждён пользователем");
@@ -365,14 +360,22 @@ mod probe {
     /// он воспримет как зависшее приложение, а не как медленный сервер.
     const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 
-    fn step(index: usize, status: StepStatus, detail: Option<String>) -> TestStep {
-        let (id, title) = TEST_STEPS[index];
+    fn step(index: usize, status: StepStatus, detail: Option<Detail>) -> TestStep {
         TestStep {
-            id: id.to_owned(),
-            title: title.to_owned(),
+            id: TEST_STEPS[index].to_owned(),
             status,
             detail,
         }
+    }
+
+    /// A step that went well, or did not, with one thing to say about it.
+    fn said(index: usize, status: StepStatus, detail: Detail) -> TestStep {
+        step(index, status, Some(detail))
+    }
+
+    /// A complaint from a library, kept in its own words.
+    fn system(e: impl std::fmt::Display) -> Detail {
+        Detail::new(DetailCode::SystemError).with("text", crate::store::redact::safe_display(&e))
     }
 
     /// Достроить остаток шагов как невыполнявшиеся.
@@ -390,9 +393,9 @@ mod probe {
 
         // 1. Сеть.
         match reach_ssh(&profile.host, profile.port).await {
-            Ok(banner) => steps.push(step(0, StepStatus::Ok, Some(banner))),
+            Ok(banner) => steps.push(said(0, StepStatus::Ok, banner)),
             Err(detail) => {
-                steps.push(step(0, StepStatus::Failed, Some(detail)));
+                steps.push(said(0, StepStatus::Failed, detail));
                 skip_rest(&mut steps);
                 return steps;
             }
@@ -402,12 +405,10 @@ mod probe {
         // не подтверждён, — поэтому неподтверждённый отпечаток останавливает
         // проверку здесь, а не превращается в загадочную неудачу входа.
         let Some(expected) = profile.host_fingerprint.clone() else {
-            steps.push(step(
+            steps.push(said(
                 1,
                 StepStatus::Failed,
-                Some(String::from(
-                    "отпечаток сервера ещё не подтверждён — подтвердите его, и проверка пойдёт дальше",
-                )),
+                Detail::new(DetailCode::StepLoginFingerprintUnconfirmed),
             ));
             skip_rest(&mut steps);
             return steps;
@@ -419,7 +420,7 @@ mod probe {
         {
             Ok(s) => s,
             Err(e) => {
-                steps.push(step(1, StepStatus::Failed, Some(e.to_string())));
+                steps.push(said(1, StepStatus::Failed, system(e)));
                 skip_rest(&mut steps);
                 return steps;
             }
@@ -442,21 +443,17 @@ mod probe {
         .await
         {
             Ok(c) => {
-                steps.push(step(
+                steps.push(said(
                     1,
                     StepStatus::Ok,
-                    Some(format!("вошли как {}", profile.user)),
+                    Detail::new(DetailCode::StepLoginOk).with("user", profile.user.clone()),
                 ));
                 c
             }
             Err(e) => {
                 // Подробность проходит вырезание секретов: она приходит от чужой
                 // библиотеки, которая о наших правилах ничего не знает.
-                steps.push(step(
-                    1,
-                    StepStatus::Failed,
-                    Some(crate::store::redact::safe_display(&e)),
-                ));
+                steps.push(said(1, StepStatus::Failed, system(&e)));
                 skip_rest(&mut steps);
                 return steps;
             }
@@ -469,30 +466,25 @@ mod probe {
             dir = profile.video_dir
         );
         match conn.exec(&probe_cmd).await {
-            Ok(out) if out.ok() => steps.push(step(
+            Ok(out) if out.ok() => steps.push(said(
                 2,
                 StepStatus::Ok,
-                Some(format!("{} доступен на чтение и запись", profile.video_dir)),
+                Detail::new(DetailCode::StepVideoDirOk).with("dir", profile.video_dir.clone()),
             )),
             Ok(_) => {
-                steps.push(step(
+                steps.push(said(
                     2,
                     StepStatus::Failed,
-                    Some(format!(
-                        "каталога {} нет либо у пользователя {} нет прав на него",
-                        profile.video_dir, profile.user
-                    )),
+                    Detail::new(DetailCode::StepVideoDirMissingOrDenied)
+                        .with("dir", profile.video_dir.clone())
+                        .with("user", profile.user.clone()),
                 ));
                 skip_rest(&mut steps);
                 conn.close().await;
                 return steps;
             }
             Err(e) => {
-                steps.push(step(
-                    2,
-                    StepStatus::Failed,
-                    Some(crate::store::redact::safe_display(&e)),
-                ));
+                steps.push(said(2, StepStatus::Failed, system(&e)));
                 skip_rest(&mut steps);
                 conn.close().await;
                 return steps;
@@ -539,15 +531,18 @@ mod probe {
     /// SSH шлёт строку `SSH-2.0-…` сразу после соединения, ничего не дожидаясь.
     /// Это тот же принцип, что и в проверке отдачи по домену (R-20): открытый порт
     /// не доказывает ничего, доказывает ответ.
-    async fn reach_ssh(host: &str, port: u16) -> std::result::Result<String, String> {
+    async fn reach_ssh(host: &str, port: u16) -> std::result::Result<Detail, Detail> {
         use tokio::io::AsyncReadExt;
 
         let addr = format!("{host}:{port}");
         let mut stream =
             match tokio::time::timeout(STEP_TIMEOUT, tokio::net::TcpStream::connect(&addr)).await {
                 Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(e.to_string()),
-                Err(_) => return Err(format!("сервер не ответил за {} с", STEP_TIMEOUT.as_secs())),
+                Ok(Err(e)) => return Err(system(e)),
+                Err(_) => {
+                    return Err(Detail::new(DetailCode::StepNetTimeout)
+                        .with("seconds", STEP_TIMEOUT.as_secs()))
+                }
             };
 
         // Баннера хватает первых нескольких десятков байт; ждать его долго незачем —
@@ -556,31 +551,20 @@ mod probe {
         let read = tokio::time::timeout(STEP_TIMEOUT, stream.read(&mut buf)).await;
 
         let bytes = match read {
-            Ok(Ok(0)) => {
-                return Err(String::from(
-                    "соединение принято и тут же закрыто: на этом порту SSH не отвечает",
-                ))
-            }
+            Ok(Ok(0)) => return Err(Detail::new(DetailCode::StepNetClosed)),
             Ok(Ok(n)) => &buf[..n],
-            Ok(Err(e)) => return Err(e.to_string()),
-            Err(_) => {
-                return Err(String::from(
-                    "соединение принимается, но SSH молчит. Так ведёт себя защита от атак \
-                     у части хостеров: она отвечает на любом порту, даже если за ним ничего нет. \
-                     Проверьте номер порта — возможно, SSH слушает на другом",
-                ))
-            }
+            Ok(Err(e)) => return Err(system(e)),
+            Err(_) => return Err(Detail::new(DetailCode::StepNetSilent)),
         };
 
         let banner = String::from_utf8_lossy(bytes);
         let first_line = banner.lines().next().unwrap_or("").trim();
         if first_line.starts_with("SSH-") {
-            Ok(format!("отвечает {first_line}"))
+            Ok(Detail::new(DetailCode::StepNetBanner).with("banner", first_line.to_owned()))
         } else {
-            Err(format!(
-                "на порту {port} отвечает не SSH, а что-то другое: «{}»",
-                first_line.chars().take(40).collect::<String>()
-            ))
+            Err(Detail::new(DetailCode::StepNetNotSsh)
+                .with("port", port)
+                .with("got", first_line.chars().take(40).collect::<String>()))
         }
     }
 
@@ -600,7 +584,7 @@ mod probe {
     async fn check_domain(domain: &str, sample: Option<&str>) -> TestStep {
         let client = match reqwest::Client::builder().timeout(STEP_TIMEOUT).build() {
             Ok(c) => c,
-            Err(e) => return step(3, StepStatus::Failed, Some(e.to_string())),
+            Err(e) => return said(3, StepStatus::Failed, system(e)),
         };
 
         let (url, checking_file) = match sample {
@@ -631,54 +615,51 @@ mod probe {
                 if !checking_file {
                     // Ответ веб-сервера — успех, но неполный: каталог может быть
                     // закрыт для перечисления, и это правильная настройка.
-                    return step(
+                    return said(
                         3,
                         StepStatus::Ok,
-                        Some(format!(
-                            "{domain} отвечает по HTTPS (код {code}); файлов в каталоге нет, \
-                             саму отдачу проверить пока нечем"
-                        )),
+                        Detail::new(DetailCode::StepDomainOkNoFiles)
+                            .with("domain", domain.to_owned())
+                            .with("code", code),
                     );
                 }
                 if !response.status().is_success() {
-                    return step(
+                    return said(
                         3,
                         StepStatus::Failed,
-                        Some(format!(
-                            "домен отвечает, но файл не отдаётся: на {url} пришёл код {code}. \
-                             Файл на сервере есть — значит, дело в настройках раздачи"
-                        )),
+                        Detail::new(DetailCode::StepDomainFileNotServed)
+                            .with("url", url.clone())
+                            .with("code", code),
                     );
                 }
                 match response.bytes().await {
-                    Ok(body) if !body.is_empty() => step(
+                    Ok(body) if !body.is_empty() => said(
                         3,
                         StepStatus::Ok,
-                        Some(format!("раздача отдаёт файлы: проверено на {url}")),
+                        Detail::new(DetailCode::StepDomainOk).with("url", url.clone()),
                     ),
-                    Ok(_) => step(
+                    Ok(_) => said(
                         3,
                         StepStatus::Failed,
-                        Some(format!("на {url} пришёл код {code}, но тело ответа пустое")),
+                        Detail::new(DetailCode::StepDomainEmptyBody)
+                            .with("url", url.clone())
+                            .with("code", code),
                     ),
-                    Err(e) => step(
-                        3,
-                        StepStatus::Failed,
-                        Some(crate::store::redact::safe_display(&e)),
-                    ),
+                    Err(e) => said(3, StepStatus::Failed, system(&e)),
                 }
             }
             Err(e) => {
                 let detail = if e.is_timeout() {
-                    format!("{domain} не ответил за {} с", STEP_TIMEOUT.as_secs())
+                    Detail::new(DetailCode::StepDomainTimeout)
+                        .with("domain", domain.to_owned())
+                        .with("seconds", STEP_TIMEOUT.as_secs())
                 } else if e.is_connect() {
-                    format!(
-                        "не удалось соединиться с {domain}: проверьте, что доменная запись ведёт на этот сервер"
-                    )
+                    Detail::new(DetailCode::StepDomainNoConnection)
+                        .with("domain", domain.to_owned())
                 } else {
-                    crate::store::redact::safe_display(&e)
+                    system(&e)
                 };
-                step(3, StepStatus::Failed, Some(detail))
+                said(3, StepStatus::Failed, detail)
             }
         }
     }

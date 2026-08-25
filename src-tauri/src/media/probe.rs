@@ -19,10 +19,10 @@ pub enum ProbeError {
     #[error(transparent)]
     Ffmpeg(#[from] ffmpeg::FfmpegError),
 
-    #[error("файл не разобрать: {0}")]
+    #[error("file could not be parsed: {0}")]
     Unreadable(String),
 
-    #[error("в файле нет видео")]
+    #[error("the file has no video")]
     NoVideo,
 }
 

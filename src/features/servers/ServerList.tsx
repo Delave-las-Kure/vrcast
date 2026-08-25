@@ -1,18 +1,20 @@
 /**
- * T053 — список серверов и карточка каждого.
+ * T053 — the list of servers and the card for each.
  *
- * Активен ровно один (FR-002), и это видно с одного взгляда: переключатель, а не
- * галочки. Профиль без подтверждённого отпечатка помечен отдельно — он существует,
- * но подключиться по нему нельзя, и молчать об этом нельзя тем более.
+ * Exactly one is active (FR-002), and that is visible at a glance: a switch, not
+ * checkboxes. A profile with no confirmed fingerprint is marked separately — it
+ * exists, but nothing can connect through it, and staying quiet about that is worse
+ * still.
  *
- * Место на диске и версия серверной части в карточке пока не показываются: первое
- * приходит вместе с библиотекой, второе появится в Фазе 7. Поле под версию
- * не рисуем впустую — пустая строка «Версия: —» ничего не сообщает.
+ * Disk space and the server-side version are not on the card yet: the first arrives
+ * with the library, the second appears in Phase 7. No empty field is drawn for the
+ * version — a line reading "Version: —" says nothing.
  */
 
 import { useEffect, useState } from "react";
 import type { ServerProfile, TestStep } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
+import { useT } from "../../shared/i18n";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { SetupWizard, TestSteps } from "./SetupWizard";
 import { isReady, useServers } from "./store";
@@ -20,12 +22,13 @@ import { isReady, useServers } from "./store";
 export function ServerList() {
   const { profiles, loading, error, reload, setActive, clearError } = useServers();
   const [adding, setAdding] = useState(false);
+  const t = useT();
 
   useEffect(() => {
     void reload();
   }, [reload]);
 
-  if (loading) return <div className="panel">Читаем список серверов…</div>;
+  if (loading) return <div className="panel">{t.ui.servers.reading}</div>;
 
   if (adding) {
     return (
@@ -38,17 +41,14 @@ export function ServerList() {
   return (
     <div className="panel">
       <div className="panel__head">
-        <h1>Серверы</h1>
-        <button onClick={() => setAdding(true)}>Добавить сервер</button>
+        <h1>{t.ui.servers.heading}</h1>
+        <button onClick={() => setAdding(true)}>{t.ui.servers.add}</button>
       </div>
 
       {error && <ErrorNotice error={error} onDismiss={clearError} />}
 
       {profiles.length === 0 ? (
-        <p className="muted">
-          Серверов пока нет. Добавьте первый — приложение узнает его отпечаток, попросит
-          вас подтвердить и проверит подключение по шагам.
-        </p>
+        <p className="muted">{t.ui.servers.empty}</p>
       ) : (
         <ul className="server-list">
           {profiles.map((p) => (
@@ -78,6 +78,7 @@ function ServerCard({
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<ReturnType<typeof toAppError> | null>(null);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+  const t = useT();
 
   const runTest = async () => {
     setTesting(true);
@@ -111,24 +112,24 @@ function ServerCard({
           </span>
         </div>
         {profile.is_active ? (
-          <span className="server__badge">активный</span>
+          <span className="server__badge">{t.ui.servers.activeBadge}</span>
         ) : (
-          <button onClick={onActivate}>Сделать активным</button>
+          <button onClick={onActivate}>{t.ui.servers.makeActive}</button>
         )}
       </div>
 
       <dl className="server__facts">
         <div>
-          <dt>Домен</dt>
+          <dt>{t.ui.servers.domain}</dt>
           <dd>{profile.domain}</dd>
         </div>
         <div>
-          <dt>Каталог с видео</dt>
+          <dt>{t.ui.servers.videoDir}</dt>
           <dd>{profile.video_dir}</dd>
         </div>
         {profile.cdn_base && (
           <div>
-            <dt>CDN</dt>
+            <dt>{t.ui.servers.cdn}</dt>
             <dd>{profile.cdn_base}</dd>
           </div>
         )}
@@ -136,8 +137,7 @@ function ServerCard({
 
       {!isReady(profile) && (
         <p className="server__warning" role="status">
-          Отпечаток сервера не подтверждён — подключиться нельзя. Приложение не отправляет
-          учётные данные серверу, которого не узнаёт.
+          {t.ui.servers.fingerprintUnconfirmed}
         </p>
       )}
 
@@ -146,21 +146,21 @@ function ServerCard({
 
       <div className="server__actions">
         <button onClick={() => void runTest()} disabled={testing}>
-          {testing ? "Проверяем…" : "Проверить подключение"}
+          {testing ? t.ui.servers.testing : t.ui.servers.test}
         </button>
         {confirmingRemoval ? (
           <>
-            <span className="server__confirm">
-              Удалить профиль? Пароль или ключ от этого сервера тоже будут забыты.
-            </span>
+            <span className="server__confirm">{t.ui.servers.confirmRemoval}</span>
             <button className="button--danger" onClick={() => void remove()}>
-              Да, удалить
+              {t.ui.servers.removeYes}
             </button>
-            <button onClick={() => setConfirmingRemoval(false)}>Отмена</button>
+            <button onClick={() => setConfirmingRemoval(false)}>
+              {t.ui.common.cancel}
+            </button>
           </>
         ) : (
           <button className="button--danger" onClick={() => setConfirmingRemoval(true)}>
-            Удалить
+            {t.ui.servers.remove}
           </button>
         )}
       </div>

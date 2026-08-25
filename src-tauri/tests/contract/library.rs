@@ -10,7 +10,7 @@
 //! проверял бы согласие кода с этой выдумкой, а не с тем, что лежит на сервере.
 
 use super::support::{state, valid_input};
-use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::library::{api, FileView, LibraryView, MediaView};
 use vrcast_studio_lib::commands::servers::api as servers_api;
 
@@ -74,9 +74,11 @@ async fn медиа_с_недопустимым_коротким_именем_н
         .await
         .expect_err("создано медиа с пробелом в коротком имени");
     assert_eq!(err.code, ErrorCode::InvalidInput);
+    // Отказ называет, ЧТО именно не так с именем, а не только что оно не годится:
+    // подсказку по коду интерфейс возьмёт сам, а вот про пробел знает только ядро.
     assert!(
-        !err.hint.trim().is_empty(),
-        "отказ без подсказки, что делать"
+        err.says(DetailCode::SlugBadChar),
+        "отказ не называет негодный знак: {err}"
     );
 }
 
@@ -99,10 +101,8 @@ async fn название_без_латинского_соответствия_�
         .expect_err("короткое имя выдумано из ниоткуда");
     assert_eq!(err.code, ErrorCode::InvalidInput);
     assert!(
-        err.message.contains("орот") || err.hint.contains("орот"),
-        "отказ не объясняет, что нужно короткое имя: {} / {}",
-        err.message,
-        err.hint
+        err.says(DetailCode::SlugUnmakeable),
+        "отказ не объясняет, что короткое имя придётся задать самому: {err}"
     );
 }
 
