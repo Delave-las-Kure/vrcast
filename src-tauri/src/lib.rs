@@ -69,6 +69,8 @@ pub fn run() {
             commands::ipc::task_cancel,
             commands::ipc::task_pause,
             commands::ipc::task_resume,
+            commands::ipc::tasks_reorder,
+            commands::ipc::tasks_queue_order,
             commands::ipc::tasks_on_close,
             commands::ipc::server_probe_fingerprint,
             commands::servers::ipc::servers_list,

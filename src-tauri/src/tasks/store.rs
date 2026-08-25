@@ -23,6 +23,11 @@ pub struct TaskRecord {
     pub resume_token: Option<String>,
     /// Человеческая формулировка, уже прошедшая вырезание секретов.
     pub error: Option<String>,
+    /// Место в очереди: меньше — раньше.
+    ///
+    /// Отдельно от времени создания, потому что перестановка (FR-083) обязана менять
+    /// порядок, не подделывая время появления задачи.
+    pub queue_order: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -41,6 +46,7 @@ impl TaskRecord {
             eta_s: None,
             resume_token: None,
             error: None,
+            queue_order: 0,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -61,6 +67,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
         eta_s: row.get("eta_s")?,
         resume_token: row.get("resume_token")?,
         error: row.get("error")?,
+        queue_order: row.get("queue_order")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -72,8 +79,8 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
         c.execute(
             "INSERT INTO tasks
                 (id, kind, server_id, state, progress, stage, speed_bps, eta_s,
-                 resume_token, error, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 resume_token, error, queue_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT (id) DO UPDATE SET
                 state = excluded.state,
                 progress = excluded.progress,
@@ -94,6 +101,7 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
                 task.eta_s,
                 task.resume_token,
                 task.error,
+                task.queue_order,
                 task.created_at,
                 task.updated_at,
             ],
@@ -170,6 +178,31 @@ pub fn get(db: &Db, id: &str) -> Result<Option<TaskRecord>, DbError> {
             Some(row) => Some(row_to_record(row)?),
             None => None,
         })
+    })
+}
+
+/// Наибольший занятый номер в очереди.
+///
+/// Нужен при запуске: следующая задача обязана встать **после** всех, что уже лежат
+/// в базе, иначе она молча влезет в середину очереди прошлого запуска.
+pub fn max_queue_order(db: &Db) -> Result<i64, DbError> {
+    db.with_conn(|c| {
+        Ok(
+            c.query_row("SELECT COALESCE(MAX(queue_order), 0) FROM tasks", [], |r| {
+                r.get(0)
+            })?,
+        )
+    })
+}
+
+/// Записать только место в очереди.
+pub fn save_queue_order(db: &Db, id: &str, order: i64) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET queue_order = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, order, now_rfc3339()],
+        )?;
+        Ok(())
     })
 }
 

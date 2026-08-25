@@ -1,7 +1,7 @@
 //! Тесты механизма задач (T016, T017, T019, T020).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::tasks::engine::{TaskEngine, TaskEvent};
@@ -497,6 +497,194 @@ async fn прерванная_задача_становится_приостан
         after.resume_token.as_deref(),
         Some("12400000000"),
         "потеряна позиция возобновления"
+    );
+}
+
+// ---------- порядок очереди (T096, FR-083) ----------
+
+/// Движок с полосой на одну задачу и общая копилка порядка выполнения.
+///
+/// Проверять порядок можно только так: изнутри задачи, в момент, когда она пошла.
+/// По записям в базе этого не увидеть — там остаётся лишь исход.
+fn очередь_на_одного() -> (TaskEngine, Arc<Mutex<Vec<String>>>) {
+    let e = TaskEngine::new(Arc::new(Db::open_in_memory().unwrap())).with_limits(LaneLimits {
+        compute: 1,
+        network: 1,
+        light: 1,
+    });
+    (e, Arc::new(Mutex::new(Vec::new())))
+}
+
+/// Поставить задачу, которая отмечается в копилке и ждёт отмашки.
+///
+/// Ждать нужно, чтобы очередь успела сложиться: без задержки первая задача
+/// закончится раньше, чем встанет третья, и переставлять будет нечего. Отмашка —
+/// опрашиваемый признак, а не сигнал: сигнал будит только тех, кто ждёт его прямо
+/// сейчас, а задачи здесь доходят до ожидания по очереди, освобождая полосу.
+async fn поставить(
+    e: &TaskEngine,
+    имя: &str,
+    порядок: Arc<Mutex<Vec<String>>>,
+    отпустить: Arc<std::sync::atomic::AtomicBool>,
+) -> String {
+    let имя = имя.to_owned();
+    e.submit(TaskKind::Upload, None, move |_ctx| async move {
+        порядок.lock().unwrap().push(имя);
+        while !отпустить.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok(())
+    })
+    .await
+    .expect("задача не поставилась")
+}
+
+async fn все_завершились(e: &TaskEngine, ids: &[&String]) {
+    for id in ids {
+        assert!(
+            wait_for_state(e, id, TaskState::Completed, Duration::from_secs(10)).await,
+            "задача {id} не завершилась"
+        );
+    }
+}
+
+#[tokio::test]
+async fn без_перестановки_задачи_идут_в_порядке_постановки() {
+    let (e, порядок) = очередь_на_одного();
+    let отпустить = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let первая = поставить(&e, "первая", порядок.clone(), отпустить.clone()).await;
+    let вторая = поставить(&e, "вторая", порядок.clone(), отпустить.clone()).await;
+    let третья = поставить(&e, "третья", порядок.clone(), отпустить.clone()).await;
+
+    assert!(wait_for_state(&e, &первая, TaskState::Running, Duration::from_secs(3)).await);
+    assert_eq!(
+        e.queue_order(),
+        vec![вторая.clone(), третья.clone()],
+        "очередь показана не в том порядке, в каком задачи пойдут"
+    );
+
+    отпустить.store(true, Ordering::SeqCst);
+    все_завершились(&e, &[&первая, &вторая, &третья]).await;
+
+    assert_eq!(
+        *порядок.lock().unwrap(),
+        vec!["первая", "вторая", "третья"],
+        "задачи пошли не в том порядке, в каком их поставили"
+    );
+}
+
+#[tokio::test]
+async fn перестановка_меняет_то_какая_задача_пойдёт_следующей() {
+    // Ради этого FR-083 и существует. Проверяется по тому, какая задача пошла
+    // в работу, а не по полю в базе: поле можно переставить и без последствий,
+    // и тогда кнопка в интерфейсе была бы обманом.
+    let (e, порядок) = очередь_на_одного();
+    let отпустить = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let первая = поставить(&e, "первая", порядок.clone(), отпустить.clone()).await;
+    let вторая = поставить(&e, "вторая", порядок.clone(), отпустить.clone()).await;
+    let третья = поставить(&e, "третья", порядок.clone(), отпустить.clone()).await;
+
+    assert!(wait_for_state(&e, &первая, TaskState::Running, Duration::from_secs(3)).await);
+
+    // Человек передумал: третья нужна раньше второй.
+    let переставлено = e
+        .reorder_queue(&[третья.clone(), вторая.clone()])
+        .expect("перестановка не удалась");
+    assert_eq!(переставлено, 2);
+    assert_eq!(e.queue_order(), vec![третья.clone(), вторая.clone()]);
+
+    отпустить.store(true, Ordering::SeqCst);
+    все_завершились(&e, &[&первая, &вторая, &третья]).await;
+
+    assert_eq!(
+        *порядок.lock().unwrap(),
+        vec!["первая", "третья", "вторая"],
+        "перестановка не изменила того, какая задача пошла следующей"
+    );
+}
+
+#[tokio::test]
+async fn перестановка_не_прерывает_начатую_задачу() {
+    // Прервать выполняющуюся ради изменения порядка значило бы выбросить уже
+    // сделанную работу — на многочасовой заливке это часы.
+    let (e, порядок) = очередь_на_одного();
+    let отпустить = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let первая = поставить(&e, "первая", порядок.clone(), отпустить.clone()).await;
+    let вторая = поставить(&e, "вторая", порядок.clone(), отпустить.clone()).await;
+
+    assert!(wait_for_state(&e, &первая, TaskState::Running, Duration::from_secs(3)).await);
+
+    // Заявка включает уже начатую задачу — так и приходит из списка на экране.
+    let переставлено = e
+        .reorder_queue(&[вторая.clone(), первая.clone()])
+        .expect("перестановка не удалась");
+    assert_eq!(
+        переставлено, 0,
+        "переставлять было нечего: ждёт только одна задача"
+    );
+    assert_eq!(
+        e.get(&первая).unwrap().unwrap().state,
+        TaskState::Running,
+        "выполняющуюся задачу прервали ради изменения порядка"
+    );
+}
+
+#[tokio::test]
+async fn порядок_переживает_перезапуск_приложения() {
+    // Иначе человек расставит очередь на ночь, закроет приложение, а утром
+    // обнаружит прежний порядок.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let e = TaskEngine::new(db.clone()).with_limits(LaneLimits {
+        compute: 1,
+        network: 1,
+        light: 1,
+    });
+    let порядок = Arc::new(Mutex::new(Vec::new()));
+    let отпустить = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let первая = поставить(&e, "первая", порядок.clone(), отпустить.clone()).await;
+    let вторая = поставить(&e, "вторая", порядок.clone(), отпустить.clone()).await;
+    let третья = поставить(&e, "третья", порядок.clone(), отпустить.clone()).await;
+
+    assert!(wait_for_state(&e, &первая, TaskState::Running, Duration::from_secs(3)).await);
+    e.reorder_queue(&[третья.clone(), вторая.clone()])
+        .expect("перестановка не удалась");
+
+    // Новый запуск читает ту же базу.
+    let порядки: Vec<(String, i64)> = store::list(&db)
+        .unwrap()
+        .into_iter()
+        .map(|t| (t.id, t.queue_order))
+        .collect();
+    let место = |id: &str| порядки.iter().find(|(i, _)| i == id).unwrap().1;
+    assert!(
+        место(&третья) < место(&вторая),
+        "перестановка не дошла до базы и перезапуска не переживёт"
+    );
+}
+
+#[tokio::test]
+async fn новая_задача_встаёт_в_конец_очереди_прошлого_запуска() {
+    // Отсчёт мест продолжается, а не начинается заново: иначе задача, поставленная
+    // после перезапуска, молча влезла бы в середину чужой очереди.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let mut старая = store::TaskRecord::new("t-старая", TaskKind::Upload, None);
+    старая.state = TaskState::Queued;
+    старая.queue_order = 100;
+    store::upsert(&db, &старая).unwrap();
+
+    let e = TaskEngine::new(db.clone());
+    let id = e
+        .submit(TaskKind::Upload, None, |_| async { Ok(()) })
+        .await
+        .unwrap();
+
+    assert!(
+        e.get(&id).unwrap().unwrap().queue_order > 100,
+        "новая задача встала перед задачей прошлого запуска"
     );
 }
 

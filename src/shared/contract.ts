@@ -237,6 +237,8 @@ export interface Task {
   eta_s: number | null;
   resume_token: string | null;
   error: string | null;
+  /** Место в очереди: меньше — раньше. Меняется перестановкой (FR-083). */
+  queue_order: number;
   created_at: string;
   updated_at: string;
 }

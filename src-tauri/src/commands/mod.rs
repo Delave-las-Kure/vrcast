@@ -165,6 +165,21 @@ pub mod api {
         Ok(state.tasks.resume(id)?)
     }
 
+    /// Переставить ждущие задачи в очереди (FR-083).
+    ///
+    /// `ordered` — номера задач в желаемом порядке. Выполняющиеся не трогаются:
+    /// прервать начатую передачу ради изменения порядка значило бы выбросить уже
+    /// сделанную работу. Возвращается, сколько задач переставлено, — список
+    /// у человека на экране всегда чуть отстаёт, и часть из них могла уже начаться.
+    pub fn tasks_reorder(state: &AppState, ordered: &[String]) -> Result<usize> {
+        Ok(state.tasks.reorder_queue(ordered)?)
+    }
+
+    /// Номера ждущих задач в том порядке, в каком они пойдут в работу.
+    pub fn tasks_queue_order(state: &AppState) -> Result<Vec<String>> {
+        Ok(state.tasks.queue_order())
+    }
+
     /// Что сказать пользователю при закрытии приложения (FR-086).
     ///
     /// Разница между видами задач здесь не косметическая: передача продолжится с
@@ -252,6 +267,16 @@ pub mod ipc {
     #[tauri::command]
     pub fn task_resume(state: State<'_, AppState>, id: String) -> Result<()> {
         api::task_resume(&state, &id)
+    }
+
+    #[tauri::command]
+    pub fn tasks_reorder(state: State<'_, AppState>, ordered: Vec<String>) -> Result<usize> {
+        api::tasks_reorder(&state, &ordered)
+    }
+
+    #[tauri::command]
+    pub fn tasks_queue_order(state: State<'_, AppState>) -> Result<Vec<String>> {
+        api::tasks_queue_order(&state)
     }
 
     #[tauri::command]

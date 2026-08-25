@@ -81,6 +81,8 @@ struct LiveTask {
     paused: Arc<Mutex<bool>>,
     resume: Arc<Notify>,
     throttle: Arc<ProgressThrottle>,
+    /// Место в очереди: меньше — раньше (FR-083).
+    position: i64,
 }
 
 /// То, что видит выполняющаяся задача.
@@ -235,16 +237,26 @@ pub struct TaskEngine {
     live: Arc<Mutex<HashMap<String, LiveTask>>>,
     limits: LaneLimits,
     events: broadcast::Sender<TaskEvent>,
+    /// Номер, который получит следующая поставленная задача.
+    next_position: Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl TaskEngine {
     pub fn new(db: Arc<Db>) -> Self {
         let (events, _) = broadcast::channel(256);
+        // Отсчёт продолжается с того места, где кончил прошлый запуск: иначе новая
+        // задача получила бы номер, уже занятый лежащей в базе, и встала бы в середину
+        // чужой очереди.
+        let next = store::max_queue_order(&db).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "не прочитать порядок очереди — начинаем с нуля");
+            0
+        }) + 1;
         Self {
             db,
             live: Arc::new(Mutex::new(HashMap::new())),
             limits: LaneLimits::default(),
             events,
+            next_position: Arc::new(std::sync::atomic::AtomicI64::new(next)),
         }
     }
 
@@ -292,9 +304,18 @@ impl TaskEngine {
         Fut: Future<Output = std::result::Result<(), String>> + Send + 'static,
     {
         let id = uuid::Uuid::new_v4().to_string();
-        let record = TaskRecord::new(id.clone(), kind, server_id);
+        let mut record = TaskRecord::new(id.clone(), kind, server_id);
+        record.queue_order = self
+            .next_position
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         store::upsert(&self.db, &record)?;
-        self.start(id.clone(), kind, TaskState::Queued, work);
+        self.start(
+            id.clone(),
+            kind,
+            TaskState::Queued,
+            record.queue_order,
+            work,
+        );
         Ok(id)
     }
 
@@ -334,12 +355,18 @@ impl TaskEngine {
         }
 
         store::save_state(&self.db, id, TaskState::Paused, None)?;
-        self.start(id.to_owned(), record.kind, TaskState::Paused, work);
+        self.start(
+            id.to_owned(),
+            record.kind,
+            TaskState::Paused,
+            record.queue_order,
+            work,
+        );
         Ok(())
     }
 
     /// Общая часть постановки: завести живую задачу и запустить её работу.
-    fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, work: F)
+    fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, position: i64, work: F)
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), String>> + Send + 'static,
@@ -360,6 +387,7 @@ impl TaskEngine {
                     paused: paused.clone(),
                     resume: resume.clone(),
                     throttle: throttle.clone(),
+                    position,
                 },
             );
         }
@@ -431,6 +459,74 @@ impl TaskEngine {
                 Err(e) => engine.finish(&task_id, TaskState::Failed, Some(e)),
             }
         });
+    }
+
+    /// Переставить задачи в очереди (FR-083).
+    ///
+    /// `ordered` — номера задач в желаемом порядке, как их видит человек в списке.
+    /// Переставляются только те из них, что **ждут своей очереди**: выполняющуюся
+    /// задача перестановка не трогает, потому что прервать её ради изменения порядка
+    /// значило бы выбросить уже сделанную работу. Занятые места перераспределяются
+    /// между собой, так что задачи, которых в списке нет, остаются там, где стояли.
+    ///
+    /// Задачи, успевшие начаться или закончиться между показом списка и нажатием,
+    /// пропускаются молча: список у человека на экране всегда чуть отстаёт, и отказ
+    /// от всей перестановки из-за одной такой задачи был бы наказанием за чужую
+    /// расторопность. Возвращается, сколько задач действительно переставлено.
+    pub fn reorder_queue(&self, ordered: &[String]) -> Result<usize> {
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Берём только тех, кто ещё ждёт, сохраняя порядок из заявки.
+        let ожидающие: Vec<&String> = ordered
+            .iter()
+            .filter(|id| {
+                live.get(id.as_str())
+                    .is_some_and(|t| t.state == TaskState::Queued)
+            })
+            .collect();
+        if ожидающие.len() < 2 {
+            // Переставлять нечего: одна задача или ни одной.
+            return Ok(0);
+        }
+
+        // Места, которые они занимают сейчас, — их и раздаём в новом порядке.
+        // Так задачи, не попавшие в заявку, не сдвигаются ни на шаг.
+        let mut места: Vec<i64> = ожидающие
+            .iter()
+            .filter_map(|id| live.get(id.as_str()).map(|t| t.position))
+            .collect();
+        места.sort_unstable();
+
+        let mut записать: Vec<(String, i64)> = Vec::with_capacity(ожидающие.len());
+        for (id, место) in ожидающие.iter().zip(места.iter()) {
+            записать.push(((*id).clone(), *место));
+        }
+        for (id, место) in &записать {
+            if let Some(t) = live.get_mut(id.as_str()) {
+                t.position = *место;
+            }
+        }
+        drop(live);
+
+        // В базу — чтобы порядок пережил перезапуск приложения.
+        for (id, место) in &записать {
+            if let Err(e) = store::save_queue_order(&self.db, id, *место) {
+                tracing::warn!(id, error = %e, "порядок очереди не записан");
+            }
+        }
+        Ok(записать.len())
+    }
+
+    /// Номера ждущих задач в том порядке, в каком они пойдут в работу.
+    pub fn queue_order(&self) -> Vec<String> {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ждущие: Vec<(&String, i64)> = live
+            .iter()
+            .filter(|(_, t)| t.state == TaskState::Queued)
+            .map(|(id, t)| (id, t.position))
+            .collect();
+        ждущие.sort_by_key(|(_, position)| *position);
+        ждущие.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
     /// Отменить задачу.
@@ -559,6 +655,24 @@ impl TaskEngine {
         if used >= self.limits.for_lane(lane) {
             return ClaimOutcome::Busy;
         }
+
+        // Очередь соблюдается: место занимает та задача, что стоит в полосе первой.
+        // Без этой проверки порядок был бы «кто первым захватил блокировку», и
+        // перестановка (FR-083) не давала бы ничего — переставлять было бы нечего.
+        //
+        // Сравнение только со стоящими в очереди. Приостановленная не ждёт полосы,
+        // она ждёт человека, и держать за собой очередь ей не за что; продолженная
+        // человеком идёт сразу — он только что сказал, что хочет именно её.
+        if t.state == TaskState::Queued {
+            let position = t.position;
+            let есть_раньше = live.values().any(|x| {
+                x.state == TaskState::Queued && x.kind.lane() == lane && x.position < position
+            });
+            if есть_раньше {
+                return ClaimOutcome::Busy;
+            }
+        }
+
         let Some(t) = live.get_mut(id) else {
             return ClaimOutcome::Gone;
         };

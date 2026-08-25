@@ -58,6 +58,13 @@ export const ipc = {
   taskCancel: (id: string) => call<void>("task_cancel", { id }),
   taskPause: (id: string) => call<void>("task_pause", { id }),
   taskResume: (id: string) => call<void>("task_resume", { id }),
+  /**
+   * Переставить ждущие задачи (FR-083). `ordered` — номера в желаемом порядке.
+   * Возвращает, сколько переставлено: часть могла начаться, пока список был на экране.
+   */
+  tasksReorder: (ordered: string[]) => call<number>("tasks_reorder", { ordered }),
+  /** Номера ждущих задач в том порядке, в каком они пойдут в работу. */
+  tasksQueueOrder: () => call<string[]>("tasks_queue_order"),
   tasksOnClose: () => call<TaskOnClose[]>("tasks_on_close"),
 
   serverProbeFingerprint: (host: string, port: number) =>
