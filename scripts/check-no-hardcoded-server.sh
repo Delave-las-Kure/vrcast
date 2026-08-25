@@ -11,18 +11,27 @@ cd "$APP"
 
 # Значения берутся из окружения, чтобы сам скрипт не стал местом хранения адреса.
 # В CI задаются секретами; локально — из server.env вручную.
+#
+# Предупреждение проверяет сами переменные, а не длину массива: раньше условие
+# стояло после безусловного добавления пути по умолчанию и не срабатывало никогда —
+# запуск без секретов (форк, локально) выглядел как полная проверка.
+if [ -z "${FORBID_IP:-}" ] && [ -z "${FORBID_DOMAIN:-}" ]; then
+  echo "Предупреждение: FORBID_IP и FORBID_DOMAIN не заданы — адрес и домен сервера НЕ проверяются." >&2
+fi
+
 NEEDLES=()
 [ -n "${FORBID_IP:-}" ]     && NEEDLES+=("$FORBID_IP")
 [ -n "${FORBID_DOMAIN:-}" ] && NEEDLES+=("$FORBID_DOMAIN")
 NEEDLES+=("/var/lib/vrcast/videos")   # путь по умолчанию допустим ТОЛЬКО как значение по умолчанию в настройках
 
-if [ "${#NEEDLES[@]}" -eq 0 ]; then
-  echo "Предупреждение: FORBID_IP и FORBID_DOMAIN не заданы — проверка неполная." >&2
-fi
+# Область поиска: исходники И файлы поставки Tauri — адрес сервера реально оседает
+# в tauri.conf.json (CSP) и capabilities/ (разрешения на удалённые URL).
+SCOPE=(src src-tauri/src src-tauri/tauri.conf.json)
+[ -d src-tauri/capabilities ] && SCOPE+=(src-tauri/capabilities)
 
 fail=0
 for needle in "${NEEDLES[@]}"; do
-  hits="$(grep -rInF "$needle" src src-tauri/src 2>/dev/null || true)"
+  hits="$(grep -rInF "$needle" "${SCOPE[@]}" 2>/dev/null || true)"
   if [ -n "$hits" ]; then
     echo "НАЙДЕН захардкоженный сервер ($needle):" >&2
     echo "$hits" >&2

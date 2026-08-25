@@ -29,7 +29,11 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      # Без --passWithNoTests: исчезновение всей сюиты (перенос файла мимо маски)
+      # обязано быть красным, а не неотличимым от успеха.
       - run: npm run test
+      # Продакшен-сборка: tsc --noEmit не ловит поломок, проявляющихся только сборкой.
+      - run: npm run build
 
   core:
     name: Ядро — ${{ matrix.os }}
@@ -86,10 +90,12 @@ jobs:
       - name: Убедиться, что контейнеры за собой убраны
         if: always()
         run: |
-          left=$(docker ps -aq --filter ancestor=vrcast-test-sshd:1 | wc -l)
+          set -o pipefail
+          # Метка образа обязана совпадать с IMAGE в tests/integration/fixture.rs.
+          left=$(docker ps -aq --filter ancestor=vrcast-test-sshd:2 | wc -l)
           if [ "$left" != "0" ]; then
             echo "остались висящие контейнеры: $left" >&2
-            docker ps -a --filter ancestor=vrcast-test-sshd:1
+            docker ps -a --filter ancestor=vrcast-test-sshd:2
             exit 1
           fi
           echo "контейнеров не осталось"
@@ -108,8 +114,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Денайлист сравнивается точным совпадением строк, поэтому перечислены и
+      # варианты с -only/-or-later: «AGPL-3.0» не совпал бы с «AGPL-3.0-only».
       - name: Проверить лицензии зависимостей интерфейса
-        run: npx --yes license-checker-rseidelsohn --production --failOn "AGPL-1.0;AGPL-3.0;SSPL-1.0;BUSL-1.1;CC-BY-NC-4.0"
+        run: npx --yes license-checker-rseidelsohn --production --failOn "AGPL-1.0;AGPL-1.0-only;AGPL-1.0-or-later;AGPL-3.0;AGPL-3.0-only;AGPL-3.0-or-later;SSPL-1.0;BUSL-1.1;CC-BY-NC-4.0"
 
   guards:
     name: Изоляция и отсутствие захардкоженных серверов

@@ -119,8 +119,12 @@ async fn запись_об_уже_завершившейся_программе_
     tokio::time::sleep(Duration::from_millis(600)).await;
 
     let report = registry::sweep_on_startup(&db).unwrap();
+    // Запись обязана быть классифицирована, а не молча выброшена: обычно «уже нет»,
+    // а при мгновенном переиспользовании номера системой — «номер занят другим».
+    // (Раньше правым плечом «или» стояло killed.is_empty() — та же проверка, что
+    // и assert ниже, и первое утверждение не могло упасть вовсе.)
     assert!(
-        report.already_gone.contains(&pid) || report.killed.is_empty(),
+        report.already_gone.contains(&pid) || report.reused.contains(&pid),
         "завершившаяся программа обработана неверно: {report:?}"
     );
     assert!(
