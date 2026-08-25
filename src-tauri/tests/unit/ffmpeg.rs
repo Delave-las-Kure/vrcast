@@ -72,6 +72,7 @@ fn чужое_имя_внутри_нашего_не_считается_совп�
     );
     assert!(!ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "h264_qsv"));
     assert!(!ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "h264_amf"));
+    assert!(!ffmpeg::encoder_present(ПЕРЕЧЕНЬ, "h264_vaapi"));
 }
 
 #[test]
