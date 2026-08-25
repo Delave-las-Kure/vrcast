@@ -1,23 +1,28 @@
 /**
- * T106 — сборка уведомлений о сторонних лицензиях в THIRD-PARTY.md.
+ * T106 — assembling the third-party licence notices into THIRD-PARTY.md.
  *
- * Почему сборкой, а не руками. Список зависимостей меняется при каждом обновлении,
- * и написанный однажды вручную он устареет в первый же месяц. Устаревший перечень
- * лицензий хуже отсутствующего: он выглядит выполненным обязательством, не будучи им.
+ * Why assembled rather than written by hand. The list of dependencies changes with every
+ * upgrade, and written once by hand it goes stale within the first month. A stale list of
+ * licences is worse than a missing one: it looks like an obligation met while not being one.
  *
- * Почему на Node, а не на bash с jq или на Python. Node уже нужен для интерфейса
- * и стоит на всех машинах, где эта сборка идёт, включая непрерывную интеграцию.
- * Добавить ради одного сценария ещё и python или jq значило бы завести требование,
- * о котором узнают в тот день, когда его не окажется.
+ * Why Node rather than bash with jq, or Python. Node is already needed for the interface and
+ * is installed on every machine this build runs on, continuous integration included. Adding
+ * python or jq for one script would create a requirement people learn about on the day it is
+ * not there.
  *
- * Тексты лицензий берутся с диска — из исходников зависимостей, а не из своего
- * набора образцов: у многих пакетов в файле стоит имя правообладателя, и подменять
- * его типовым текстом нельзя, это и есть то самое уведомление, которое мы обязаны
- * сохранить.
+ * The licence texts are taken from disk — from the dependencies' sources rather than from a
+ * set of templates of our own: many packages hold a copyright holder's name in that file,
+ * and replacing it with a boilerplate text is not allowed; it is the very notice we are
+ * obliged to keep.
  *
- * Запуск:
- *   node scripts/gen-third-party.mjs           — перезаписать THIRD-PARTY.md
- *   node scripts/gen-third-party.mjs --check    — упасть, если файл устарел
+ * A NOTE ON THE LANGUAGE. Everything this script emits INTO THIRD-PARTY.md stays in Russian:
+ * that document is a notice for the people the application is handed to, not code, and its
+ * language is a decision of its own. Everything else — the comments, the names, what goes to
+ * the console — is English, like the rest of the code.
+ *
+ * To run it:
+ *   node scripts/gen-third-party.mjs           — rewrite THIRD-PARTY.md
+ *   node scripts/gen-third-party.mjs --check    — fail if the file is stale
  */
 
 import { execFileSync } from "node:child_process";
@@ -30,10 +35,10 @@ const APP = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(APP, "THIRD-PARTY.md");
 const CHECK = process.argv.includes("--check");
 
-/** Имена файлов, в которых пакеты держат текст лицензии. */
+/** The names packages keep their licence text under. */
 const LICENSE_FILE = /^(LICEN[CS]E|COPYING|NOTICE|UNLICENSE)([-.].*)?$/i;
 
-/** Прочитать тексты лицензий, лежащие в каталоге пакета. */
+/** Read the licence texts lying in a package's directory. */
 function licenseTexts(dir) {
   if (!dir || !existsSync(dir)) return [];
   let entries;
@@ -49,16 +54,16 @@ function licenseTexts(dir) {
     try {
       if (!statSync(path).isFile()) continue;
       const text = readFileSync(path, "utf8").trim();
-      // Заглушки вида «см. LICENSE-MIT» не несут уведомления и только раздувают файл.
+      // Stubs like "see LICENSE-MIT" carry no notice and only bloat the file.
       if (text.length > 200) out.push(text);
     } catch {
-      /* нечитаемый файл — не повод рушить сборку перечня */
+      /* an unreadable file is no reason to break assembling the list */
     }
   }
   return out;
 }
 
-/** Зависимости ядра из `cargo metadata`. */
+/** The core's dependencies, from `cargo metadata`. */
 function rustPackages() {
   const raw = execFileSync(
     "cargo",
@@ -78,25 +83,25 @@ function rustPackages() {
     }));
 }
 
-/** Зависимости интерфейса, попадающие в поставку (без средств разработки). */
+/** The interface's dependencies that reach the package (development tools aside). */
 function nodePackages() {
-  // Дерево берётся из package-lock.json, а не у `npm ls`. Причин две. Первая:
-  // на Windows npm — это .cmd, и запускать его из Node уже нельзя, а через
-  // оболочку аргументы не экранируются. Вторая важнее: замок и есть точное
-  // описание того, что установится, — спрашивать о том же ещё и программу
-  // значит завести второй источник ответа на один вопрос.
+  // The tree comes from package-lock.json rather than from `npm ls`. For two reasons. The
+  // first: on Windows npm is a .cmd, which can no longer be started from Node, and going
+  // through a shell leaves the arguments unescaped. The second matters more: the lock file
+  // is the exact description of what will be installed — asking a program the same question
+  // would create a second source of one answer.
   const lockPath = join(APP, "package-lock.json");
   if (!existsSync(lockPath)) {
-    throw new Error("нет package-lock.json — состав зависимостей интерфейса неизвестен");
+    throw new Error("there is no package-lock.json — the interface's dependencies are unknown");
   }
   const lock = JSON.parse(readFileSync(lockPath, "utf8"));
   if (!lock.packages) {
-    throw new Error("package-lock.json старого образца: нет раздела packages");
+    throw new Error("package-lock.json is of the old shape: it has no packages section");
   }
 
   const found = new Map();
   for (const [path, info] of Object.entries(lock.packages)) {
-    // Корень — это мы сами, а средства разработки в поставку не попадают.
+    // The root is ourselves, and development tools do not reach the package.
     if (path === "" || info.dev || info.devOptional) continue;
     const cut = path.lastIndexOf("node_modules/");
     if (cut < 0) continue;
@@ -114,7 +119,7 @@ function nodePackages() {
       const url = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
       source = url ? url.replace(/^git\+/, "").replace(/\.git$/, "") : null;
     } catch {
-      /* пакет не установлен — покажем то, что знает замок */
+      /* the package is not installed — we show what the lock file knows */
     }
     found.set(`${name}@${version}`, { name, version, license, source, dir });
   }
@@ -122,13 +127,13 @@ function nodePackages() {
 }
 
 /**
- * Раздел про вложенный FFmpeg.
+ * The section about the bundled FFmpeg.
  *
- * Его нет ни в дереве зависимостей ядра, ни интерфейса: он не библиотека, а готовая
- * программа, которую мы кладём в поставку целиком. Обязательство от этого не меньше,
- * а больше — мы раздаём чужой исполняемый файл под GPL, значит обязаны дать и его
- * исходный код. Сведения берутся из того же закреплённого описания, по которому
- * сборка скачивается, чтобы они не могли разойтись.
+ * It is in neither the core's dependency tree nor the interface's: it is not a library but a
+ * finished program we put into the package whole. That makes the obligation greater rather
+ * than smaller — we hand out somebody else's executable under the GPL, so we owe its source
+ * code too. The details come from the same pinned manifest the build is downloaded by, so
+ * that the two cannot diverge.
  */
 function ffmpegSection() {
   const m = JSON.parse(readFileSync(join(APP, "scripts", "ffmpeg.json"), "utf8"));
@@ -161,22 +166,22 @@ function build() {
   const rust = rustPackages();
   const node = nodePackages();
 
-  // Нераспакованные исходники — не мелочь. Тексты лицензий берутся с диска,
-  // и пакет без каталога молча выпал бы из перечня: файл собрался бы короче,
-  // а сверка объявила бы его устаревшим, не сказав почему. Лучше отказаться
-  // сразу и назвать причину.
-  const пропали = [...rust, ...node].filter((p) => !p.dir || !existsSync(p.dir));
-  if (пропали.length > 0) {
-    const примеры = пропали.slice(0, 5).map((p) => `${p.name} ${p.version}`).join(", ");
+  // Unpacked sources are no trifle. The licence texts are taken from disk, and a package with
+  // no directory would quietly drop out of the list: the file would come out shorter, and the
+  // comparison would declare it stale without saying why. Better to refuse at once and name
+  // the reason.
+  const missing = [...rust, ...node].filter((p) => !p.dir || !existsSync(p.dir));
+  if (missing.length > 0) {
+    const examples = missing.slice(0, 5).map((p) => `${p.name} ${p.version}`).join(", ");
     throw new Error(
-      `исходников нет на диске у ${пропали.length} зависимостей (${примеры}). ` +
-        "Перечень лицензий собирается из них, и без них он будет неполным. " +
-        "Выполните `cargo fetch --manifest-path src-tauri/Cargo.toml` и `npm ci`.",
+      `the sources of ${missing.length} dependencies are not on disk (${examples}). ` +
+        "The list of licences is assembled from them, and without them it would be incomplete. " +
+        "Run `cargo fetch --manifest-path src-tauri/Cargo.toml` and `npm ci`.",
     );
   }
 
-  // Тексты складываются по содержимому: у сотни пакетов лицензия дословно одна
-  // и та же, и печатать её сто раз — значит сделать файл нечитаемым.
+  // The texts are gathered by their contents: a hundred packages carry word-for-word the same
+  // licence, and printing it a hundred times would make the file unreadable.
   const texts = new Map();
   for (const p of [...rust, ...node]) {
     for (const text of licenseTexts(p.dir)) {
@@ -217,46 +222,45 @@ function build() {
   for (const { text, packages } of [...texts.values()].sort((a, b) =>
     a.packages[0].localeCompare(b.packages[0]),
   )) {
-    const шапка =
+    const heading =
       packages.length > 6
         ? `${packages.slice(0, 6).join(", ")} и ещё ${packages.length - 6}`
         : packages.join(", ");
-    // Ограда длиннее самой длинной цепочки обратных кавычек внутри текста:
-    // в лицензиях встречается разметка, и короткая ограда рассыпала бы вёрстку
-    // всего файла начиная с этого места.
-    const самая_длинная = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
-    const ограда = "`".repeat(Math.max(3, самая_длинная + 1));
-    parts.push(`<details><summary>${шапка}</summary>`, "", ограда, text, ограда, "", "</details>", "");
+    // The fence is longer than the longest run of backticks inside the text: licences do hold
+    // markup, and a short fence would scatter the layout of the whole file from that point on.
+    const longestRun = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
+    const fence = "`".repeat(Math.max(3, longestRun + 1));
+    parts.push(`<details><summary>${heading}</summary>`, "", fence, text, fence, "", "</details>", "");
   }
 
   return parts.join("\n");
 }
 
-const текст = build();
+const document = build();
 
 /**
- * Привести к одному виду концы строк.
+ * Bring the line endings to one form.
  *
- * На Windows git выдаёт файл с иными концами строк, чем те, с которыми он лежит
- * в хранилище. Без этого сверка объявляла бы перечень устаревшим на каждой машине
- * с Windows — и была бы не проверкой, а помехой, которую первым делом отключат.
+ * On Windows git hands back a file with line endings other than the ones it is stored with.
+ * Without this the comparison would declare the list stale on every Windows machine — and
+ * would be not a check but a nuisance, the first thing anyone switches off.
  */
-const однообразно = (s) => s.replace(/\r\n/g, "\n").trim();
+const uniform = (s) => s.replace(/\r\n/g, "\n").trim();
 
 if (CHECK) {
-  const было = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
-  if (однообразно(было) !== однообразно(текст)) {
+  const before = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
+  if (uniform(before) !== uniform(document)) {
     console.error(
-      "THIRD-PARTY.md устарел: состав зависимостей изменился.\n" +
-        "Выполните `npm run third-party` и включите обновлённый файл в коммит.",
+      "THIRD-PARTY.md is stale: the set of dependencies changed.\n" +
+        "Run `npm run third-party` and include the updated file in the commit.",
     );
     process.exit(1);
   }
-  console.log("THIRD-PARTY.md соответствует дереву зависимостей.");
+  console.log("THIRD-PARTY.md matches the dependency tree.");
 } else {
-  // Пишем с одинаковыми концами строк на любой системе: иначе файл, собранный
-  // на Windows, отличался бы от собранного на Linux целиком, и разница в одну
-  // зависимость терялась бы среди двадцати тысяч мнимых.
-  writeFileSync(OUT, `${однообразно(текст)}\n`, "utf8");
-  console.log(`THIRD-PARTY.md собран: ${OUT}`);
+  // Written with the same line endings on any system: otherwise a file assembled on Windows
+  // would differ from one assembled on Linux in its entirety, and a difference of one
+  // dependency would be lost among twenty thousand imaginary ones.
+  writeFileSync(OUT, `${uniform(document)}\n`, "utf8");
+  console.log(`THIRD-PARTY.md assembled: ${OUT}`);
 }

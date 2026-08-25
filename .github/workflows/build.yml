@@ -1,9 +1,10 @@
-# T005 — сборка и проверки под обе целевые ОС.
+# T005 — building and checking on both target operating systems.
 #
-# macOS сознательно отсутствует: отложена решением владельца 2026-08-23 (см. spec.md, «Вне объёма»).
-# Раннер под неё не добавлять — приложение под macOS не собирается и не заявляется.
+# macOS is deliberately absent: deferred by the owner's decision on 2026-08-23 (see spec.md,
+# "Out of scope"). Do not add a runner for it — the application is not built for macOS and
+# is not claimed to work there.
 #
-# Файл лежит в репозитории заранее и бездействует, пока не задан удалённый репозиторий.
+# The file sat in the repository ahead of time and did nothing until a remote was set.
 
 name: build
 
@@ -18,7 +19,7 @@ env:
 
 jobs:
   frontend:
-    name: Интерфейс — стиль и тесты
+    name: Interface — style and tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,14 +30,14 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      # Без --passWithNoTests: исчезновение всей сюиты (перенос файла мимо маски)
-      # обязано быть красным, а не неотличимым от успеха.
+      # No --passWithNoTests: the whole suite vanishing (a file moved out from under the
+      # glob) has to be red rather than indistinguishable from success.
       - run: npm run test
-      # Продакшен-сборка: tsc --noEmit не ловит поломок, проявляющихся только сборкой.
+      # A production build: tsc --noEmit does not catch breakage that shows only on a build.
       - run: npm run build
 
   core:
-    name: Ядро — ${{ matrix.os }}
+    name: Core — ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Системные зависимости Tauri (Linux)
+      - name: Tauri system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
@@ -59,35 +60,35 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # FFmpeg нужен уже на СБОРКЕ, а не только при упаковке: сборщик Tauri проверяет
-      # наличие вложенных программ и отказывается собирать без них. Поэтому шаг стоит
-      # во всех заданиях, где вообще собирается ядро, — иначе падает даже `cargo test`.
+      # FFmpeg is needed at BUILD time, not only when packaging: the Tauri bundler checks
+      # that the bundled programs are there and refuses to build without them. So this step
+      # stands in every job that builds the core at all — otherwise even `cargo test` fails.
       #
-      # Кладётся в тайник по слепку из scripts/ffmpeg.json: двести восемьдесят мегабайт
-      # качаются один раз на версию, дальше берутся готовыми. Заодно это единственное
-      # место, где сам сценарий получения проверяется под обе целевые системы.
+      # It is cached by the snapshot in scripts/ffmpeg.json: two hundred and eighty megabytes
+      # are downloaded once per version and taken ready afterwards. It is also the only place
+      # where the fetching script itself is checked on both target systems.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Тайник вложенного FFmpeg
+      - name: Cache for the bundled FFmpeg
         uses: actions/cache@v4
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
-      - name: Положить вложенный FFmpeg
+      - name: Put the bundled FFmpeg in place
         run: node scripts/fetch-ffmpeg.mjs
 
-      - name: Формат
+      - name: Format
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Тесты ядра
+      - name: Core tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
   integration:
-    name: Интеграционные — одноразовый сервер в контейнере
+    name: Integration — a throwaway server in a container
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,104 +96,105 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Системные зависимости Tauri
+      - name: Tauri system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      # FFmpeg нужен уже на СБОРКЕ, а не только при упаковке: сборщик Tauri проверяет
-      # наличие вложенных программ и отказывается собирать без них. Поэтому шаг стоит
-      # во всех заданиях, где вообще собирается ядро, — иначе падает даже `cargo test`.
+      # FFmpeg is needed at BUILD time, not only when packaging: the Tauri bundler checks
+      # that the bundled programs are there and refuses to build without them. So this step
+      # stands in every job that builds the core at all — otherwise even `cargo test` fails.
       #
-      # Кладётся в тайник по слепку из scripts/ffmpeg.json: двести восемьдесят мегабайт
-      # качаются один раз на версию, дальше берутся готовыми. Заодно это единственное
-      # место, где сам сценарий получения проверяется под обе целевые системы.
+      # It is cached by the snapshot in scripts/ffmpeg.json: two hundred and eighty megabytes
+      # are downloaded once per version and taken ready afterwards. It is also the only place
+      # where the fetching script itself is checked on both target systems.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Тайник вложенного FFmpeg
+      - name: Cache for the bundled FFmpeg
         uses: actions/cache@v4
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
-      - name: Положить вложенный FFmpeg
+      - name: Put the bundled FFmpeg in place
         run: node scripts/fetch-ffmpeg.mjs
 
-      # Однопоточность обязательна: каждый тест поднимает свой контейнер, и десяток
-      # одновременно только замедляет дело.
-      - name: Тесты против настоящего OpenSSH
+      # Running on one thread is not optional: each test brings up a container of its own,
+      # and a dozen at once only slows things down.
+      - name: Tests against a real OpenSSH
         run: >
           cargo test --manifest-path src-tauri/Cargo.toml
           --features integration --test integration -- --test-threads=1
-      - name: Убедиться, что контейнеры за собой убраны
+      - name: Make sure the containers cleaned up after themselves
         if: always()
         run: |
           set -o pipefail
-          # Метка образа обязана совпадать с IMAGE в tests/integration/fixture.rs.
+          # The image tag must match IMAGE in tests/integration/fixture.rs.
           #
-          # С выдержкой, а не сразу: `docker rm -f` возвращает управление, когда
-          # контейнер только помечен к удалению, и секунду-другую он ещё виден
-          # в перечне. Проверка без выдержки поймала это 2026-08-25 — сорок четыре
-          # теста прошли, страж объявил «остался 1» и тут же показал пустой список.
-          # Мигающий страж хуже отсутствующего: он приучает перезапускать сборку,
-          # не читая, — и однажды так же перезапустят настоящую утечку.
+          # With a settling period rather than at once: `docker rm -f` returns as soon as a
+          # container is merely marked for removal, and for a second or two it is still in
+          # the listing. A check with no settling period caught that on 2026-08-25 — forty
+          # four tests passed, the guard announced "1 left" and then showed an empty list.
+          # A flickering guard is worse than none: it teaches people to re-run a build
+          # without reading it — and one day they will re-run a real leak the same way.
           for _ in $(seq 1 15); do
             left="$(docker ps -a --filter ancestor=vrcast-test-sshd:2 --format '{{.ID}} {{.Status}}')"
             [ -z "$left" ] && break
             sleep 1
           done
           if [ -n "$left" ]; then
-            echo "остались висящие контейнеры:" >&2
-            # Печатается ровно то, что было сосчитано, а не новый запрос: иначе
-            # сообщение и список расходятся, и разобраться по ним нельзя — ровно
-            # это и случилось в тот раз.
+            echo "dangling containers were left:" >&2
+            # Exactly what was counted is printed, rather than a fresh query: otherwise the
+            # message and the list disagree and neither can be made sense of — which is
+            # precisely what happened that time.
             echo "$left" >&2
             exit 1
           fi
-          echo "контейнеров не осталось"
+          echo "no containers left"
 
   licenses:
-    name: Совместимость лицензий с GPL-3.0
+    name: Licence compatibility with GPL-3.0
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-deny
-      - name: Проверить лицензии зависимостей ядра
+      - name: Check the core dependencies' licences
         run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - run: npm ci
-      # БЕЛЫЙ список, а не чёрный. Чёрный сравнивается точным совпадением строк,
-      # и перечислить в нём все написания («AGPL-3.0» против «AGPL-3.0-only»)
-      # — гонка с реальностью, которую не выиграть: проверено, прежний список
-      # пропускал «AGPL-3.0-only», ради которого и заводился. Белый список
-      # ошибается в безопасную сторону: незнакомая лицензия роняет сборку,
-      # и её разбирают глазами.
-      - name: Проверить лицензии зависимостей интерфейса
+      # An ALLOW list, not a deny list. A deny list is compared by exact string match, and
+      # enumerating every spelling in it ("AGPL-3.0" against "AGPL-3.0-only") is a race with
+      # reality that cannot be won: proved in practice, the old list let "AGPL-3.0-only"
+      # through — the very thing it was created for. An allow list errs on the safe side: an
+      # unfamiliar licence fails the build, and a person looks at it.
+      - name: Check the interface dependencies' licences
         run: >
           npx --yes license-checker-rseidelsohn --production --excludePrivatePackages
           --onlyAllow "MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0"
-      # Перечень чужих работ обязан отвечать дереву зависимостей. Собранный однажды
-      # и забытый, он выглядит выполненным обязательством, не будучи им, — а это
-      # хуже отсутствующего файла (T106, обязательство GPL).
-      # Исходники нужны целиком: тексты лицензий берутся из них, а не из своего
-      # набора образцов — у многих пакетов в файле стоит имя правообладателя.
-      - name: Получить исходники зависимостей ядра
+      # The list of other people's work has to answer to the dependency tree. Assembled once
+      # and forgotten, it looks like an obligation met while not being one — which is worse
+      # than a missing file (T106, the GPL obligation).
+      # The sources are needed in full: the licence texts are taken from them rather than
+      # from a set of templates of our own — many packages hold a copyright holder's name in
+      # that file.
+      - name: Fetch the core dependencies' sources
         run: cargo fetch --manifest-path src-tauri/Cargo.toml
-      - name: Сверить перечень сторонних компонентов с деревом зависимостей
+      - name: Compare the third-party list against the dependency tree
         run: npm run check:third-party
 
   guards:
-    name: Изоляция и отсутствие захардкоженных серверов
+    name: Isolation and no hardcoded servers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Захардкоженные серверы (FR-004)
+      - name: Hardcoded servers (FR-004)
         env:
           FORBID_IP: ${{ secrets.FORBID_IP }}
           FORBID_DOMAIN: ${{ secrets.FORBID_DOMAIN }}
         run: bash scripts/check-no-hardcoded-server.sh
-      # Проверка изоляции (принцип VII) выполняется локально перед сдачей фазы:
-      # в CI виден только каталог приложения, а защищаемые файлы лежат вне репозитория.
+      # The isolation check (principle VII) runs locally before a phase is handed over: CI
+      # sees only the application's directory, while the protected files live outside the
+      # repository.

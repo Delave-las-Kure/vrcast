@@ -122,7 +122,7 @@ npm run check:third-party
 ```bash
 # Сценарий приёмки вехи A: только чтение, сервер не изменяется.
 cargo test --manifest-path src-tauri/Cargo.toml --features integration \
-  --test integration -- --ignored --nocapture живой_сервер
+  --test integration -- --ignored --nocapture the_live_server_read_only
 
 # Поиск секретов в подробном журнале настоящего подключения (SC-011).
 bash scripts/check-no-secrets-in-logs.sh

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# T064 — поиск секретов в журнале (SC-011, конституция, принцип IV).
+# T064 — hunting for secrets in the log (SC-011, constitution, principle IV).
 #
-# Прогоняет приёмочную проверку на настоящем сервере с самым подробным журналом,
-# какой умеет приложение, и ищет в выводе следы приватного ключа. Смысл именно
-# в подробном журнале: на уровне info разговорчивые библиотеки молчат, и проверка
-# была бы вхолостую — а на trace они выкладывают всё, что знают, включая то, что
-# знать никому не следует.
+# Runs the acceptance check against the live server with the most detailed log the
+# application can produce, and searches the output for traces of the private key. The
+# detailed log is the whole point: at the info level talkative libraries stay quiet and the
+# check would be idle — while at trace they lay out everything they know, including what
+# nobody should.
 #
-# Скрипт НИКОГДА не печатает содержимое ключа: он берёт из него отрезок, ищет его
-# в журнале и сообщает только «нашлось» или «не нашлось».
+# The script NEVER prints the key's contents: it takes a stretch out of it, looks for that in
+# the log, and reports only "found" or "not found".
 #
-# Запуск (нужен настоящий сервер и server.env рядом):
-#   bash scripts/check-no-secrets-in-logs.sh            # настоящий сервер, только чтение
-#   bash scripts/check-no-secrets-in-logs.sh container  # одноразовый сервер, ЗАЛИВКА
+# To run it (needs a real server and a server.env beside the project):
+#   bash scripts/check-no-secrets-in-logs.sh            # the live server, read-only
+#   bash scripts/check-no-secrets-in-logs.sh container  # a throwaway server, AN UPLOAD
 #
-# Второй режим появился потому, что заливка добавила свои пути вывода — соединение
-# держится часами, переподключается, ходит по SFTP, — и ни один из них не задет
-# проверкой, которая только читает библиотеку (T128). Боевой сервер для этого
-# не годится и не нужен: код тот же, а трогать чужие файлы незачем.
+# The second mode appeared because uploading added paths to the output of its own — the
+# connection is held for hours, reconnects, goes over SFTP — and not one of them is touched
+# by a check that only reads the library (T128). The live server is neither fit nor needed
+# for that: the code is the same, and there is no reason to touch somebody's files.
 set -euo pipefail
 
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,24 +25,30 @@ ROOT="$(cd "$APP/.." && pwd)"
 ENV_FILE="$ROOT/server.env"
 MODE="${1:-live}"
 
+# The passphrase of the test key. It must match PASSPHRASE in
+# src-tauri/tests/support/test_key.rs: this check looks for exactly that string in the log,
+# and a stale value here would search for something that never appears — the check would
+# pass while proving nothing.
+TEST_KEY_PASSPHRASE="test-passphrase-1234"
+
 if [ "$MODE" = "container" ]; then
-  # Ключ одноразового сервера тесты создают на месте. Он не даёт доступа никуда,
-  # но в журнале ему всё равно не место: правило про секреты не знает разницы
-  # между ценным и учебным, и проверять надо ровно то, что выполняется.
+  # The throwaway server's key is made on the spot by the tests. It opens nothing anywhere,
+  # but it has no place in a log all the same: the rule about secrets knows no difference
+  # between a valuable one and a practice one, and what must be checked is exactly what runs.
   KEY="$APP/src-tauri/tests/fixtures/encrypted_ed25519.key"
   if [ ! -f "$KEY" ]; then
-    echo "Нет ключа для тестов. Прогоните любой интеграционный тест — он его создаст." >&2
+    echo "There is no test key. Run any integration test — it will create one." >&2
     exit 2
   fi
 elif [ ! -f "$ENV_FILE" ]; then
-  echo "Нет $ENV_FILE — проверка рассчитана на машину, где настроен настоящий сервер." >&2
-  echo "Для проверки путей вывода заливки: bash $0 container" >&2
+  echo "There is no $ENV_FILE — this check is meant for a machine with a real server set up." >&2
+  echo "To check the upload's output paths: bash $0 container" >&2
   exit 2
 else
 
 KEY=$(grep -E "^SSH_KEY=" "$ENV_FILE" | sed -E 's/^SSH_KEY="?([^"#]*)"?.*/\1/' | sed "s|\$HOME|$HOME|" | xargs)
 if [ ! -f "$KEY" ]; then
-  echo "Файл ключа из server.env не найден." >&2
+  echo "The key file named in server.env was not found." >&2
   exit 2
 fi
 fi
@@ -50,55 +56,58 @@ fi
 LOG="$(mktemp)"
 trap 'rm -f "$LOG" "$LOG.needles"' EXIT
 
+# The filters below are test names. They must match the names in
+# src-tauri/tests/integration/: a stale filter selects nothing, `cargo test` exits with
+# success, and the check reports a clean log it never produced.
 if [ "$MODE" = "container" ]; then
-  echo "Прогон заливки на одноразовом сервере с подробным журналом…"
+  echo "Running an upload against a throwaway server with a detailed log…"
   RUN=(--test-threads=1 --nocapture upload_live)
 else
-  echo "Прогон приёмочной проверки с подробным журналом…"
-  RUN=(--ignored --nocapture живой_сервер)
+  echo "Running the acceptance check with a detailed log…"
+  RUN=(--ignored --nocapture the_live_server_read_only)
 fi
 
 (
   cd "$APP/src-tauri"
   VRCAST_LOG=trace cargo test --features integration --test integration -- "${RUN[@]}"
 ) > "$LOG" 2>&1 || {
-  echo "Приёмочная проверка не прошла — искать секреты в журнале неудавшегося прогона рано." >&2
+  echo "The acceptance check did not pass — it is too early to hunt for secrets in a failed run's log." >&2
   tail -20 "$LOG" >&2
   exit 1
 }
 
-# Отрезки, которых в журнале быть не должно. Тело ключа берём из середины файла:
-# первая строка у всех ключей одинакова и ничего не доказывает.
+# The stretches that must not be in the log. The key's body is taken from the middle of the
+# file: the first line is the same in every key and proves nothing.
 {
   sed -n '3,6p' "$KEY"
   echo "BEGIN OPENSSH PRIVATE KEY"
   echo "BEGIN RSA PRIVATE KEY"
-  # В режиме контейнера ищется ещё и парольная фраза: она проходит через те же
-  # пути, что настоящий пароль сервера, и её утечка означала бы утечку и его.
-  [ "$MODE" = "container" ] && echo "тестовая-фраза-1234"
+  # In container mode the passphrase is looked for too: it goes down the same paths as a real
+  # server password, and its leaking would mean that one leaks as well.
+  [ "$MODE" = "container" ] && echo "$TEST_KEY_PASSPHRASE"
 } > "$LOG.needles"
 
 found=0
 while IFS= read -r needle; do
   [ ${#needle} -lt 12 ] && continue
   if grep -qF "$needle" "$LOG"; then
-    echo "НАЙДЕН СЛЕД СЕКРЕТА В ЖУРНАЛЕ (отрезок длиной ${#needle} знаков)" >&2
+    echo "A TRACE OF A SECRET WAS FOUND IN THE LOG (a stretch ${#needle} characters long)" >&2
     found=1
   fi
 done < "$LOG.needles"
 
-# Заодно убеждаемся, что журнал вообще писался: пустой журнал «прошёл бы» проверку,
-# ничего не проверив.
+# And a check that the log was written at all: an empty log would "pass" while checking
+# nothing.
 lines=$(wc -l < "$LOG")
 if [ "$lines" -lt 50 ]; then
-  echo "Журнал подозрительно короткий ($lines строк) — проверка, скорее всего, вхолостую." >&2
+  echo "The log is suspiciously short ($lines lines) — the check most likely ran idle." >&2
   exit 1
 fi
 
 if [ "$found" -ne 0 ]; then
   echo "" >&2
-  echo "Нарушен принцип IV: секрет попал в журнал." >&2
+  echo "Principle IV is broken: a secret reached the log." >&2
   exit 1
 fi
 
-echo "Секретов в журнале не найдено ($lines строк проверено, уровень trace, режим $MODE)."
+echo "No secrets found in the log ($lines lines checked, level trace, mode $MODE)."

@@ -1,38 +1,39 @@
 {
-  "_решение": "T115. Какая сборка FFmpeg входит в поставку и откуда берётся.",
-  "_почему_вообще_в_поставке": [
-    "FR-112 и R-01: приложение ничего не скачивает при первом запуске. Человек",
-    "устанавливает его и сразу готовит видео. Скачивание у пользователя означало бы",
-    "отказ там, где сети нет, и разные версии у разных людей — то есть разные",
-    "результаты на одном и том же файле."
+  "_decision": "T115. Which FFmpeg build ships with the application, and where it comes from.",
+  "_why_bundled_at_all": [
+    "FR-112 and R-01: the application downloads nothing on its first run. A person installs",
+    "it and prepares a video straight away. Downloading on the person's side would mean a",
+    "refusal wherever there is no network, and different versions for different people —",
+    "that is, different results from one and the same file."
   ],
-  "_почему_btbn": [
-    "Сборки собираются открытым и воспроизводимым набором сценариев, у каждой есть",
-    "точная метка выпуска и подпись содержимого. Это и даёт возможность закрепить",
-    "конкретный файл, а не «последнюю версию», которая меняется под ногами."
+  "_why_btbn": [
+    "The builds are made by an open and reproducible set of scripts, and each has an exact",
+    "release tag and a signature over its contents. That is what makes it possible to pin a",
+    "particular file rather than \"the latest version\", which shifts underfoot."
   ],
-  "_почему_gpl_а_не_lgpl": [
-    "Нужен libx264 — программный кодировщик, на который приложение переходит, когда",
-    "аппаратного нет (FR-026). Он под GPL-2.0-or-later, и собранный с ним FFmpeg",
-    "тоже. Наше приложение под GPL-3.0-or-later, а «или новее» позволяет считать",
-    "такую сборку GPL-3 — условия сходятся.",
-    "Сборка lgpl обошлась бы без обязательств, но осталась бы без x264: на машине",
-    "без подходящей видеокарты подготовить файл стало бы нечем."
+  "_why_gpl_and_not_lgpl": [
+    "libx264 is needed — the software encoder the application falls back to when there is no",
+    "hardware one (FR-026). It is under GPL-2.0-or-later, and so is an FFmpeg built with it.",
+    "Our application is under GPL-3.0-or-later, and the \"or later\" lets such a build count",
+    "as GPL-3 — the terms meet.",
+    "An lgpl build would carry no obligations but would come without x264: on a machine with",
+    "no suitable graphics card there would be nothing left to prepare a file with."
   ],
-  "_почему_статическая": [
-    "Один файл вместо программы и десятка библиотек рядом. В установщике это",
-    "снимает целый класс бед: несовпадение версий библиотек и «не найдена avcodec»."
+  "_why_static": [
+    "One file instead of a program and a dozen libraries beside it. In an installer that",
+    "removes a whole class of trouble: mismatched library versions and \"avcodec not found\"."
   ],
-  "_почему_ветка_8_1_а_не_9_0": [
-    "9.0 существует и новее, но 8.1 — устоявшаяся ветка на шаг назад. Ценность",
-    "приложения в том, чтобы не портить чужие видео, и ради свежести рисковать этим",
-    "незачем. Перейти на 9.0 — заменить три поля ниже и прогнать проверки подготовки."
+  "_why_branch_8_1_and_not_9_0": [
+    "9.0 exists and is newer, but 8.1 is the settled branch one step back. The application's",
+    "value is in not spoiling people's videos, and there is no reason to risk that for the",
+    "sake of freshness. Moving to 9.0 means replacing the three fields below and running the",
+    "preparation checks."
   ],
-  "_обязательство_gpl": [
-    "Мы раздаём собранный FFmpeg, значит обязаны дать и его исходный код — тот самый,",
-    "из которого собран этот файл. Ниже записаны точный слепок исходников и метка",
-    "набора сценариев сборки; оба адреса ведут на неизменяемые точки, а не на «главную",
-    "ветку», которая уедет."
+  "_gpl_obligation": [
+    "We hand out a built FFmpeg, so we are obliged to give its source code too — the very",
+    "source this file was built from. Below are the exact snapshot of the sources and the tag",
+    "of the build scripts; both addresses point at immutable points rather than at a \"main",
+    "branch\" that will move."
   ],
   "version": "n8.1.2-44-g7c533d0f86",
   "release_tag": "autobuild-2026-08-25-13-06",
@@ -41,12 +42,13 @@
     "ffmpeg_source_url": "https://github.com/FFmpeg/FFmpeg/tree/7c533d0f86",
     "build_scripts_url": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-08-25-13-06",
     "license": "GPL-3.0-or-later",
-    "_проверено": [
-      "Сборка собрана с --enable-gpl --enable-version3, без --enable-nonfree и без fdk-aac:",
-      "раздавать её можно, и условия сходятся с нашим GPL-3.0-or-later напрямую, а не через",
-      "оговорку «или новее». Проверено запуском `ffmpeg -version` 2026-08-25.",
-      "Нужные нам кодировщики на месте: libx264 (запасной программный, FR-026),",
-      "h264_nvenc (аппаратный) и aac. Проверено `ffmpeg -encoders`."
+    "_verified": [
+      "The build was made with --enable-gpl --enable-version3, without --enable-nonfree and",
+      "without fdk-aac: it may be handed out, and the terms meet our GPL-3.0-or-later",
+      "directly rather than through the \"or later\" clause. Verified by running",
+      "`ffmpeg -version` on 2026-08-25.",
+      "The encoders we need are there: libx264 (the software fallback, FR-026), h264_nvenc",
+      "(hardware) and aac. Verified with `ffmpeg -encoders`."
     ]
   },
   "platforms": {
@@ -61,10 +63,11 @@
       "exe_suffix": ""
     }
   },
-  "_размер": [
-    "Каждая программа — около 138 МБ: статическая сборка несёт все библиотеки в себе,",
-    "и в поставке они лежат дважды. Общая сборка вышла бы вдвое легче, но принесла бы",
-    "десяток файлов рядом и целый класс бед «не найдена avcodec-NN.dll». Размер здесь",
-    "куплен тем, что установленное приложение работает, а не почти работает."
+  "_size": [
+    "Each program is about 138 MB: a static build carries every library inside itself, and",
+    "in the package they lie there twice. A shared build would come out half the weight but",
+    "would bring a dozen files beside it and a whole class of \"avcodec-NN.dll not found\"",
+    "trouble. The size here is bought with an installed application that works rather than",
+    "almost works."
   ]
 }

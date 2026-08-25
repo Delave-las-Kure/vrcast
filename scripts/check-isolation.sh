@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
-# T007 — проверка изоляции (конституция, принцип VII).
+# T007 — the isolation check (constitution, principle VII).
 #
-# Разработка VRCast Studio не имеет права трогать работающий процесс раздачи.
-# Всё новое живёт в vrcast-studio/; скиллы, справочник, конфигурация раздачи и
-# доступы остаются нетронутыми.
+# Developing VRCast Studio has no right to touch the running serving process. Everything new
+# lives in vrcast-studio/; the skills, the reference, the serving configuration and the
+# credentials stay untouched.
 #
-# Проверяется БЕЛЫЙ СПИСОК ниже (PROTECTED), а не «всё, кроме vrcast-studio/»:
-# в корне лежат и большие загруженные видео (uploads/), хешировать которые при
-# каждой проверке слишком дорого. Появился новый защищаемый файл — добавьте его
-# в список и перепишите эталон. И помните: эталон переписывается одной командой,
-# поэтому порядок «сначала check, потом baseline» держится на дисциплине.
+# What is checked is the ALLOW LIST below (PROTECTED) rather than "everything except
+# vrcast-studio/": the root also holds large uploaded videos (uploads/), and hashing those on
+# every check is too expensive. When a new protected file appears, add it to the list and
+# rewrite the baseline. And remember: the baseline is rewritten by one command, so the order
+# "check first, baseline afterwards" rests on discipline.
 #
-# Запуск из корня проекта:
-#   vrcast-studio/scripts/check-isolation.sh baseline   — записать эталон (один раз)
-#   vrcast-studio/scripts/check-isolation.sh check      — сверить (перед сдачей фазы, в CI)
+# Run from the project's root:
+#   vrcast-studio/scripts/check-isolation.sh baseline   — record the baseline (once)
+#   vrcast-studio/scripts/check-isolation.sh check      — compare (before a phase, in CI)
 #
-# Эталон хранится ПОФАЙЛОВО, а не одним хешем на каталог. Так проверка, во-первых,
-# называет конкретный изменившийся файл, во-вторых, не зависит от порядка обхода
-# каталога: раньше зависела и давала ложную тревогу при смене локали (поймано 2026-08-24).
+# The baseline is kept PER FILE rather than as one hash over a directory. That way the check
+# firstly names the file that changed, and secondly does not depend on the order a directory
+# is walked in: it used to, and gave a false alarm when the locale changed (caught
+# 2026-08-24).
 set -euo pipefail
 
-# Локаль фиксирована: от неё зависит порядок сортировки, а значит и воспроизводимость.
+# The locale is fixed: the sort order depends on it, and so does reproducibility.
 export LC_ALL=C
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -41,7 +42,7 @@ PROTECTED=(
 
 STAMP="vrcast-studio/.isolation-baseline"
 
-# Печатает строки "<sha256>  <путь>" по одной на файл, в устойчивом порядке.
+# Prints lines "<sha256>  <path>", one per file, in a stable order.
 list_hashes() {
   local target
   for target in "${PROTECTED[@]}"; do
@@ -52,7 +53,7 @@ list_hashes() {
     elif [ -f "$target" ]; then
       printf '%s  %s\n' "$(sha256sum "$target" | cut -d' ' -f1)" "$target"
     else
-      printf '%s  %s\n' "ОТСУТСТВУЕТ" "$target"
+      printf '%s  %s\n' "MISSING" "$target"
     fi
   done | sort -k2
 }
@@ -60,12 +61,12 @@ list_hashes() {
 case "${1:-check}" in
   baseline)
     list_hashes > "$STAMP"
-    echo "Эталон записан: $STAMP ($(wc -l < "$STAMP") файлов)"
+    echo "Baseline recorded: $STAMP ($(wc -l < "$STAMP") files)"
     ;;
 
   check)
     if [ ! -f "$STAMP" ]; then
-      echo "ОШИБКА: нет эталона. Сначала: $0 baseline" >&2
+      echo "ERROR: there is no baseline. First run: $0 baseline" >&2
       exit 2
     fi
 
@@ -74,26 +75,26 @@ case "${1:-check}" in
     list_hashes > "$current"
 
     if diff -q "$STAMP" "$current" >/dev/null; then
-      echo "Изоляция соблюдена: ни один из $(wc -l < "$STAMP") защищённых файлов не изменён."
+      echo "Isolation holds: not one of the $(wc -l < "$STAMP") protected files was changed."
       exit 0
     fi
 
-    echo "НАРУШЕНА ИЗОЛЯЦИЯ. Расхождения с эталоном:" >&2
+    echo "ISOLATION BROKEN. Differences from the baseline:" >&2
     echo "" >&2
-    # Левый столбец эталона, правый — текущее состояние; показываем только пути.
-    join -j 2 -v 1 -o '0' "$STAMP" "$current" 2>/dev/null | sed 's/^/  УДАЛЁН:  /' >&2 || true
-    join -j 2 -v 2 -o '0' "$STAMP" "$current" 2>/dev/null | sed 's/^/  ДОБАВЛЕН: /' >&2 || true
+    # The baseline is the left column, the current state the right; only paths are shown.
+    join -j 2 -v 1 -o '0' "$STAMP" "$current" 2>/dev/null | sed 's/^/  DELETED: /' >&2 || true
+    join -j 2 -v 2 -o '0' "$STAMP" "$current" 2>/dev/null | sed 's/^/  ADDED:   /' >&2 || true
     join -j 2 -o '0,1.1,2.1' "$STAMP" "$current" 2>/dev/null \
-      | awk '$2 != $3 { print "  ИЗМЕНЁН: " $1 }' >&2 || true
+      | awk '$2 != $3 { print "  CHANGED: " $1 }' >&2 || true
 
     echo "" >&2
-    echo "Нарушен принцип VII конституции: рабочий процесс раздачи изменён." >&2
-    echo "Верните файлы как были — разработка приложения не имеет права их трогать." >&2
+    echo "The constitution's principle VII is broken: the working serving process was changed." >&2
+    echo "Put the files back as they were — developing the application must not touch them." >&2
     exit 1
     ;;
 
   *)
-    echo "Использование: $0 [baseline|check]" >&2
+    echo "Usage: $0 [baseline|check]" >&2
     exit 2
     ;;
 esac

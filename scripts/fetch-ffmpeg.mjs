@@ -1,32 +1,33 @@
 /**
- * T115 — положить FFmpeg рядом с приложением ПРИ СБОРКЕ.
+ * T115 — put FFmpeg beside the application AT BUILD TIME.
  *
- * Не у пользователя (FR-112, R-01): человек ставит приложение и сразу готовит видео.
- * Скачивание при первом запуске означало бы отказ там, где сети нет, и разные версии
- * у разных людей — то есть разный результат на одном и том же файле.
+ * Not on a person's machine (FR-112, R-01): a person installs the application and prepares a
+ * video straight away. Downloading on the first run would mean a refusal wherever there is
+ * no network, and different versions for different people — that is, a different result from
+ * one and the same file.
  *
- * Что берётся и почему — в `ffmpeg.json` рядом. Здесь только механика: скачать,
- * СВЕРИТЬ СЛЕПОК и распаковать две нужные программы.
+ * What is taken and why is in `ffmpeg.json` beside this file. Here there is only the
+ * mechanism: download it, VERIFY THE SNAPSHOT and unpack the two programs we need.
  *
- * Слепок обязателен и не подлежит отключению. Мы кладём чужой исполняемый файл
- * в свою поставку и подписываемся под ним своим именем; принять «то, что пришло
- * по адресу» без сверки значило бы раздать людям что угодно, что окажется на том
- * конце в неудачный день.
+ * The snapshot check is required and cannot be switched off. We put somebody else's
+ * executable into our package and sign our name under it; accepting "whatever came back from
+ * the address" without checking would mean handing people whatever happens to be at the far
+ * end on a bad day.
  *
- * Распаковка через `tar`: он есть и в Windows 10+, и в любом Linux, и читает
- * оба наших вида архива. Библиотека для распаковки добавила бы зависимость ради
- * того, что уже стоит в системе.
+ * Unpacking goes through `tar`: it is present in Windows 10+ and in every Linux, and it
+ * reads both of our archive kinds. A library for unpacking would add a dependency for
+ * something already installed on the system.
  *
- * Запуск:
- *   node scripts/fetch-ffmpeg.mjs                    — скачать под эту систему
- *   node scripts/fetch-ffmpeg.mjs --for linux-x64    — скачать под другую
- *   node scripts/fetch-ffmpeg.mjs --force            — скачать заново
- *   node scripts/fetch-ffmpeg.mjs --check            — только проверить, что на месте
+ * To run it:
+ *   node scripts/fetch-ffmpeg.mjs                    — download for this system
+ *   node scripts/fetch-ffmpeg.mjs --for linux-x64    — download for another
+ *   node scripts/fetch-ffmpeg.mjs --force            — download again
+ *   node scripts/fetch-ffmpeg.mjs --check            — only check that it is in place
  *
- * `--for` нужен не для удобства. Проверка сборки под Linux с машины разработчика
- * идёт в контейнере, где Node нет, а сборщик Tauri отказывается собирать без
- * вложенных программ. Без возможности положить чужие заранее эта проверка
- * перестала бы работать вовсе — и перестала бы ловить то, ради чего заведена.
+ * `--for` is not there for convenience. Checking the Linux build from a developer's machine
+ * runs in a container that has no Node, while the Tauri bundler refuses to build without the
+ * bundled programs. Without a way to put somebody else's in place beforehand that check
+ * would stop working at all — and would stop catching what it exists for.
  */
 
 import { execFileSync } from "node:child_process";
@@ -53,28 +54,28 @@ const OUT_DIR = join(APP, "src-tauri", "binaries");
 const FORCE = process.argv.includes("--force");
 const CHECK = process.argv.includes("--check");
 
-/** Под какую систему класть. По умолчанию — под эту. */
+/** Which system to put it in place for. This one by default. */
 const FOR = (() => {
   const i = process.argv.indexOf("--for");
   return i >= 0 ? process.argv[i + 1] : `${process.platform}-${process.arch}`;
 })();
 
-/** Тройки платформ по ключам описания: сборщик ищет программы именно по ним. */
+/** Platform triples by the manifest's keys: the bundler looks for the programs by these. */
 const TRIPLES = {
   "win32-x64": "x86_64-pc-windows-msvc",
   "linux-x64": "x86_64-unknown-linux-gnu",
 };
 
-/** Программы, которые нам нужны. Проигрыватель из архива не берём — он лишние сто мегабайт. */
+/** The programs we need. The player from the archive is left out — a needless hundred megabytes. */
 const WANTED = ["ffmpeg", "ffprobe"];
 
 /**
- * Тройка целевой платформы: Tauri ищет вложенные программы именно по такому имени.
+ * The target platform's triple: Tauri looks for the bundled programs under exactly that name.
  *
- * Для СВОЕЙ системы спрашивается у самого компилятора: имя обязано совпасть с тем,
- * что подставит сборщик, иначе программа просто не попадёт в установщик — молча,
- * без единой жалобы. Для чужой берётся из таблицы: `rustc` о ней не спросишь,
- * а класть под неё всё равно надо.
+ * For OUR OWN system it is asked of the compiler itself: the name has to match what the
+ * bundler will use, or the program simply never reaches the installer — quietly, without a
+ * single complaint. For another system it comes from the table: `rustc` cannot be asked about
+ * one, and it still has to be put in place.
  */
 function targetTriple(key) {
   const own = `${process.platform}-${process.arch}`;
@@ -85,7 +86,7 @@ function targetTriple(key) {
     const line = out.split("\n").find((l) => l.startsWith("host:"));
     if (line) return line.slice("host:".length).trim();
   } catch {
-    /* компилятора рядом нет — обойдёмся таблицей */
+    /* no compiler at hand — the table will do */
   }
   return TRIPLES[key];
 }
@@ -93,8 +94,8 @@ function targetTriple(key) {
 function platformKey() {
   if (!MANIFEST.platforms[FOR] || !TRIPLES[FOR]) {
     throw new Error(
-      `для ${FOR} сборка FFmpeg не закреплена. Поддерживаются: ${Object.keys(MANIFEST.platforms).join(", ")}. ` +
-        "Целевые системы — Windows и Linux (macOS отложена решением владельца).",
+      `no FFmpeg build is pinned for ${FOR}. Supported: ${Object.keys(MANIFEST.platforms).join(", ")}. ` +
+        "The target systems are Windows and Linux (macOS was deferred by the owner's decision).",
     );
   }
   return FOR;
@@ -106,7 +107,7 @@ function outputPath(name, triple, suffix) {
 
 async function download(url, to) {
   const res = await fetch(url, { redirect: "follow" });
-  if (!res.ok) throw new Error(`не скачать ${url}: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`could not download ${url}: ${res.status} ${res.statusText}`);
 
   const total = Number(res.headers.get("content-length") ?? 0);
   const chunks = [];
@@ -115,8 +116,8 @@ async function download(url, to) {
   for await (const chunk of res.body) {
     chunks.push(chunk);
     got += chunk.length;
-    // Отметки раз в десять процентов: сто шестьдесят мегабайт идут не мгновенно,
-    // и молчащая сборка выглядит зависшей.
+    // A mark every ten per cent: a hundred and sixty megabytes do not arrive instantly, and
+    // a silent build looks frozen.
     if (total && got - shown > total / 10) {
       shown = got;
       process.stdout.write(`  ${Math.round((got / total) * 100)} %\n`);
@@ -128,16 +129,16 @@ async function download(url, to) {
 }
 
 /**
- * Распаковать архив.
+ * Unpack the archive.
  *
- * Просто `tar` не годится, и это не придирка. Под именем `tar` в системе может
- * оказаться разное: в оболочке Git это GNU tar, который **не читает zip вовсе**
- * и требует отдельной программы для сжатия xz, а в самой Windows — bsdtar,
- * который читает оба наших вида. Какая из них попадётся, зависит от того, из какой
- * оболочки запущено, — то есть от случая.
+ * Plain `tar` will not do, and that is not pedantry. Different things may stand behind the
+ * name `tar` on a system: in the Git shell it is GNU tar, which **does not read zip at all**
+ * and needs a separate program for xz, while in Windows itself it is bsdtar, which reads
+ * both of our kinds. Which one turns up depends on which shell it was started from — that
+ * is, on chance.
  *
- * Поэтому перебираем по очереди и берём ту, что справилась. Windows-овская идёт
- * первой по полному пути: искать её по имени бессмысленно, ровно из-за этой путаницы.
+ * So they are tried in turn and the one that managed it is used. The Windows one comes first,
+ * by its full path: looking for it by name is pointless, for exactly that confusion.
  */
 function extract(archive, into) {
   const candidates =
@@ -155,11 +156,11 @@ function extract(archive, into) {
     }
   }
   throw new Error(
-    `архив не распаковать ни одной из доступных программ.\n  ${problems.join("\n  ")}`,
+    `not one of the available programs could unpack the archive.\n  ${problems.join("\n  ")}`,
   );
 }
 
-/** Найти в распакованном дереве файл с нужным именем. */
+/** Find a file with the wanted name in the unpacked tree. */
 function findFile(dir, name) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -178,9 +179,9 @@ function report(triple, suffix) {
   for (const name of WANTED) {
     const path = outputPath(name, triple, suffix);
     if (existsSync(path)) {
-      console.log(`  ${name}: ${(statSync(path).size / 1024 / 1024).toFixed(1)} МБ`);
+      console.log(`  ${name}: ${(statSync(path).size / 1024 / 1024).toFixed(1)} MB`);
     } else {
-      console.log(`  ${name}: НЕТ`);
+      console.log(`  ${name}: MISSING`);
       ok = false;
     }
   }
@@ -193,23 +194,23 @@ async function main() {
   const triple = targetTriple(key);
 
   if (CHECK) {
-    console.log(`FFmpeg ${MANIFEST.version} для ${triple}:`);
+    console.log(`FFmpeg ${MANIFEST.version} for ${triple}:`);
     if (!report(triple, entry.exe_suffix)) {
-      console.error("Выполните `npm run ffmpeg`, иначе установщик соберётся без FFmpeg.");
+      console.error("Run `npm run ffmpeg`, or the installer will be built without FFmpeg.");
       process.exit(1);
     }
     return;
   }
 
-  const готово = WANTED.every((n) => existsSync(outputPath(n, triple, entry.exe_suffix)));
-  if (готово && !FORCE) {
-    console.log(`FFmpeg ${MANIFEST.version} уже на месте:`);
+  const ready = WANTED.every((n) => existsSync(outputPath(n, triple, entry.exe_suffix)));
+  if (ready && !FORCE) {
+    console.log(`FFmpeg ${MANIFEST.version} is already in place:`);
     report(triple, entry.exe_suffix);
     return;
   }
 
   const url = `https://github.com/BtbN/FFmpeg-Builds/releases/download/${MANIFEST.release_tag}/${entry.asset}`;
-  console.log(`Скачиваем ${entry.asset} (${MANIFEST.version})…`);
+  console.log(`Downloading ${entry.asset} (${MANIFEST.version})…`);
 
   const work = mkdtempSync(join(tmpdir(), "vrcast-ffmpeg-"));
   try {
@@ -218,24 +219,25 @@ async function main() {
 
     if (got !== entry.sha256) {
       throw new Error(
-        `слепок не сошёлся.\n  ожидался: ${entry.sha256}\n  получен:  ${got}\n` +
-          "Это не мелочь: в поставку попал бы чужой исполняемый файл под нашим именем. " +
-          "Если сборка обновилась намеренно — впишите новый слепок в scripts/ffmpeg.json.",
+        `the snapshot did not match.\n  expected: ${entry.sha256}\n  got:      ${got}\n` +
+          "This is no trifle: somebody else's executable would go into our package under our " +
+          "name. If the build was updated deliberately, write the new snapshot into " +
+          "scripts/ffmpeg.json.",
       );
     }
-    console.log("  слепок сошёлся");
+    console.log("  the snapshot matched");
 
     extract(archive, work);
 
     mkdirSync(OUT_DIR, { recursive: true });
     for (const name of WANTED) {
-      const файл = `${name}${entry.exe_suffix}`;
-      const found = findFile(work, файл);
-      if (!found) throw new Error(`в архиве нет ${файл}`);
+      const file = `${name}${entry.exe_suffix}`;
+      const found = findFile(work, file);
+      if (!found) throw new Error(`the archive holds no ${file}`);
       copyFileSync(found, outputPath(name, triple, entry.exe_suffix));
     }
 
-    console.log(`FFmpeg ${MANIFEST.version} готов для ${triple}:`);
+    console.log(`FFmpeg ${MANIFEST.version} is ready for ${triple}:`);
     report(triple, entry.exe_suffix);
   } finally {
     rmSync(work, { recursive: true, force: true });

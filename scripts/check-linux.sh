@@ -1,69 +1,69 @@
 #!/usr/bin/env bash
-# Проверка сборки под Linux с машины разработчика.
+# Checking the Linux build from a developer's machine.
 #
-# Зачем. Код под `#[cfg(unix)]` — завершение дерева процессов, сигнал при смерти
-# родителя, группы процессов — на Windows не компилируется вовсе. Любая ошибка в нём
-# невидима, пока сборка не дойдёт до Linux. Первый же прогон в непрерывной интеграции
-# поймал ровно это: лишний импорт, который под Windows негде было заметить.
+# Why. Code under `#[cfg(unix)]` — terminating a process tree, the signal on a parent's
+# death, process groups — does not compile on Windows at all. Any mistake in it is invisible
+# until the build reaches Linux. The very first run in continuous integration caught exactly
+# that: a needless import there was nowhere to notice under Windows.
 #
-# Проверка идёт в контейнере с тем же составом, что ставит CI. Первый запуск собирает
-# образ и зависимости (несколько минут), дальше всё берётся из кеша.
+# The check runs in a container with the same contents CI installs. The first run builds the
+# image and the dependencies (a few minutes), after which everything comes from the cache.
 #
-# Запуск из каталога приложения:
-#   bash scripts/check-linux.sh            # формат, clippy и ПРОГОН ТЕСТОВ
-#   bash scripts/check-linux.sh style      # только формат и clippy, быстрее
+# Run from the application's directory:
+#   bash scripts/check-linux.sh            # format, clippy AND A TEST RUN
+#   bash scripts/check-linux.sh style      # format and clippy only, faster
 #
-# Тесты идут по умолчанию намеренно. Первая же попытка обойтись без них пропустила
-# настоящую ошибку: уборка уцелевших программ не срабатывала именно под Linux,
-# и увидела это только непрерывная интеграция. Проверка, которая не гоняет то,
-# что ломается, экономит минуты и стоит часов.
+# The tests run by default deliberately. The very first attempt to do without them missed a
+# real fault: sweeping up surviving programs did not work precisely under Linux, and only
+# continuous integration saw it. A check that does not run what breaks saves minutes and
+# costs hours.
 set -euo pipefail
 
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="vrcast-linux-check:1"
-# Именованный том под каталог сборки: без него каждый запуск пересобирал бы
-# все зависимости заново, и проверкой никто не пользовался бы.
+# A named volume for the build directory: without one every run would rebuild all the
+# dependencies from scratch, and nobody would use the check.
 VOLUME="vrcast-linux-target"
 MODE="${1:-test}"
 
 if ! docker info >/dev/null 2>&1; then
-  echo "Docker не запущен. Откройте Docker Desktop и повторите." >&2
+  echo "Docker is not running. Open Docker Desktop and try again." >&2
   exit 2
 fi
 
-# Образ собирается всегда: при неизменном Dockerfile это доли секунды из кеша,
-# зато правка состава подхватывается сама.
+# The image is always built: with the Dockerfile unchanged that is a fraction of a second
+# from the cache, while an edit to its contents is picked up by itself.
 docker build -q -t "$IMAGE" "$APP/scripts/linux-check" >/dev/null
 
 STYLE='cargo fmt --check && cargo clippy --all-targets --features integration -- -D warnings'
 case "$MODE" in
   test)  CMD="$STYLE && cargo test" ;;
   style) CMD="$STYLE" ;;
-  *) echo "Использование: $0 [test|style]" >&2; exit 2 ;;
+  *) echo "Usage: $0 [test|style]" >&2; exit 2 ;;
 esac
 
-# Вложенный FFmpeg под Linux кладётся ЗАРАНЕЕ, с этой машины: сборщик Tauri
-# проверяет наличие вложенных программ и отказывается собирать без них, а в контейнере
-# нет Node, чтобы их получить. Без этого шага проверка падала бы на пустом месте —
-# и ровно так уже вышло в CI, где вложенных программ тоже не было.
-echo "Готовим вложенный FFmpeg под Linux…"
+# The bundled FFmpeg for Linux is put in place BEFOREHAND, from this machine: the Tauri
+# bundler checks that the bundled programs are there and refuses to build without them, and
+# the container has no Node to fetch them with. Without this step the check would fail over
+# nothing — and that is exactly what already happened in CI, where the bundled programs were
+# missing too.
+echo "Preparing the bundled FFmpeg for Linux…"
 node "$APP/scripts/fetch-ffmpeg.mjs" --for linux-x64
 
-echo "Проверка под Linux ($MODE)…"
-# Монтируется ПРИЛОЖЕНИЕ ЦЕЛИКОМ, а не только ядро. Договорные тесты читают
-# описание типов интерфейса этажом выше (src/shared/contract.ts) и сверяют его
-# с ядром в обе стороны; при монтировании одного лишь src-tauri они падали на
-# отсутствующем файле — проверка ругалась на код, который в порядке.
+echo "Checking on Linux ($MODE)…"
+# THE WHOLE APPLICATION is mounted, not just the core. The contract tests read the
+# interface's type declarations one floor up (src/shared/contract.ts) and compare them
+# against the core both ways; with src-tauri alone mounted they failed on the missing file —
+# the check complained about code that was fine.
 #
-# Путь для Docker переводится в вид с буквой диска: Git Bash подсовывает свои пути
-# вида /f/…, Docker их не понимает и молча монтирует пустоту. Выглядит это как
-# «нет Cargo.toml» в каталоге, где он заведомо есть. MSYS_NO_PATHCONV заодно
-# не даёт переписать правую часть `:/app`.
+# The path is converted to the drive-letter form for Docker: Git Bash offers paths of its own
+# like /f/…, Docker does not understand them and quietly mounts nothing. It looks like "there
+# is no Cargo.toml" in a directory that certainly holds one. MSYS_NO_PATHCONV also stops the
+# right-hand side of `:/app` being rewritten.
 APP_MOUNT="$(cygpath -m "$APP" 2>/dev/null || echo "$APP")"
 
-# Оболочка без `-l`: логин-оболочка перечитывает /etc/profile и затирает PATH,
-# в котором лежит cargo. Ошибка выглядит как «cargo: command not found» на образе,
-# где cargo заведомо есть.
+# A shell without `-l`: a login shell re-reads /etc/profile and wipes out the PATH that holds
+# cargo. The failure looks like "cargo: command not found" on an image that certainly has it.
 MSYS_NO_PATHCONV=1 docker run --rm \
   -v "$APP_MOUNT:/app" \
   -v "$VOLUME:/build/target" \
@@ -71,4 +71,4 @@ MSYS_NO_PATHCONV=1 docker run --rm \
   "$IMAGE" \
   bash -c "$CMD"
 
-echo "Под Linux собирается и проходит проверки стиля."
+echo "It builds on Linux and passes the style checks."

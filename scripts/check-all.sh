@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
-# Всё, что проверяет непрерывная интеграция, — одной командой перед отправкой.
+# Everything continuous integration checks, in one command, before pushing.
 #
-# Зачем. Проверки разбросаны по четырём командам и двум языкам, и обойти их все
-# по памяти получается не всегда: дважды подряд в CI уезжало то, что ловится
-# за минуту на месте — сначала замечание clippy, добавленное после последнего
-# прогона clippy, потом гонка в оснастке тестов. Каждый такой круг стоит десяти
-# минут ожидания и одного лишнего коммита в истории.
+# Why. The checks are spread over four commands and two languages, and going through them
+# all from memory does not always work: twice in a row something reached CI that is caught
+# in a minute here — first a clippy remark added after the last clippy run, then a race in
+# the test fixture. Every such round costs ten minutes of waiting and one needless commit
+# in the history.
 #
-# Порядок намеренный: сначала быстрое и дешёвое, потом долгое. Первая же неудача
-# останавливает прогон — незачем ждать пять минут ради второй.
+# The order is deliberate: the quick and cheap first, the long afterwards. The first failure
+# stops the run — there is no point waiting five minutes for a second one.
 #
-# ЧЕГО ЭТА ПРОВЕРКА НЕ ВИДИТ. Она идёт на машине разработчика, где всё уже лежит:
-# вложенный FFmpeg, распакованные исходники зависимостей. В непрерывной интеграции
-# их нет, и то, что зависит от их наличия, здесь не проверяется. Так уже вышло
-# с вложенными программами: сборщик Tauri проверяет их наличие, локально они были,
-# и падение вылезло только в CI. Поэтому при правках сборки — `--full`: он гоняет
-# то же самое в чистом контейнере под Linux, где ничего не лежит.
+# WHAT THIS CHECK CANNOT SEE. It runs on a developer's machine, where everything is already
+# in place: the bundled FFmpeg, the unpacked sources of dependencies. Continuous integration
+# has none of that, and whatever depends on their presence is not checked here. That has
+# already happened with the bundled programs: the Tauri bundler checks they are there, they
+# were there locally, and the failure showed only in CI. So when the build is edited, use
+# `--full`: it runs the same things in a clean Linux container where nothing is in place.
 #
-# Имена переменных и функций латиницей: в именах оболочка допускает только
-# латиницу, цифры и подчёркивание, а кириллическое имя она даже не дочитывает
-# до конца — падает на разборе. Русский остаётся там, где ему место: в тексте.
-#
-# Запуск из каталога приложения:
-#   bash scripts/check-all.sh              # всё, кроме требующего Docker
-#   bash scripts/check-all.sh --full       # плюс Linux и одноразовый сервер
+# Run from the application's directory:
+#   bash scripts/check-all.sh              # everything that does not need Docker
+#   bash scripts/check-all.sh --full       # plus Linux and the throwaway server
 set -uo pipefail
 
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,10 +33,10 @@ FAILED=""
 summary() {
   printf '\n'
   if [ -z "$FAILED" ]; then
-    printf '\033[32m--- всё проверено, можно отправлять ---\033[0m\n'
+    printf '\033[32m--- all checked, safe to push ---\033[0m\n'
   else
-    printf '\033[31m--- не прошло:%s ---\033[0m\n' "$FAILED"
-    printf 'Отправлять нельзя: то же самое поймает CI, только через десять минут.\n'
+    printf '\033[31m--- failed:%s ---\033[0m\n' "$FAILED"
+    printf 'Do not push: CI will catch the same thing, only ten minutes later.\n'
   fi
 }
 
@@ -48,33 +44,33 @@ step() {
   local name="$1"; shift
   printf '\n\033[1m> %s\033[0m\n' "$name"
   if "$@"; then
-    printf '\033[32m  прошло: %s\033[0m\n' "$name"
+    printf '\033[32m  passed: %s\033[0m\n' "$name"
   else
-    printf '\033[31m  НЕ ПРОШЛО: %s\033[0m\n' "$name"
-    FAILED="$FAILED «$name»"
-    # Останавливаемся сразу: ждать ещё пять минут ради второй неудачи незачем.
+    printf '\033[31m  FAILED: %s\033[0m\n' "$name"
+    FAILED="$FAILED \"$name\""
+    # Stop at once: there is no point waiting another five minutes for a second failure.
     summary
     exit 1
   fi
 }
 
-step "Изоляция (принцип VII)" bash scripts/check-isolation.sh
-step "Захардкоженные серверы (FR-004)" bash scripts/check-no-hardcoded-server.sh
-step "Ядро: формат" cargo fmt --manifest-path src-tauri/Cargo.toml --check
-step "Ядро: clippy со всеми целями" \
+step "Isolation (principle VII)" bash scripts/check-isolation.sh
+step "Hardcoded servers (FR-004)" bash scripts/check-no-hardcoded-server.sh
+step "Core: format" cargo fmt --manifest-path src-tauri/Cargo.toml --check
+step "Core: clippy over all targets" \
   cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features integration -- -D warnings
-step "Ядро: тесты" cargo test --manifest-path src-tauri/Cargo.toml
-step "Интерфейс: типы" npm run --silent typecheck
-step "Интерфейс: стиль" npm run --silent lint
-step "Интерфейс: тесты" npm test --silent
-step "Лицензии зависимостей ядра" \
+step "Core: tests" cargo test --manifest-path src-tauri/Cargo.toml
+step "Interface: types" npm run --silent typecheck
+step "Interface: style" npm run --silent lint
+step "Interface: tests" npm test --silent
+step "Core dependencies' licences" \
   cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
-step "Перечень сторонних компонентов" npm run --silent check:third-party
-step "Лицензии зависимостей интерфейса" npx --yes license-checker-rseidelsohn   --production --excludePrivatePackages --onlyAllow   "MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0"
+step "Third-party list" npm run --silent check:third-party
+step "Interface dependencies' licences" npx --yes license-checker-rseidelsohn   --production --excludePrivatePackages --onlyAllow   "MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0"
 
 if [ "$FULL" = "1" ]; then
-  step "Сборка и тесты под Linux" bash scripts/check-linux.sh test
-  step "Одноразовый сервер в контейнере" \
+  step "Build and tests on Linux" bash scripts/check-linux.sh test
+  step "Throwaway server in a container" \
     cargo test --manifest-path src-tauri/Cargo.toml --features integration --test integration -- --test-threads=1
 fi
 
