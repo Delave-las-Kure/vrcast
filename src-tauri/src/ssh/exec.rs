@@ -49,6 +49,10 @@ impl Connection {
     /// Открывает отдельный канал в уже установленном соединении — новое соединение
     /// не создаётся (R-04: сервер ограничивает число одновременно устанавливаемых).
     pub async fn exec(&self, command: &str) -> Result<CommandOutput> {
+        // Место под канал держится всё время выполнения: у сервера есть предел на число
+        // одновременных каналов в соединении, и превышать его нельзя (см. connection.rs).
+        let _permit = self.acquire_channel().await?;
+
         let mut channel = self
             .handle()
             .channel_open_session()

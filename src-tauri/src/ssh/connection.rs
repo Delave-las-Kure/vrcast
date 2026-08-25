@@ -10,6 +10,17 @@ use super::fingerprint::{client_config, ClientHandler, HostKeyPolicy, HostKeySlo
 use super::{auth, Credentials, Result, ServerAddress, SshError};
 use russh::client;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Semaphore;
+
+/// Сколько каналов держим открытыми одновременно в одном соединении.
+///
+/// У OpenSSH есть предел `MaxSessions`, по умолчанию **10**, и превышение даёт не
+/// очередь, а отказ: `Failed to open channel (ConnectFailed)`. Проверено на живом
+/// сервере 2026-08-25 — двенадцать одновременных каналов не открылись.
+///
+/// Берём восемь, оставляя запас: у пользователя предел может быть ниже умолчания,
+/// а вылезти за него мы обязаны не отказом посреди работы, а ожиданием.
+const MAX_CONCURRENT_CHANNELS: usize = 8;
 
 /// Установленное соединение с сервером.
 ///
@@ -19,6 +30,8 @@ pub struct Connection {
     handle: Arc<client::Handle<ClientHandler>>,
     addr: ServerAddress,
     user: String,
+    /// Ограничитель числа одновременно открытых каналов — см. `MAX_CONCURRENT_CHANNELS`.
+    channels: Arc<Semaphore>,
 }
 
 impl Connection {
@@ -76,6 +89,7 @@ impl Connection {
             handle: Arc::new(handle),
             addr,
             user,
+            channels: Arc::new(Semaphore::new(MAX_CONCURRENT_CHANNELS)),
         })
     }
 
@@ -137,6 +151,18 @@ impl Connection {
 
     pub(crate) fn handle(&self) -> &client::Handle<ClientHandler> {
         &self.handle
+    }
+
+    /// Занять место под канал, дождавшись очереди при необходимости.
+    ///
+    /// Ожидание здесь правильнее отказа: превышение предела сервера — не ошибка
+    /// пользователя и не повод прерывать работу.
+    pub(crate) async fn acquire_channel(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        self.channels
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| SshError::Protocol(String::from("соединение закрывается")))
     }
 
     pub fn address(&self) -> &ServerAddress {

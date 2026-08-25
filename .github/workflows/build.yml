@@ -64,6 +64,36 @@ jobs:
       - name: Тесты ядра
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  integration:
+    name: Интеграционные — одноразовый сервер в контейнере
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Системные зависимости Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      # Однопоточность обязательна: каждый тест поднимает свой контейнер, и десяток
+      # одновременно только замедляет дело.
+      - name: Тесты против настоящего OpenSSH
+        run: >
+          cargo test --manifest-path src-tauri/Cargo.toml
+          --features integration --test integration -- --test-threads=1
+      - name: Убедиться, что контейнеры за собой убраны
+        if: always()
+        run: |
+          left=$(docker ps -aq --filter ancestor=vrcast-test-sshd:1 | wc -l)
+          if [ "$left" != "0" ]; then
+            echo "остались висящие контейнеры: $left" >&2
+            docker ps -a --filter ancestor=vrcast-test-sshd:1
+            exit 1
+          fi
+          echo "контейнеров не осталось"
+
   licenses:
     name: Совместимость лицензий с GPL-3.0
     runs-on: ubuntu-latest
