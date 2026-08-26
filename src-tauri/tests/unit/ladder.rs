@@ -17,7 +17,8 @@ use vrcast_studio_lib::domain::hls_master::{
     average_bps, build, codecs_for, parse, peak_bps, MasterProblem, Segment, Variant,
 };
 use vrcast_studio_lib::domain::ladder::{
-    density, plan, validate, Layout, LayoutSource, Objection, Reason, Rung, SourceFacts,
+    density, plan, source_cap_mbps, validate, Layout, LayoutSource, Objection, Reason, Rung,
+    SourceFacts, FALLBACK_MBPS,
 };
 
 fn source(width: u32, height: u32, fps: u32, bitrate_mbps: u64) -> SourceFacts {
@@ -86,26 +87,26 @@ fn a_stereoscopic_frame_is_recognised_and_its_eyes_are_measured() {
     // Told to a person as "3840×1080" this is true and useless: what they have is 1920 per
     // eye. Recognising it changes none of the arithmetic — that would take a measurement
     // nobody has made — but it does change what they are shown.
-    let laid = plan(20_000_000, &source(3840, 1080, 60, 40), None);
+    let laid = plan(Some(20_000_000), &source(3840, 1080, 60, 40), None);
     assert_eq!(laid.shape.layout, Layout::SideBySide);
     assert_eq!(laid.shape.from, LayoutSource::Guessed);
     assert_eq!(Layout::SideBySide.per_eye(3840, 1080), (1920, 1080));
 
-    let stacked = plan(20_000_000, &source(1920, 2160, 48, 40), None);
+    let stacked = plan(Some(20_000_000), &source(1920, 2160, 48, 40), None);
     assert_eq!(stacked.shape.layout, Layout::OverUnder);
     assert_eq!(Layout::OverUnder.per_eye(1920, 2160), (1920, 1080));
 
     // An ordinary film is not mistaken for either, at any of the rates.
     for fps in [24, 48, 60] {
         assert_eq!(
-            plan(20_000_000, &source(3840, 2160, fps, 40), None)
+            plan(Some(20_000_000), &source(3840, 2160, fps, 40), None)
                 .shape
                 .layout,
             Layout::Flat,
             "ordinary 4K at {fps} frames was taken for stereoscopic"
         );
         assert_eq!(
-            plan(20_000_000, &source(1920, 800, fps, 40), None)
+            plan(Some(20_000_000), &source(1920, 800, fps, 40), None)
                 .shape
                 .layout,
             Layout::Flat,
@@ -118,7 +119,11 @@ fn a_stereoscopic_frame_is_recognised_and_its_eyes_are_measured() {
 fn what_the_file_says_beats_what_its_proportions_suggest() {
     // A guess shown as knowledge is how a person ends up correcting something that was
     // right. A very wide flat panorama exists; if the file says it is flat, it is flat.
-    let told = plan(20_000_000, &source(3840, 1080, 60, 40), Some(Layout::Flat));
+    let told = plan(
+        Some(20_000_000),
+        &source(3840, 1080, 60, 40),
+        Some(Layout::Flat),
+    );
     assert_eq!(told.shape.layout, Layout::Flat);
     assert_eq!(told.shape.from, LayoutSource::Declared);
 }
@@ -128,7 +133,7 @@ fn lowering_the_resolution_keeps_both_eyes_together() {
     // Scaling a stereoscopic frame has to keep its proportions, or the split between the
     // eyes moves and the picture comes apart. A deliberately thin ladder over a heavy
     // side-by-side source, so that a rung really is lowered.
-    let laid = plan(4_000_000, &source(3840, 1080, 60, 40), None);
+    let laid = plan(Some(4_000_000), &source(3840, 1080, 60, 40), None);
     for rung in &laid.rungs {
         let expected = (3840 * rung.height) / 1080;
         assert_eq!(
@@ -147,7 +152,7 @@ fn lowering_the_resolution_keeps_both_eyes_together() {
 #[test]
 fn the_top_never_goes_above_the_source() {
     // Above the source there is no more detail to find, only weight (FR-042).
-    let laid = plan(35_000_000, &source(3840, 2160, 48, 12), None);
+    let laid = plan(Some(35_000_000), &source(3840, 2160, 48, 12), None);
     assert_eq!(laid.rungs[0].bitrate_bps, 12_000_000);
     assert!(laid.rungs[0].reasons.contains(&Reason::CappedBySource));
 }
@@ -158,13 +163,17 @@ fn a_heavier_source_codec_buys_the_ladder_more_room() {
     // source's bitrate would cut the ladder off far below where the detail runs out.
     let mut hevc = source(3840, 2160, 24, 12);
     hevc.heavier_codec = true;
-    let laid = plan(35_000_000, &hevc, None);
-    assert_eq!(laid.rungs[0].bitrate_bps, 19_200_000, "12 × 1.6");
+    let laid = plan(Some(35_000_000), &hevc, None);
+    // `SCAP=$(( S * 16 / 10 ))` — integer arithmetic on whole megabits: 12 × 16 / 10 is
+    // 192 / 10 is **19**, not 19.2. The truncation is what keeps the cap on the same grid
+    // as the rungs and as every measurement this project owns.
+    assert_eq!(source_cap_mbps(&hevc), 19);
+    assert_eq!(laid.rungs[0].bitrate_bps, 19_000_000, "12 × 16 / 10");
 }
 
 #[test]
 fn the_rungs_go_down_at_about_one_and_eight_tenths() {
-    let laid = plan(20_000_000, &source(3840, 2160, 24, 60), None);
+    let laid = plan(Some(20_000_000), &source(3840, 2160, 24, 60), None);
     assert_eq!(laid.rungs.len(), 4);
     for pair in laid.rungs.windows(2) {
         let times = pair[0].bitrate_bps as f64 / pair[1].bitrate_bps as f64;
@@ -179,12 +188,79 @@ fn the_rungs_go_down_at_about_one_and_eight_tenths() {
 
 #[test]
 fn light_material_gets_one_rung_and_is_told_so() {
-    // Animation on a small source asks for very little, and the multipliers then collide.
-    // Two identical rungs are a ladder with a rung missing, not a ladder with an extra one;
-    // and a person should be told a ladder is not what this material needs.
-    let laid = plan(1, &source(1280, 720, 24, 1), None);
-    assert_eq!(laid.rungs.len(), 1);
+    // A fifteen-minute animation episode at 1.5 Mbit/s, probed at 1.4 — an input somebody
+    // could actually have. The anchor truncates to 1 Mbit/s, and every multiplier then
+    // lands on the same whole megabit, so the ladder folds to one rung and says so.
+    //
+    // This test used to be given an anchor of **one bit per second** — the only input in
+    // the whole domain where the rule still fired once the port had moved off the megabit
+    // grid. It passed, and the rule was gone.
+    let laid = plan(Some(1_400_000), &source(1280, 720, 24, 2), None);
+    assert_eq!(
+        laid.rungs.len(),
+        1,
+        "light material got a ladder where the rule says it wants one file: {:?}",
+        laid.rungs
+    );
     assert!(laid.rungs[0].reasons.contains(&Reason::SingleRungOnly));
+    assert_eq!(laid.rungs[0].bitrate_bps, 1_000_000);
+}
+
+#[test]
+fn every_rung_lands_on_a_whole_megabit() {
+    // The grid is not decoration. Every VMAF measurement this project owns was taken at
+    // whole megabits, every prepared file is named by one (`film_22.mp4`), and a rung at
+    // 8,891,666 bit/s can be compared to none of them.
+    for anchor_mbps in [1u64, 2, 3, 5, 8, 14, 15, 16, 22, 35] {
+        let laid = plan(
+            Some(anchor_mbps * 1_000_000 + 666_666),
+            &source(3840, 2160, 24, 60),
+            None,
+        );
+        for rung in &laid.rungs {
+            assert_eq!(
+                rung.bitrate_bps % 1_000_000,
+                0,
+                "anchor {anchor_mbps}: rung {} is {} bit/s, off the grid",
+                rung.index,
+                rung.bitrate_bps
+            );
+            assert!(
+                rung.bitrate_bps >= 1_000_000,
+                "anchor {anchor_mbps}: rung {} fell below a megabit at {} bit/s — no \
+                 quality worth serving lives down there",
+                rung.index,
+                rung.bitrate_bps
+            );
+        }
+    }
+}
+
+#[test]
+fn without_a_measurement_the_constant_is_held_down_by_what_the_source_allows() {
+    // `ANCHOR=$(( SCAP < 35 ? SCAP : 35 ))`. The cap is SCAP — which already carries the
+    // heavier-codec allowance — and not the source's own bitrate. Taking the latter cut
+    // every ladder over an HEVC master by a third, and the person was shown the top rung
+    // as "this is where the material stopped asking for more" when nothing had been asked.
+    let mut hevc = source(3840, 2160, 24, 12);
+    hevc.heavier_codec = true;
+    let laid = plan(None, &hevc, None);
+    assert_eq!(
+        laid.rungs[0].bitrate_bps, 19_000_000,
+        "min(35, 12 × 16 / 10)"
+    );
+    assert!(laid.rungs[0].reasons.contains(&Reason::FallbackConstant));
+    assert!(
+        !laid.rungs[0].reasons.contains(&Reason::ProbedAnchor),
+        "an unprobed ladder claimed the material had been asked"
+    );
+
+    // And a source heavier than the constant is held to the constant.
+    let heavy = source(3840, 2160, 24, 80);
+    assert_eq!(
+        plan(None, &heavy, None).rungs[0].bitrate_bps,
+        FALLBACK_MBPS * 1_000_000
+    );
 }
 
 #[test]
@@ -196,7 +272,7 @@ fn the_resolution_drops_only_when_the_bits_have_run_thin() {
 
     // 22 Mbit/s over 4K at 24 frames is a density of about 0.11 — full resolution.
     assert!(density(22_000_000, 3840, 2160, 24) > 0.05);
-    let laid = plan(22_000_000, &src, None);
+    let laid = plan(Some(22_000_000), &src, None);
     assert_eq!(laid.rungs[0].height, 2160);
     assert!(laid.rungs[0].reasons.contains(&Reason::FullResolution));
 
@@ -204,7 +280,7 @@ fn the_resolution_drops_only_when_the_bits_have_run_thin() {
     // the resolution is the whole of why it belongs in the formula.
     let quick = source(3840, 2160, 60, 60);
     assert!(density(22_000_000, 3840, 2160, 60) < 0.05);
-    let fast = plan(22_000_000, &quick, None);
+    let fast = plan(Some(22_000_000), &quick, None);
     assert!(
         fast.rungs[0].height < 2160,
         "at 60 frames the same bitrate is spread thinner and the height should come down"
@@ -224,7 +300,7 @@ fn an_upscaled_source_is_not_encoded_above_what_it_really_has() {
     // formula was calling for 2160.
     let mut upscaled = source(3840, 2160, 24, 60);
     upscaled.native_height = Some(1080);
-    let laid = plan(22_000_000, &upscaled, None);
+    let laid = plan(Some(22_000_000), &upscaled, None);
 
     assert_eq!(laid.rungs[0].height, 1728, "1080 × 1.6");
     assert!(laid.rungs[0].reasons.contains(&Reason::CappedByUpscale));
@@ -233,7 +309,7 @@ fn an_upscaled_source_is_not_encoded_above_what_it_really_has() {
 #[test]
 fn every_rung_carries_its_own_level_and_it_holds() {
     for (w, h, fps) in [(3840, 2160, 48), (3840, 1080, 60), (1920, 1080, 24)] {
-        let laid = plan(20_000_000, &source(w, h, fps, 60), None);
+        let laid = plan(Some(20_000_000), &source(w, h, fps, 60), None);
         for rung in &laid.rungs {
             assert!(
                 level_exceeded(&rung.level, rung.width, rung.height, fps).is_empty(),
@@ -316,13 +392,21 @@ fn a_ladder_this_code_planned_has_nothing_wrong_with_it() {
     // The two halves have to agree: a planner that produced ladders its own checker
     // objected to would be shouting at the person about its own work.
     for (w, h, fps) in [(3840, 2160, 24), (3840, 1080, 60), (1920, 1080, 48)] {
-        let src = source(w, h, fps, 60);
-        let laid = plan(20_000_000, &src, None);
-        let objections = validate(&laid.rungs, &src, fps);
-        assert!(
-            objections.is_empty(),
-            "the planner's own ladder for {w}×{h}@{fps} was objected to: {objections:?}"
-        );
+        // Every anchor from one to forty, not one comfortable value. At an anchor of 15 the
+        // rungs come out 15, 8, 4, 3 — and 4 over 3 is 1.33, outside the stated range of
+        // one and a half to two. That ladder is what the project's own script emits, and
+        // the checker used to object to it.
+        for anchor_mbps in 1..=40u64 {
+            let src = source(w, h, fps, 60);
+            let laid = plan(Some(anchor_mbps * 1_000_000), &src, None);
+            let objections = validate(&laid.rungs, &src, fps);
+            assert!(
+                objections.is_empty(),
+                "the planner's own ladder for {w}×{h}@{fps} at anchor {anchor_mbps} was \
+                 objected to: {objections:?} — rungs {:?}",
+                laid.rungs.iter().map(|r| r.bitrate_bps).collect::<Vec<_>>()
+            );
+        }
     }
 }
 

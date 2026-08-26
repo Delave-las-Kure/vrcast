@@ -42,19 +42,19 @@ const EDGE_SECONDS: u64 = 180;
 const TAIL_SECONDS: u64 = 200;
 const SHORT_FILM_SECONDS: u64 = 400;
 
-/// The constant the ladder used before the probe existed.
-///
-/// Still the fallback when the probe cannot run: a ladder built on it is worse than one
-/// built on a measurement, and far better than none.
-pub const FALLBACK_MBPS: u64 = 35;
-
 /// What the probe found.
+///
+/// **What to do when it found nothing is not here.** Falling back on the old constant means
+/// holding that constant down to what the source allows, and that allowance carries the
+/// heavier-codec multiplier with it — a rule, and one that belongs with the other rules
+/// where it can be checked without an encoder. It lived here once and took the source's own
+/// bitrate instead, which cut every ladder over an HEVC master by a third.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Probed {
-    /// How many bits the material asked for, in bits per second.
-    pub anchor_bps: u64,
-    /// How many pieces actually encoded. Fewer than three still gives an answer; none
-    /// falls back.
+    /// How many bits the material asked for, in bits per second. `None` means the probe
+    /// could not run at all.
+    pub measured_bps: Option<u64>,
+    /// How many pieces actually encoded. Fewer than three still gives an answer.
     pub pieces: usize,
     /// What did the encoding.
     pub encoder: Encoder,
@@ -65,12 +65,7 @@ pub struct Probed {
 /// Ask the material.
 ///
 /// `duration_s` is the film's length; the pieces are placed inside it.
-pub async fn probe(
-    path: &Path,
-    duration_s: f64,
-    encoder: &Encoder,
-    source_bitrate_bps: u64,
-) -> Probed {
+pub async fn probe(path: &Path, duration_s: f64, encoder: &Encoder) -> Probed {
     let total = duration_s.max(0.0) as u64;
     let mut taken: Vec<u64> = Vec::new();
 
@@ -90,8 +85,7 @@ pub async fn probe(
     let calibrated = super::encoder_args::family_of(encoder).is_calibrated();
     if taken.is_empty() {
         return Probed {
-            // Capped by the source, as the script does: above it there is no more detail.
-            anchor_bps: (FALLBACK_MBPS * 1_000_000).min(source_bitrate_bps.max(1)),
+            measured_bps: None,
             pieces: 0,
             encoder: encoder.clone(),
             notice: Some(crate::domain::wording::Detail::new(
@@ -100,9 +94,8 @@ pub async fn probe(
         };
     }
 
-    let anchor_bps = taken.iter().sum::<u64>() / taken.len() as u64;
     Probed {
-        anchor_bps: anchor_bps.max(1),
+        measured_bps: Some(taken.iter().sum::<u64>() / taken.len() as u64),
         pieces: taken.len(),
         encoder: encoder.clone(),
         // **The one thing that must be said out loud.** The quality the probe pins was

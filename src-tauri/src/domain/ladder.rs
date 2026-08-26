@@ -27,6 +27,21 @@ use serde::{Deserialize, Serialize};
 /// further apart and a hole opens for a weak connection to fall into.
 const MULTIPLIERS: [f64; 4] = [1.0, 0.55, 0.3, 0.17];
 
+/// A megabit per second, in bits.
+///
+/// **The unit the whole of this works in, and that is load bearing.** `plan-ladder.sh`
+/// counts in whole megabits from beginning to end — the source's bitrate (`S=$(( SBPS /
+/// 1000000 ))`), the anchor (`ANCHOR=$(( psum / pn / 1000000 ))`), its floor (`ANCHOR < 1`
+/// means below one **megabit**), and every rung (`max(1, int(round(a*m)))`).
+///
+/// Ported into bits per second it all still compiles and every number comes out wrong. The
+/// floor of one becomes one bit rather than one megabit, so a ladder can be planned with a
+/// rung of 238 kbit/s. The rungs stop landing on whole megabits, so they no longer coincide
+/// with the grid every VMAF measurement this project owns was taken on. And the collapsing
+/// of duplicates stops happening, because at bit precision two multipliers never meet — so
+/// light material, which the rule says needs one file and no ladder, gets four.
+const MBIT: u64 = 1_000_000;
+
 /// The bit density below which a rung's resolution is worth lowering.
 ///
 /// **0.05 and not 0.10**, and that is a measurement rather than a preference. The old
@@ -146,6 +161,8 @@ pub enum Reason {
     CappedByUpscale,
     /// A step down from the one above.
     StepDown,
+    /// The material could not be measured, so the old constant was used instead.
+    FallbackConstant,
     /// The resolution was lowered because the bits per pixel had fallen too low.
     LoweredForDensity,
     /// The resolution was left alone: the density is sound.
@@ -198,44 +215,78 @@ pub struct Plan {
     pub rungs: Vec<Rung>,
     /// What the shape of the picture turned out to be.
     pub shape: Shape,
-    /// The bitrate the probe settled on, in bits per second.
+    /// The top of the ladder, in bits per second — always a whole number of megabits.
     pub anchor_bps: u64,
 }
 
-/// The top of the ladder: where the material stopped asking for more, brought inside what
-/// the source and any upscale allow.
+/// What the source allows the top of a ladder to be, in whole megabits per second.
 ///
-/// Comes back with the bitrate and why it is that and not the probe's own answer.
-fn top_rung(anchor_bps: u64, source: &SourceFacts) -> (u64, Vec<Reason>) {
-    let mut reasons = vec![Reason::ProbedAnchor];
-
-    // Above the source there is no more detail to find, only weight. A source in a heavier
-    // codec is worth more in H.264 terms — the same picture needs more bits here.
-    let cap = if source.heavier_codec {
-        (source.bitrate_bps as f64 * HEVC_TO_H264) as u64
+/// The script's own arithmetic, integer division and all: a 12 Mbit/s HEVC source gives
+/// `12 * 16 / 10` = **19**, not 19.2. The rounding is not a detail to be tidied up — it is
+/// what puts the cap on the same whole-megabit grid as the rungs and the measurements.
+pub fn source_cap_mbps(source: &SourceFacts) -> u64 {
+    let s = source.bitrate_bps / MBIT;
+    if source.heavier_codec {
+        s * 16 / 10
     } else {
-        source.bitrate_bps
+        s
+    }
+}
+
+/// The constant the ladder used before the probe existed, in megabits per second.
+///
+/// Still the fallback when the probe cannot run. A ladder built on it is worse than one
+/// built on a measurement and far better than none.
+pub const FALLBACK_MBPS: u64 = 35;
+
+/// The top of the ladder: where the material stopped asking for more, brought inside what
+/// the source allows.
+///
+/// `measured_bps` is what the probe found, or `None` when it could not run. Both paths are
+/// here, in the rules, rather than in the layer that runs ffmpeg: the fallback is a rule —
+/// **the constant capped by what the source allows**, and that cap carries the heavier-codec
+/// allowance with it. Left in the probe, it took the source's own bitrate instead and cut
+/// every ladder over an HEVC master by a third.
+fn top_rung(measured_bps: Option<u64>, source: &SourceFacts) -> (u64, Vec<Reason>) {
+    let cap = source_cap_mbps(source);
+
+    let Some(measured_bps) = measured_bps else {
+        // `ANCHOR=$(( SCAP < 35 ? SCAP : 35 ))` — the constant, held down by the cap.
+        let top = if cap == 0 {
+            FALLBACK_MBPS
+        } else {
+            cap.min(FALLBACK_MBPS)
+        };
+        return (top.max(1), vec![Reason::FallbackConstant]);
     };
 
-    let mut top = anchor_bps;
-    if top > cap && cap > 0 {
+    let mut reasons = vec![Reason::ProbedAnchor];
+    // Whole megabits, as the probe's own line does it. Truncated, not rounded.
+    let mut top = (measured_bps / MBIT).max(1);
+    if cap > 0 && top > cap {
         top = cap;
         reasons.push(Reason::CappedBySource);
     }
     (top.max(1), reasons)
 }
 
-/// The rungs, going down from the top.
+/// The rungs, in whole megabits per second, going down from the top.
 ///
-/// Rungs that come out the same are folded together: on light material the multipliers
-/// collide, and two identical rungs are a ladder with a rung missing rather than an extra
-/// one.
-fn steps_from(top_bps: u64) -> Vec<u64> {
+/// Rungs that come out the same are folded together, and that folding is a rule rather than
+/// tidiness: on light material the multipliers land on the same whole megabit, and the
+/// ladder shrinks to two rungs or to one. One rung is the script's signal that this material
+/// does not want a ladder at all — `# ВНИМАНИЕ: источник слабый → одна ступень, ABR-лесенка
+/// не нужна`.
+///
+/// The floor is **one megabit**, not one of anything smaller. Below that there is no
+/// quality worth serving, and the ladder would be planning rungs no measurement this project
+/// owns has ever looked at.
+fn steps_from(top_mbps: u64) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
     for m in MULTIPLIERS {
-        let bps = ((top_bps as f64 * m).round() as u64).max(1);
-        if !out.contains(&bps) {
-            out.push(bps);
+        let mbps = ((top_mbps as f64 * m).round() as u64).max(1);
+        if !out.contains(&mbps) {
+            out.push(mbps);
         }
     }
     out
@@ -304,14 +355,17 @@ pub fn width_for(height: u32, source: &SourceFacts) -> u32 {
 }
 
 /// Work out a ladder.
-pub fn plan(anchor_bps: u64, source: &SourceFacts, declared: Option<Layout>) -> Plan {
+///
+/// `measured_bps` is what the complexity probe found, or `None` when it could not run.
+pub fn plan(measured_bps: Option<u64>, source: &SourceFacts, declared: Option<Layout>) -> Plan {
     let shape = guess_shape(source.width, source.height, declared);
-    let (top_bps, top_reasons) = top_rung(anchor_bps, source);
-    let steps = steps_from(top_bps);
+    let (top_mbps, top_reasons) = top_rung(measured_bps, source);
+    let steps = steps_from(top_mbps);
     let single = steps.len() == 1;
 
     let rungs = steps
         .into_iter()
+        .map(|mbps| mbps * MBIT)
         .enumerate()
         .map(|(index, bitrate_bps)| {
             let (height, mut reasons) = height_for(bitrate_bps, source);
@@ -348,7 +402,7 @@ pub fn plan(anchor_bps: u64, source: &SourceFacts, declared: Option<Layout>) -> 
     Plan {
         rungs,
         shape,
-        anchor_bps,
+        anchor_bps: top_mbps * MBIT,
     }
 }
 
@@ -408,6 +462,29 @@ pub enum Objection {
     BadStep { index: usize, times: f64 },
 }
 
+/// Whether two neighbouring rungs are acceptably far apart.
+///
+/// **The rounding to whole megabits has to be allowed for, or this objects to ladders the
+/// project's own script produces.** At an anchor of 15 the script gives 15, 8, 4, 3 — and
+/// 4 over 3 is 1.33, outside the stated range of one and a half to two. That ladder is not
+/// wrong; it is what whole-megabit rungs look like at the bottom, where half a megabit is a
+/// sixth of the value.
+///
+/// So the true, unrounded values are allowed for: each rung stands for something within
+/// half a megabit of itself, and the objection is raised only when even the most favourable
+/// reading of the pair falls outside the range. At 4 and 3 the most favourable reading is
+/// 4.5 over 2.5, which is 1.8 — inside. At 3 and 3 it is 3.5 over 2.5, which is 1.4 — still
+/// outside, and rightly so.
+fn step_is_allowable(above_bps: u64, below_bps: u64) -> bool {
+    let half = MBIT as f64 / 2.0;
+    let above = above_bps as f64;
+    let below = below_bps as f64;
+
+    let closest_possible = (above + half) / (below - half).max(1.0);
+    let furthest_possible = (above - half).max(1.0) / (below + half);
+    closest_possible >= MIN_STEP && furthest_possible <= MAX_STEP
+}
+
 /// Check a ladder, whoever wrote it.
 ///
 /// **Every** objection comes back, not the first: an edited ladder often has several, and a
@@ -450,7 +527,7 @@ pub fn validate(rungs: &[Rung], source: &SourceFacts, fps: u32) -> Vec<Objection
                 out.push(Objection::OutOfOrder { index: i });
             } else if rung.bitrate_bps > 0 {
                 let times = above.bitrate_bps as f64 / rung.bitrate_bps as f64;
-                if !(MIN_STEP..=MAX_STEP).contains(&times) {
+                if !step_is_allowable(above.bitrate_bps, rung.bitrate_bps) {
                     out.push(Objection::BadStep { index: i, times });
                 }
             }

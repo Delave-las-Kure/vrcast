@@ -77,6 +77,18 @@ pub fn choose(
     if prefer_hardware {
         if let Some(name) = PREFERRED
             .iter()
+            // Present in the build is not the same as usable. VAAPI needs a device opened
+            // and the frames uploaded to it before any encoding happens, and a command
+            // without that fails on start — so choosing it would hand somebody a hardware
+            // encoder that cannot run, where falling back to the processor works. The
+            // quality-pinned path has nothing to say to it either, so a ladder probed
+            // through it would come out with no quality setting at all.
+            .filter(|p| {
+                super::encoder_args::family_of(&Encoder::Hardware {
+                    name: (*p).to_string(),
+                })
+                .is_usable()
+            })
             .find(|p| available.iter().any(|a| a.eq_ignore_ascii_case(p)))
         {
             return Ok(EncoderChoice {
