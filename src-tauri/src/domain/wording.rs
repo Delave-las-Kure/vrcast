@@ -151,6 +151,9 @@ detail_codes! {
     StageValidating => "STAGE_VALIDATING",
     StageChecksum => "STAGE_CHECKSUM",
     StageMeasuringQuality => "STAGE_MEASURING_QUALITY",
+    StageBuildingLadder => "STAGE_BUILDING_LADDER",
+    StageCuttingSegments => "STAGE_CUTTING_SEGMENTS",
+    StageVerifyingLadder => "STAGE_VERIFYING_LADDER",
     StageDone => "STAGE_DONE",
 
     // --- what closing the application would do to a task (FR-086) ---
@@ -205,6 +208,8 @@ detail_codes! {
     ReasonTonemap => "REASON_TONEMAP",
     ReasonResize => "REASON_RESIZE",
     ReasonTargetBitrate => "REASON_TARGET_BITRATE",
+    /// The source's own keyframes do not fall where the segments will be cut.
+    ReasonKeyframesUnaligned => "REASON_KEYFRAMES_UNALIGNED",
     /// `codec` — what the track is in.
     ReasonAudioNotAac => "REASON_AUDIO_NOT_AAC",
     /// `channels` — how many the track has.
@@ -223,6 +228,11 @@ detail_codes! {
     NoticeMeasurementBorrowed => "NOTICE_MEASUREMENT_BORROWED",
     /// `measured`, `total` — how much of the grid answered. Some points would not encode.
     NoticeMeasurementPartial => "NOTICE_MEASUREMENT_PARTIAL",
+    /// A rung that needed no change of quality is being re-encoded anyway, to put its
+    /// keyframes where the other rungs have theirs.
+    NoticeReencodedForKeyframes => "NOTICE_REENCODED_FOR_KEYFRAMES",
+    /// `count` — variants that were already on the server and were not made again.
+    NoticeVariantsReused => "NOTICE_VARIANTS_REUSED",
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 

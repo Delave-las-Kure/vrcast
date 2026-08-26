@@ -19,6 +19,7 @@ pub mod grouping;
 pub mod hls_master;
 pub mod hls_package;
 pub mod ladder;
+pub mod ladder_build;
 pub mod links;
 pub mod manifest;
 pub mod measure_grid;

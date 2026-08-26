@@ -35,6 +35,9 @@ mod geo;
 #[path = "unit/ladder.rs"]
 mod ladder;
 
+#[path = "unit/ladder_build.rs"]
+mod ladder_build;
+
 #[path = "unit/hls_package.rs"]
 mod hls_package;
 

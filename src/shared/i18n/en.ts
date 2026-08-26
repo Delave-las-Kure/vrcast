@@ -337,6 +337,9 @@ export const en: Catalogue = {
     STAGE_VALIDATING: "checking playback",
     STAGE_CHECKSUM: "comparing checksums",
     STAGE_MEASURING_QUALITY: "measuring quality on the material itself",
+    STAGE_BUILDING_LADDER: "preparing the variants",
+    STAGE_CUTTING_SEGMENTS: "cutting into segments — on the server",
+    STAGE_VERIFYING_LADDER: "checking that every variant is served",
     STAGE_DONE: "done",
 
     // --- what closing the application would do ---
@@ -377,6 +380,8 @@ export const en: Catalogue = {
     REASON_TONEMAP:
       "the source is in high dynamic range and has to be brought down to ordinary",
     REASON_RESIZE: "the frame size is changing",
+    REASON_KEYFRAMES_UNALIGNED:
+      "The source's keyframes do not fall where the segment boundaries will",
     REASON_TARGET_BITRATE: "a target bitrate was set",
     REASON_AUDIO_NOT_AAC: "audio is {codec} — the target format is AAC",
     REASON_AUDIO_CHANNELS: "audio has {channels} channels — the target format is stereo",
@@ -391,6 +396,10 @@ export const en: Catalogue = {
       "These rungs come from the measurement of {from}, not from a measurement of this file. For the next episode of the same season that is usually right — it is the same source. If the material differs (a different upscale, a different frame rate), measure it separately.",
     NOTICE_MEASUREMENT_PARTIAL:
       "{measured} points of {total} were measured; the rest would not encode. The ladder is built from what there is, but where points are missing the optimum may have gone unfound.",
+    NOTICE_VARIANTS_REUSED:
+      "{count} variants were already on the server and were not made again. The application asked the server what is there rather than its own note about a previous run: a note outlives the thing it describes.",
+    NOTICE_REENCODED_FOR_KEYFRAMES:
+      "This rung could have been carried across without re-encoding — its quality needs no change. But segments can only be cut at a keyframe, and this source's keyframes sit differently from the other rungs': the boundaries would stop lining up, and a viewer changing quality would see it stall. So the rung is re-encoded after all — hours instead of minutes.",
     NOTICE_NO_HARDWARE_FOUND:
       "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
     NOTICE_SOFTWARE_AS_ASKED:

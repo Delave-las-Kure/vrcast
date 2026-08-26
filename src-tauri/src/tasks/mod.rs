@@ -6,6 +6,7 @@
 //! certain (constitution, principle III).
 
 pub mod engine;
+pub mod ladder_build;
 pub mod process;
 pub mod progress;
 pub mod quality_measure;

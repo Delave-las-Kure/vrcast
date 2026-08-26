@@ -15,6 +15,7 @@ use vrcast_studio_lib::domain::hls_master::{self, Variant};
 use vrcast_studio_lib::domain::hls_package::ToCut;
 use vrcast_studio_lib::server::hls_package::Cutting;
 use vrcast_studio_lib::server::hls_verify;
+use vrcast_studio_lib::tasks::ladder_build;
 
 use super::fixture::TestServer;
 use super::hls_fixture::VIDEO_DIR;
@@ -282,6 +283,63 @@ async fn a_variant_already_cut_whole_is_not_cut_again() {
     );
 
     cutting.tidy_up().await.expect("the leftovers would not go");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_variant_already_on_the_server_is_recognised_and_a_half_sent_one_is_not() {
+    // FR-048, the half of it that is about the files rather than the segments. The point
+    // is not "is there a file of that name" — an interrupted transfer leaves one of those —
+    // but "is the whole film in it". A ladder that treats a truncated variant as done
+    // serves ninety seconds and stops, and nothing ever looks at it again.
+    let server = TestServer::start().expect("the container would not come up");
+    make_film(&server, "resume_6.mp4", 720, 6_000).expect("the film would not be made");
+    let conn = connect(&server).await;
+
+    let whole = ladder_build::variant_already_there(
+        &conn,
+        VIDEO_DIR,
+        "resume_6.mp4",
+        f64::from(FILM_SECONDS),
+    )
+    .await
+    .expect("the server would not answer");
+    assert!(
+        whole,
+        "a variant that is all there was going to be made again"
+    );
+
+    // A file that is not there at all. The shell says nothing, and nothing must not be
+    // read as a duration — this is the case that is worth a real server rather than
+    // reasoning: `test -f ... || true` succeeds while printing nothing.
+    let missing = ladder_build::variant_already_there(
+        &conn,
+        VIDEO_DIR,
+        "never_made.mp4",
+        f64::from(FILM_SECONDS),
+    )
+    .await
+    .expect("the server would not answer");
+    assert!(!missing, "a variant that does not exist was called ready");
+
+    // And one cut short, as a broken transfer leaves it: the right name, half the film.
+    server
+        .exec_inside(&format!(
+            "head -c $(( $(stat -c %s '{VIDEO_DIR}/resume_6.mp4') / 3 )) \
+             '{VIDEO_DIR}/resume_6.mp4' > '{VIDEO_DIR}/short_6.mp4' && echo cut"
+        ))
+        .expect("the short file would not be made");
+    let short = ladder_build::variant_already_there(
+        &conn,
+        VIDEO_DIR,
+        "short_6.mp4",
+        f64::from(FILM_SECONDS),
+    )
+    .await
+    .expect("the server would not answer");
+    assert!(
+        !short,
+        "a variant with a third of the film in it was called ready"
+    );
 }
 
 /// ffprobe reports a level as a number — 30 is 3.0, 51 is 5.1 — and the description wants

@@ -8,6 +8,7 @@ pub mod convert;
 pub mod encoder_args;
 pub mod encoders;
 pub mod ffmpeg;
+pub mod keyframes;
 pub mod measure;
 pub mod probe;
 pub mod probe_complexity;
