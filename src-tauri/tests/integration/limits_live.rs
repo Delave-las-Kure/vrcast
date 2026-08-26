@@ -322,6 +322,78 @@ async fn taking_a_limit_off_gives_the_viewer_the_whole_set_again() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cap_under_everything_serves_the_lightest_rather_than_nothing() {
+    // Scenario 6, step 8, and the only one of its steps that was checked without a
+    // server. FR-067 is about what a viewer sees, and "an empty description" and "the
+    // lightest rung" look identical in a unit test and nothing alike to a person.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let viewer = Viewer::attach(&server).expect("the viewer would not attach");
+
+    let all: Vec<Variant> = parse(
+        &viewer
+            .fetch("/videos/demo/master.m3u8")
+            .expect("the description was not served"),
+    )
+    .expect("the description would not read");
+    let lightest = all.iter().map(|v| v.bandwidth).min().unwrap_or(0);
+
+    // A cap a tenth of the lightest rung: nothing on this server can meet it.
+    let cap = lightest / 10;
+    let short = shorten(&all, cap, PREFIX, "demo");
+    assert!(
+        short.below_lightest,
+        "the fixture's rungs are lighter than expected"
+    );
+
+    let conn = connect(&server).await;
+    let serving = Serving {
+        conn: &conn,
+        video_dir: VIDEO_DIR,
+        conf_path: CONF,
+        main_conf: MAIN_CONF,
+        serving_prefix: PREFIX,
+        check_url: &format!(
+            "http://127.0.0.1:{}/videos/demo/master.m3u8",
+            server.http_port
+        ),
+        owner: "root:root",
+    };
+    serving
+        .apply(
+            &[Limit {
+                ip: viewer.ip().to_owned(),
+                slug: String::from("demo"),
+                cap_bps: cap,
+                set_at: when(),
+            }],
+            &[(String::from("demo"), short)],
+        )
+        .await
+        .expect("the limit would not go on");
+
+    let theirs: Vec<Variant> = parse(
+        &viewer
+            .fetch("/videos/demo/master.m3u8")
+            .expect("the limited viewer was served nothing at all"),
+    )
+    .expect("what they got would not read");
+
+    assert_eq!(
+        theirs.len(),
+        1,
+        "a cap under everything should leave exactly the lightest rung"
+    );
+    assert_eq!(theirs[0].bandwidth, lightest);
+    // And it plays: a description naming a variant that is not served is the same as no
+    // video, which is what this whole rule exists to avoid.
+    assert!(viewer
+        .fetch(&theirs[0].path)
+        .expect("the one rung they were left is not served")
+        .contains("#EXTM3U"));
+}
+
 /// Give a reload a moment on a loaded machine.
 #[allow(dead_code)]
 const PATIENCE: Duration = Duration::from_secs(30);
