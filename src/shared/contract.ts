@@ -420,6 +420,65 @@ export interface Versions {
 // ---------- events ----------
 
 /** Event names. Fixed by the contract. */
+
+/** Why a viewer is marked as having trouble (FR-053). */
+export type ViewerProblem = "SlowLink" | "Retransmits" | "Stalls";
+
+/**
+ * Somebody watching right now.
+ *
+ * Every field that may be absent means **not determined**, and is shown as that. Nothing
+ * here is ever filled in by guessing: a city invented from a neighbouring range looks
+ * exactly like knowledge (FR-052).
+ */
+export interface Viewer {
+  ip: string;
+  country: string | null;
+  city: string | null;
+  asn_org: string | null;
+  /** What they are watching. Null while no request of theirs has been recorded yet. */
+  media_id: string | null;
+  variant: string | null;
+  /** What is arriving. Null until there is enough measurement to work it out from. */
+  delivery_bps: number | null;
+  /** What the variant they are getting needs. */
+  required_bps: number | null;
+  started_at: string;
+  last_seen_at: string;
+  problems: ViewerProblem[];
+}
+
+/**
+ * The list, as it arrives — not as it is asked for.
+ *
+ * The core sends this every few seconds while watching is on. The interface does not poll:
+ * polling something that changes this often is what SC-009 exists to prevent.
+ */
+export interface ViewersUpdateEvent {
+  event: "viewers_update";
+  server_id: string;
+  active: Viewer[];
+  /** How many are watching each medium — for the card in the library (FR-056). */
+  per_media: Record<string, number>;
+}
+
+/** What the person may change. */
+export interface Settings {
+  viewer_activity_threshold_s: number;
+  /**
+   * Whether an outside service may be asked to place an address more exactly.
+   *
+   * Off unless deliberately turned on (FR-057): asking hands a viewer's address to somebody
+   * else, for every viewer, every session.
+   */
+  geo_refine_outside: boolean;
+  concurrent_heavy_tasks: number;
+  mascot: boolean;
+  animations: boolean;
+  language: string | null;
+  theme: string | null;
+}
+
 export const EVENTS = {
   taskProgress: "task:progress",
   taskDone: "task:done",

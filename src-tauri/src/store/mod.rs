@@ -14,3 +14,4 @@ pub mod library_cache;
 pub mod profiles;
 pub mod redact;
 pub mod secrets;
+pub mod settings;

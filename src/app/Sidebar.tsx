@@ -15,7 +15,7 @@ export const SECTIONS = [
   { path: "/convert", key: "convert", ready: true },
   { path: "/upload", key: "upload", ready: true },
   { path: "/ladder", key: "ladder", ready: false },
-  { path: "/viewers", key: "viewers", ready: false },
+  { path: "/viewers", key: "viewers", ready: true },
   { path: "/limits", key: "limits", ready: false },
   { path: "/diagnostics", key: "diagnostics", ready: false },
   { path: "/tasks", key: "tasks", ready: true },

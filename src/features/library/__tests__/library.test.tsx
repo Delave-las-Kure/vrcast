@@ -43,6 +43,9 @@ vi.mock("../../../shared/ipc", async () => {
       linksFor: vi.fn(),
     },
     onLibraryChanged: vi.fn(async () => () => {}),
+    // The card counts its viewers off the same stream (T176). Without this the real
+    // listener runs and reaches for the shell, which is not there in a test.
+    onViewersUpdate: vi.fn(async () => () => {}),
   };
 });
 

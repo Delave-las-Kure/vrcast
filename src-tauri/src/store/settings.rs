@@ -1,0 +1,173 @@
+//! T173 — the application's settings.
+//!
+//! What the person may change and what the core has to be told about. Kept apart from the
+//! server profiles on purpose: these belong to the application rather than to any one
+//! server, and switching servers must not change them.
+//!
+//! **No secrets here.** Passphrases and keys live in the operating system's own store
+//! (constitution, principle IV); this is an ordinary file in a person's profile, and
+//! anything put in it is readable by anything that can read that profile.
+
+use crate::domain::viewers::DEFAULT_ACTIVITY_THRESHOLD_S;
+use crate::store::db::{Db, DbError};
+
+/// Everything that can be set.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Settings {
+    /// How long after their last sign of life a viewer stops being counted as watching
+    /// (FR-055).
+    pub viewer_activity_threshold_s: u64,
+    /// Whether an outside service may be asked to place an address more exactly.
+    ///
+    /// **Off, and it takes a deliberate act to turn on** (FR-057). Asking means handing a
+    /// viewer's address to somebody else — for every viewer, every session. That is a
+    /// decision for the person whose friends are watching, not a default someone else
+    /// chose for them.
+    pub geo_refine_outside: bool,
+    /// How many heavy tasks may run at once.
+    pub concurrent_heavy_tasks: u32,
+    /// Whether the mascot is shown, and whether things move.
+    pub mascot: bool,
+    pub animations: bool,
+    /// Which of the interface's languages to use. `None` means "the system's".
+    pub language: Option<String>,
+    /// Light or dark. `None` means "the system's".
+    pub theme: Option<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            viewer_activity_threshold_s: DEFAULT_ACTIVITY_THRESHOLD_S,
+            geo_refine_outside: false,
+            concurrent_heavy_tasks: 1,
+            mascot: true,
+            animations: true,
+            language: None,
+            theme: None,
+        }
+    }
+}
+
+/// The bounds a setting is held to.
+///
+/// Not decoration: a threshold of zero would empty the list of viewers the instant anyone
+/// paused, and one of a day would keep yesterday's viewers in it. The bounds are wide —
+/// this is about keeping a value usable, not about second-guessing the person.
+pub const MIN_THRESHOLD_S: u64 = 5;
+pub const MAX_THRESHOLD_S: u64 = 600;
+pub const MAX_HEAVY_TASKS: u32 = 8;
+
+impl Settings {
+    /// Bring the values inside their bounds.
+    ///
+    /// Clamped rather than refused. A setting out of range comes from an older version of
+    /// the application or from somebody editing the file by hand, and refusing to start
+    /// over it would be out of all proportion to the harm.
+    pub fn clamped(mut self) -> Self {
+        self.viewer_activity_threshold_s = self
+            .viewer_activity_threshold_s
+            .clamp(MIN_THRESHOLD_S, MAX_THRESHOLD_S);
+        self.concurrent_heavy_tasks = self.concurrent_heavy_tasks.clamp(1, MAX_HEAVY_TASKS);
+        self
+    }
+
+    /// The viewer threshold as a span.
+    pub fn activity_threshold(&self) -> time::Duration {
+        time::Duration::seconds(self.viewer_activity_threshold_s as i64)
+    }
+}
+
+/// Read the settings.
+///
+/// Anything absent takes its default, and anything unreadable takes its default too. The
+/// settings are a convenience; refusing to start because one of them will not parse would
+/// turn a convenience into a way of locking a person out of their own application.
+pub fn load(db: &Db) -> Result<Settings, DbError> {
+    let mut settings = Settings::default();
+    db.with_conn(|conn| {
+        let mut stmt = conn.prepare("SELECT name, value FROM settings")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (name, value) = row?;
+            apply(&mut settings, &name, &value);
+        }
+        Ok(())
+    })?;
+    Ok(settings.clamped())
+}
+
+/// Write the settings, replacing what was there.
+pub fn save(db: &Db, settings: &Settings) -> Result<Settings, DbError> {
+    let settings = settings.clone().clamped();
+    let pairs = [
+        (
+            "viewer_activity_threshold_s",
+            settings.viewer_activity_threshold_s.to_string(),
+        ),
+        (
+            "geo_refine_outside",
+            settings.geo_refine_outside.to_string(),
+        ),
+        (
+            "concurrent_heavy_tasks",
+            settings.concurrent_heavy_tasks.to_string(),
+        ),
+        ("mascot", settings.mascot.to_string()),
+        ("animations", settings.animations.to_string()),
+        ("language", settings.language.clone().unwrap_or_default()),
+        ("theme", settings.theme.clone().unwrap_or_default()),
+    ];
+    db.with_conn_mut(|conn| {
+        let tx = conn.transaction()?;
+        for (name, value) in &pairs {
+            tx.execute(
+                "INSERT INTO settings (name, value) VALUES (?1, ?2)
+                 ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+                rusqlite::params![name, value],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })?;
+    Ok(settings)
+}
+
+/// Put one stored value into place.
+///
+/// A value that will not parse leaves the default standing. Silently: the alternative is a
+/// warning on every start for a setting nobody can see is broken.
+fn apply(settings: &mut Settings, name: &str, value: &str) {
+    match name {
+        "viewer_activity_threshold_s" => {
+            if let Ok(v) = value.parse() {
+                settings.viewer_activity_threshold_s = v;
+            }
+        }
+        "geo_refine_outside" => {
+            if let Ok(v) = value.parse() {
+                settings.geo_refine_outside = v;
+            }
+        }
+        "concurrent_heavy_tasks" => {
+            if let Ok(v) = value.parse() {
+                settings.concurrent_heavy_tasks = v;
+            }
+        }
+        "mascot" => {
+            if let Ok(v) = value.parse() {
+                settings.mascot = v;
+            }
+        }
+        "animations" => {
+            if let Ok(v) = value.parse() {
+                settings.animations = v;
+            }
+        }
+        // An empty string means "not chosen": the system decides. Storing it as a real
+        // value would make "the system's" indistinguishable from a language named "".
+        "language" => settings.language = (!value.is_empty()).then(|| value.to_owned()),
+        "theme" => settings.theme = (!value.is_empty()).then(|| value.to_owned()),
+        _ => {}
+    }
+}

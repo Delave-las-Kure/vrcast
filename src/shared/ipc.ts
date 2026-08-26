@@ -19,6 +19,7 @@ import {
   type LibraryChangedEvent,
   type LibraryView,
   type Links,
+  type Settings,
   type ServerInput,
   type ServerProfile,
   type Task,
@@ -34,6 +35,8 @@ import {
   type TestStep,
   type UploadRequest,
   type Versions,
+  type Viewer,
+  type ViewersUpdateEvent,
 } from "./contract";
 
 /**
@@ -115,6 +118,24 @@ export const ipc = {
   linksFor: (serverId: string, path: string) =>
     call<Links>("links_for", { serverId, path }),
 
+  // --- viewers ---
+  /**
+   * Switch the watching on. The list then arrives by itself on `viewers:update`.
+   *
+   * Repeating it for the same server does nothing and is not an error: it is the ordinary
+   * thing to do when the screen is opened again.
+   */
+  viewersWatchStart: (serverId: string) =>
+    call<void>("viewers_watch_start", { serverId }),
+  /** Switch it off. Quiet when nothing was being watched. */
+  viewersWatchStop: () => call<void>("viewers_watch_stop"),
+  /** Those who watched earlier in this session, and have since stopped (FR-055). */
+  viewersHistory: () => call<Viewer[]>("viewers_history"),
+
+  // --- settings ---
+  settingsGet: () => call<Settings>("settings_get"),
+  settingsSet: (settings: Settings) => call<Settings>("settings_set", { settings }),
+
   // --- upload ---
   /**
    * Start an upload. Returns the task id at once (FR-080).
@@ -181,6 +202,18 @@ export function onTaskNotify(
  * The payload is an object rather than a string: the core tags the event with its
  * kind, as it does for task events, so that one cannot be mistaken for another.
  */
+/**
+ * The list of viewers, as it changes (FR-054).
+ *
+ * Listened to rather than asked for. The list moves every few seconds, and asking for it
+ * that often would itself become the reason the interface stutters.
+ */
+export function onViewersUpdate(
+  handler: (update: ViewersUpdateEvent) => void,
+): Promise<UnlistenFn> {
+  return tauriListen<ViewersUpdateEvent>(EVENTS.viewersUpdate, (ev) => handler(ev.payload));
+}
+
 export function onLibraryChanged(handler: (serverId: string) => void): Promise<UnlistenFn> {
   return tauriListen<LibraryChangedEvent>(EVENTS.libraryChanged, (ev) =>
     handler(ev.payload.server_id),

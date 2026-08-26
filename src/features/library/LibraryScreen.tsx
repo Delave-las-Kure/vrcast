@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { AppError, LibraryView, MediaView } from "../../shared/contract";
-import { ipc, onLibraryChanged, toAppError } from "../../shared/ipc";
+import { ipc, onLibraryChanged, onViewersUpdate, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
 import { formatBytes, usedFraction } from "../../shared/i18n/format";
 import { fill, renderError } from "../../shared/i18n/render";
@@ -54,6 +54,17 @@ export function LibraryScreen() {
   const [dialogError, setDialogError] = useState<AppError | null>(null);
   const t = useT();
   const { lang } = useLang();
+  const [watchers, setWatchers] = useState<Record<string, number>>({});
+
+  // Only listened to. The library is not asked again for a number that changes this
+  // often — that is the polling SC-009 exists to prevent. When nobody is watching, the
+  // event never comes and the cards simply show no count.
+  useEffect(() => {
+    const unlisten = onViewersUpdate((update) => setWatchers(update.per_media));
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
 
   useEffect(() => {
     void reloadServers();
@@ -252,6 +263,7 @@ export function LibraryScreen() {
             <MediaCard
               key={m.id}
               media={m}
+              watching={watchers[m.id] ?? 0}
               t={t}
               lang={lang}
               disabled={busy || view.stale}
@@ -283,10 +295,13 @@ function MediaCard({
   onRename,
   onDelete,
   onDeleteFile,
+  watching,
   t,
   lang,
 }: {
   media: MediaView;
+  /** How many are watching it right now (FR-056). Zero shows nothing at all. */
+  watching: number;
   disabled?: boolean;
   onRename: () => void;
   onDelete: () => void;
@@ -309,6 +324,11 @@ function MediaCard({
             lang,
           )}
           {media.ladders.length > 0 && t.ui.library.hasLadder}
+          {watching > 0 && (
+            <em className="media__watching">
+              {watching} {t.ui.viewers.watchingNow}
+            </em>
+          )}
           {missing > 0 && (
             <em className="media__missing">
               {fill(t.ui.library.missingOnServer, { n: missing }, t, lang)}

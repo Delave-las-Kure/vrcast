@@ -165,6 +165,7 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                 Ok(event) => {
                     let name = match &event {
                         AppEvent::LibraryChanged { .. } => names::LIBRARY_CHANGED,
+                        AppEvent::ViewersUpdate(_) => names::VIEWERS_UPDATE,
                     };
                     if let Err(e) = app.emit(name, &event) {
                         tracing::debug!(error = %e, "event not delivered to the interface");

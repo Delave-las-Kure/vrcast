@@ -14,7 +14,9 @@ pub mod error;
 pub mod events;
 pub mod library;
 pub mod servers;
+pub mod settings;
 pub mod upload;
+pub mod viewers;
 
 use crate::domain::wording::Detail;
 use crate::store::db::Db;
@@ -36,6 +38,11 @@ use std::sync::Arc;
 pub enum AppEvent {
     /// The server's library changed: read it again.
     LibraryChanged { server_id: String },
+    /// Who is watching has changed (FR-054).
+    ///
+    /// Sent rather than waited to be asked for: the list changes every few seconds, and
+    /// asking for it that often is what SC-009 exists to prevent.
+    ViewersUpdate(crate::server::viewers::ViewersUpdate),
 }
 
 /// The application's shared state. Everything the commands need lives here.
@@ -45,7 +52,14 @@ pub struct AppState {
     pub tasks: TaskEngine,
     pub secrets: Arc<dyn SecretStore>,
     /// The channel for events unrelated to tasks.
-    events: tokio::sync::broadcast::Sender<AppEvent>,
+    pub(crate) events: tokio::sync::broadcast::Sender<AppEvent>,
+    /// The watching of viewers — at most one server at a time (T171).
+    pub viewers: Arc<viewers::ViewersWatch>,
+    /// Where addresses are, looked up on this machine and nowhere else (FR-057).
+    ///
+    /// Empty until the table is put into the package (T162), and empty is a working state:
+    /// every viewer is then shown as "not determined", which is the truth.
+    pub places: Arc<crate::domain::geo::GeoTable>,
 }
 
 impl AppState {
@@ -91,6 +105,8 @@ impl AppState {
             tasks,
             secrets,
             events,
+            viewers: Arc::new(viewers::ViewersWatch::default()),
+            places: Arc::new(crate::domain::geo::GeoTable::default()),
         })
     }
 

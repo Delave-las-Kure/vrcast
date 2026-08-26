@@ -411,6 +411,37 @@ export const en: Catalogue = {
       theme: { light: "Light", dark: "Dark", system: "Follow the system" },
     },
 
+    viewers: {
+      explain:
+        "Who is pulling from your server right now. The list keeps itself up to date while this screen is open.",
+      noServer: "Choose a server first — there is nobody to watch yet.",
+      starting: "Starting to watch…",
+      nobody: "Nobody is watching at the moment.",
+      notKnown: "not determined",
+      watchingUnknown: "what they are watching is not known yet",
+      speedNotYet: "A speed appears once there is enough to work one out from.",
+      needs: "needs",
+      fine: "fine",
+      columnAddress: "Address",
+      columnPlace: "From",
+      columnWatching: "Watching",
+      columnSpeed: "Speed",
+      columnFor: "For",
+      columnState: "State",
+      problems: {
+        slowLink: "not enough link",
+        slowLinkHint:
+          "Less is arriving than the quality they are getting needs. The player will not step down by itself — the quality has to be capped by hand.",
+        retransmits: "a lossy link",
+        retransmitsHint:
+          "A noticeable share of what is sent has to be sent again. Usually the viewer's connection rather than the server's.",
+        stalls: "the pulling has stopped",
+        stallsHint:
+          "The connection is open but nothing is moving. If it lasts, the viewer's film has cut out.",
+      },
+      watchingNow: "watching now",
+    },
+
     sections: {
       servers: "Servers",
       library: "Library",
@@ -436,11 +467,6 @@ export const en: Catalogue = {
         phase: "Phase 5",
         what: "Working out a ladder for a particular source and checking that every variant is served.",
         fallback: "the vrcast-hls skill",
-      },
-      viewers: {
-        phase: "Phase 4",
-        what: "Who is watching right now, from where, at what speed, and who has run into trouble.",
-        fallback: "the vrcast-diagnose skill",
       },
       limits: {
         phase: "Phase 6",

@@ -29,3 +29,6 @@ mod upload;
 
 #[path = "contract/convert.rs"]
 mod convert;
+
+#[path = "contract/viewers.rs"]
+mod viewers;

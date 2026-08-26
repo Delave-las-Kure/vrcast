@@ -13,6 +13,7 @@ import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
 import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { ComingSoon } from "../features/shared/ComingSoon";
+import { ViewersScreen } from "../features/viewers/ViewersScreen";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { UploadScreen } from "../features/upload/UploadScreen";
 import { ipc } from "../shared/ipc";
@@ -63,17 +64,7 @@ function AppShell() {
               />
             }
           />
-          <Route
-            path="/viewers"
-            element={
-              <ComingSoon
-                title={t.ui.sections.viewers}
-                phase={soon.viewers.phase}
-                what={soon.viewers.what}
-                fallback={soon.viewers.fallback}
-              />
-            }
-          />
+          <Route path="/viewers" element={<ViewersScreen />} />
           <Route
             path="/limits"
             element={
