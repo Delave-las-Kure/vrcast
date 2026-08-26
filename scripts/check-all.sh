@@ -56,6 +56,7 @@ step() {
 
 step "Isolation (principle VII)" bash scripts/check-isolation.sh
 step "Hardcoded servers (FR-004)" bash scripts/check-no-hardcoded-server.sh
+step "Bundled FFmpeg can do what is needed" bash scripts/check-ffmpeg-features.sh
 step "Core: format" cargo fmt --manifest-path src-tauri/Cargo.toml --check
 step "Core: clippy over all targets" \
   cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features integration -- -D warnings

@@ -78,6 +78,13 @@ jobs:
       - name: Put the bundled FFmpeg in place
         run: node scripts/fetch-ffmpeg.mjs
 
+      # Both of the bundled build's abilities the application cannot work without. Checked
+      # on each system separately: a build that has them on Windows and not on Linux is a
+      # thing that has happened to other projects, and it would show up here as a person's
+      # ladder refusing to be measured.
+      - name: The bundled FFmpeg can do what is needed
+        shell: bash
+        run: bash scripts/check-ffmpeg-features.sh
       - name: Format
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
