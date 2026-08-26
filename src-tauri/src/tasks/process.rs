@@ -17,6 +17,7 @@
 //! The Windows row is the crucial one. It covers the case where no application code is
 //! running any more while the guarantee must hold all the same (SC-010).
 
+use std::path::Path;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 
@@ -56,12 +57,27 @@ impl ManagedProcess {
     /// The task runner's worker threads live for as long as the application does — calling
     /// from there is fine; from separate threads for blocking operations it is not.
     pub fn spawn(program: &str, args: &[String]) -> Result<Self> {
+        Self::spawn_in(None, program, args)
+    }
+
+    /// The same, but started in a directory of our choosing.
+    ///
+    /// **Needed for one real reason**: a filter string is parsed by FFmpeg itself, and a
+    /// Windows path inside one is not a path — the colon after the drive letter separates
+    /// options and the backslashes escape whatever follows them. The measurement writes its
+    /// results through such a string. Working in a directory and naming the file relatively
+    /// sidesteps the whole question; the alternative is escaping by hand, which this
+    /// project has already once got wrong quietly, writing the results nowhere.
+    pub fn spawn_in(dir: Option<&Path>, program: &str, args: &[String]) -> Result<Self> {
         let mut cmd = Command::new(program);
         cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if let Some(dir) = dir {
+            cmd.current_dir(dir);
+        }
 
         #[cfg(unix)]
         {

@@ -38,6 +38,9 @@ mod ladder;
 #[path = "unit/measured_ladder.rs"]
 mod measured_ladder;
 
+#[path = "unit/measurements.rs"]
+mod measurements;
+
 #[path = "unit/process.rs"]
 mod process;
 
@@ -79,3 +82,6 @@ mod convert;
 
 #[path = "unit/validate.rs"]
 mod validate;
+
+#[path = "unit/vmaf.rs"]
+mod vmaf;

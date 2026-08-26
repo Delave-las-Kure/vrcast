@@ -159,6 +159,22 @@ export const en: Catalogue = {
       message: "The quality ladder was not built in full",
       hint: "Some variants are not being served. Run the build again — the finished ones will not be rebuilt.",
     },
+    VMAF_UNAVAILABLE: {
+      message: "This build of FFmpeg cannot measure quality",
+      hint: "A quality ladder is chosen by measuring the material rather than by formula, and without libvmaf there is nothing to measure with. Reinstall the application — its FFmpeg is built with libvmaf.",
+    },
+    LADDER_NOT_MEASURED: {
+      message: "The quality of this material has not been measured yet",
+      hint: "Rungs taken from the formula are a guess: on one film it asks for twice what is needed, on another it understates. Run the measurement, or borrow one from the first episode of the same season.",
+    },
+    MEASUREMENT_NOT_FOUND: {
+      message: "There is no such measurement",
+      hint: "It may have been deleted, or taken for a different target codec. Measurements do not carry between codecs: AV1's advantage over H.264 melts as the bitrate rises, and there is no constant multiplier.",
+    },
+    MEASUREMENT_DIFFERENT_MATERIAL: {
+      message: "That measurement was taken on different material",
+      hint: "Frame size, frame rate and the height the material really has must all agree. Native 4K and an upscale behave differently: the point where the resolution should drop sits somewhere else entirely.",
+    },
     NO_LADDER_FOR_MEDIA: {
       message: "This medium has no quality ladder",
       hint: "Build a quality ladder first: capping quality means choosing from the rungs that exist.",
@@ -320,6 +336,7 @@ export const en: Catalogue = {
     STAGE_CONVERTING: "preparing the file",
     STAGE_VALIDATING: "checking playback",
     STAGE_CHECKSUM: "comparing checksums",
+    STAGE_MEASURING_QUALITY: "measuring quality on the material itself",
     STAGE_DONE: "done",
 
     // --- what closing the application would do ---
@@ -370,6 +387,10 @@ export const en: Catalogue = {
       "The complexity probe ran on something other than an NVIDIA card, and the quality setting it uses was calibrated for one. The ladder came out, but its top rung rests on a number taken with a different ruler: if you know this material, check it against what you know, and run a full measurement for anything that matters.",
     NOTICE_PROBE_FAILED:
       "The material could not be measured, so the top rung comes from the old constant. A constant knows nothing about the material: on animation it asks for three times what is needed, and on dense action it understates. The rungs are worth going over by hand.",
+    NOTICE_MEASUREMENT_BORROWED:
+      "These rungs come from the measurement of {from}, not from a measurement of this file. For the next episode of the same season that is usually right — it is the same source. If the material differs (a different upscale, a different frame rate), measure it separately.",
+    NOTICE_MEASUREMENT_PARTIAL:
+      "{measured} points of {total} were measured; the rest would not encode. The ladder is built from what there is, but where points are missing the optimum may have gone unfound.",
     NOTICE_NO_HARDWARE_FOUND:
       "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
     NOTICE_SOFTWARE_AS_ASKED:
@@ -739,6 +760,7 @@ export const en: Catalogue = {
         probe: "examining the source",
         convert: "preparing the file",
         upload: "uploading to the server",
+        measure_quality: "measuring quality on the material",
         build_ladder: "building the quality ladder",
         deploy: "deploying",
         upgrade_server: "updating the server",
@@ -760,6 +782,7 @@ export const en: Catalogue = {
       done: {
         upload: "The file was uploaded and put into service.",
         convert: "The file is prepared and ready to upload.",
+        measure_quality: "The quality of this material has been measured.",
         build_ladder: "The quality ladder is built.",
         deploy: "Serving is deployed.",
         upgrade_server: "The server side is updated.",

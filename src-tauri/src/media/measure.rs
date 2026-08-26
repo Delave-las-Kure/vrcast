@@ -129,6 +129,38 @@ pub fn from_packets(csv: &str) -> Measured {
     }
 }
 
+/// Read a file's per-second weights.
+///
+/// The same ffprobe call as [`measure`], read differently: the chunk picker wants the whole
+/// series, not the worst few moments of it.
+pub async fn seconds_of(path: &Path) -> Result<Vec<u64>, ffmpeg::FfmpegError> {
+    let ffprobe = ffmpeg::locate("ffprobe")?;
+    let output = tokio::process::Command::new(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time,dts_time,size",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .map_err(|e| ffmpeg::FfmpegError::NotRunnable(e.to_string()))?;
+
+    if !output.status.success() {
+        return Err(ffmpeg::FfmpegError::Unexpected(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ));
+    }
+    Ok(seconds_from_packets(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
 /// What each second of the film weighed, from the first to the last, with silent seconds
 /// present as zero.
 ///

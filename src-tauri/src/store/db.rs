@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// The schema version this build of the application understands.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Migrations are applied in order; the number is the `user_version` after applying it.
 /// A migration already released must never be changed — only followed by the next one.
@@ -23,6 +23,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (4, include_str!("migrations/0004_process_identity.sql")),
     (5, include_str!("migrations/0005_queue_order.sql")),
     (6, include_str!("migrations/0006_settings.sql")),
+    (7, include_str!("migrations/0007_quality_measurements.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

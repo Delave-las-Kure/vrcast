@@ -55,6 +55,10 @@ export type ErrorCode =
   | "LEVEL_EXCEEDED"
   | "LADDER_INCOMPLETE"
   | "NO_LADDER_FOR_MEDIA"
+  | "VMAF_UNAVAILABLE"
+  | "LADDER_NOT_MEASURED"
+  | "MEASUREMENT_NOT_FOUND"
+  | "MEASUREMENT_DIFFERENT_MATERIAL"
   // web server configuration
   | "CADDY_VALIDATE_FAILED"
   | "CADDY_RELOAD_FAILED"
@@ -162,6 +166,7 @@ export type DetailCode =
   | "STAGE_CONVERTING"
   | "STAGE_VALIDATING"
   | "STAGE_CHECKSUM"
+  | "STAGE_MEASURING_QUALITY"
   | "STAGE_DONE"
 
   // what closing the application would do to a task (FR-086)
@@ -201,6 +206,8 @@ export type DetailCode =
   // what to say about the choice of encoder (FR-026)
   | "NOTICE_PROBE_UNCALIBRATED"
   | "NOTICE_PROBE_FAILED"
+  | "NOTICE_MEASUREMENT_BORROWED"
+  | "NOTICE_MEASUREMENT_PARTIAL"
   | "NOTICE_NO_HARDWARE_FOUND"
   | "NOTICE_SOFTWARE_AS_ASKED"
   | "NOTICE_HARDWARE_FAILED"
@@ -366,6 +373,7 @@ export type TaskKind =
   | "probe"
   | "convert"
   | "upload"
+  | "measure_quality"
   | "build_ladder"
   | "deploy"
   | "upgrade_server"
@@ -553,6 +561,7 @@ export interface FfmpegInfo {
   path: string;
   /** Whether the software H.264 encoder is there. Without it, preparation is impossible. */
   has_x264: boolean;
+  has_libvmaf: boolean;
   /**
    * The hardware encoders this build knows how to call.
    *

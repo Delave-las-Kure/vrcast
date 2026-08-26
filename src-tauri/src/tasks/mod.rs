@@ -8,6 +8,7 @@
 pub mod engine;
 pub mod process;
 pub mod progress;
+pub mod quality_measure;
 pub mod registry;
 pub mod state;
 pub mod store;

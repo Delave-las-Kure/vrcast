@@ -51,6 +51,8 @@ str_enum! {
         Convert => "convert",
         /// Sending a file to the server.
         Upload => "upload",
+        /// Measuring what each rung is worth on this material — the longest of them all.
+        MeasureQuality => "measure_quality",
         /// Building a quality ladder on the server.
         BuildLadder => "build_ladder",
         /// Setting up serving on a bare server.
@@ -66,7 +68,7 @@ impl TaskKind {
     /// Which resource a task takes up.
     pub fn lane(&self) -> Lane {
         match self {
-            Self::Convert => Lane::Compute,
+            Self::Convert | Self::MeasureQuality => Lane::Compute,
             Self::Upload | Self::BuildLadder | Self::Deploy | Self::UpgradeServer => Lane::Network,
             Self::Probe | Self::Diagnose => Lane::Light,
         }
@@ -84,7 +86,11 @@ impl TaskKind {
             // person must learn that BEFORE closing it (FR-086).
             Self::Convert => PauseKind::SuspendedProcess,
             // Assembled from completed steps: it carries on from what is already done.
-            Self::BuildLadder | Self::Deploy | Self::UpgradeServer => {
+            //
+            // A measurement belongs here rather than with preparing a file: each point of
+            // the grid is written down as it is taken, so what survives a restart is not an
+            // estimate but the exact points that answered.
+            Self::BuildLadder | Self::Deploy | Self::UpgradeServer | Self::MeasureQuality => {
                 PauseKind::ResumableAcrossRestart
             }
             // Short ones: there is nothing to pause, running them again is simpler.

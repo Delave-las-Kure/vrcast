@@ -39,6 +39,13 @@ pub struct FfmpegInfo {
     pub path: String,
     /// Whether there is a software H.264 encoder. Without it no preparation is possible.
     pub has_x264: bool,
+    /// Whether quality can be measured at all.
+    ///
+    /// Without `libvmaf` there is no measuring what a rung is worth on this material, and
+    /// without that there is no ladder — the ladder is chosen by measurement, not by
+    /// formula (R-21). Learning this at the moment a person asks for a ladder would be
+    /// learning it too late.
+    pub has_libvmaf: bool,
     /// The hardware H.264 encoders this build knows how to call.
     ///
     /// "Knows how to call" is not "work here": their presence in the build says nothing
@@ -132,11 +139,13 @@ pub async fn probe_self() -> Result<FfmpegInfo> {
 
     let version = parse_version(&run(&path, &["-hide_banner", "-version"]).await?)?;
     let encoders = run(&path, &["-hide_banner", "-encoders"]).await?;
+    let filters = run(&path, &["-hide_banner", "-filters"]).await?;
 
     Ok(FfmpegInfo {
         version,
         path: path.display().to_string(),
         has_x264: encoder_present(&encoders, "libx264"),
+        has_libvmaf: filter_present(&filters, "libvmaf"),
         hardware: HW_ENCODERS
             .iter()
             .filter(|n| encoder_present(&encoders, n))
@@ -233,4 +242,42 @@ fn first_line(text: &str) -> Option<String> {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .map(str::to_owned)
+}
+
+/// Whether such a filter is in the listing.
+///
+/// A listing line looks like this: ` ... libvmaf   VV->V  Calculate the VMAF between two
+/// video streams.` — flags, name, what it takes and gives, then a description for a person.
+/// The line is recognised by the arrow in the third column, which the headings and the
+/// legend do not have. Searching the whole text would not do here either: `libvmaf` also
+/// stands in the description of `vmafmotion`, which is a different filter measuring a
+/// different thing.
+pub fn filter_present(listing: &str, name: &str) -> bool {
+    listing.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        let (_flags, found, kinds) = (parts.next(), parts.next(), parts.next());
+        matches!((found, kinds), (Some(f), Some(k)) if k.contains("->") && f == name)
+    })
+}
+
+/// What a file's container says it weighs, in bits per second.
+///
+/// `None` when it cannot be asked — a file that will not open has no bitrate, and the
+/// callers all have something sensible to do with that.
+pub async fn bitrate_of(path: &Path) -> Option<u64> {
+    let ffprobe = locate("ffprobe").ok()?;
+    let out = tokio::process::Command::new(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=bit_rate",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }

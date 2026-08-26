@@ -14,6 +14,7 @@ pub mod error;
 pub mod events;
 pub mod geo;
 pub mod library;
+pub mod quality;
 pub mod servers;
 pub mod settings;
 pub mod upload;

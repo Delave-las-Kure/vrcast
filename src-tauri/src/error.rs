@@ -106,6 +106,14 @@ error_codes! {
     LevelExceeded => "LEVEL_EXCEEDED",
     LadderIncomplete => "LADDER_INCOMPLETE",
     NoLadderForMedia => "NO_LADDER_FOR_MEDIA",
+    /// This build of FFmpeg cannot measure quality, so no ladder can be built.
+    VmafUnavailable => "VMAF_UNAVAILABLE",
+    /// The ladder for this material has not been measured, and a ladder is not built
+    /// from a formula (R-21).
+    LadderNotMeasured => "LADDER_NOT_MEASURED",
+    MeasurementNotFound => "MEASUREMENT_NOT_FOUND",
+    /// The measurement asked for was taken on material of another kind entirely.
+    MeasurementDifferentMaterial => "MEASUREMENT_DIFFERENT_MATERIAL",
 
     // --- web server configuration ---
     CaddyValidateFailed => "CADDY_VALIDATE_FAILED",

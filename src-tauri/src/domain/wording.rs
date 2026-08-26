@@ -150,6 +150,7 @@ detail_codes! {
     StageConverting => "STAGE_CONVERTING",
     StageValidating => "STAGE_VALIDATING",
     StageChecksum => "STAGE_CHECKSUM",
+    StageMeasuringQuality => "STAGE_MEASURING_QUALITY",
     StageDone => "STAGE_DONE",
 
     // --- what closing the application would do to a task (FR-086) ---
@@ -217,6 +218,11 @@ detail_codes! {
     NoticeProbeUncalibrated => "NOTICE_PROBE_UNCALIBRATED",
     /// The probe could not run at all, and the ladder rests on the old constant.
     NoticeProbeFailed => "NOTICE_PROBE_FAILED",
+    /// `from` — the file the measurement was really taken on. These rungs were not
+    /// measured on this material.
+    NoticeMeasurementBorrowed => "NOTICE_MEASUREMENT_BORROWED",
+    /// `measured`, `total` — how much of the grid answered. Some points would not encode.
+    NoticeMeasurementPartial => "NOTICE_MEASUREMENT_PARTIAL",
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 

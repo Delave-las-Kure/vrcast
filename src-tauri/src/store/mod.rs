@@ -12,6 +12,7 @@
 pub mod db;
 pub mod geo;
 pub mod library_cache;
+pub mod measurements;
 pub mod profiles;
 pub mod redact;
 pub mod secrets;

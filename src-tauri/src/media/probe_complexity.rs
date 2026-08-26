@@ -191,7 +191,7 @@ async fn encode_piece(
         .map_err(|e| ffmpeg::FfmpegError::NotRunnable(e.to_string()));
 
     let bitrate = match status {
-        Ok(o) if o.status.success() => bitrate_of(&out).await.unwrap_or(0),
+        Ok(o) if o.status.success() => ffmpeg::bitrate_of(&out).await.unwrap_or(0),
         Ok(o) => {
             let _ = tokio::fs::remove_file(&out).await;
             return Err(ffmpeg::FfmpegError::Unexpected(
@@ -206,22 +206,4 @@ async fn encode_piece(
 
     let _ = tokio::fs::remove_file(&out).await;
     Ok(bitrate)
-}
-
-async fn bitrate_of(path: &Path) -> Option<u64> {
-    let ffprobe = ffmpeg::locate("ffprobe").ok()?;
-    let out = tokio::process::Command::new(ffprobe)
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=bit_rate",
-            "-of",
-            "csv=p=0",
-        ])
-        .arg(path)
-        .output()
-        .await
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }

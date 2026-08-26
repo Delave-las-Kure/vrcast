@@ -1,0 +1,266 @@
+//! T236, T237 — keeping a quality measurement, and lending it to the next episode.
+//!
+//! Half an hour of somebody's machine goes into a measurement. It survives a cancellation,
+//! a restart and a crash because the points are written as they are taken rather than at
+//! the end.
+
+use std::path::Path;
+
+use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
+
+use crate::domain::measured_ladder::Point;
+use crate::store::db::{now_rfc3339, Db, DbError};
+
+/// What is being measured, and how.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Run {
+    pub source_key: String,
+    /// The codec the ladder is for, not the source's own.
+    pub codec: String,
+    pub source_path: String,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub native_height: Option<u32>,
+    pub anchor_mbps: u64,
+    pub chunk_starts: Vec<u64>,
+    pub chunk_s: u64,
+    /// Which file this measurement really came from, when it was not made here.
+    pub borrowed_from: Option<String>,
+}
+
+impl Run {
+    /// Whether the rungs resting on this can be called measured.
+    pub fn is_measured_here(&self) -> bool {
+        self.borrowed_from.is_none()
+    }
+}
+
+/// What identifies the material.
+///
+/// Its size and its name. **Not its path**: a person who tidies their films into folders
+/// has not changed a single frame, and making them measure again for half an hour would be
+/// punishing them for housekeeping. Editing a file in place changes its size, and that is a
+/// different film — as it should be.
+pub fn key_for(path: &Path) -> std::io::Result<String> {
+    let size = std::fs::metadata(path)?.len();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(format!("{size}:{name}"))
+}
+
+/// Begin, or resume, a measurement of this material for this codec.
+///
+/// Repeating it does not lose the points already taken: the header is replaced, the points
+/// stay. That is what lets a cancelled run be picked up.
+pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
+    let chunks = run
+        .chunk_starts
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO quality_measurements
+                (source_key, codec, source_path, width, height, fps, native_height,
+                 anchor_mbps, chunk_starts, chunk_s, borrowed_from, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT (source_key, codec) DO UPDATE SET
+                source_path = excluded.source_path,
+                width = excluded.width,
+                height = excluded.height,
+                fps = excluded.fps,
+                native_height = excluded.native_height,
+                anchor_mbps = excluded.anchor_mbps,
+                chunk_starts = excluded.chunk_starts,
+                chunk_s = excluded.chunk_s,
+                borrowed_from = excluded.borrowed_from,
+                updated_at = excluded.updated_at",
+            rusqlite::params![
+                run.source_key,
+                run.codec,
+                run.source_path,
+                run.width,
+                run.height,
+                run.fps,
+                run.native_height,
+                run.anchor_mbps as i64,
+                chunks,
+                run.chunk_s as i64,
+                run.borrowed_from,
+                now_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    })
+}
+
+/// Write down one measured point.
+pub fn record(db: &Db, source_key: &str, codec: &str, point: &Point) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO quality_points
+                (source_key, codec, bitrate_mbps, height, vmaf, actual_bps, measured_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT (source_key, codec, bitrate_mbps, height) DO UPDATE SET
+                vmaf = excluded.vmaf,
+                actual_bps = excluded.actual_bps,
+                measured_at = excluded.measured_at",
+            rusqlite::params![
+                source_key,
+                codec,
+                point.bitrate_mbps as i64,
+                point.height,
+                point.vmaf,
+                point.actual_bps as i64,
+                now_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    })
+}
+
+/// What has been measured so far.
+pub fn points(db: &Db, source_key: &str, codec: &str) -> Result<Vec<Point>, DbError> {
+    db.with_conn(|c| {
+        let mut q = c.prepare(
+            "SELECT bitrate_mbps, height, vmaf, actual_bps
+             FROM quality_points WHERE source_key = ?1 AND codec = ?2
+             ORDER BY bitrate_mbps, height",
+        )?;
+        let rows = q
+            .query_map(rusqlite::params![source_key, codec], |r| {
+                Ok(Point {
+                    bitrate_mbps: r.get::<_, i64>(0)? as u64,
+                    height: r.get(1)?,
+                    vmaf: r.get(2)?,
+                    actual_bps: r.get::<_, i64>(3)? as u64,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
+
+/// The header of a measurement, if there is one.
+pub fn run(db: &Db, source_key: &str, codec: &str) -> Result<Option<Run>, DbError> {
+    db.with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT source_key, codec, source_path, width, height, fps, native_height,
+                    anchor_mbps, chunk_starts, chunk_s, borrowed_from
+             FROM quality_measurements WHERE source_key = ?1 AND codec = ?2",
+            rusqlite::params![source_key, codec],
+            row_to_run,
+        )
+        .optional()?)
+    })
+}
+
+/// Every measurement kept, newest first.
+///
+/// This is what a person is offered the next episode from.
+pub fn all(db: &Db) -> Result<Vec<Run>, DbError> {
+    db.with_conn(|c| {
+        let mut q = c.prepare(
+            "SELECT source_key, codec, source_path, width, height, fps, native_height,
+                    anchor_mbps, chunk_starts, chunk_s, borrowed_from
+             FROM quality_measurements ORDER BY updated_at DESC",
+        )?;
+        let rows = q
+            .query_map([], row_to_run)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
+
+/// Why a measurement cannot be lent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LendRefusal {
+    /// There is no such measurement to lend.
+    NothingToLend,
+    /// The two are not the same kind of material.
+    ///
+    /// A ladder measured on a native 4K master says nothing about an upscale, and the other
+    /// way round: the point where the resolution should drop sits somewhere else entirely.
+    /// Frame size, frame rate and the height the material really has must all agree.
+    DifferentMaterial,
+}
+
+/// Lend one film's measurement to another — the next episode of the same season.
+///
+/// **The chunks are lent with it.** Chosen afresh the percentiles would be the same and the
+/// scenes different, and then the difference between two episodes would mix into the
+/// difference between two rungs.
+///
+/// The borrowed run is marked as borrowed. A rung standing on somebody else's measurement
+/// is not a measured rung, and a person is owed the difference plainly (FR-145).
+pub fn lend(db: &Db, from_key: &str, codec: &str, to: &Run) -> Result<Run, LendRefusal> {
+    let source = match run(db, from_key, codec) {
+        Ok(Some(r)) => r,
+        _ => return Err(LendRefusal::NothingToLend),
+    };
+    if source.width != to.width
+        || source.height != to.height
+        || source.fps != to.fps
+        || source.native_height != to.native_height
+    {
+        return Err(LendRefusal::DifferentMaterial);
+    }
+
+    let borrowed = Run {
+        anchor_mbps: source.anchor_mbps,
+        chunk_starts: source.chunk_starts.clone(),
+        chunk_s: source.chunk_s,
+        borrowed_from: Some(source.source_path.clone()),
+        ..to.clone()
+    };
+    if begin(db, &borrowed).is_err() {
+        return Err(LendRefusal::NothingToLend);
+    }
+
+    let lent = points(db, from_key, codec).unwrap_or_default();
+    for point in &lent {
+        let _ = record(db, &borrowed.source_key, codec, point);
+    }
+    Ok(borrowed)
+}
+
+/// Throw a measurement away — the material was re-encoded, or the person wants it redone.
+pub fn forget(db: &Db, source_key: &str, codec: &str) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "DELETE FROM quality_points WHERE source_key = ?1 AND codec = ?2",
+            rusqlite::params![source_key, codec],
+        )?;
+        c.execute(
+            "DELETE FROM quality_measurements WHERE source_key = ?1 AND codec = ?2",
+            rusqlite::params![source_key, codec],
+        )?;
+        Ok(())
+    })
+}
+
+fn row_to_run(r: &rusqlite::Row) -> rusqlite::Result<Run> {
+    let chunks: String = r.get(8)?;
+    Ok(Run {
+        source_key: r.get(0)?,
+        codec: r.get(1)?,
+        source_path: r.get(2)?,
+        width: r.get(3)?,
+        height: r.get(4)?,
+        fps: r.get(5)?,
+        native_height: r.get(6)?,
+        anchor_mbps: r.get::<_, i64>(7)? as u64,
+        chunk_starts: chunks
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect(),
+        chunk_s: r.get::<_, i64>(9)? as u64,
+        borrowed_from: r.get(10)?,
+    })
+}

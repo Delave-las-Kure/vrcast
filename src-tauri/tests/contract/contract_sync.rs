@@ -335,6 +335,7 @@ fn the_ffmpeg_info_s_shape_matches_both_ways() {
         version: String::from("ffmpeg version n8"),
         path: String::from("/x/ffmpeg"),
         has_x264: true,
+        has_libvmaf: true,
         hardware: vec![String::from("h264_nvenc")],
     };
     same_shape(
