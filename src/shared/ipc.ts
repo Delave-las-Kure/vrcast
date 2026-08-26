@@ -37,6 +37,13 @@ import {
   type Versions,
   type Viewer,
   type ViewersUpdateEvent,
+  type LadderPreview,
+  type LadderVerdict,
+  type MeasurePreview,
+  type MeasurementView,
+  type Rung,
+  type SourceFacts,
+  type SourceMeasured,
 } from "./contract";
 
 /**
@@ -131,6 +138,40 @@ export const ipc = {
   viewersWatchStop: () => call<void>("viewers_watch_stop"),
   /** Those who watched earlier in this session, and have since stopped (FR-055). */
   viewersHistory: () => call<Viewer[]>("viewers_history"),
+
+  // --- quality ladders ---
+  /** What the source averages and where it peaks, before a ladder is worked out. */
+  ladderMeasure: (path: string) => call<SourceMeasured>("ladder_measure", { path }),
+  /**
+   * The ladder for this film: the measured one when it has been measured, and the
+   * formula's preview when it has not. The answer says which, every time.
+   */
+  ladderPlan: (request: {
+    path: string;
+    codec?: string;
+    nativeHeight?: number | null;
+    preferHardware?: boolean;
+  }) => call<LadderPreview>("ladder_plan", { request }),
+  /**
+   * Check rungs a person has edited. Called on **every** edit (FR-044): a pure function
+   * in the core, so it costs nothing and never waits on a file or a server.
+   */
+  ladderValidate: (rungs: Rung[], source: SourceFacts) =>
+    call<LadderVerdict>("ladder_validate", { check: { rungs, source } }),
+
+  // --- measuring quality ---
+  qualityMeasurePreview: (request: {
+    path: string;
+    codec?: string;
+    nativeHeight?: number | null;
+  }) => call<MeasurePreview>("quality_measure_preview", { request }),
+  qualityMeasureStart: (request: {
+    path: string;
+    codec?: string;
+    nativeHeight?: number | null;
+  }) => call<string>("quality_measure_start", { request }),
+  qualityMeasureResult: (sourceKey: string, codec: string) =>
+    call<MeasurementView>("quality_measure_result", { sourceKey, codec }),
 
   // --- settings ---
   settingsGet: () => call<Settings>("settings_get"),

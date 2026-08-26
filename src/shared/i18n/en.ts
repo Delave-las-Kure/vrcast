@@ -445,6 +445,55 @@ export const en: Catalogue = {
       theme: { light: "Light", dark: "Dark", system: "Follow the system" },
     },
 
+    ladder: {
+      explain:
+        "A quality set is several versions of one film. A viewer's player takes whichever their connection can hold.",
+      pickFile: "Choose a source",
+      measuring: "Measuring the source…",
+      sourceIs: "Source: {width}×{height}, {fps} frames a second, {bitrate}",
+      peakIs: "Peak: {peak} — a viewer's connection has to hold this, not the average",
+
+      fromMeasured: "The rungs were chosen by measuring this material",
+      fromBorrowed: "The rungs come from a measurement of another file",
+      fromFormula: "The rungs come from the formula — a guess, not a measurement",
+      formulaExplain:
+        "The formula knows nothing about the material: on animation it asks for three times what is needed, on dense action it understates. Until it has been measured, the set cannot be built.",
+
+      measureTitle: "Measuring quality",
+      measureExplain:
+        "The application encodes three short chunks — a light one, a middling one and a heavy one — at several qualities, and looks at what actually comes out.",
+      measureTakes: "About {minutes} min: {points} points",
+      measureTakesResume: "About {minutes} min: {points} points left of {total}",
+      estimateFromThisMachine: "Estimated from your own earlier measurements ({points} points)",
+      estimateFromModel:
+        "Estimated from a measurement on the developer's machine — yours may differ. It corrects itself after your very first measured point.",
+      measureStart: "Measure",
+      measureRunning: "Measuring — you can close this: the work is not lost",
+
+      rungs: "Rungs",
+      columnBitrate: "Bitrate",
+      columnSize: "Frame",
+      columnQuality: "Quality",
+      columnWhy: "Why",
+      notMeasured: "not measured",
+      vmafIs: "VMAF {value}",
+      droppedAbove:
+        "Dropped as excessive: {list}. Past the quality target those bits are paid for by every viewer and seen by none.",
+
+      build: "Build the set",
+      buildBlocked: "Cannot be built: the rungs are not measured",
+      buildBlockedEmpty: "Nothing to build: there are no rungs",
+      building: "Building — this takes a while",
+      objections: "Objections",
+      objectionAboveSource: "Rung {index}: above the source — those bits add nothing but weight",
+      objectionBufsize: "Rung {index}: the buffer is larger than the ceiling — real peaks will exceed it and a viewer will stall",
+      objectionLevel: "Rung {index}: the variant does not fit the level it declares, {level}",
+      objectionOrder: "Rung {index}: the rungs are not in descending order",
+      objectionStep: "Rung {index}: {times} times the one below — too far {tooMuch}",
+      stepTooBig: "apart",
+      stepTooSmall: "together",
+    },
+
     viewers: {
       explain:
         "Who is pulling from your server right now. The list keeps itself up to date while this screen is open.",

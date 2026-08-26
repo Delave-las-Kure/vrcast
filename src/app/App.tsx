@@ -13,6 +13,7 @@ import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
 import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { ComingSoon } from "../features/shared/ComingSoon";
+import { LadderPage } from "../features/ladder/LadderScreen";
 import { ViewersScreen } from "../features/viewers/ViewersScreen";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { UploadScreen } from "../features/upload/UploadScreen";
@@ -53,17 +54,7 @@ function AppShell() {
           <Route path="/convert" element={<ConvertScreen />} />
           <Route path="/upload" element={<UploadScreen />} />
           <Route path="/about" element={<About />} />
-          <Route
-            path="/ladder"
-            element={
-              <ComingSoon
-                title={t.ui.sections.ladder}
-                phase={soon.ladder.phase}
-                what={soon.ladder.what}
-                fallback={soon.ladder.fallback}
-              />
-            }
-          />
+          <Route path="/ladder" element={<LadderPage />} />
           <Route path="/viewers" element={<ViewersScreen />} />
           <Route
             path="/limits"

@@ -447,6 +447,147 @@ export type ViewerProblem = "SlowLink" | "Retransmits" | "Stalls";
  * here is ever filled in by guessing: a city invented from a neighbouring range looks
  * exactly like knowledge (FR-052).
  */
+// ---------- quality ladders ----------
+
+/** What is known about how good a rung actually looks (FR-145, R-21). */
+export type Quality =
+  /** Measured on this material. In hundredths of a VMAF point. */
+  | { state: "measured_here"; vmaf_x100: number }
+  /** Measured on another file and lent to this one. */
+  | { state: "borrowed"; vmaf_x100: number }
+  /** Not measured: this rung came out of the formula, which is a guess. */
+  | { state: "not_measured" };
+
+/** Why a rung is as it is. Codes, never sentences — the words live in the catalogues. */
+export type RungReason =
+  | "probed_anchor"
+  | "capped_by_source"
+  | "capped_by_upscale"
+  | "step_down"
+  | "fallback_constant"
+  | "lowered_for_density"
+  | "full_resolution"
+  | "single_rung_only"
+  | "measured_optimum"
+  | "borrowed_measurement";
+
+export interface Rung {
+  index: number;
+  bitrate_bps: number;
+  /** The ceiling on peaks. */
+  maxrate_bps: number;
+  /** Roughly equal to the ceiling: a larger buffer lets surges through above it. */
+  bufsize_bps: number;
+  width: number;
+  height: number;
+  /** The **actual** level of this variant, by both limits. */
+  level: string;
+  reasons: RungReason[];
+  quality: Quality;
+}
+
+export interface LadderPlan {
+  rungs: Rung[];
+  shape: { kind: string } | string;
+  anchor_bps: number;
+}
+
+/** What the checker says about a ladder's soundness. */
+export type Objection =
+  | { RungAboveSource: { index: number; source_bps: number } }
+  | { BufsizeTooLarge: { index: number; maxrate_bps: number } }
+  | { LevelExceeded: { index: number; level: string; limits: unknown[] } }
+  | { OutOfOrder: { index: number } }
+  | { BadStep: { index: number; times: number } };
+
+/** Why a ladder must not be built yet. Separate from soundness on purpose. */
+export type NotBuildable =
+  | { code: "NO_RUNGS" }
+  | { code: "RUNGS_NOT_MEASURED"; indexes: number[] };
+
+export interface LadderVerdict {
+  objections: Objection[];
+  not_buildable: NotBuildable | null;
+}
+
+export interface SourceFacts {
+  width: number;
+  height: number;
+  fps: number;
+  bitrate_bps: number;
+  heavier_codec: boolean;
+  native_height: number | null;
+}
+
+/** Where a ladder's rungs came from. Decides whether it may be built at all. */
+export type LadderSource = "measured" | "borrowed" | "formula";
+
+export interface LadderPreview {
+  plan: LadderPlan;
+  from: LadderSource;
+  source: SourceFacts;
+  /** What the complexity probe found, when it ran. */
+  anchor_mbps: number | null;
+  verdict: LadderVerdict;
+  notices: Detail[];
+}
+
+/** What the source averages and where it peaks (FR-040). */
+export interface SourceMeasured {
+  average_bps: number;
+  peak_bps: number;
+  worst: { at_s: number; bitrate_bps: number }[];
+  seconds: number;
+}
+
+/** What measuring this film would involve, before anything is started (FR-147). */
+export interface MeasurePreview {
+  source_key: string;
+  points: number;
+  already_measured: number;
+  about_seconds: number;
+  chunk_starts: number[];
+  anchor_mbps: number;
+  encoder: string;
+  /**
+   * How many timed points on this machine the estimate rests on. Zero means it rests on
+   * the model measured on somebody else's machine, and the interface says so.
+   */
+  estimate_from_points: number;
+  notices: Detail[];
+}
+
+export interface MeasuredPoint {
+  bitrate_mbps: number;
+  height: number;
+  actual_bps: number;
+  vmaf: number;
+}
+
+export interface MeasurementView {
+  run: {
+    source_key: string;
+    codec: string;
+    source_path: string;
+    width: number;
+    height: number;
+    fps: number;
+    native_height: number | null;
+    anchor_mbps: number;
+    chunk_starts: number[];
+    chunk_s: number;
+    borrowed_from: string | null;
+  };
+  points: MeasuredPoint[];
+  selection: {
+    rungs: { bitrate_mbps: number; height: number; vmaf: number }[];
+    above_target: { bitrate_mbps: number; height: number; vmaf: number }[];
+    hull: { bitrate_mbps: number; height: number; vmaf: number }[];
+  } | null;
+  ladder: LadderPlan | null;
+  notices: Detail[];
+}
+
 export interface Viewer {
   ip: string;
   country: string | null;
