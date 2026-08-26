@@ -77,6 +77,9 @@ mod hls_live;
 #[path = "integration/limits_live.rs"]
 mod limits_live;
 
+#[path = "integration/seams.rs"]
+mod seams;
+
 #[path = "integration/quality_live.rs"]
 mod quality_live;
 
