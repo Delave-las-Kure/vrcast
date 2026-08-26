@@ -128,7 +128,8 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          # The image tag must match IMAGE in tests/integration/fixture.rs.
+          # The image tag must match IMAGE in tests/integration/fixture.rs, and the network
+          # prefix must match NETWORK_PREFIX there.
           #
           # With a settling period rather than at once: `docker rm -f` returns as soon as a
           # container is merely marked for removal, and for a second or two it is still in
@@ -137,7 +138,7 @@ jobs:
           # A flickering guard is worse than none: it teaches people to re-run a build
           # without reading it — and one day they will re-run a real leak the same way.
           for _ in $(seq 1 15); do
-            left="$(docker ps -a --filter ancestor=vrcast-test-sshd:2 --format '{{.ID}} {{.Status}}')"
+            left="$(docker ps -a --filter ancestor=vrcast-test-sshd:3 --format '{{.ID}} {{.Status}}')"
             [ -z "$left" ] && break
             sleep 1
           done
@@ -150,6 +151,22 @@ jobs:
             exit 1
           fi
           echo "no containers left"
+
+          # The networks the fixture creates (T149) are watched for in the same way. A
+          # leaked network is not harmless: the pool of addresses they are handed out from
+          # is finite, and once it runs out no container starts at all — with a message
+          # that says nothing about this place.
+          for _ in $(seq 1 15); do
+            nets="$(docker network ls --filter name=vrcast-test-net --format '{{.Name}}')"
+            [ -z "$nets" ] && break
+            sleep 1
+          done
+          if [ -n "$nets" ]; then
+            echo "dangling networks were left:" >&2
+            echo "$nets" >&2
+            exit 1
+          fi
+          echo "no networks left"
 
   licenses:
     name: Licence compatibility with GPL-3.0

@@ -21,7 +21,48 @@ use tokio::sync::Semaphore;
 ///
 /// Eight is taken, leaving room to spare: a person's limit may be lower than the default,
 /// and running into it must show up as waiting rather than as a refusal mid-work.
-const MAX_CONCURRENT_CHANNELS: usize = 8;
+pub const MAX_CONCURRENT_CHANNELS: usize = 8;
+
+/// How many of those eight belong to work that holds a channel for as long as watching
+/// goes on: following the access log and polling the connection table (R-02, T153).
+///
+/// Exactly two, because that is how many such users there are. The number is not a margin
+/// but an inventory — adding a third standing user means raising this and knowing what it
+/// takes away from the rest.
+pub const STANDING_CHANNELS: usize = 2;
+
+/// What is left for ordinary work: commands, listings, checksums, a transfer.
+///
+/// **Why the pool is split rather than shared.** With one pool of eight the two go wrong in
+/// opposite directions and both quietly. A band of tasks that got in first takes all eight,
+/// and the watching of viewers then never starts — the screen stays empty and nothing says
+/// why. Or the standing users take places one by one and ordinary work waits behind them.
+/// Split, neither can take the other's, and the arithmetic is the one written down in R-04:
+/// one preparation, one transfer and four light ones fit into six, with two set aside.
+pub const BRIEF_CHANNELS: usize = MAX_CONCURRENT_CHANNELS - STANDING_CHANNELS;
+
+/// What a channel is being taken for.
+///
+/// It decides which of the two pools the place comes out of — see [`BRIEF_CHANNELS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelUse {
+    /// A short piece of work that frees the place: a command, a listing, a window of a
+    /// transfer.
+    Brief,
+    /// Held for as long as a session lasts: following the log, polling the connections.
+    Standing,
+}
+
+/// A place set aside for standing work, held for as long as this value lives.
+///
+/// Dropping it gives the place back. That is deliberate: stopping the watching of viewers
+/// happens in several places — the server was switched, the window was closed, the task
+/// failed — and a place given back by hand would sooner or later be forgotten in one of
+/// them. Two forgotten places out of two mean the watching never starts again, and nothing
+/// says why.
+pub struct StandingChannel {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
 
 /// An established connection to a server.
 ///
@@ -31,8 +72,11 @@ pub struct Connection {
     handle: Arc<client::Handle<ClientHandler>>,
     addr: ServerAddress,
     user: String,
-    /// Caps how many channels are open at once — see `MAX_CONCURRENT_CHANNELS`.
+    /// Places for ordinary work — see [`BRIEF_CHANNELS`].
     channels: Arc<Semaphore>,
+    /// Places set aside for work that holds a channel throughout — see
+    /// [`STANDING_CHANNELS`].
+    standing: Arc<Semaphore>,
 }
 
 impl Connection {
@@ -91,7 +135,8 @@ impl Connection {
             handle: Arc::new(handle),
             addr,
             user,
-            channels: Arc::new(Semaphore::new(MAX_CONCURRENT_CHANNELS)),
+            channels: Arc::new(Semaphore::new(BRIEF_CHANNELS)),
+            standing: Arc::new(Semaphore::new(STANDING_CHANNELS)),
         })
     }
 
@@ -191,11 +236,51 @@ impl Connection {
     /// Waiting is more right here than refusing: going over the server's limit is not a
     /// person's mistake and not a reason to break off the work.
     pub(crate) async fn acquire_channel(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
-        self.channels
-            .clone()
+        self.acquire_channel_for(ChannelUse::Brief).await
+    }
+
+    /// The same, saying what the place is for (T153).
+    ///
+    /// Work that holds a channel for as long as watching goes on MUST ask for
+    /// [`ChannelUse::Standing`]: its places are set aside, so a band of tasks cannot leave
+    /// the watching of viewers unable to start, and it cannot crowd out ordinary work in
+    /// return.
+    pub(crate) async fn acquire_channel_for(
+        &self,
+        purpose: ChannelUse,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        let pool = match purpose {
+            ChannelUse::Brief => &self.channels,
+            ChannelUse::Standing => &self.standing,
+        };
+        pool.clone()
             .acquire_owned()
             .await
             .map_err(|_| SshError::Protocol(String::from("the connection is closing")))
+    }
+
+    /// Reserve a place for work that will hold a channel throughout.
+    ///
+    /// Held by the value that comes back: the place is freed when it is dropped, so
+    /// stopping the watching cannot forget to give it up. Whoever holds it opens their own
+    /// session through [`Connection::open_session`] rather than through `exec` — what they
+    /// need is a channel to read from, not a command that ends.
+    pub async fn reserve_standing_channel(&self) -> Result<StandingChannel> {
+        Ok(StandingChannel {
+            _permit: self.acquire_channel_for(ChannelUse::Standing).await?,
+        })
+    }
+
+    /// How many places for ordinary work are taken right now.
+    ///
+    /// For diagnosis and for the checks. Cheap: it touches no network.
+    pub fn brief_channels_in_use(&self) -> usize {
+        BRIEF_CHANNELS - self.channels.available_permits()
+    }
+
+    /// How many of the places set aside for standing work are taken right now.
+    pub fn standing_channels_in_use(&self) -> usize {
+        STANDING_CHANNELS - self.standing.available_permits()
     }
 
     pub fn address(&self) -> &ServerAddress {

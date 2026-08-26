@@ -1,0 +1,67 @@
+# The container's serving configuration (T149).
+#
+# This is the /videos part of the live server's configuration
+# (.claude/skills/vrcast-deploy/reference/Caddyfile), kept deliberately close to it. The
+# viewers are read out of the log this writes, and the quality limits have to narrow the
+# caching rule below — so a fixture that "roughly resembles" the real thing would let
+# through exactly the mistakes those checks exist to catch.
+#
+# What differs, and only this:
+#   - the site is served on plain :80 instead of a domain over TLS. There is no certificate
+#     in a container and no domain pointing at it;
+#   - the catch-all proxy to the live-streaming server is dropped: nothing in the
+#     application goes that way, and the application does not manage it.
+#
+# What must NOT differ: the shape of the access log, the paths, the MIME types and the
+# caching rule.
+{
+	# Off: a container has no domain and no certificate, and an attempt to obtain one would
+	# hold the start up and then fail.
+	auto_https off
+	admin 127.0.0.1:2019
+}
+
+:80 {
+	encode gzip
+
+	# The access log, in the shape the live server writes it: JSON, in a file, with
+	# rotation. Half of what is known about a viewer comes from here (R-02), and the
+	# parsing is written against this shape.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	# The one line of the main configuration that points at the rules the application owns
+	# (R-03). Everything to do with quality limits is written into that file and nowhere
+	# else; the main configuration is not rewritten after deployment, so a mistake in a
+	# rule costs a rule rather than the whole of the serving.
+	import /etc/caddy/vrcast-limits.conf
+
+	handle_path /videos/* {
+		root * /var/lib/vrcast/videos
+		header Access-Control-Allow-Origin "*"
+		header Accept-Ranges "bytes"
+		# Deliberately the live server's blanket rule, the description of a quality set
+		# included. It is wrong for that description, and a limit has to NARROW it — that
+		# is precisely the recorded mistake the check has to be able to see.
+		header Cache-Control "public, max-age=2592000, immutable"
+		# The right MIME types for static HLS: without them Caddy hands .ts out as text
+		# and .m3u8 as audio.
+		@m3u8 path *.m3u8
+		header @m3u8 Content-Type "application/vnd.apple.mpegurl"
+		@ts path *.ts
+		header @ts Content-Type "video/mp2t"
+		@m4s path *.m4s
+		header @m4s Content-Type "video/mp4"
+		file_server
+	}
+
+	handle / {
+		respond "VRCast throwaway server for the tests" 200
+	}
+}

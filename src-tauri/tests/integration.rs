@@ -26,11 +26,19 @@ mod proc_check;
 #[path = "integration/audio_sync.rs"]
 mod audio_sync;
 
+#[path = "integration/channels.rs"]
+mod channels;
+
 #[path = "integration/convert_kill.rs"]
 mod convert_kill;
 
 #[path = "integration/fixture.rs"]
 mod fixture;
+
+/// A ready quality set in the container (T151). Used by the checks of Phases 4 and 6.
+#[path = "integration/hls_fixture.rs"]
+#[allow(dead_code)]
+mod hls_fixture;
 
 #[path = "integration/library_completeness.rs"]
 mod library_completeness;
@@ -53,5 +61,17 @@ mod upload_live;
 #[path = "integration/scenario_upload.rs"]
 mod scenario_upload;
 
+/// A check of the fixture itself (T149, T151, T152): that it serves, writes its log and
+/// gives every viewer an address of their own.
+#[path = "integration/serving.rs"]
+mod serving;
+
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;
+
+/// The viewer helpers (T152). Used by the checks of Phases 4 and 6; until those are
+/// written it is only compiled, and that is deliberate — a helper nobody has compiled is
+/// not a helper.
+#[path = "integration/viewer.rs"]
+#[allow(dead_code)]
+mod viewer;
