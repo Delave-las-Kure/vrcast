@@ -10,7 +10,10 @@
 //! (`links`) rather than stored beside the file, where it would inevitably go stale
 //! the day the domain changes.
 
+pub mod access_log;
+pub mod connections;
 pub mod convert_plan;
+pub mod geo;
 pub mod grouping;
 pub mod links;
 pub mod manifest;
@@ -22,4 +25,5 @@ pub mod remote_name;
 pub mod server_profile;
 pub mod source;
 pub mod transfer;
+pub mod viewers;
 pub mod wording;

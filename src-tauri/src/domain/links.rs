@@ -66,6 +66,37 @@ fn encode_path(rel_path: &str) -> String {
         .join("/")
 }
 
+/// Undo [`encode_path`] — read a path back out of a link or a log line.
+///
+/// It lives here, next to the encoder, deliberately: a decoder that drifts away from its
+/// encoder is the quietest kind of fault. The two are checked against each other on the
+/// same names — with spaces, with Cyrillic, with a hash sign.
+///
+/// What will not decode is left as it stands. A log holds whatever was asked for, and
+/// somebody may have asked for a `%` that is not the start of anything: throwing the name
+/// away over that would lose a real viewer, while leaving it is at worst a name that
+/// matches nothing.
+pub fn decode_path(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(byte) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    // Names on a server are not obliged to be valid text, and a name that is not is still
+    // not a reason to lose the viewer who asked for it.
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Percent-encoding for one segment of a path.
 ///
 /// Only the "unreserved" characters (RFC 3986) are left alone: Latin letters, digits

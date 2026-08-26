@@ -16,6 +16,7 @@ pub mod connection;
 pub mod exec;
 pub mod fingerprint;
 pub mod sftp;
+pub mod stream;
 
 pub use auth::Credentials;
 pub use connection::Connection;

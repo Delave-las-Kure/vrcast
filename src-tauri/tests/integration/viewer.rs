@@ -130,6 +130,36 @@ impl Viewer {
         Ok(())
     }
 
+    /// Watch a quality set the way a player does: segment after segment, round and round.
+    ///
+    /// Not one long request. A player pulls a segment, plays it, pulls the next — and each
+    /// of those finishes, so the serving records it at once and what is being watched is
+    /// known throughout. One endless request would be the other case entirely, the one a
+    /// directly served file makes, and it is checked separately.
+    pub fn start_watching_a_set(
+        &self,
+        slug: &str,
+        rung: &str,
+        segments: usize,
+    ) -> Result<(), String> {
+        let names: Vec<String> = (0..segments)
+            .map(|i| format!("http://{SERVER_ALIAS}/videos/{slug}/{rung}/seg{i}.ts"))
+            .collect();
+        let command = format!(
+            "while true; do for u in {}; do curl -sS -o /dev/null \"$u\" || sleep 1; done; done",
+            names.join(" ")
+        );
+        let out = docker(&["exec", "-d", &self.id, "sh", "-c", &command])
+            .map_err(|e| format!("could not start the watching: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "the watching of the set would not start:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        Ok(())
+    }
+
     /// Ask for something once and look only at what the answer was.
     ///
     /// Good for anything whose body is not text: a segment is a few megabytes of bytes, and

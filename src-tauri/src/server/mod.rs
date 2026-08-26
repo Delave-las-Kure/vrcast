@@ -15,6 +15,7 @@ pub mod manifest_io;
 pub mod probe_moov;
 pub mod reconcile;
 pub mod upload;
+pub mod viewers;
 
 /// Entries of the serving directory that are not video and are not shown in the library.
 ///

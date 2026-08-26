@@ -29,6 +29,9 @@ mod moov;
 #[path = "unit/engine.rs"]
 mod engine;
 
+#[path = "unit/geo.rs"]
+mod geo;
+
 #[path = "unit/process.rs"]
 mod process;
 
@@ -37,6 +40,9 @@ mod registry;
 
 #[path = "unit/reconcile.rs"]
 mod reconcile;
+
+#[path = "unit/viewers.rs"]
+mod viewers;
 
 #[path = "unit/redact.rs"]
 mod redact;

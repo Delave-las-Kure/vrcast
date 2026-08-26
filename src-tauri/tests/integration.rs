@@ -69,6 +69,9 @@ mod serving;
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;
 
+#[path = "integration/viewers_live.rs"]
+mod viewers_live;
+
 /// The viewer helpers (T152). Used by the checks of Phases 4 and 6; until those are
 /// written it is only compiled, and that is deliberate — a helper nobody has compiled is
 /// not a helper.
