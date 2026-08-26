@@ -237,7 +237,12 @@ pub mod api {
     use crate::ssh::Connection;
     use crate::store::{library_cache, profiles};
 
-    fn profile_of(state: &AppState, server_id: &str) -> Result<ServerProfile> {
+    /// The profile behind an identifier, or a refusal naming it.
+    ///
+    /// Shared with the other commands that reach a server: two ways of turning an
+    /// identifier into a profile would eventually disagree about what happens when there
+    /// is none.
+    pub fn profile_of(state: &AppState, server_id: &str) -> Result<ServerProfile> {
         profiles::get(&state.db, server_id)?
             .ok_or_else(|| crate::commands::servers::no_such_server(server_id))
     }

@@ -18,6 +18,9 @@ mod library;
 #[path = "contract/ladder.rs"]
 mod ladder;
 
+#[path = "contract/limits.rs"]
+mod limits;
+
 #[path = "contract/responsiveness.rs"]
 mod responsiveness;
 

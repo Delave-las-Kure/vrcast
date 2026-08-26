@@ -400,6 +400,12 @@ export const en: Catalogue = {
       "{count} variants were already on the server and were not made again. The application asked the server what is there rather than its own note about a previous run: a note outlives the thing it describes.",
     NOTICE_REENCODED_FOR_KEYFRAMES:
       "This rung could have been carried across without re-encoding — its quality needs no change. But segments can only be cut at a keyframe, and this source's keyframes sit differently from the other rungs': the boundaries would stop lining up, and a viewer changing quality would see it stall. So the rung is re-encoded after all — hours instead of minutes.",
+    WARN_LIMIT_FOLLOWS_THE_ADDRESS:
+      "A limit is put on an address, and an address is not a person. If this viewer's address changes, the limit stays on the old one and lands on whoever takes it next; and they come back to the full set under their new one.",
+    WARN_ADDRESS_SHARED:
+      "{count} viewers are watching from this address right now. That is ordinary for a household or an office: the limit reaches all of them, not only the one who is struggling.",
+    WARN_CAP_BELOW_LIGHTEST:
+      "The cap is below the lightest rung there is ({lightest_bps} bit/s). The viewer gets that rung anyway — an empty description would leave them with no video at all. If it is still too much, a lighter rung has to be built rather than chosen.",
     NOTICE_NO_HARDWARE_FOUND:
       "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
     NOTICE_SOFTWARE_AS_ASKED:
@@ -492,6 +498,29 @@ export const en: Catalogue = {
       objectionStep: "Rung {index}: {times} times the one below — too far {tooMuch}",
       stepTooBig: "apart",
       stepTooSmall: "together",
+    },
+
+    limits: {
+      title: "Capping quality",
+      explain:
+        "A player takes the best it is shown and will not be talked out of it. The only way to bring a viewer down to a rung they can hold is to stop showing them the ones they cannot.",
+      pickMedia: "Which medium",
+      cap: "Cap, Mbit/s",
+      willGet: "This viewer would be given:",
+      apply: "Cap it",
+      confirm: "Understood — cap it",
+      cancel: "Cancel",
+      noLadder: "This medium has no quality set — there is nothing to shorten",
+
+      listTitle: "Limits in force",
+      listEmpty: "Nothing is capped.",
+      listFromServer: "Read from the server rather than from a note here: a note goes stale the hour somebody edits the server by hand.",
+      columnWho: "Address",
+      columnMedia: "Medium",
+      columnCap: "Cap",
+      columnSince: "Since",
+      remove: "Lift",
+      removing: "Lifting…",
     },
 
     viewers: {

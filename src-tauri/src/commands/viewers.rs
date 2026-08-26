@@ -41,6 +41,21 @@ impl ViewersWatch {
             .and_then(|g| g.as_ref().map(|r| r.server_id.clone()))
     }
 
+    /// Who is watching right now, by the server's clock as last read.
+    ///
+    /// Empty when nothing is being watched, which is a true answer rather than a
+    /// failure: nobody is known to be watching.
+    pub fn active_now(&self) -> Vec<crate::domain::viewers::Viewer> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|r| r.watch.active(time::OffsetDateTime::now_utc()))
+            })
+            .unwrap_or_default()
+    }
+
     fn replace(&self, running: Option<Running>) {
         if let Ok(mut guard) = self.inner.lock() {
             // The previous one is dropped here, which stops it and gives its two channels

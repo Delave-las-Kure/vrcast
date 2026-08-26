@@ -214,6 +214,9 @@ export type DetailCode =
   | "NOTICE_MEASUREMENT_PARTIAL"
   | "NOTICE_REENCODED_FOR_KEYFRAMES"
   | "NOTICE_VARIANTS_REUSED"
+  | "WARN_LIMIT_FOLLOWS_THE_ADDRESS"
+  | "WARN_ADDRESS_SHARED"
+  | "WARN_CAP_BELOW_LIGHTEST"
   | "NOTICE_NO_HARDWARE_FOUND"
   | "NOTICE_SOFTWARE_AS_ASKED"
   | "NOTICE_HARDWARE_FAILED"
@@ -447,6 +450,39 @@ export type ViewerProblem = "SlowLink" | "Retransmits" | "Stalls";
  * here is ever filled in by guessing: a city invented from a neighbouring range looks
  * exactly like knowledge (FR-052).
  */
+// ---------- quality limits ----------
+
+/** One limit in force, as the **server** says it is (FR-064). */
+export interface QualityLimit {
+  /** The viewer's address as the serving sees it. */
+  ip: string;
+  /** The medium's own directory. */
+  slug: string;
+  cap_bps: number;
+  set_at: string;
+}
+
+/** What a limit would do, before it is done (FR-066). */
+export interface LimitPreview {
+  /** The rungs this viewer would be left with, heaviest first. */
+  kept: Variant[];
+  /** Everything a person should know before agreeing. */
+  warnings: Detail[];
+  /** The cap is under the lightest rung there is, so the lightest is given anyway. */
+  below_lightest: boolean;
+}
+
+/** A variant as a description names it. */
+export interface Variant {
+  path: string;
+  bandwidth: number;
+  average_bandwidth: number;
+  width: number;
+  height: number;
+  fps: number | null;
+  codecs: string;
+}
+
 // ---------- quality ladders ----------
 
 /** What is known about how good a rung actually looks (FR-145, R-21). */

@@ -44,6 +44,8 @@ import {
   type Rung,
   type SourceFacts,
   type SourceMeasured,
+  type LimitPreview,
+  type QualityLimit,
 } from "./contract";
 
 /**
@@ -172,6 +174,27 @@ export const ipc = {
   }) => call<string>("quality_measure_start", { request }),
   qualityMeasureResult: (sourceKey: string, codec: string) =>
     call<MeasurementView>("quality_measure_result", { sourceKey, codec }),
+
+  // --- quality limits ---
+  /** What capping this viewer would do. Nothing is changed (FR-066). */
+  limitPreview: (request: {
+    serverId: string;
+    ip: string;
+    slug: string;
+    capBps: number;
+  }) => call<LimitPreview>("limit_preview", { request }),
+  /**
+   * Put the cap on. Refuses unless `confirmed`: what is being edited is the
+   * configuration of the thing serving somebody's film at that moment.
+   */
+  limitSet: (
+    request: { serverId: string; ip: string; slug: string; capBps: number },
+    confirmed: boolean,
+  ) => call<void>("limit_set", { request, confirmed }),
+  limitClear: (serverId: string, ip: string, slug: string) =>
+    call<void>("limit_clear", { serverId, ip, slug }),
+  /** What is in force, read from the server rather than from a note here (FR-064). */
+  limitsList: (serverId: string) => call<QualityLimit[]>("limits_list", { serverId }),
 
   // --- settings ---
   settingsGet: () => call<Settings>("settings_get"),

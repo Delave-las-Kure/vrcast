@@ -15,6 +15,7 @@ pub mod events;
 pub mod geo;
 pub mod ladder;
 pub mod library;
+pub mod limits;
 pub mod quality;
 pub mod servers;
 pub mod settings;

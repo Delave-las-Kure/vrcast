@@ -233,6 +233,14 @@ detail_codes! {
     NoticeReencodedForKeyframes => "NOTICE_REENCODED_FOR_KEYFRAMES",
     /// `count` — variants that were already on the server and were not made again.
     NoticeVariantsReused => "NOTICE_VARIANTS_REUSED",
+
+    // --- what to know before capping somebody's quality (FR-066) ---
+    /// A limit is put on an address, and an address is not a person.
+    WarnLimitFollowsTheAddress => "WARN_LIMIT_FOLLOWS_THE_ADDRESS",
+    /// `count` — how many viewers are behind this address right now.
+    WarnAddressShared => "WARN_ADDRESS_SHARED",
+    /// `lightest_bps` — the lightest rung there is.
+    WarnCapBelowLightest => "WARN_CAP_BELOW_LIGHTEST",
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 
