@@ -106,9 +106,16 @@ pub async fn run(job: &MeasureJob<'_>, ctx: &TaskContext) -> Result<Outcome, Mea
         }
         ctx.wait_while_paused().await;
 
+        let started = std::time::Instant::now();
         match measure_one(job, cell, ctx).await {
             Ok(point) => {
-                measurements::record(job.db, &job.run.source_key, &job.run.codec, &point)?;
+                measurements::record(
+                    job.db,
+                    &job.run.source_key,
+                    &job.run.codec,
+                    &point,
+                    started.elapsed(),
+                )?;
                 done += 1;
             }
             Err(VmafError::Cancelled) => return Err(MeasureError::Cancelled),

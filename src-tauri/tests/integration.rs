@@ -71,6 +71,9 @@ mod scenario_upload;
 #[path = "integration/serving.rs"]
 mod serving;
 
+#[path = "integration/quality_live.rs"]
+mod quality_live;
+
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;
 

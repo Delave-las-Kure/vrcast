@@ -9,7 +9,9 @@ use vrcast_studio_lib::domain::ladder::plan;
 use vrcast_studio_lib::domain::ladder::{
     buildable, from_measurement, NotBuildable, Quality, Reason, SourceFacts,
 };
-use vrcast_studio_lib::domain::measure_grid::{grid, grid_bitrates_mbps, grid_heights, Cell};
+use vrcast_studio_lib::domain::measure_grid::{
+    grid, grid_bitrates_mbps, grid_heights, seconds_per_point, Cell,
+};
 use vrcast_studio_lib::domain::measured_ladder::{select, Chosen, Point, TARGET_VMAF, VMAF_STEP};
 
 fn source(width: u32, height: u32, fps: u32, native: Option<u32>) -> SourceFacts {
@@ -359,4 +361,42 @@ fn one_rung_edited_by_hand_stops_the_build_by_itself() {
         buildable(&laid.rungs),
         Err(NotBuildable::RungsNotMeasured { indexes: vec![1] })
     );
+}
+
+// ---------- what a measurement costs ----------
+
+#[test]
+fn the_cost_model_gives_back_the_readings_it_was_fitted_to() {
+    // Two clips of the same film on the same machine, three ten-second chunks each
+    // (RTX 5080, h264_nvenc): 3840×1080 took 12.6 s a point and 1920×540 took 6.3 s.
+    let full = seconds_per_point(3840, 1080, 24, 10, 3);
+    let quarter = seconds_per_point(1920, 540, 24, 10, 3);
+    assert!(
+        (full - 12.6).abs() < 0.2,
+        "3840×1080 came out at {full:.1} s"
+    );
+    assert!(
+        (quarter - 6.3).abs() < 0.2,
+        "1920×540 came out at {quarter:.1} s"
+    );
+
+    // **A quarter of the pixels is half the time, not a quarter.** This is the whole
+    // reason there are two numbers in the model: a pure per-pixel cost would have
+    // promised 3.2 s here, half of what really happens, and every estimate for a small
+    // film would have been half the truth.
+    assert!(
+        quarter > full / 3.0,
+        "the fixed cost of a point disappeared: {quarter:.1} s against {full:.1} s"
+    );
+
+    // Heavier material costs more, and in the right order of magnitude: 4K at 48 frames
+    // is four times the pixels of the clip above and comes out near forty seconds.
+    let heavy = seconds_per_point(3840, 2160, 48, 10, 3);
+    assert!(
+        (30.0..50.0).contains(&heavy),
+        "4K48 came out at {heavy:.1} s"
+    );
+
+    // A frame rate of zero is somebody's broken file, not a division by zero.
+    assert!(seconds_per_point(1920, 1080, 0, 10, 3) > 0.0);
 }

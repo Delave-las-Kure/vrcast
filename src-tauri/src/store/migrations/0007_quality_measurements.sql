@@ -52,6 +52,13 @@ CREATE TABLE quality_points (
     -- What the encode actually weighed: the target is asked for, not obeyed.
     actual_bps   INTEGER NOT NULL,
     measured_at  TEXT NOT NULL,
+    -- How long this point took, in milliseconds.
+    --
+    -- Recorded so that the estimate shown before a measurement stops being a
+    -- constant. A constant cannot know this machine: the same grid is minutes on a
+    -- recent card and the better part of an evening on a processor, and a person
+    -- deciding whether to start this now needs the number for THEIR machine.
+    took_ms      INTEGER NOT NULL,
     PRIMARY KEY (source_key, codec, bitrate_mbps, height),
     FOREIGN KEY (source_key, codec)
         REFERENCES quality_measurements (source_key, codec) ON DELETE CASCADE

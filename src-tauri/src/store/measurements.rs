@@ -108,17 +108,25 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
     })
 }
 
-/// Write down one measured point.
-pub fn record(db: &Db, source_key: &str, codec: &str, point: &Point) -> Result<(), DbError> {
+/// Write down one measured point, and how long it took.
+pub fn record(
+    db: &Db,
+    source_key: &str,
+    codec: &str,
+    point: &Point,
+    took: std::time::Duration,
+) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
             "INSERT INTO quality_points
-                (source_key, codec, bitrate_mbps, height, vmaf, actual_bps, measured_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                (source_key, codec, bitrate_mbps, height, vmaf, actual_bps,
+                 measured_at, took_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (source_key, codec, bitrate_mbps, height) DO UPDATE SET
                 vmaf = excluded.vmaf,
                 actual_bps = excluded.actual_bps,
-                measured_at = excluded.measured_at",
+                measured_at = excluded.measured_at,
+                took_ms = excluded.took_ms",
             rusqlite::params![
                 source_key,
                 codec,
@@ -127,6 +135,7 @@ pub fn record(db: &Db, source_key: &str, codec: &str, point: &Point) -> Result<(
                 point.vmaf,
                 point.actual_bps as i64,
                 now_rfc3339(),
+                took.as_millis().min(i64::MAX as u128) as i64,
             ],
         )?;
         Ok(())
@@ -154,6 +163,67 @@ pub fn points(db: &Db, source_key: &str, codec: &str) -> Result<Vec<Point>, DbEr
         Ok(rows)
     })
 }
+
+/// How this machine compares with the one the cost model was measured on.
+///
+/// A plain number: 1.0 means it behaves as the model says, 3.0 that everything takes
+/// three times as long here. Returned with the count of timed points behind it, so a
+/// person can be told whether the estimate rests on their machine or on somebody
+/// else's.
+///
+/// **A factor rather than a flat number of seconds**, because the flat number does not
+/// carry between films: measure a small one and then a 4K one and the estimate would
+/// be a quarter of the truth. The factor carries; the model handles the size.
+///
+/// **The middle value, not the average.** One point in a run is regularly an outlier —
+/// the card throttles, something else wants the processor, a chunk is a hard one — and
+/// an average carries that outlier into every estimate afterwards.
+///
+/// `None` until this machine has timed anything. There is nothing to learn from yet,
+/// and a made-up correction would be worse than none.
+pub fn machine_factor(db: &Db) -> Result<Option<(f64, usize)>, DbError> {
+    db.with_conn(|c| {
+        let mut q = c.prepare(
+            "SELECT p.took_ms, m.width, m.height, m.fps, m.chunk_s, m.chunk_starts
+             FROM quality_points p
+             JOIN quality_measurements m
+               ON m.source_key = p.source_key AND m.codec = p.codec
+             WHERE p.took_ms > 0
+             ORDER BY p.measured_at DESC LIMIT ?1",
+        )?;
+        let mut factors: Vec<f64> = q
+            .query_map([RECENT_POINTS], |r| {
+                let took_ms: i64 = r.get(0)?;
+                let width: u32 = r.get(1)?;
+                let height: u32 = r.get(2)?;
+                let fps: u32 = r.get(3)?;
+                let chunk_s: i64 = r.get(4)?;
+                let chunks: String = r.get(5)?;
+                let chunks = chunks.split(',').filter(|s| !s.trim().is_empty()).count();
+                Ok(crate::domain::measure_grid::seconds_per_point(
+                    width,
+                    height,
+                    fps,
+                    chunk_s.max(0) as u64,
+                    chunks,
+                ))
+                .map(|expected| (took_ms as f64 / 1000.0) / expected.max(0.001))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        if factors.is_empty() {
+            return Ok(None);
+        }
+        let counted = factors.len();
+        factors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(Some((factors[counted / 2], counted)))
+    })
+}
+
+/// How far back the estimate looks.
+///
+/// Recent ones only: a machine gets a new card, or the film being measured changes
+/// kind, and last year's timings then describe neither.
+const RECENT_POINTS: i64 = 60;
 
 /// The header of a measurement, if there is one.
 pub fn run(db: &Db, source_key: &str, codec: &str) -> Result<Option<Run>, DbError> {
@@ -237,7 +307,15 @@ pub fn lend(db: &Db, from_key: &str, codec: &str, to: &Run) -> Result<Run, LendR
 
     let lent = points(db, from_key, codec).unwrap_or_default();
     for point in &lent {
-        let _ = record(db, &borrowed.source_key, codec, point);
+        // Zero time: nothing was measured here, and counting a lent point as work done
+        // on this machine would flatter every estimate that follows.
+        let _ = record(
+            db,
+            &borrowed.source_key,
+            codec,
+            point,
+            std::time::Duration::ZERO,
+        );
     }
     Ok(borrowed)
 }

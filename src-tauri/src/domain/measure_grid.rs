@@ -30,6 +30,43 @@ pub const HEIGHT_STEP: f64 = 0.8;
 /// no longer the film, and the bitrate saved is a rounding error against the top rungs.
 pub const LOWEST_SHARE: f64 = 0.28;
 
+/// What one point of the grid costs, in seconds, on the machine this was measured on.
+///
+/// **Two numbers rather than one, because one was wrong.** The obvious model — cost
+/// per pixel — fails at the small end: measured on two clips of the same film, one at
+/// 3840×1080 and one at 1920×540, a quarter of the pixels took *half* the time, not a
+/// quarter. There is a fixed cost to a point that has nothing to do with its size:
+/// starting the encoder twice, seeking into the film, decoding the chunk, writing and
+/// reading two small files.
+///
+/// The readings (RTX 5080, `h264_nvenc`, three ten-second chunks, 24 frames a second):
+///
+/// | source | pixels scored | took |
+/// |---|---|---|
+/// | 3840×1080 | 2.99 · 10⁹ | 12.6 s |
+/// | 1920×540 | 0.75 · 10⁹ | 6.3 s |
+///
+/// which give a fixed 4.2 s and 2.83 nanoseconds a pixel. Scoring dominates the
+/// variable half, and scoring always happens at the **source's** size — the encode is
+/// stretched back up to meet it — which is why the rung's own height barely shows in
+/// the timings and does not appear here.
+///
+/// This is one machine and one kind of material. It is the first estimate a person
+/// sees and nothing more: from their very first measured point onwards their own
+/// timings correct it (see `store::measurements::machine_factor`).
+pub const POINT_FIXED_S: f64 = 4.2;
+pub const POINT_PER_PIXEL_S: f64 = 2.83e-9;
+
+/// How long one point of the grid should take.
+pub fn seconds_per_point(width: u32, height: u32, fps: u32, chunk_s: u64, chunks: usize) -> f64 {
+    let pixels = f64::from(width)
+        * f64::from(height)
+        * f64::from(fps.max(1))
+        * chunk_s as f64
+        * chunks as f64;
+    POINT_FIXED_S + POINT_PER_PIXEL_S * pixels
+}
+
 /// One point of the grid: a bitrate tried at a height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cell {

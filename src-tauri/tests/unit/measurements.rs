@@ -1,9 +1,10 @@
 //! T236, T237 — a measurement that survives, and one that is lent.
 
+use vrcast_studio_lib::domain::measure_grid::seconds_per_point;
 use vrcast_studio_lib::domain::measured_ladder::Point;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::measurements::{
-    all, begin, forget, lend, points, record, run, LendRefusal, Run,
+    all, begin, forget, lend, machine_factor, points, record, run, LendRefusal, Run,
 };
 
 fn a_run(key: &str, path: &str) -> Run {
@@ -24,6 +25,11 @@ fn a_run(key: &str, path: &str) -> Run {
     }
 }
 
+/// A plausible time for one point on the machine the model was measured on.
+fn took() -> std::time::Duration {
+    std::time::Duration::from_millis(12_600)
+}
+
 fn a_point(bitrate_mbps: u64, height: u32, vmaf: f64) -> Point {
     Point {
         bitrate_mbps,
@@ -41,8 +47,22 @@ fn what_was_measured_survives_the_run_being_cut_short() {
     let job = a_run("1234:film.mp4", "F:/films/film.mp4");
 
     begin(&db, &job).unwrap();
-    record(&db, &job.source_key, &job.codec, &a_point(6, 1728, 91.2)).unwrap();
-    record(&db, &job.source_key, &job.codec, &a_point(10, 1728, 94.8)).unwrap();
+    record(
+        &db,
+        &job.source_key,
+        &job.codec,
+        &a_point(6, 1728, 91.2),
+        took(),
+    )
+    .unwrap();
+    record(
+        &db,
+        &job.source_key,
+        &job.codec,
+        &a_point(10, 1728, 94.8),
+        took(),
+    )
+    .unwrap();
 
     // The run begins again — as it does when a person starts it a second time.
     begin(&db, &job).unwrap();
@@ -71,7 +91,14 @@ fn a_measurement_taken_for_one_codec_is_not_offered_for_another() {
     let db = Db::open_in_memory().expect("the database would not open");
     let job = a_run("1234:film.mp4", "F:/films/film.mp4");
     begin(&db, &job).unwrap();
-    record(&db, &job.source_key, &job.codec, &a_point(10, 1728, 94.8)).unwrap();
+    record(
+        &db,
+        &job.source_key,
+        &job.codec,
+        &a_point(10, 1728, 94.8),
+        took(),
+    )
+    .unwrap();
 
     assert_eq!(points(&db, &job.source_key, "hevc").unwrap().len(), 0);
     assert!(run(&db, &job.source_key, "hevc").unwrap().is_none());
@@ -83,7 +110,7 @@ fn lending_carries_the_chunks_and_says_plainly_that_it_was_lent() {
     let first = a_run("1234:s01e01.mp4", "F:/films/s01e01.mp4");
     begin(&db, &first).unwrap();
     for point in [a_point(6, 1728, 91.2), a_point(10, 1728, 94.8)] {
-        record(&db, &first.source_key, &first.codec, &point).unwrap();
+        record(&db, &first.source_key, &first.codec, &point, took()).unwrap();
     }
 
     let second = a_run("5678:s01e02.mp4", "F:/films/s01e02.mp4");
@@ -115,6 +142,7 @@ fn a_measurement_is_not_lent_to_material_of_another_kind() {
         &native.source_key,
         &native.codec,
         &a_point(10, 2160, 95.0),
+        took(),
     )
     .unwrap();
 
@@ -147,11 +175,82 @@ fn forgetting_a_measurement_takes_its_points_with_it() {
     let db = Db::open_in_memory().expect("the database would not open");
     let job = a_run("1234:film.mp4", "F:/films/film.mp4");
     begin(&db, &job).unwrap();
-    record(&db, &job.source_key, &job.codec, &a_point(10, 1728, 94.8)).unwrap();
+    record(
+        &db,
+        &job.source_key,
+        &job.codec,
+        &a_point(10, 1728, 94.8),
+        took(),
+    )
+    .unwrap();
     assert_eq!(all(&db).unwrap().len(), 1);
 
     forget(&db, &job.source_key, &job.codec).unwrap();
     assert!(run(&db, &job.source_key, &job.codec).unwrap().is_none());
     assert!(points(&db, &job.source_key, &job.codec).unwrap().is_empty());
     assert!(all(&db).unwrap().is_empty());
+}
+
+#[test]
+fn the_estimate_learns_what_this_machine_really_does() {
+    // The shipped model was measured on one machine. Somebody else's is faster or slower,
+    // and the difference between twenty minutes and two hours is the whole decision.
+    let db = Db::open_in_memory().expect("the database would not open");
+    assert_eq!(
+        machine_factor(&db).unwrap(),
+        None,
+        "a machine that has measured nothing was given a correction anyway"
+    );
+
+    let job = a_run("1234:film.mp4", "F:/films/film.mp4");
+    begin(&db, &job).unwrap();
+
+    // Three points, each taking twice what the model expects of this material.
+    let expected = seconds_per_point(job.width, job.height, job.fps, job.chunk_s, 3);
+    let slow = std::time::Duration::from_secs_f64(expected * 2.0);
+    for (i, height) in [1728u32, 1382, 1104].iter().enumerate() {
+        record(
+            &db,
+            &job.source_key,
+            &job.codec,
+            &a_point(6 + i as u64, *height, 90.0),
+            slow,
+        )
+        .unwrap();
+    }
+
+    let (factor, from) = machine_factor(&db).unwrap().expect("nothing was learned");
+    assert_eq!(from, 3);
+    assert!(
+        (factor - 2.0).abs() < 0.01,
+        "this machine is twice as slow and the correction says {factor}"
+    );
+}
+
+#[test]
+fn a_lent_point_is_not_counted_as_work_this_machine_did() {
+    // Lending copies somebody else's points. Counting them as time spent here would
+    // flatter every estimate afterwards — an episode borrowed in a second would say the
+    // machine measures a point in no time at all.
+    let db = Db::open_in_memory().expect("the database would not open");
+    let first = a_run("1234:s01e01.mp4", "F:/films/s01e01.mp4");
+    begin(&db, &first).unwrap();
+    record(
+        &db,
+        &first.source_key,
+        &first.codec,
+        &a_point(10, 1728, 94.8),
+        took(),
+    )
+    .unwrap();
+
+    let (_, before) = machine_factor(&db).unwrap().expect("nothing was learned");
+    let second = a_run("5678:s01e02.mp4", "F:/films/s01e02.mp4");
+    lend(&db, &first.source_key, "h264", &second).expect("the episode was refused");
+
+    let (_, after) = machine_factor(&db).unwrap().expect("nothing was learned");
+    assert_eq!(
+        after, before,
+        "a borrowed point was counted as time this machine spent"
+    );
 }

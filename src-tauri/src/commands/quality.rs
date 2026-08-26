@@ -53,11 +53,16 @@ pub struct MeasurePreview {
     pub already_measured: usize,
     /// Roughly how long the rest will take, in seconds.
     ///
-    /// **Roughly, and said so.** It rests on how long one point took on the material this
-    /// was calibrated on; a slower machine or a heavier film will take longer. A number
-    /// that is honestly approximate beats no number: without one a person cannot tell
-    /// whether to start this before dinner or before bed.
+    /// **Roughly, and said so.** A number that is honestly approximate beats no number:
+    /// without one a person cannot tell whether to start this before dinner or before
+    /// bed.
     pub about_seconds: u64,
+    /// How many timed points on this machine the estimate rests on.
+    ///
+    /// Zero means it rests on the cost model this project measured on its own machine,
+    /// which is a different machine. The interface says which, because the difference
+    /// between twenty minutes and two hours is the whole decision.
+    pub estimate_from_points: usize,
     /// Where the reference chunks fall, in seconds into the film.
     pub chunk_starts: Vec<u64>,
     pub anchor_mbps: u64,
@@ -77,13 +82,6 @@ pub struct MeasurementView {
     pub notices: Vec<Detail>,
 }
 
-/// About how long one point of the grid takes.
-///
-/// Three chunks of ten seconds encoded and then scored, and scoring is the slower half.
-/// Taken from the run this project measured: half an hour for a grid of about fifteen
-/// points at 4K48.
-const SECONDS_PER_POINT: u64 = 120;
-
 pub mod api {
     use super::*;
 
@@ -99,11 +97,26 @@ pub mod api {
             .map(|p| p.len())
             .unwrap_or(0);
 
+        // What a point costs on the machine the model was measured on, corrected by
+        // what this machine has really done — once it has done anything.
+        let per_point = crate::domain::measure_grid::seconds_per_point(
+            run.width,
+            run.height,
+            run.fps,
+            run.chunk_s,
+            run.chunk_starts.len(),
+        );
+        let (factor, from_points) = measurements::machine_factor(&state.db)
+            .ok()
+            .flatten()
+            .unwrap_or((1.0, 0));
+
         Ok(MeasurePreview {
             source_key: run.source_key.clone(),
             points,
             already_measured: already,
-            about_seconds: (points.saturating_sub(already) as u64) * SECONDS_PER_POINT,
+            about_seconds: (points.saturating_sub(already) as f64 * per_point * factor) as u64,
+            estimate_from_points: from_points,
             chunk_starts: run.chunk_starts.clone(),
             anchor_mbps: run.anchor_mbps,
             encoder,
