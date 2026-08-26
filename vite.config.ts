@@ -16,7 +16,16 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // **The loopback address, written out.** Left as `false` this listens on "localhost",
+    // which Node resolves to `::1` first on some machines — while the application's window
+    // asks for `http://localhost:1420` and its web view resolves that to `127.0.0.1`. Both
+    // are behaving correctly and nothing is listening where the window looks: the window
+    // comes up saying the connection was refused, with a dev server running happily beside
+    // it. Naming the address leaves neither of them a choice.
+    //
+    // Still only the loopback: this does not put the dev server on the network. Reaching it
+    // from another device is what TAURI_DEV_HOST is for, and that path is untouched.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
