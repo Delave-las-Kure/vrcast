@@ -39,6 +39,18 @@ pub fn run() {
         }
     };
 
+    // The key viewers' pseudonyms are made with (T222). Set before anything is watched,
+    // and before anything could be written down: an address that reaches the log ahead of
+    // this line goes in as itself.
+    match crate::store::settings::pseudonym_key(&state.db) {
+        Ok(key) => crate::store::redact::use_pseudonym_key(key),
+        Err(e) => {
+            // Not a reason to refuse to start: without a key one is made up for this run,
+            // and the only thing lost is that today's tokens will not match yesterday's.
+            tracing::warn!(error = %e, "the pseudonym key could not be read; using one made for this run");
+        }
+    }
+
     let engine = state.tasks.clone();
 
     tauri::Builder::default()

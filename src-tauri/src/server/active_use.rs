@@ -35,7 +35,10 @@ pub async fn serving_connections(conn: &Connection) -> usize {
     match conn.exec(&cmd).await {
         Ok(out) if out.ok() => out.trimmed().trim().parse::<usize>().unwrap_or(0),
         Ok(out) => {
-            tracing::debug!(stderr = %out.stderr.trim(), "could not count serving connections");
+            tracing::debug!(
+                stderr = %crate::store::redact::scrub_viewer_addresses(out.stderr.trim()),
+                "could not count serving connections"
+            );
             0
         }
         Err(e) => {

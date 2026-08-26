@@ -10,6 +10,7 @@
 
 use crate::domain::viewers::DEFAULT_ACTIVITY_THRESHOLD_S;
 use crate::store::db::{Db, DbError};
+use rusqlite::OptionalExtension;
 
 /// Everything that can be set.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -95,6 +96,43 @@ pub fn load(db: &Db) -> Result<Settings, DbError> {
         Ok(())
     })?;
     Ok(settings.clamped())
+}
+
+/// The key a viewer's pseudonym is made with (T222).
+///
+/// Made once, on this machine, and kept: the pseudonym has to be the same after the
+/// application is closed and opened again, or one viewer becomes a different stranger
+/// every session and the whole point of it goes.
+///
+/// Kept beside the settings rather than among the secrets: it is not a secret in the
+/// sense principle IV means — losing it costs the ability to compare old log lines with
+/// new ones, and nothing else. What it must never be is **shared**, and a value that
+/// never leaves this machine is not.
+pub fn pseudonym_key(db: &Db) -> Result<String, DbError> {
+    const NAME: &str = "pseudonym_key";
+
+    let existing: Option<String> = db.with_conn(|c| {
+        Ok(
+            c.query_row("SELECT value FROM settings WHERE name = ?1", [NAME], |r| {
+                r.get(0)
+            })
+            .optional()?,
+        )
+    })?;
+    if let Some(key) = existing.filter(|k| !k.is_empty()) {
+        return Ok(key);
+    }
+
+    let key = uuid::Uuid::new_v4().simple().to_string();
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO settings (name, value) VALUES (?1, ?2)
+             ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+            rusqlite::params![NAME, key],
+        )?;
+        Ok(())
+    })?;
+    Ok(key)
 }
 
 /// Write the settings, replacing what was there.

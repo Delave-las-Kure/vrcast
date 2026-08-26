@@ -28,6 +28,36 @@ fn registry() -> &'static RwLock<Vec<String>> {
     REGISTRY.get_or_init(|| RwLock::new(Vec::new()))
 }
 
+/// The key viewers' pseudonyms are made with, for this run (T222).
+///
+/// Set once at start-up from what is kept on this machine. **When it has not been set,
+/// one is made up on the spot rather than the scrubbing being skipped**: a missing key
+/// must never mean addresses go through untouched, and a test that forgot to set one
+/// should see nonsense tokens rather than real addresses.
+static PSEUDONYM_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Tell the application which key to use. Called once, at start-up.
+pub fn use_pseudonym_key(key: String) {
+    let _ = PSEUDONYM_KEY.set(key);
+}
+
+fn pseudonym_key() -> &'static str {
+    PSEUDONYM_KEY.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
+}
+
+/// What a viewer is called in writing.
+pub fn viewer(ip: &str) -> String {
+    crate::domain::pseudonym::pseudonym(ip, pseudonym_key())
+}
+
+/// Replace every address in a piece of the server's own output with its pseudonym.
+///
+/// For text that came from watching viewers — the connection table above all, which is
+/// nothing but addresses — before any of it reaches the log.
+pub fn scrub_viewer_addresses(text: &str) -> String {
+    crate::domain::pseudonym::scrub_addresses(text, pseudonym_key())
+}
+
 /// Remember a value that must never appear in the output.
 ///
 /// Called where a secret enters the application — not where it is printed. Values that are

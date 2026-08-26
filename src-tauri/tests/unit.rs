@@ -65,6 +65,9 @@ mod viewers;
 #[path = "unit/redact.rs"]
 mod redact;
 
+#[path = "unit/pseudonym.rs"]
+mod pseudonym;
+
 #[path = "unit/transfer.rs"]
 mod transfer;
 

@@ -221,7 +221,10 @@ pub async fn start(
                 let output = match conn.exec(&connections::poll_command()).await {
                     Ok(output) if output.ok() => output.stdout,
                     Ok(output) => {
-                        tracing::debug!(stderr = %output.stderr.trim(), "the connection table would not be read");
+                        tracing::debug!(
+                            stderr = %crate::store::redact::scrub_viewer_addresses(output.stderr.trim()),
+                            "the connection table would not be read"
+                        );
                         continue;
                     }
                     Err(e) => {
