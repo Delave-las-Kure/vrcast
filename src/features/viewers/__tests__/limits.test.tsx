@@ -111,7 +111,12 @@ describe("before the cap goes on", () => {
     });
     renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "ru");
     await waitFor(() => expect(screen.getByTestId("kept")).toHaveTextContent("3.0"));
-    expect(screen.getByTestId("warnings")).toHaveTextContent("самой лёгкой ступени");
+    // Asked of the catalogue rather than copied out of it: a sentence written into a test
+    // breaks the day somebody improves the wording, and then says nothing about what is
+    // actually wrong.
+    expect(screen.getByTestId("warnings")).toHaveTextContent(
+      ru.details.WARN_CAP_BELOW_LIGHTEST.split("(")[0].trim(),
+    );
   });
 });
 

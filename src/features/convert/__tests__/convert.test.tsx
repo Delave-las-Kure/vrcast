@@ -140,7 +140,7 @@ describe("preparation screen", () => {
     const lines = screen.getAllByRole("listitem");
     expect(
       lines.some((el) => el.textContent?.includes(reason)),
-      `ни одна строка плана не называет причину: ${reason}`,
+      `not one line of the plan names the reason: ${reason}`,
     ).toBe(true);
   });
 
@@ -188,7 +188,18 @@ describe("preparation screen", () => {
     renderIn(<ConvertScreen />);
     await pickSource();
 
-    expect(await screen.findByText(/видеокарты NVIDIA/)).toBeInTheDocument();
+    // Asked of the catalogue rather than copied out of it: what matters is that the
+    // sentence names the make of card, not the exact words around it.
+    expect(
+      await screen.findByText(
+        fill(
+          ru.details.NOTICE_HARDWARE_FAILED,
+          { encoder: "h264_nvenc" },
+          ru,
+          "ru",
+        ),
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/h264_nvenc/)).not.toBeInTheDocument();
   });
 
@@ -279,6 +290,8 @@ describe("playback check", () => {
         result={verdict({ ignored: ["[null @ 0x1] non monotonically increasing dts"] })}
       />,
     );
-    expect(screen.getByText(/на воспроизведение не влияют/)).toBeInTheDocument();
+    expect(
+      screen.getByText(fill(ru.ui.validation.ignoredSummary, { n: 1 }, ru, "ru")),
+    ).toBeInTheDocument();
   });
 });

@@ -15,6 +15,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppError, Task, TaskOnClose } from "../../shared/contract";
 import { en, renderIn, ru } from "../../test-utils";
+import { fill } from "../../shared/i18n/render";
 
 // The replacement has to be declared before the code under test is imported.
 const mockTasksList = vi.fn<() => Promise<Task[]>>();
@@ -101,7 +102,11 @@ describe("the shell", () => {
 
   it("shows the application version when the core returned one", async () => {
     renderIn(<App />);
-    expect(await screen.findByText(/версия 0\.1\.0/)).toBeInTheDocument();
+    // Built from the catalogue's own template: the sentence may be reworded, the fact that
+    // the version is shown may not.
+    expect(
+      await screen.findByText(fill(ru.ui.sidebar.version, { version: "0.1.0" }, ru, "ru")),
+    ).toBeInTheDocument();
   });
 
   it("does not fall over when the version could not be had", async () => {
@@ -109,7 +114,9 @@ describe("the shell", () => {
     mockAppVersions.mockRejectedValue(new Error("core unavailable"));
     renderIn(<App />);
     expect(await screen.findByText(ru.ui.sections.tasks)).toBeInTheDocument();
-    expect(screen.queryByText(/версия/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(fill(ru.ui.sidebar.version, { version: "0.1.0" }, ru, "ru")),
+    ).not.toBeInTheDocument();
   });
 
   it("opens the task section by default", async () => {

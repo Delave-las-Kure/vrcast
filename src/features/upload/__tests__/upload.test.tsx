@@ -1,10 +1,14 @@
 /**
- * T103 — тесты интерфейса заливки и очереди.
+ * T103 — the upload screen and the queue.
  *
- * Ядро подменено: тест интерфейса не должен требовать ни сервера, ни базы. Проверяется
- * то, что видит человек, — а главное, разница между вопросом и отказом. Показать
- * нехватку места как предупреждение с кнопкой «всё равно залить» значило бы соврать:
- * места от согласия не появится.
+ * The core is stood in for: a check of the interface must need neither a server nor a
+ * database. What is checked is what a person sees — and above all the difference between
+ * a question and a refusal. Showing "not enough room" as a warning with an "upload
+ * anyway" button would be a lie: agreeing does not make room appear.
+ *
+ * **The Cyrillic that is left is deliberate.** The file is called `фильм 22.mp4` and the
+ * serving directory is `/srv/проба/видео`, because that is what this project's own files
+ * are called, and a check that only ever sees Latin names proves nothing about them.
  */
 
 import { fireEvent, screen, waitFor } from "@testing-library/react";
@@ -41,7 +45,7 @@ const { UploadScreen } = await import("../UploadScreen");
 const { QueueOrder } = await import("../../tasks/QueueOrder");
 const { CloseConsequences } = await import("../../tasks/CloseConsequences");
 
-function профиль(over: Partial<ServerProfile> = {}): ServerProfile {
+function profile(over: Partial<ServerProfile> = {}): ServerProfile {
   return {
     id: "s1",
     name: "Боевой",
@@ -51,8 +55,8 @@ function профиль(over: Partial<ServerProfile> = {}): ServerProfile {
     auth_kind: "password",
     key_path: null,
     domain: "stream.example.com",
-    // Нарочно не путь по умолчанию: подмена, повторяющая его, однажды пройдёт
-    // проверку там, где настоящее значение брать неоткуда (FR-004).
+    // Deliberately not the default path: a stand-in that repeats it will one day pass a
+    // check in a place where the real value has nowhere to come from (FR-004).
     video_dir: "/srv/проба/видео",
     cdn_base: null,
     ipv6_mode: null,
@@ -64,7 +68,7 @@ function профиль(over: Partial<ServerProfile> = {}): ServerProfile {
   } as ServerProfile;
 }
 
-const ПУСТАЯ_БИБЛИОТЕКА: LibraryView = {
+const EMPTY_LIBRARY: LibraryView = {
   server_id: "s1",
   media: [],
   unrecognized: [],
@@ -74,36 +78,36 @@ const ПУСТАЯ_БИБЛИОТЕКА: LibraryView = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockServersList.mockResolvedValue([профиль()]);
-  mockLibraryList.mockResolvedValue(ПУСТАЯ_БИБЛИОТЕКА);
+  mockServersList.mockResolvedValue([profile()]);
+  mockLibraryList.mockResolvedValue(EMPTY_LIBRARY);
   mockOpen.mockResolvedValue("F:\\видео\\фильм 22.mp4");
   mockUploadStart.mockResolvedValue("t-1");
   mockTasksReorder.mockResolvedValue(2);
 });
 
-/** Выбрать файл и дождаться, пока экран это заметит. */
-async function выбрать_файл() {
+/** Choose a file and wait for the screen to notice. */
+async function chooseAFile() {
   fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
   await screen.findByDisplayValue("фильм 22.mp4");
 }
 
-describe("экран заливки", () => {
-  it("подставляет имя в раздаче из имени выбранного файла", async () => {
-    // Чаще всего нужно именно оно. Заставлять человека перепечатывать имя руками —
-    // лишняя работа и лишний повод для опечатки.
+describe("the upload screen", () => {
+  it("takes the served name from the name of the file chosen", async () => {
+    // It is what is wanted most of the time. Making a person retype it is extra work and
+    // one more chance to mistype.
     renderIn(<UploadScreen />);
-    await выбрать_файл();
+    await chooseAFile();
     expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("фильм 22.mp4");
   });
 
-  it("не даёт залить, пока файл не выбран", async () => {
+  it("will not upload until a file has been chosen", async () => {
     renderIn(<UploadScreen />);
     expect(await screen.findByText(ru.ui.upload.start)).toBeDisabled();
   });
 
-  it("передаёт ядру путь, имя и предел скорости", async () => {
+  it("hands the core the path, the name and the speed limit", async () => {
     renderIn(<UploadScreen />);
-    await выбрать_файл();
+    await chooseAFile();
 
     fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldLimit), {
       target: { value: "1250000" },
@@ -122,18 +126,18 @@ describe("экран заливки", () => {
     );
   });
 
-  it("говорит, что заливка продолжится после закрытия приложения", async () => {
-    // FR-086. Человек не обязан знать, что «в фоне» здесь значит «переживёт
-    // закрытие»: об этом надо сказать прямо.
+  it("says the upload carries on after the application is closed", async () => {
+    // FR-086. A person is not obliged to know that "in the background" here means
+    // "outlives the closing": it has to be said plainly.
     renderIn(<UploadScreen />);
-    await выбрать_файл();
+    await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
     expect(await screen.findByText(ru.ui.upload.startedHint)).toBeInTheDocument();
   });
 
-  it("не подключается к серверу без подтверждённого отпечатка", async () => {
-    mockServersList.mockResolvedValue([профиль({ host_fingerprint: null })]);
+  it("does not reach a server whose fingerprint was never confirmed", async () => {
+    mockServersList.mockResolvedValue([profile({ host_fingerprint: null })]);
     renderIn(<UploadScreen />);
     expect(
       await screen.findByText(fill(ru.ui.upload.notReady, { name: "Боевой" }, ru, "ru")),
@@ -142,19 +146,19 @@ describe("экран заливки", () => {
   });
 });
 
-describe("предупреждения до старта", () => {
-  const занятое_имя: AppError = {
+describe("what is said before it starts", () => {
+  const nameTaken: AppError = {
     code: "NAME_EXISTS",
     details: [{ key: "NAME_WILL_BE_REPLACED", params: { name: "фильм 22.mp4" } }],
   };
-  const занятое_имя_словами = fill(
+  const nameTakenInWords = fill(
     ru.details.NAME_WILL_BE_REPLACED,
     { name: "фильм 22.mp4" },
     ru,
     "ru",
   );
 
-  const нет_места: AppError = {
+  const noRoom: AppError = {
     code: "REMOTE_DISK_FULL",
     details: [
       {
@@ -168,15 +172,15 @@ describe("предупреждения до старта", () => {
     ],
   };
 
-  it("занятое имя показывается вопросом и снимается согласием", async () => {
-    mockUploadStart.mockRejectedValueOnce(занятое_имя);
+  it("a name already taken is a question, and agreeing settles it", async () => {
+    mockUploadStart.mockRejectedValueOnce(nameTaken);
     renderIn(<UploadScreen />);
-    await выбрать_файл();
+    await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    expect(await screen.findByText(занятое_имя_словами)).toBeInTheDocument();
+    expect(await screen.findByText(nameTakenInWords)).toBeInTheDocument();
 
-    // Согласие уходит в ядро тем же запросом, но уже подтверждённым.
+    // The agreement goes to the core as the same request, now confirmed.
     mockUploadStart.mockResolvedValueOnce("t-2");
     fireEvent.click(screen.getByText(ru.ui.preflight.uploadAnyway));
 
@@ -186,34 +190,42 @@ describe("предупреждения до старта", () => {
     );
   });
 
-  it("нехватка места согласием не снимается", async () => {
-    // Ради этого различия компонент и существует. Кнопка «всё равно залить» здесь
-    // была бы обманом: передача упрётся в конец диска на середине.
-    mockUploadStart.mockRejectedValue(нет_места);
+  it("not enough room is not something agreeing can settle", async () => {
+    // This difference is the whole reason the component exists. An "upload anyway" button
+    // here would be a deceit: the transfer runs into the end of the disk halfway.
+    mockUploadStart.mockRejectedValue(noRoom);
     renderIn(<UploadScreen />);
-    await выбрать_файл();
+    await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    // The numbers are the core's; the units and the separator are the language's.
-    const сказано = await screen.findByText(/На сервере не хватает 22,0 ГБ/);
-    expect(сказано).toBeInTheDocument();
+    // The numbers are the core's; the units and the separator are the language's. Asked
+    // of the catalogue rather than written out here: a sentence copied into a test breaks
+    // the day somebody improves the wording, and says nothing about what went wrong.
+    const shortBy = fill(
+      ru.details.NOT_ENOUGH_SPACE,
+      noRoom.details![0].params as Record<string, number>,
+      ru,
+      "ru",
+    );
+    expect(shortBy).toContain("22,0");
+    expect(await screen.findByText(shortBy)).toBeInTheDocument();
     expect(screen.queryByText(ru.ui.preflight.uploadAnyway)).not.toBeInTheDocument();
   });
 
-  it("предупреждение показывается до начала передачи, а не после", async () => {
-    // Задача не должна была поставиться: узнать о занятом имени после часа
-    // передачи — то же самое, что не предупреждать вовсе.
-    mockUploadStart.mockRejectedValue(занятое_имя);
+  it("the warning comes before the transfer starts, not after", async () => {
+    // No task should have been made: learning about a taken name after an hour of
+    // transferring is the same as not being warned at all.
+    mockUploadStart.mockRejectedValue(nameTaken);
     renderIn(<UploadScreen />);
-    await выбрать_файл();
+    await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    await screen.findByText(занятое_имя_словами);
+    await screen.findByText(nameTakenInWords);
     expect(screen.queryByText(ru.ui.upload.started)).not.toBeInTheDocument();
   });
 
-  it("говорит о нехватке места по-английски, когда выбран английский", async () => {
-    mockUploadStart.mockRejectedValue(нет_места);
+  it("says there is not enough room in English when English is chosen", async () => {
+    mockUploadStart.mockRejectedValue(noRoom);
     renderIn(<UploadScreen />, "en");
     fireEvent.click(await screen.findByText(en.ui.upload.pickFile));
     await screen.findByDisplayValue("фильм 22.mp4");
@@ -223,8 +235,8 @@ describe("предупреждения до старта", () => {
   });
 });
 
-describe("очередь", () => {
-  function задача(id: string, order: number): Task {
+describe("the queue", () => {
+  function task(id: string, order: number): Task {
     return {
       id,
       kind: "upload",
@@ -242,25 +254,25 @@ describe("очередь", () => {
     };
   }
 
-  it("поднимает задачу и отдаёт ядру новый порядок целиком", () => {
+  it("moves a task up and hands the core the whole new order", () => {
     const onReorder = vi.fn();
     renderIn(
       <QueueOrder
-        queued={[задача("a", 1), задача("b", 2), задача("c", 3)]}
+        queued={[task("a", 1), task("b", 2), task("c", 3)]}
         busy={false}
         onReorder={onReorder}
       />,
     );
 
-    // Поднимаем третью.
+    // Move the third one up.
     fireEvent.click(screen.getAllByLabelText(ru.ui.tasks.moveUp)[2]);
     expect(onReorder).toHaveBeenCalledWith(["a", "c", "b"]);
   });
 
-  it("первую поднять некуда, последнюю опустить некуда", () => {
+  it("the first has nowhere to go up and the last nowhere to go down", () => {
     renderIn(
       <QueueOrder
-        queued={[задача("a", 1), задача("b", 2)]}
+        queued={[task("a", 1), task("b", 2)]}
         busy={false}
         onReorder={vi.fn()}
       />,
@@ -269,7 +281,7 @@ describe("очередь", () => {
     expect(screen.getAllByLabelText(ru.ui.tasks.moveDown)[1]).toBeDisabled();
   });
 
-  it("пустая очередь не показывается вовсе", () => {
+  it("an empty queue is not shown at all", () => {
     const { container } = renderIn(
       <QueueOrder queued={[]} busy={false} onReorder={vi.fn()} />,
     );
@@ -277,15 +289,15 @@ describe("очередь", () => {
   });
 });
 
-describe("последствия закрытия", () => {
-  const продолжится: TaskOnClose = {
+describe("what closing would cost", () => {
+  const carriesOn: TaskOnClose = {
     id: "a",
     kind: "upload",
     progress: 0.6,
     outcome: "resumes",
     explanation: { key: "ON_CLOSE_RESUMES_FROM", params: { percent: 60 } },
   };
-  const заново: TaskOnClose = {
+  const fromTheStart: TaskOnClose = {
     id: "b",
     kind: "convert",
     progress: 0.4,
@@ -293,8 +305,8 @@ describe("последствия закрытия", () => {
     explanation: { key: "ON_CLOSE_RESTARTS_LOSING", params: { percent: 40 } },
   };
 
-  it("предупреждает, когда работа потеряется", () => {
-    renderIn(<CloseConsequences items={[продолжится, заново]} />);
+  it("warns when work would be lost", () => {
+    renderIn(<CloseConsequences items={[carriesOn, fromTheStart]} />);
     expect(screen.getByText(ru.ui.tasks.closeLosing)).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -303,12 +315,12 @@ describe("последствия закрытия", () => {
     ).toBeInTheDocument();
   });
 
-  it("успокаивает, когда всё продолжится", () => {
-    renderIn(<CloseConsequences items={[продолжится]} />);
+  it("says so when everything would carry on", () => {
+    renderIn(<CloseConsequences items={[carriesOn]} />);
     expect(screen.getByText(ru.ui.tasks.closeSafe)).toBeInTheDocument();
   });
 
-  it("молчит, когда закрывать безопасно и говорить не о чем", () => {
+  it("stays quiet when closing is safe and there is nothing to say", () => {
     const { container } = renderIn(<CloseConsequences items={[]} />);
     expect(container).toBeEmptyDOMElement();
   });

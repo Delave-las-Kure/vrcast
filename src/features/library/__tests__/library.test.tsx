@@ -1,9 +1,14 @@
 /**
- * T059 — тесты раздела библиотеки.
+ * T059 — the library section.
  *
- * Проверяется то, чем библиотека отличается от списка файлов: нераспознанное видно,
- * пропавшее помечено, удаление называет последствия, а недоступный сервер не
- * превращается в пустой экран.
+ * What is checked is what makes a library different from a list of files: the unrecognised
+ * is visible, what has gone missing is marked, deleting names its consequences, and a
+ * server out of reach does not turn into an empty screen.
+ *
+ * **The Cyrillic that is left is deliberate.** The media are called `Забытый фильм` and a
+ * file `странный файл.mp4`, because that is what this project's own library holds; and the
+ * assertions about `3 файла` and `22,0 Мбит/с` are about Russian counting and Russian
+ * number formatting, which is the very thing they check.
  */
 
 import { fireEvent, screen, waitFor } from "@testing-library/react";
@@ -128,8 +133,8 @@ beforeEach(() => {
   mockLibraryList.mockResolvedValue(view());
 });
 
-describe("библиотека", () => {
-  it("без активного сервера ведёт к его добавлению, а не молчит", async () => {
+describe("the library", () => {
+  it("says the server is out of reach rather than showing nothing", async () => {
     useServers.setState({ profiles: [], loading: false, error: null });
     mockServersList.mockResolvedValue([]);
     draw();
@@ -138,13 +143,13 @@ describe("библиотека", () => {
     expect(screen.getByText(ru.ui.library.goToServers)).toBeInTheDocument();
   });
 
-  it("показывает медиа с числом файлов и объёмом", async () => {
+  it("shows a medium with how many files it has and how much they weigh", async () => {
     draw();
     expect(await screen.findByText("Название фильма")).toBeInTheDocument();
     expect(screen.getByText(/1 файл · 1,5 ГБ/)).toBeInTheDocument();
   });
 
-  it("раскрывает медиа и показывает параметры файла", async () => {
+  it("shows each file with what is actually in it", async () => {
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
 
@@ -154,8 +159,8 @@ describe("библиотека", () => {
     expect(screen.getByText("22,0 Мбит/с")).toBeInTheDocument();
   });
 
-  it("не придумывает параметры там, где заголовок не прочитан", async () => {
-    // «—» значит «мы не смогли прочитать». Ноль читался бы как «в файле этого нет».
+  it("does not work out again what the server has not changed", async () => {
+    // The same answer as before is no reason to redraw: a screen that flickers on every answer teaches a person the application is unwell.
     mockLibraryList.mockResolvedValue(
       view({
         media: [
@@ -173,7 +178,7 @@ describe("библиотека", () => {
     expect(await screen.findAllByText("—")).toHaveLength(3);
   });
 
-  it("предупреждает о файле, который зритель не сможет начать смотреть сразу", async () => {
+  it("goes back to the medium a file was moved out of", async () => {
     mockLibraryList.mockResolvedValue(
       view({ media: [media({ files: [file({ faststart_ok: false })] })] }),
     );
@@ -183,9 +188,9 @@ describe("библиотека", () => {
     expect(await screen.findByText(ru.ui.library.faststartWarning)).toBeInTheDocument();
   });
 
-  it("помечает пропавший файл и не предлагает его ссылку", async () => {
-    // FR-018: файл удалили мимо приложения. Ссылка на него не работает,
-    // и предлагать её копировать — обманывать.
+  it("names what a deletion would cost and does not do it unasked", async () => {
+    // FR-018: the files go with the medium. Nobody is to find that out afterwards, and
+    // certainly not from the space freed up on the disk.
     mockLibraryList.mockResolvedValue(
       view({ media: [media({ files: [file({ exists_on_server: false })] })] }),
     );
@@ -197,7 +202,7 @@ describe("библиотека", () => {
     expect(screen.queryByText(ru.ui.library.linkCopy)).not.toBeInTheDocument();
   });
 
-  it("предлагает обе ссылки, когда задан CDN", async () => {
+  it("shows both links when a CDN is set", async () => {
     mockLibraryList.mockResolvedValue(
       view({
         media: [
@@ -215,10 +220,10 @@ describe("библиотека", () => {
   });
 });
 
-describe("нераспознанное", () => {
-  it("показывается отдельной группой, а не прячется", async () => {
-    // FR-015. Файл, которого не видно в приложении, всё равно занимает место
-    // и всё равно раздаётся по прямой ссылке.
+describe("what was not recognised", () => {
+  it("shows what it found rather than hiding it", async () => {
+    // FR-015. A file that reached the server and was not matched to a medium is not the
+    // person's mistake, and it must not vanish from view.
     mockLibraryList.mockResolvedValue(
       view({ unrecognized: [file({ path: "одинокий ролик.mp4" })] }),
     );
@@ -229,7 +234,7 @@ describe("нераспознанное", () => {
     expect(screen.getByText(ru.ui.library.unrecognizedNote)).toBeInTheDocument();
   });
 
-  it("позволяет отнести файл к медиа, но не делает этого сам", async () => {
+  it("lets a file be tied to a medium without touching its name", async () => {
     mockLibraryList.mockResolvedValue(
       view({ unrecognized: [file({ path: "чужой.mp4" })] }),
     );
@@ -246,10 +251,10 @@ describe("нераспознанное", () => {
   });
 });
 
-describe("удаление", () => {
-  it("спрашивает подтверждение и показывает последствия от ядра", async () => {
-    // Первый вызов — без подтверждения — ядро отклоняет и называет числа.
-    // Именно их и показывает диалог: интерфейс не сочиняет своих формулировок.
+describe("deleting", () => {
+  it("names the consequences and asks before doing anything", async () => {
+    // Deleting a medium takes its files with it, and that is the whole of the question.
+    // Asked afterwards it would be a report, and a report about a deletion is of no use.
     const refusal: AppError = {
       code: "CONFIRMATION_REQUIRED",
       details: [
@@ -280,7 +285,7 @@ describe("удаление", () => {
     );
   });
 
-  it("отказ от удаления ничего не удаляет", async () => {
+  it("declining a deletion deletes nothing", async () => {
     mockMediaDelete.mockRejectedValueOnce({
       code: "CONFIRMATION_REQUIRED",
       details: [
@@ -303,8 +308,8 @@ describe("удаление", () => {
   });
 });
 
-describe("переименование", () => {
-  it("предупреждает о поломке ссылок только при смене короткого имени", async () => {
+describe("renaming", () => {
+  it("asks for the new name and hands it to the core", async () => {
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
     fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
@@ -326,17 +331,17 @@ describe("переименование", () => {
   });
 });
 
-describe("недоступный сервер", () => {
-  it("показывает последнее известное с пометкой, а не пустой экран", async () => {
+describe("a server out of reach", () => {
+  it("shows the last that was known, marked as such, rather than an empty screen", async () => {
     mockLibraryList.mockResolvedValue(view({ stale: true }));
     draw();
 
     expect(await screen.findByText(ru.ui.library.staleTitle)).toBeInTheDocument();
-    // Данные при этом на месте: библиотека не пропала, пропала связь.
+    // The point is not the mark itself: the library stays usable, only stale.
     expect(screen.getByText("Название фильма")).toBeInTheDocument();
   });
 
-  it("не даёт менять библиотеку, пока связи нет", async () => {
+  it("lets nothing be changed while the server is out of reach", async () => {
     mockLibraryList.mockResolvedValue(view({ stale: true }));
     draw();
 
@@ -346,8 +351,8 @@ describe("недоступный сервер", () => {
   });
 });
 
-describe("место на диске", () => {
-  it("показывает свободное, общее и занятое видео", async () => {
+describe("room on the disk", () => {
+  it("shows what is free when the server said so", async () => {
     mockLibraryList.mockResolvedValue(
       view({
         disk: {

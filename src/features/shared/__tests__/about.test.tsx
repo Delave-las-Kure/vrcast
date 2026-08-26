@@ -1,10 +1,10 @@
 /**
- * T107 — проверка того, что обязательство GPL выполняется на деле.
+ * T107 — a check that the GPL obligation is kept in fact.
  *
- * Проверяется не наличие красивого экрана, а два обещания: сказано, под какой
- * лицензией распространяется приложение, и назван адрес, где взять исходный код
- * ИМЕННО ЭТОЙ версии. Ссылка на «последнюю» версию обязательства не выполняет:
- * человеку на руки досталась конкретная сборка, и право у него на её исходники.
+ * What is checked is not that there is a handsome screen, but two promises: that the
+ * licence the application is distributed under is named, and that the address where the
+ * source of **this very version** can be had is given. A link to "the latest" does not keep
+ * the obligation: a person was handed a particular build, and their right is to its source.
  */
 
 import { screen } from "@testing-library/react";
@@ -26,32 +26,32 @@ beforeEach(() => {
   mockAppVersions.mockResolvedValue({ app: "0.1.0", server: null, schema: 5 });
 });
 
-describe("о программе", () => {
-  it("называет лицензию", async () => {
+describe("about the application", () => {
+  it("names the licence", async () => {
     renderIn(<About />);
     expect(await screen.findByText(/GNU General Public License/)).toBeInTheDocument();
   });
 
-  it("даёт адрес исходного кода ссылкой, по которой можно перейти", async () => {
+  it("gives the source address as a link somebody can follow", async () => {
     renderIn(<About />);
-    const ссылка = await screen.findByRole("link", { name: /github\.com/ });
-    expect(ссылка).toHaveAttribute("href", expect.stringContaining("github.com"));
+    const link = await screen.findByRole("link", { name: /github\.com/ });
+    expect(link).toHaveAttribute("href", expect.stringContaining("github.com"));
   });
 
-  it("привязывает исходный код к той версии, что на руках", async () => {
-    // Обязательство GPL — про полученную сборку, а не про «последнюю вообще».
+  it("ties the source to the version in hand", async () => {
+    // The GPL obligation is about the build that was received, not about "the latest".
     renderIn(<About />);
     expect(await screen.findByText("v0.1.0")).toBeInTheDocument();
   });
 
-  it("указывает, где перечень чужих работ", async () => {
+  it("says where the list of other people's work is", async () => {
     renderIn(<About />);
     expect(await screen.findByText("THIRD-PARTY.md")).toBeInTheDocument();
   });
 
-  it("не молчит о лицензии, когда версию узнать не удалось", async () => {
-    // Ядро может быть недоступно, но обязательство от этого никуда не девается.
-    mockAppVersions.mockRejectedValue(new Error("ядро недоступно"));
+  it("does not go quiet about the licence when the version could not be learned", async () => {
+    // The core may be out of reach, and the obligation does not go anywhere because of it.
+    mockAppVersions.mockRejectedValue(new Error("the core is unreachable"));
     renderIn(<About />);
     expect(await screen.findByText(/GNU General Public License/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /github\.com/ })).toBeInTheDocument();
