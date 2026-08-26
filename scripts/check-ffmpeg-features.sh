@@ -12,6 +12,15 @@
 #
 # The build is pinned by scripts/ffmpeg.json, so this cannot change by itself — but it can
 # change when somebody moves the pin, and that is exactly the moment to notice.
+#
+# **The listings are taken into variables and searched there, not piped into `grep -q`.**
+# The first version of this did pipe them, and on continuous integration it declared libvmaf
+# missing from a build that has it — proved by running the very same file in a container.
+# The likeliest reason is that `grep -q` leaves as soon as it matches, the writer upstream
+# dies of a broken pipe, and `pipefail` then reports the whole pipeline as failed although
+# the thing was found. It was not reproduced, and that is exactly why the pipeline is gone
+# rather than adjusted: a check that reports a missing feature when the feature is there is
+# worse than no check, because it is believed.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
@@ -28,23 +37,38 @@ if [ ! -f "$FFMPEG" ]; then
   exit 1
 fi
 
+ENCODERS="$("$FFMPEG" -hide_banner -encoders 2>/dev/null)"
+FILTERS="$("$FFMPEG" -hide_banner -filters 2>/dev/null)"
+
+if [ -z "$ENCODERS" ] || [ -z "$FILTERS" ]; then
+  echo "the bundled FFmpeg at $FFMPEG would not say what it can do" >&2
+  echo "  encoders listing: ${#ENCODERS} characters" >&2
+  echo "  filters listing:  ${#FILTERS} characters" >&2
+  exit 1
+fi
+
 fail=0
 
-# The encoder is looked for in the name column of the listing, not anywhere in the text:
-# "x264" also stands inside "libx264rgb" and in half the descriptions.
-if "$FFMPEG" -hide_banner -encoders 2>/dev/null | awk '{ print $2 }' | grep -qx "libx264"; then
+# Only the name column is looked at, never the whole line. "x264" also stands inside
+# "libx264rgb" and in half the descriptions; "libvmaf" stands in the description of
+# "vmafmotion", which is a different filter measuring a different thing.
+has_name() {
+  echo "$1" | awk -v want="$2" '$2 == want { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+if has_name "$ENCODERS" libx264; then
   echo "  libx264: yes"
 else
   echo "  libx264: MISSING — a machine without a graphics card could prepare nothing" >&2
+  echo "    (the encoders listing was ${#ENCODERS} characters long)" >&2
   fail=1
 fi
 
-# Likewise for the filter: "libvmaf" also appears in the description of "vmafmotion", which
-# is a different filter measuring a different thing.
-if "$FFMPEG" -hide_banner -filters 2>/dev/null | awk '{ print $2 }' | grep -qx "libvmaf"; then
+if has_name "$FILTERS" libvmaf; then
   echo "  libvmaf: yes"
 else
   echo "  libvmaf: MISSING — quality cannot be measured, so no ladder can be built" >&2
+  echo "    (the filters listing was ${#FILTERS} characters long)" >&2
   fail=1
 fi
 
