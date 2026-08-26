@@ -10,6 +10,8 @@ pub mod checksum;
 pub mod disk;
 pub mod env_import;
 pub mod free_space;
+pub mod hls_package;
+pub mod hls_verify;
 pub mod listing;
 pub mod manifest_io;
 pub mod probe_moov;

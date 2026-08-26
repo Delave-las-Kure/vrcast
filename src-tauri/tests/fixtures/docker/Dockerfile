@@ -12,6 +12,10 @@
 
 FROM ubuntu:24.04
 
+# ffmpeg is here because the SERVER cuts the segments, not this machine (T196): hundreds
+# of small files are born where they will be served rather than dragged across the network
+# one by one. The live server gets it the same way, from apt, at deployment — so checking
+# against a container without it would be checking something the application never does.
 # iproute2 provides ss: the channel-multiplexing test counts the connections by the server's
 # own means, and a viewer's delivery speed is read from that same table (R-02). Without ss
 # that count quietly degenerated into taking our word for it.
@@ -23,6 +27,7 @@ RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       openssh-server \
       ca-certificates \
+      ffmpeg \
       curl \
       iproute2 \
       procps \

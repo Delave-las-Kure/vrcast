@@ -20,7 +20,12 @@ fn key_credentials() -> Credentials {
     }
 }
 
-async fn connect(server: &TestServer) -> Connection {
+/// A connection to the container as the application makes one.
+///
+/// Shared with the other live checks: two ways of connecting in the tests would eventually
+/// differ from each other and from the application, and the difference would be blamed on
+/// whatever failed next.
+pub async fn connect(server: &TestServer) -> Connection {
     let a = addr(server);
     let fp = fingerprint::probe(&a)
         .await

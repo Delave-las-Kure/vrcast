@@ -93,6 +93,55 @@ fn level_idc(level: &str) -> u8 {
     }
 }
 
+/// Where each variant's playlist is, in the order the description names them.
+///
+/// Read straight out of the text rather than through [`parse`]: checking what is served
+/// must not depend on the description being well formed. A master with a mangled
+/// `STREAM-INF` line still names its variants, and a person is better served by "this
+/// variant does not answer" than by "the description could not be read".
+pub fn playlist_paths(master: &str) -> Vec<String> {
+    master
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && line.ends_with(".m3u8"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The segments a variant's playlist names, in order.
+pub fn segment_names(playlist: &str) -> Vec<String> {
+    playlist
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && (line.ends_with(".ts") || line.ends_with(".m4s"))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The initialisation piece a fragmented-MP4 playlist points at, if it names one.
+///
+/// `#EXT-X-MAP:URI="init.mp4"`. Without this file the segments carry no stream headers
+/// and cannot be decoded at all — and the tag can be perfectly correct while the file it
+/// names is missing, which looks identical until somebody presses play.
+pub fn init_name(playlist: &str) -> Option<String> {
+    playlist.lines().map(str::trim).find_map(|line| {
+        let rest = line.strip_prefix("#EXT-X-MAP:")?;
+        let uri = rest.split("URI=").nth(1)?;
+        Some(
+            uri.trim()
+                .trim_matches('"')
+                .split(',')
+                .next()?
+                .trim_matches('"')
+                .to_owned(),
+        )
+    })
+}
+
 /// Write the description of a quality set.
 pub fn build(variants: &[Variant]) -> String {
     let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");

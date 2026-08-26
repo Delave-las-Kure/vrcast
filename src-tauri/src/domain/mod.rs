@@ -17,6 +17,7 @@ pub mod convert_plan;
 pub mod geo;
 pub mod grouping;
 pub mod hls_master;
+pub mod hls_package;
 pub mod ladder;
 pub mod links;
 pub mod manifest;

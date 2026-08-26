@@ -138,7 +138,7 @@ jobs:
           # A flickering guard is worse than none: it teaches people to re-run a build
           # without reading it — and one day they will re-run a real leak the same way.
           for _ in $(seq 1 15); do
-            left="$(docker ps -a --filter ancestor=vrcast-test-sshd:3 --format '{{.ID}} {{.Status}}')"
+            left="$(docker ps -a --filter ancestor=vrcast-test-sshd:4 --format '{{.ID}} {{.Status}}')"
             [ -z "$left" ] && break
             sleep 1
           done
