@@ -181,6 +181,9 @@ fn video_args(job: &ConvertJob<'_>, args: &mut Vec<String>) {
             for a in super::encoder_args::quality_pinned(family, 16) {
                 push(args, &a);
             }
+            for a in super::encoder_args::quality_preset(family) {
+                push(args, &a);
+            }
             common_video_args(job, level, args);
         }
         VideoAction::ReencodeCapped {
@@ -192,21 +195,25 @@ fn video_args(job: &ConvertJob<'_>, args: &mut Vec<String>) {
         } => {
             push(args, "-c:v");
             push(args, job.encoder.ffmpeg_name());
-            push(args, "-b:v");
-            push(args, &format!("{target_kbps}k"));
-            push(args, "-maxrate");
-            push(args, &format!("{maxrate_kbps}k"));
-            // Buffer equals the ceiling on purpose. A larger buffer lets bursts
-            // run above the ceiling, and that is what froze viewers: a ceiling of
-            // 45 with a buffer of 60 produced 54 Mbit/s peaks.
-            push(args, "-bufsize");
-            push(args, &format!("{bufsize_kbps}k"));
+            for a in super::encoder_args::bitrate_capped(*target_kbps, *maxrate_kbps, *bufsize_kbps)
+            {
+                push(args, &a);
+            }
             // No `-minrate`: a floor forces easy scenes to be padded with bits
             // they do not need, which is constant-bitrate behaviour, and constant
             // bitrate lost the measurement it was compared against.
-            if matches!(job.encoder, Encoder::Software) {
-                push(args, "-preset");
-                push(args, "slow");
+            //
+            // **And the profile the numbers were measured with.** Without it the encoder
+            // runs at its own defaults — NVENC at preset p4 with no B-frames, no
+            // look-ahead and no adaptive quantisation — while the complexity probe
+            // measured the material through p7 with all of them. The probe's whole
+            // premise is that what it measures is what will later be made; measured one
+            // way and made another, its anchor describes a file nobody produces, and so
+            // does every VMAF number this project owns.
+            for a in
+                super::encoder_args::quality_preset(super::encoder_args::family_of(job.encoder))
+            {
+                push(args, &a);
             }
             common_video_args(job, level, args);
         }

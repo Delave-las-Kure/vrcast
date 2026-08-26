@@ -80,6 +80,12 @@ fn owned(args: &[&str]) -> Vec<String> {
 pub fn quality_preset(family: Family) -> Vec<String> {
     match family {
         Family::Nvenc => owned(&[
+            // `-rc vbr` sits here rather than with the quality number because convert.sh
+            // passes it on both paths: with `-cq` and with `-b:v`. Left with the quality
+            // number alone, the capped path would run in whichever mode the encoder
+            // defaulted to.
+            "-rc",
+            "vbr",
             "-preset",
             "p7",
             "-tune",
@@ -114,7 +120,7 @@ pub fn quality_preset(family: Family) -> Vec<String> {
 /// out is what the material wanted.
 pub fn quality_pinned(family: Family, quality: u32) -> Vec<String> {
     match family {
-        Family::Nvenc => owned(&["-rc", "vbr", "-cq", &quality.to_string()]),
+        Family::Nvenc => owned(&["-cq", &quality.to_string()]),
         // AMD has no equivalent of `-cq`: constant quantiser is its own rate-control mode,
         // and the quantiser is given per frame kind.
         Family::Amf => {

@@ -17,8 +17,8 @@ use vrcast_studio_lib::domain::hls_master::{
     average_bps, build, codecs_for, parse, peak_bps, MasterProblem, Segment, Variant,
 };
 use vrcast_studio_lib::domain::ladder::{
-    density, plan, source_cap_mbps, validate, Layout, LayoutSource, Objection, Reason, Rung,
-    SourceFacts, FALLBACK_MBPS,
+    density, plan, source_cap_mbps, validate, Layout, LayoutSource, Objection, Reason, Refusal,
+    Rung, SourceFacts, FALLBACK_MBPS,
 };
 
 fn source(width: u32, height: u32, fps: u32, bitrate_mbps: u64) -> SourceFacts {
@@ -87,12 +87,14 @@ fn a_stereoscopic_frame_is_recognised_and_its_eyes_are_measured() {
     // Told to a person as "3840×1080" this is true and useless: what they have is 1920 per
     // eye. Recognising it changes none of the arithmetic — that would take a measurement
     // nobody has made — but it does change what they are shown.
-    let laid = plan(Some(20_000_000), &source(3840, 1080, 60, 40), None);
+    let laid = plan(Some(20_000_000), &source(3840, 1080, 60, 40), None)
+        .expect("a sound source was refused");
     assert_eq!(laid.shape.layout, Layout::SideBySide);
     assert_eq!(laid.shape.from, LayoutSource::Guessed);
     assert_eq!(Layout::SideBySide.per_eye(3840, 1080), (1920, 1080));
 
-    let stacked = plan(Some(20_000_000), &source(1920, 2160, 48, 40), None);
+    let stacked = plan(Some(20_000_000), &source(1920, 2160, 48, 40), None)
+        .expect("a sound source was refused");
     assert_eq!(stacked.shape.layout, Layout::OverUnder);
     assert_eq!(Layout::OverUnder.per_eye(1920, 2160), (1920, 1080));
 
@@ -100,6 +102,7 @@ fn a_stereoscopic_frame_is_recognised_and_its_eyes_are_measured() {
     for fps in [24, 48, 60] {
         assert_eq!(
             plan(Some(20_000_000), &source(3840, 2160, fps, 40), None)
+                .expect("a sound source was refused")
                 .shape
                 .layout,
             Layout::Flat,
@@ -107,6 +110,7 @@ fn a_stereoscopic_frame_is_recognised_and_its_eyes_are_measured() {
         );
         assert_eq!(
             plan(Some(20_000_000), &source(1920, 800, fps, 40), None)
+                .expect("a sound source was refused")
                 .shape
                 .layout,
             Layout::Flat,
@@ -123,7 +127,8 @@ fn what_the_file_says_beats_what_its_proportions_suggest() {
         Some(20_000_000),
         &source(3840, 1080, 60, 40),
         Some(Layout::Flat),
-    );
+    )
+    .expect("a sound source was refused");
     assert_eq!(told.shape.layout, Layout::Flat);
     assert_eq!(told.shape.from, LayoutSource::Declared);
 }
@@ -133,7 +138,8 @@ fn lowering_the_resolution_keeps_both_eyes_together() {
     // Scaling a stereoscopic frame has to keep its proportions, or the split between the
     // eyes moves and the picture comes apart. A deliberately thin ladder over a heavy
     // side-by-side source, so that a rung really is lowered.
-    let laid = plan(Some(4_000_000), &source(3840, 1080, 60, 40), None);
+    let laid = plan(Some(4_000_000), &source(3840, 1080, 60, 40), None)
+        .expect("a sound source was refused");
     for rung in &laid.rungs {
         let expected = (3840 * rung.height) / 1080;
         assert_eq!(
@@ -152,7 +158,8 @@ fn lowering_the_resolution_keeps_both_eyes_together() {
 #[test]
 fn the_top_never_goes_above_the_source() {
     // Above the source there is no more detail to find, only weight (FR-042).
-    let laid = plan(Some(35_000_000), &source(3840, 2160, 48, 12), None);
+    let laid = plan(Some(35_000_000), &source(3840, 2160, 48, 12), None)
+        .expect("a sound source was refused");
     assert_eq!(laid.rungs[0].bitrate_bps, 12_000_000);
     assert!(laid.rungs[0].reasons.contains(&Reason::CappedBySource));
 }
@@ -163,7 +170,7 @@ fn a_heavier_source_codec_buys_the_ladder_more_room() {
     // source's bitrate would cut the ladder off far below where the detail runs out.
     let mut hevc = source(3840, 2160, 24, 12);
     hevc.heavier_codec = true;
-    let laid = plan(Some(35_000_000), &hevc, None);
+    let laid = plan(Some(35_000_000), &hevc, None).expect("a sound source was refused");
     // `SCAP=$(( S * 16 / 10 ))` — integer arithmetic on whole megabits: 12 × 16 / 10 is
     // 192 / 10 is **19**, not 19.2. The truncation is what keeps the cap on the same grid
     // as the rungs and as every measurement this project owns.
@@ -173,7 +180,8 @@ fn a_heavier_source_codec_buys_the_ladder_more_room() {
 
 #[test]
 fn the_rungs_go_down_at_about_one_and_eight_tenths() {
-    let laid = plan(Some(20_000_000), &source(3840, 2160, 24, 60), None);
+    let laid = plan(Some(20_000_000), &source(3840, 2160, 24, 60), None)
+        .expect("a sound source was refused");
     assert_eq!(laid.rungs.len(), 4);
     for pair in laid.rungs.windows(2) {
         let times = pair[0].bitrate_bps as f64 / pair[1].bitrate_bps as f64;
@@ -195,7 +203,8 @@ fn light_material_gets_one_rung_and_is_told_so() {
     // This test used to be given an anchor of **one bit per second** — the only input in
     // the whole domain where the rule still fired once the port had moved off the megabit
     // grid. It passed, and the rule was gone.
-    let laid = plan(Some(1_400_000), &source(1280, 720, 24, 2), None);
+    let laid =
+        plan(Some(1_400_000), &source(1280, 720, 24, 2), None).expect("a sound source was refused");
     assert_eq!(
         laid.rungs.len(),
         1,
@@ -216,7 +225,8 @@ fn every_rung_lands_on_a_whole_megabit() {
             Some(anchor_mbps * 1_000_000 + 666_666),
             &source(3840, 2160, 24, 60),
             None,
-        );
+        )
+        .expect("a sound source was refused");
         for rung in &laid.rungs {
             assert_eq!(
                 rung.bitrate_bps % 1_000_000,
@@ -244,7 +254,7 @@ fn without_a_measurement_the_constant_is_held_down_by_what_the_source_allows() {
     // as "this is where the material stopped asking for more" when nothing had been asked.
     let mut hevc = source(3840, 2160, 24, 12);
     hevc.heavier_codec = true;
-    let laid = plan(None, &hevc, None);
+    let laid = plan(None, &hevc, None).expect("a sound source was refused");
     assert_eq!(
         laid.rungs[0].bitrate_bps, 19_000_000,
         "min(35, 12 × 16 / 10)"
@@ -258,7 +268,10 @@ fn without_a_measurement_the_constant_is_held_down_by_what_the_source_allows() {
     // And a source heavier than the constant is held to the constant.
     let heavy = source(3840, 2160, 24, 80);
     assert_eq!(
-        plan(None, &heavy, None).rungs[0].bitrate_bps,
+        plan(None, &heavy, None)
+            .expect("a sound source was refused")
+            .rungs[0]
+            .bitrate_bps,
         FALLBACK_MBPS * 1_000_000
     );
 }
@@ -272,7 +285,7 @@ fn the_resolution_drops_only_when_the_bits_have_run_thin() {
 
     // 22 Mbit/s over 4K at 24 frames is a density of about 0.11 — full resolution.
     assert!(density(22_000_000, 3840, 2160, 24) > 0.05);
-    let laid = plan(Some(22_000_000), &src, None);
+    let laid = plan(Some(22_000_000), &src, None).expect("a sound source was refused");
     assert_eq!(laid.rungs[0].height, 2160);
     assert!(laid.rungs[0].reasons.contains(&Reason::FullResolution));
 
@@ -280,7 +293,7 @@ fn the_resolution_drops_only_when_the_bits_have_run_thin() {
     // the resolution is the whole of why it belongs in the formula.
     let quick = source(3840, 2160, 60, 60);
     assert!(density(22_000_000, 3840, 2160, 60) < 0.05);
-    let fast = plan(Some(22_000_000), &quick, None);
+    let fast = plan(Some(22_000_000), &quick, None).expect("a sound source was refused");
     assert!(
         fast.rungs[0].height < 2160,
         "at 60 frames the same bitrate is spread thinner and the height should come down"
@@ -300,7 +313,7 @@ fn an_upscaled_source_is_not_encoded_above_what_it_really_has() {
     // formula was calling for 2160.
     let mut upscaled = source(3840, 2160, 24, 60);
     upscaled.native_height = Some(1080);
-    let laid = plan(Some(22_000_000), &upscaled, None);
+    let laid = plan(Some(22_000_000), &upscaled, None).expect("a sound source was refused");
 
     assert_eq!(laid.rungs[0].height, 1728, "1080 × 1.6");
     assert!(laid.rungs[0].reasons.contains(&Reason::CappedByUpscale));
@@ -309,7 +322,8 @@ fn an_upscaled_source_is_not_encoded_above_what_it_really_has() {
 #[test]
 fn every_rung_carries_its_own_level_and_it_holds() {
     for (w, h, fps) in [(3840, 2160, 48), (3840, 1080, 60), (1920, 1080, 24)] {
-        let laid = plan(Some(20_000_000), &source(w, h, fps, 60), None);
+        let laid = plan(Some(20_000_000), &source(w, h, fps, 60), None)
+            .expect("a sound source was refused");
         for rung in &laid.rungs {
             assert!(
                 level_exceeded(&rung.level, rung.width, rung.height, fps).is_empty(),
@@ -398,7 +412,8 @@ fn a_ladder_this_code_planned_has_nothing_wrong_with_it() {
         // the checker used to object to it.
         for anchor_mbps in 1..=40u64 {
             let src = source(w, h, fps, 60);
-            let laid = plan(Some(anchor_mbps * 1_000_000), &src, None);
+            let laid = plan(Some(anchor_mbps * 1_000_000), &src, None)
+                .expect("a sound source was refused");
             let objections = validate(&laid.rungs, &src, fps);
             assert!(
                 objections.is_empty(),
@@ -508,5 +523,151 @@ fn something_that_is_not_a_playlist_is_refused() {
     assert_eq!(
         parse("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\n"),
         Err(MasterProblem::VariantWithoutPath { line: 2 })
+    );
+}
+
+// ---------- what the second audit found ----------
+
+#[test]
+fn halves_go_to_the_even_number_as_the_script_has_always_done() {
+    // The rungs have always been produced by Python's `round`, which breaks a tie towards
+    // the even number. Rust's `round` breaks it away from zero. They disagree on eight
+    // anchors between 1 and 100, and one of them is the constant the ladder falls back on.
+    //
+    // Checked against the values the shell really emits, worked out by running its own
+    // one-liner: `sorted({max(1,int(round(a*m))) for m in (1.0,0.55,0.3,0.17)}, reverse=True)`.
+    let src = source(3840, 2160, 24, 200);
+    let rungs_at = |anchor_mbps: u64| -> Vec<u64> {
+        plan(Some(anchor_mbps * 1_000_000), &src, None)
+            .expect("a sound source was refused")
+            .rungs
+            .iter()
+            .map(|r| r.bitrate_bps / 1_000_000)
+            .collect()
+    };
+
+    for (anchor, expected) in [
+        (15u64, vec![15u64, 8, 4, 3]),
+        (30, vec![30, 16, 9, 5]),
+        (35, vec![35, 19, 10, 6]),
+        (50, vec![50, 28, 15, 8]),
+        (55, vec![55, 30, 16, 9]),
+        (70, vec![70, 38, 21, 12]),
+        (75, vec![75, 41, 22, 13]),
+        (95, vec![95, 52, 28, 16]),
+    ] {
+        assert_eq!(
+            rungs_at(anchor),
+            expected,
+            "anchor {anchor}: the rungs are not the ones the script emits"
+        );
+    }
+}
+
+#[test]
+fn the_fallback_ladder_is_the_one_the_script_falls_back_to() {
+    // The constant is 35, and 35 is among the anchors where the two roundings disagree —
+    // so getting this wrong would have shipped an 11 Mbit rung, against a measured 10, on
+    // every ladder built when the probe could not run.
+    let src = source(3840, 2160, 24, 200);
+    let laid = plan(None, &src, None).expect("a sound source was refused");
+    assert_eq!(
+        laid.rungs
+            .iter()
+            .map(|r| r.bitrate_bps / 1_000_000)
+            .collect::<Vec<_>>(),
+        vec![35, 19, 10, 6]
+    );
+}
+
+#[test]
+fn a_source_that_does_not_reach_a_megabit_is_refused_rather_than_laddered() {
+    // `plan-ladder.sh` line 70 stops here. Carrying on instead gives a cap of zero, which
+    // reads as "no cap at all": the ladder came out at 35, 19, 10, 6 Mbit/s over a source
+    // holding 0.9 — thirty-nine times the source — and the same module then objected to
+    // every rung of it.
+    let thin = source(1280, 720, 24, 0);
+    let mut thin = thin;
+    thin.bitrate_bps = 900_000;
+
+    assert_eq!(
+        plan(None, &thin, None),
+        Err(Refusal::SourceBitrateTooLow {
+            bitrate_bps: 900_000
+        })
+    );
+    assert_eq!(
+        plan(Some(20_000_000), &thin, None),
+        Err(Refusal::SourceBitrateTooLow {
+            bitrate_bps: 900_000
+        }),
+        "a measurement does not make an unmeasurable source laddered"
+    );
+
+    // One bit more and it is a source like any other: a single 1 Mbit rung.
+    thin.bitrate_bps = 1_000_000;
+    let laid = plan(Some(20_000_000), &thin, None).expect("a whole megabit was refused");
+    assert_eq!(laid.rungs.len(), 1);
+    assert_eq!(laid.rungs[0].bitrate_bps, 1_000_000);
+}
+
+#[test]
+fn the_step_check_still_catches_a_hole_and_a_duplicate() {
+    // The allowance for whole-megabit rounding must not swallow the rule it is bending.
+    // The earlier form let a threefold hole through — the very failure the rule exists for
+    // — and could not fire at all below two and a half megabits.
+    let src = source(3840, 2160, 24, 200);
+
+    let objects = |rungs: &[(u64, &str)]| {
+        let built: Vec<Rung> = rungs
+            .iter()
+            .enumerate()
+            .map(|(i, (bps, level))| Rung {
+                index: i,
+                bitrate_bps: *bps,
+                maxrate_bps: bps * 11 / 10,
+                bufsize_bps: bps * 11 / 10,
+                width: 1920,
+                height: 1080,
+                level: (*level).to_owned(),
+                reasons: Vec::new(),
+            })
+            .collect();
+        validate(&built, &src, 24)
+            .iter()
+            .any(|o| matches!(o, Objection::BadStep { .. }))
+    };
+
+    // A threefold hole: a viewer who cannot hold 3 falls all the way to 1.
+    assert!(
+        objects(&[(3_000_000, "4.1"), (1_000_000, "4.1")]),
+        "a threefold hole passed"
+    );
+    // Two rungs a tenth apart: an encode nobody can tell from its neighbour.
+    assert!(
+        objects(&[(1_100_000, "4.1"), (1_000_000, "4.1")]),
+        "a duplicate passed"
+    );
+    assert!(
+        objects(&[(2_500_000, "4.1"), (2_400_000, "4.1")]),
+        "a duplicate passed"
+    );
+    assert!(
+        objects(&[(20_000_000, "4.1"), (4_000_000, "4.1")]),
+        "a fivefold hole passed"
+    );
+
+    // And what the script itself emits is still accepted, rounding and all.
+    assert!(
+        !objects(&[(4_000_000, "4.1"), (3_000_000, "4.1")]),
+        "4 over 3 was objected to"
+    );
+    assert!(
+        !objects(&[(2_000_000, "4.1"), (1_000_000, "4.1")]),
+        "2 over 1 was objected to"
+    );
+    assert!(
+        !objects(&[(8_000_000, "4.1"), (5_000_000, "4.1")]),
+        "8 over 5 was objected to"
     );
 }

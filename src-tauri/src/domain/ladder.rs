@@ -219,6 +219,21 @@ pub struct Plan {
     pub anchor_bps: u64,
 }
 
+/// Why no ladder can be planned at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Refusal {
+    /// The source does not amount to a whole megabit per second.
+    ///
+    /// `plan-ladder.sh` line 70 stops here — `не удалось измерить битрейт источника` — and
+    /// stopping is the right answer rather than a formality. Everything downstream counts
+    /// in whole megabits, so such a source gives a cap of zero, and a cap of zero is
+    /// indistinguishable from "no cap at all": the ladder would be planned as if the source
+    /// were unlimited, and every rung would stand above it. A file with 0.9 Mbit/s of
+    /// detail in it does not want a ladder; it wants to be served as it is.
+    SourceBitrateTooLow { bitrate_bps: u64 },
+}
+
 /// What the source allows the top of a ladder to be, in whole megabits per second.
 ///
 /// The script's own arithmetic, integer division and all: a 12 Mbit/s HEVC source gives
@@ -248,22 +263,20 @@ pub const FALLBACK_MBPS: u64 = 35;
 /// allowance with it. Left in the probe, it took the source's own bitrate instead and cut
 /// every ladder over an HEVC master by a third.
 fn top_rung(measured_bps: Option<u64>, source: &SourceFacts) -> (u64, Vec<Reason>) {
+    // Never zero: [`plan`] refuses before this is reached, which is what makes the cap safe
+    // to apply unconditionally — exactly as the script's line 128 is safe because its line
+    // 70 has already stopped.
     let cap = source_cap_mbps(source);
 
     let Some(measured_bps) = measured_bps else {
         // `ANCHOR=$(( SCAP < 35 ? SCAP : 35 ))` — the constant, held down by the cap.
-        let top = if cap == 0 {
-            FALLBACK_MBPS
-        } else {
-            cap.min(FALLBACK_MBPS)
-        };
-        return (top.max(1), vec![Reason::FallbackConstant]);
+        return (cap.clamp(1, FALLBACK_MBPS), vec![Reason::FallbackConstant]);
     };
 
     let mut reasons = vec![Reason::ProbedAnchor];
     // Whole megabits, as the probe's own line does it. Truncated, not rounded.
     let mut top = (measured_bps / MBIT).max(1);
-    if cap > 0 && top > cap {
+    if top > cap {
         top = cap;
         reasons.push(Reason::CappedBySource);
     }
@@ -284,7 +297,13 @@ fn top_rung(measured_bps: Option<u64>, source: &SourceFacts) -> (u64, Vec<Reason
 fn steps_from(top_mbps: u64) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::new();
     for m in MULTIPLIERS {
-        let mbps = ((top_mbps as f64 * m).round() as u64).max(1);
+        // **Halves go to the even number, not away from zero.** The rungs have always
+        // been produced by Python's `round`, which breaks a tie towards even; Rust's
+        // `round` breaks it away from zero. They disagree on eight anchors between 1 and
+        // 100 — and one of them is 35, the constant this falls back on, where the script
+        // gives a rung of 10 and away-from-zero gives 11. Ten is a point this project has
+        // measured and named files after; eleven is not.
+        let mbps = ((top_mbps as f64 * m).round_ties_even() as u64).max(1);
         if !out.contains(&mbps) {
             out.push(mbps);
         }
@@ -357,7 +376,19 @@ pub fn width_for(height: u32, source: &SourceFacts) -> u32 {
 /// Work out a ladder.
 ///
 /// `measured_bps` is what the complexity probe found, or `None` when it could not run.
-pub fn plan(measured_bps: Option<u64>, source: &SourceFacts, declared: Option<Layout>) -> Plan {
+///
+/// Refuses on a source that does not reach a whole megabit — see [`Refusal`]. That refusal
+/// is what lets everything below treat the cap as a real number instead of a maybe.
+pub fn plan(
+    measured_bps: Option<u64>,
+    source: &SourceFacts,
+    declared: Option<Layout>,
+) -> Result<Plan, Refusal> {
+    if source_cap_mbps(source) == 0 {
+        return Err(Refusal::SourceBitrateTooLow {
+            bitrate_bps: source.bitrate_bps,
+        });
+    }
     let shape = guess_shape(source.width, source.height, declared);
     let (top_mbps, top_reasons) = top_rung(measured_bps, source);
     let steps = steps_from(top_mbps);
@@ -399,11 +430,11 @@ pub fn plan(measured_bps: Option<u64>, source: &SourceFacts, declared: Option<La
         })
         .collect();
 
-    Plan {
+    Ok(Plan {
         rungs,
         shape,
         anchor_bps: top_mbps * MBIT,
-    }
+    })
 }
 
 /// The ceiling and the buffer for a rung, in bits per second.
@@ -464,25 +495,32 @@ pub enum Objection {
 
 /// Whether two neighbouring rungs are acceptably far apart.
 ///
-/// **The rounding to whole megabits has to be allowed for, or this objects to ladders the
-/// project's own script produces.** At an anchor of 15 the script gives 15, 8, 4, 3 — and
-/// 4 over 3 is 1.33, outside the stated range of one and a half to two. That ladder is not
-/// wrong; it is what whole-megabit rungs look like at the bottom, where half a megabit is a
+/// **The grid has to be allowed for, or this objects to ladders the project's own script
+/// produces.** At an anchor of 15 the script gives 15, 8, 4, 3 — and 4 over 3 is 1.33,
+/// outside the stated range of one and a half to two. That ladder is not wrong: 4 is simply
+/// the nearest whole megabit to 4.5, and near the bottom of a ladder half a megabit is a
 /// sixth of the value.
 ///
-/// So the true, unrounded values are allowed for: each rung stands for something within
-/// half a megabit of itself, and the objection is raised only when even the most favourable
-/// reading of the pair falls outside the range. At 4 and 3 the most favourable reading is
-/// 4.5 over 2.5, which is 1.8 — inside. At 3 and 3 it is 3.5 over 2.5, which is 1.4 — still
-/// outside, and rightly so.
+/// So the range is widened by exactly the rounding that produced it — half a megabit — and
+/// **only for rungs that are on the grid.** A value off the grid was not produced by that
+/// rounding and gets no allowance for it; that is what keeps a hand-edited 1.1 against 1.0
+/// from passing as a step.
+///
+/// The earlier form of this check gave each rung its own half-megabit and then read the two
+/// bounds from two contradictory worlds. It let a threefold hole through — 3 against 1,
+/// which is the very failure the rule exists for — and could not fire at all below two and
+/// a half megabits.
 fn step_is_allowable(above_bps: u64, below_bps: u64) -> bool {
-    let half = MBIT as f64 / 2.0;
     let above = above_bps as f64;
     let below = below_bps as f64;
 
-    let closest_possible = (above + half) / (below - half).max(1.0);
-    let furthest_possible = (above - half).max(1.0) / (below + half);
-    closest_possible >= MIN_STEP && furthest_possible <= MAX_STEP
+    if above_bps % MBIT != 0 || below_bps % MBIT != 0 {
+        let times = above / below;
+        return (MIN_STEP..=MAX_STEP).contains(&times);
+    }
+
+    let half = MBIT as f64 / 2.0;
+    above >= MIN_STEP * below - half && above <= MAX_STEP * below + half
 }
 
 /// Check a ladder, whoever wrote it.
