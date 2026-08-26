@@ -11,6 +11,7 @@
 //! the day the domain changes.
 
 pub mod access_log;
+pub mod chunks;
 pub mod connections;
 pub mod convert_plan;
 pub mod geo;
@@ -19,6 +20,8 @@ pub mod hls_master;
 pub mod ladder;
 pub mod links;
 pub mod manifest;
+pub mod measure_grid;
+pub mod measured_ladder;
 pub mod media;
 pub mod moov;
 pub mod progress_estimate;

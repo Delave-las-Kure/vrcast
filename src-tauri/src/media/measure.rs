@@ -128,3 +128,37 @@ pub fn from_packets(csv: &str) -> Measured {
         seconds: counted,
     }
 }
+
+/// What each second of the film weighed, from the first to the last, with silent seconds
+/// present as zero.
+///
+/// The chunk picker needs the whole series rather than the worst few moments, and this is
+/// the same bucketing rather than a second copy of it: two copies of one reading have
+/// already once given this project different answers to the same question.
+pub fn seconds_from_packets(csv: &str) -> Vec<u64> {
+    let mut seconds: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+
+    for line in csv.lines() {
+        let mut fields = line.split(',');
+        let pts = fields.next().unwrap_or("").trim();
+        let dts = fields.next().unwrap_or("").trim();
+        let size = fields.next().unwrap_or("").trim();
+
+        let Ok(bytes) = size.parse::<u64>() else {
+            continue;
+        };
+        let time = pts.parse::<f64>().or_else(|_| dts.parse::<f64>());
+        if let Ok(time) = time {
+            if time.is_finite() && time >= 0.0 {
+                *seconds.entry(time as u64).or_insert(0) += bytes;
+            }
+        }
+    }
+
+    let Some(last) = seconds.keys().next_back().copied() else {
+        return Vec::new();
+    };
+    (0..=last)
+        .map(|s| seconds.get(&s).copied().unwrap_or(0))
+        .collect()
+}

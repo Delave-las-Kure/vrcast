@@ -48,7 +48,7 @@ const MBIT: u64 = 1_000_000;
 /// target lowered resolution twice as eagerly as it should: at 22 Mbit/s it gave 1604
 /// where full 2160 measured better by 0.32 VMAF, and at 8 Mbit/s it would have given 810 —
 /// the worst of everything tried, 4.75 VMAF below the best.
-const TARGET_DENSITY: f64 = 0.05;
+pub const TARGET_DENSITY: f64 = 0.05;
 
 /// How much more a source in a heavier codec is worth in H.264 terms.
 ///
@@ -61,7 +61,7 @@ const HEVC_TO_H264: f64 = 1.6;
 /// Measured on 2026-08-07 on material upscaled from 1080 to 2160: the best height by VMAF
 /// settled at 1728 and **stayed there** at 4, 8 and 14 Mbit/s, while the density formula
 /// was calling for 2160 and 1936. 1728/1080 is 1.6.
-const UPSCALE_HEADROOM: f64 = 1.6;
+pub const UPSCALE_HEADROOM: f64 = 1.6;
 
 /// How the two eyes of a stereoscopic frame are laid out.
 ///

@@ -35,6 +35,9 @@ mod geo;
 #[path = "unit/ladder.rs"]
 mod ladder;
 
+#[path = "unit/measured_ladder.rs"]
+mod measured_ladder;
+
 #[path = "unit/process.rs"]
 mod process;
 
