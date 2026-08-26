@@ -15,6 +15,9 @@ mod contract_sync;
 #[path = "contract/library.rs"]
 mod library;
 
+#[path = "contract/ladder.rs"]
+mod ladder;
+
 #[path = "contract/responsiveness.rs"]
 mod responsiveness;
 

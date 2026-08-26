@@ -13,6 +13,7 @@ pub mod convert;
 pub mod error;
 pub mod events;
 pub mod geo;
+pub mod ladder;
 pub mod library;
 pub mod quality;
 pub mod servers;
