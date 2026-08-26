@@ -58,10 +58,19 @@ trap 'rm -f "$LOG" "$LOG.needles"' EXIT
 
 # The filters below are test names. They must match the names in
 # src-tauri/tests/integration/: a stale filter selects nothing, `cargo test` exits with
-# success, and the check reports a clean log it never produced.
+# success, and the check reports a clean log it never produced. That is not a warning
+# any more — it is checked below, by counting the tests that actually ran.
+#
+# `cargo test` takes several filters and runs the union of them.
+CONTAINER_TESTS="upload_live viewers_live hls_live limits_live"
 if [ "$MODE" = "container" ]; then
-  echo "Running an upload against a throwaway server with a detailed log…"
-  RUN=(--test-threads=1 --nocapture upload_live)
+  # Milestone C brought output paths of its own, and none of them is touched by an
+  # upload: watching viewers holds a connection open for as long as a screen is,
+  # cutting a ladder leaves a script on the server and reads its log back, and a
+  # quality limit writes into the serving's own configuration. Every one of those is a
+  # place a secret could come out, so every one of them runs here.
+  echo "Running the server-side checks against a throwaway server with a detailed log…"
+  RUN=(--test-threads=1 --nocapture $CONTAINER_TESTS)
 else
   echo "Running the acceptance check with a detailed log…"
   RUN=(--ignored --nocapture the_live_server_read_only)
@@ -96,6 +105,19 @@ while IFS= read -r needle; do
   fi
 done < "$LOG.needles"
 
+# **How many tests actually ran.** This is the failure the whole file is written
+# against: a filter that names a test which has been renamed selects nothing, `cargo
+# test` reports success, and this check announces a clean log it never read. Counting
+# the log's own line is the only way to tell "nothing was wrong" from "nothing
+# happened".
+ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$LOG" | grep -oE '[0-9]+' | head -1)
+if [ -z "${ran:-}" ] || [ "$ran" -eq 0 ]; then
+  echo "NOT ONE TEST RAN — the filters name tests that no longer exist." >&2
+  echo "Filters: ${RUN[*]}" >&2
+  echo "The check would otherwise report a clean log it never produced." >&2
+  exit 1
+fi
+
 # And a check that the log was written at all: an empty log would "pass" while checking
 # nothing.
 lines=$(wc -l < "$LOG")
@@ -110,4 +132,4 @@ if [ "$found" -ne 0 ]; then
   exit 1
 fi
 
-echo "No secrets found in the log ($lines lines checked, level trace, mode $MODE)."
+echo "No secrets found in the log ($lines lines, $ran tests, level trace, mode $MODE)."
