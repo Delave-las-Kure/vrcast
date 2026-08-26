@@ -177,6 +177,59 @@ impl ConvertPlan {
     }
 }
 
+/// The levels, each with **both** of its limits: macroblocks in a frame, and macroblocks in
+/// a second.
+///
+/// One table, and everything about levels is asked of it. Two would be two chances to
+/// update only one — and the case they disagree on is exactly the one that matters, since a
+/// frame can fit a level while the stream does not.
+const LEVELS: [(&str, u64, u64); 5] = [
+    ("4.1", 8_192, 245_760),
+    ("4.2", 8_704, 522_240),
+    ("5.0", 22_080, 589_824),
+    ("5.1", 36_864, 983_040),
+    ("5.2", 36_864, 2_073_600),
+];
+
+/// How many macroblocks a frame of this size is.
+///
+/// A macroblock is 16×16, and a partial one counts too: 1922 gives 121 columns, not 120.
+pub fn macroblocks(width: u32, height: u32) -> u64 {
+    u64::from(width.div_ceil(16)) * u64::from(height.div_ceil(16))
+}
+
+/// Which of a level's two limits a variant breaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LevelLimit {
+    /// Too many macroblocks in a frame.
+    Frame,
+    /// Too many macroblocks in a second — the frame fits and the stream does not.
+    Second,
+}
+
+/// Whether a variant really is within the level it claims, and if not, which limit it
+/// breaks.
+///
+/// An empty list means it fits. An unknown level name also comes back as fitting: it is not
+/// this function's business to police names, and refusing over one would stop a ladder for
+/// a reason unrelated to what it is being asked.
+pub fn level_exceeded(level: &str, width: u32, height: u32, fps: u32) -> Vec<LevelLimit> {
+    let Some(&(_, max_frame, max_second)) = LEVELS.iter().find(|(name, _, _)| *name == level)
+    else {
+        return Vec::new();
+    };
+    let mb = macroblocks(width, height);
+    let mut broken = Vec::new();
+    if mb > max_frame {
+        broken.push(LevelLimit::Frame);
+    }
+    if mb * u64::from(fps.max(1)) > max_second {
+        broken.push(LevelLimit::Second);
+    }
+    broken
+}
+
 /// The H.264 compatibility level, by **two** limits at once.
 ///
 /// Checking only the frame size is not enough, and that is a recorded mistake: 1922×1082 at
@@ -184,17 +237,16 @@ impl ConvertPlan {
 /// against the 4.1 limit of 245,760 — an excess of 1.6 times. A strict decoder is entitled
 /// to refuse an understated level; an overstated one is always safe.
 pub fn h264_level(width: u32, height: u32, fps: u32) -> &'static str {
-    // A macroblock is 16×16, and a partial one counts too: 1922 gives 121 columns, not 120.
-    let mb = u64::from(width.div_ceil(16)) * u64::from(height.div_ceil(16));
+    let mb = macroblocks(width, height);
     let mbps = mb * u64::from(fps.max(1));
 
-    match () {
-        _ if mb <= 8_192 && mbps <= 245_760 => "4.1",
-        _ if mb <= 8_704 && mbps <= 522_240 => "4.2",
-        _ if mb <= 22_080 && mbps <= 589_824 => "5.0",
-        _ if mb <= 36_864 && mbps <= 983_040 => "5.1",
-        _ => "5.2",
-    }
+    LEVELS
+        .iter()
+        .find(|(_, max_frame, max_second)| mb <= *max_frame && mbps <= *max_second)
+        // Past the last level there is nothing higher to name, and the highest is what a
+        // player will be told. Naming something lower would be the understatement a strict
+        // decoder is entitled to refuse.
+        .map_or(LEVELS[LEVELS.len() - 1].0, |(name, _, _)| *name)
 }
 
 /// The ceiling and the buffer for a given target bitrate.
