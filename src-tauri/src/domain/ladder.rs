@@ -169,6 +169,62 @@ pub enum Reason {
     FullResolution,
     /// The material is too light for a ladder at all.
     SingleRungOnly,
+    /// The height is the one that scored best at this bitrate when the material was
+    /// measured — not the one the density formula guessed at.
+    ///
+    /// The two disagree on real films. On mandoup the formula dropped 22 Mbit/s to a
+    /// height of 1604 and the measurement said the full 2160 was better.
+    MeasuredOptimum,
+    /// The measurement behind this rung was taken on another file (FR-146).
+    BorrowedMeasurement,
+}
+
+/// What is known about how good this rung actually looks.
+///
+/// **In hundredths of a point rather than as a fraction.** Two rungs have to be
+/// comparable for equality — they are stored, read back and compared — and a fraction
+/// is the one kind of number that cannot be. Nothing downstream wants more precision
+/// than this: libvmaf reports three decimals and the difference a person can see at all
+/// is about six whole points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Quality {
+    /// Measured on this material.
+    MeasuredHere { vmaf_x100: u32 },
+    /// Measured on another file and lent to this one.
+    Borrowed { vmaf_x100: u32 },
+    /// Not measured at all: this rung came out of the formula, which is a guess (R-21).
+    NotMeasured,
+}
+
+impl Quality {
+    /// The score, when there is one.
+    pub fn vmaf(&self) -> Option<f64> {
+        match self {
+            Self::MeasuredHere { vmaf_x100 } | Self::Borrowed { vmaf_x100 } => {
+                Some(f64::from(*vmaf_x100) / 100.0)
+            }
+            Self::NotMeasured => None,
+        }
+    }
+
+    /// Whether a ladder may be built on this.
+    ///
+    /// A borrowed measurement counts: the next episode of a season is the same source,
+    /// and the alternative is half an hour of somebody's machine per episode. What must
+    /// not happen is building on the formula and calling it measured.
+    pub fn is_enough_to_build_on(&self) -> bool {
+        !matches!(self, Self::NotMeasured)
+    }
+
+    fn from_vmaf(vmaf: f64, borrowed: bool) -> Self {
+        let vmaf_x100 = (vmaf.max(0.0) * 100.0).round() as u32;
+        if borrowed {
+            Self::Borrowed { vmaf_x100 }
+        } else {
+            Self::MeasuredHere { vmaf_x100 }
+        }
+    }
 }
 
 /// One rung of a ladder (data model, section 5).
@@ -188,6 +244,19 @@ pub struct Rung {
     pub level: String,
     /// Why it is as it is, for the interface to put into words.
     pub reasons: Vec<Reason>,
+    /// What is known about how good it looks, and where that knowledge came from.
+    ///
+    /// A rung out of the formula says `NotMeasured` and means it: the formula is a
+    /// guess, it misses in both directions on real films, and a guess shown as a
+    /// measurement is worse than no number at all (FR-145).
+    #[serde(default = "Quality::not_measured")]
+    pub quality: Quality,
+}
+
+impl Quality {
+    fn not_measured() -> Self {
+        Self::NotMeasured
+    }
 }
 
 /// What is known about the source before the rungs are worked out.
@@ -400,8 +469,6 @@ pub fn plan(
         .enumerate()
         .map(|(index, bitrate_bps)| {
             let (height, mut reasons) = height_for(bitrate_bps, source);
-            let width = width_for(height, source);
-            let (maxrate_bps, bufsize_bps) = peak_control(bitrate_bps);
 
             if index == 0 {
                 let mut first = top_reasons.clone();
@@ -414,19 +481,14 @@ pub fn plan(
                 reasons.insert(0, Reason::StepDown);
             }
 
-            Rung {
+            build_rung(
                 index,
                 bitrate_bps,
-                maxrate_bps,
-                bufsize_bps,
-                width,
                 height,
-                // The **actual** level of this variant. A fixed one — 5.2 was what the
-                // scripts used to write — cuts the lowest rung off from weak devices, that
-                // is, from exactly the people a ladder is built for.
-                level: super::convert_plan::h264_level(width, height, source.fps).to_owned(),
+                source,
                 reasons,
-            }
+                Quality::NotMeasured,
+            )
         })
         .collect();
 
@@ -435,6 +497,127 @@ pub fn plan(
         shape,
         anchor_bps: top_mbps * MBIT,
     })
+}
+
+/// Put one rung together.
+///
+/// **One place, used by both ways of arriving at a ladder.** The geometry — the width
+/// that keeps the aspect, the ceiling, the buffer, the compatibility level — is the same
+/// whether the numbers came from the formula or from a measurement, and two copies of it
+/// would drift apart exactly where it is hardest to notice.
+fn build_rung(
+    index: usize,
+    bitrate_bps: u64,
+    height: u32,
+    source: &SourceFacts,
+    reasons: Vec<Reason>,
+    quality: Quality,
+) -> Rung {
+    let width = width_for(height, source);
+    let (maxrate_bps, bufsize_bps) = peak_control(bitrate_bps);
+    Rung {
+        index,
+        bitrate_bps,
+        maxrate_bps,
+        bufsize_bps,
+        width,
+        height,
+        // The **actual** level of this variant. A fixed one — 5.2 was what the scripts
+        // used to write — cuts the lowest rung off from weak devices, that is, from
+        // exactly the people a ladder is built for.
+        level: super::convert_plan::h264_level(width, height, source.fps).to_owned(),
+        reasons,
+        quality,
+    }
+}
+
+/// Turn what the measurement chose into a ladder.
+///
+/// **The height comes from the measurement, not from the density formula.** That is the
+/// whole point of measuring: the two disagree on real material, and where they disagree
+/// the measurement is right by construction — it looked, and the formula guessed.
+pub fn from_measurement(
+    chosen: &[super::measured_ladder::Chosen],
+    source: &SourceFacts,
+    declared: Option<Layout>,
+    borrowed: bool,
+) -> Result<Plan, Refusal> {
+    if source_cap_mbps(source) == 0 {
+        return Err(Refusal::SourceBitrateTooLow {
+            bitrate_bps: source.bitrate_bps,
+        });
+    }
+
+    let single = chosen.len() == 1;
+    let rungs = chosen
+        .iter()
+        .enumerate()
+        .map(|(index, rung)| {
+            let mut reasons = vec![Reason::MeasuredOptimum];
+            if index > 0 {
+                reasons.insert(0, Reason::StepDown);
+            }
+            if single {
+                reasons.push(Reason::SingleRungOnly);
+            }
+            if borrowed {
+                reasons.push(Reason::BorrowedMeasurement);
+            }
+            build_rung(
+                index,
+                rung.bitrate_mbps * MBIT,
+                rung.height,
+                source,
+                reasons,
+                Quality::from_vmaf(rung.vmaf, borrowed),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let anchor_bps = rungs.first().map(|r| r.bitrate_bps).unwrap_or(0);
+    Ok(Plan {
+        rungs,
+        shape: guess_shape(source.width, source.height, declared),
+        anchor_bps,
+    })
+}
+
+/// Why a ladder must not be built yet (T240, FR-141).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NotBuildable {
+    /// There is no ladder at all.
+    NoRungs,
+    /// These rungs rest on the formula rather than on a measurement.
+    RungsNotMeasured { indexes: Vec<usize> },
+}
+
+/// Whether this ladder may be built.
+///
+/// **Kept apart from [`validate`] on purpose.** That answers whether a ladder is sound —
+/// whether its steps are spaced, whether a rung stands above the source, whether the
+/// buffer will let peaks through. This answers a different question: whether anyone has
+/// actually looked at what these rungs are worth on this film. A ladder can be perfectly
+/// sound and still be a guess, and a guess is what building it would make permanent —
+/// hours of encoding, gigabytes on a server, and rungs nobody can defend.
+///
+/// A rung a person edited by hand leaves the measured grid and stops being measured. That
+/// is not an obstruction: it is the truth about that rung, and re-measuring one point is
+/// minutes rather than the half hour a whole grid costs.
+pub fn buildable(rungs: &[Rung]) -> Result<(), NotBuildable> {
+    if rungs.is_empty() {
+        return Err(NotBuildable::NoRungs);
+    }
+    let indexes: Vec<usize> = rungs
+        .iter()
+        .filter(|r| !r.quality.is_enough_to_build_on())
+        .map(|r| r.index)
+        .collect();
+    if indexes.is_empty() {
+        Ok(())
+    } else {
+        Err(NotBuildable::RungsNotMeasured { indexes })
+    }
 }
 
 /// The ceiling and the buffer for a rung, in bits per second.

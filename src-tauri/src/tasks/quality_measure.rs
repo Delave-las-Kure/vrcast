@@ -78,10 +78,8 @@ pub async fn run(job: &MeasureJob<'_>, ctx: &TaskContext) -> Result<Outcome, Mea
         width: job.run.width,
         height: job.run.height,
         fps: job.run.fps,
-        // Not used by the grid, which works from the anchor and the frame; a real value
-        // would only invite somebody to believe the grid consults it.
-        bitrate_bps: 0,
-        heavier_codec: false,
+        bitrate_bps: job.run.source_bitrate_bps,
+        heavier_codec: job.run.heavier_codec,
         native_height: job.run.native_height,
     };
     let cells = grid(&facts, job.run.anchor_mbps);

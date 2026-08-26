@@ -19,6 +19,11 @@ CREATE TABLE quality_measurements (
     width         INTEGER NOT NULL,
     height        INTEGER NOT NULL,
     fps           INTEGER NOT NULL,
+    -- The source's own bitrate and whether it is in a codec heavier than H.264.
+    -- Kept because the ladder made from these points is capped by them: above the
+    -- source there is no detail to find, only weight.
+    source_bitrate_bps INTEGER NOT NULL,
+    heavier_codec      INTEGER NOT NULL,
     -- The height the material really has, when it was upscaled. Told by the person.
     native_height INTEGER,
     -- What the complexity probe found; the grid is built around it.

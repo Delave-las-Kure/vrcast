@@ -347,6 +347,7 @@ fn rung(index: usize, mbps: u64, w: u32, h: u32, level: &str) -> Rung {
         height: h,
         level: level.to_owned(),
         reasons: Vec::new(),
+        quality: vrcast_studio_lib::domain::ladder::Quality::NotMeasured,
     }
 }
 
@@ -631,6 +632,7 @@ fn the_step_check_still_catches_a_hole_and_a_duplicate() {
                 height: 1080,
                 level: (*level).to_owned(),
                 reasons: Vec::new(),
+                quality: vrcast_studio_lib::domain::ladder::Quality::NotMeasured,
             })
             .collect();
         validate(&built, &src, 24)

@@ -72,6 +72,8 @@ pub struct MeasurementView {
     pub points: Vec<crate::domain::measured_ladder::Point>,
     /// The ladder these points choose, or nothing when the grid is still empty.
     pub selection: Option<crate::domain::measured_ladder::Selection>,
+    /// The same ladder as rungs ready to be built — each carrying what it measured.
+    pub ladder: Option<crate::domain::ladder::Plan>,
     pub notices: Vec<Detail>,
 }
 
@@ -161,14 +163,26 @@ pub mod api {
             );
         }
 
+        let selection = (!points.is_empty()).then(|| {
+            crate::domain::measured_ladder::select(
+                &points,
+                crate::domain::measured_ladder::TARGET_VMAF,
+                crate::domain::measured_ladder::VMAF_STEP,
+            )
+        });
+        let ladder = selection.as_ref().and_then(|chosen| {
+            crate::domain::ladder::from_measurement(
+                &chosen.rungs,
+                &facts_of(&run),
+                None,
+                run.borrowed_from.is_some(),
+            )
+            .ok()
+        });
+
         Ok(MeasurementView {
-            selection: (!points.is_empty()).then(|| {
-                crate::domain::measured_ladder::select(
-                    &points,
-                    crate::domain::measured_ladder::TARGET_VMAF,
-                    crate::domain::measured_ladder::VMAF_STEP,
-                )
-            }),
+            selection,
+            ladder,
             run,
             points,
             notices,
@@ -258,6 +272,8 @@ async fn prepare(request: &MeasureRequest) -> Result<(Run, encoders::Encoder, Ve
             width: source.width,
             height: source.height,
             fps: source.fps,
+            source_bitrate_bps: source.bitrate_bps,
+            heavier_codec: source.video_codec.eq_ignore_ascii_case("hevc"),
             native_height: request.native_height,
             anchor_mbps,
             chunk_starts,
@@ -274,8 +290,8 @@ fn facts_of(run: &Run) -> SourceFacts {
         width: run.width,
         height: run.height,
         fps: run.fps,
-        bitrate_bps: 0,
-        heavier_codec: false,
+        bitrate_bps: run.source_bitrate_bps,
+        heavier_codec: run.heavier_codec,
         native_height: run.native_height,
     }
 }

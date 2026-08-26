@@ -22,6 +22,10 @@ pub struct Run {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// The source's own bitrate — what caps the ladder made from these points.
+    pub source_bitrate_bps: u64,
+    /// Whether the source carries more picture per bit than H.264.
+    pub heavier_codec: bool,
     pub native_height: Option<u32>,
     pub anchor_mbps: u64,
     pub chunk_starts: Vec<u64>,
@@ -66,14 +70,17 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
             "INSERT INTO quality_measurements
-                (source_key, codec, source_path, width, height, fps, native_height,
+                (source_key, codec, source_path, width, height, fps,
+                 source_bitrate_bps, heavier_codec, native_height,
                  anchor_mbps, chunk_starts, chunk_s, borrowed_from, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT (source_key, codec) DO UPDATE SET
                 source_path = excluded.source_path,
                 width = excluded.width,
                 height = excluded.height,
                 fps = excluded.fps,
+                source_bitrate_bps = excluded.source_bitrate_bps,
+                heavier_codec = excluded.heavier_codec,
                 native_height = excluded.native_height,
                 anchor_mbps = excluded.anchor_mbps,
                 chunk_starts = excluded.chunk_starts,
@@ -87,6 +94,8 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
                 run.width,
                 run.height,
                 run.fps,
+                run.source_bitrate_bps as i64,
+                run.heavier_codec,
                 run.native_height,
                 run.anchor_mbps as i64,
                 chunks,
@@ -150,7 +159,8 @@ pub fn points(db: &Db, source_key: &str, codec: &str) -> Result<Vec<Point>, DbEr
 pub fn run(db: &Db, source_key: &str, codec: &str) -> Result<Option<Run>, DbError> {
     db.with_conn(|c| {
         Ok(c.query_row(
-            "SELECT source_key, codec, source_path, width, height, fps, native_height,
+            "SELECT source_key, codec, source_path, width, height, fps,
+                    source_bitrate_bps, heavier_codec, native_height,
                     anchor_mbps, chunk_starts, chunk_s, borrowed_from
              FROM quality_measurements WHERE source_key = ?1 AND codec = ?2",
             rusqlite::params![source_key, codec],
@@ -166,7 +176,8 @@ pub fn run(db: &Db, source_key: &str, codec: &str) -> Result<Option<Run>, DbErro
 pub fn all(db: &Db) -> Result<Vec<Run>, DbError> {
     db.with_conn(|c| {
         let mut q = c.prepare(
-            "SELECT source_key, codec, source_path, width, height, fps, native_height,
+            "SELECT source_key, codec, source_path, width, height, fps,
+                    source_bitrate_bps, heavier_codec, native_height,
                     anchor_mbps, chunk_starts, chunk_s, borrowed_from
              FROM quality_measurements ORDER BY updated_at DESC",
         )?;
@@ -208,6 +219,7 @@ pub fn lend(db: &Db, from_key: &str, codec: &str, to: &Run) -> Result<Run, LendR
         || source.height != to.height
         || source.fps != to.fps
         || source.native_height != to.native_height
+        || source.heavier_codec != to.heavier_codec
     {
         return Err(LendRefusal::DifferentMaterial);
     }
@@ -246,7 +258,7 @@ pub fn forget(db: &Db, source_key: &str, codec: &str) -> Result<(), DbError> {
 }
 
 fn row_to_run(r: &rusqlite::Row) -> rusqlite::Result<Run> {
-    let chunks: String = r.get(8)?;
+    let chunks: String = r.get(10)?;
     Ok(Run {
         source_key: r.get(0)?,
         codec: r.get(1)?,
@@ -254,13 +266,15 @@ fn row_to_run(r: &rusqlite::Row) -> rusqlite::Result<Run> {
         width: r.get(3)?,
         height: r.get(4)?,
         fps: r.get(5)?,
-        native_height: r.get(6)?,
-        anchor_mbps: r.get::<_, i64>(7)? as u64,
+        source_bitrate_bps: r.get::<_, i64>(6)? as u64,
+        heavier_codec: r.get(7)?,
+        native_height: r.get(8)?,
+        anchor_mbps: r.get::<_, i64>(9)? as u64,
         chunk_starts: chunks
             .split(',')
             .filter_map(|s| s.trim().parse().ok())
             .collect(),
-        chunk_s: r.get::<_, i64>(9)? as u64,
-        borrowed_from: r.get(10)?,
+        chunk_s: r.get::<_, i64>(11)? as u64,
+        borrowed_from: r.get(12)?,
     })
 }

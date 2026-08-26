@@ -14,6 +14,8 @@ fn a_run(key: &str, path: &str) -> Run {
         width: 3840,
         height: 2160,
         fps: 24,
+        source_bitrate_bps: 60_000_000,
+        heavier_codec: false,
         native_height: Some(1080),
         anchor_mbps: 16,
         chunk_starts: vec![233, 590, 947],

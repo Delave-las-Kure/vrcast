@@ -5,7 +5,10 @@
 //! a port can be shown to be a port (constitution VI).
 
 use vrcast_studio_lib::domain::chunks::{reference_chunks, CHUNK_S};
-use vrcast_studio_lib::domain::ladder::SourceFacts;
+use vrcast_studio_lib::domain::ladder::plan;
+use vrcast_studio_lib::domain::ladder::{
+    buildable, from_measurement, NotBuildable, Quality, Reason, SourceFacts,
+};
 use vrcast_studio_lib::domain::measure_grid::{grid, grid_bitrates_mbps, grid_heights, Cell};
 use vrcast_studio_lib::domain::measured_ladder::{select, Chosen, Point, TARGET_VMAF, VMAF_STEP};
 
@@ -236,4 +239,124 @@ fn nothing_measured_is_not_a_ladder_of_nonsense() {
     assert!(empty.rungs.is_empty());
     assert!(empty.hull.is_empty());
     assert!(empty.above_target.is_empty());
+}
+
+// ---------- a rung that knows where its number came from (T239, T240) ----------
+
+#[test]
+fn a_measured_ladder_keeps_the_height_the_measurement_chose() {
+    // Not the one the density formula would have guessed. On mandoup the formula dropped
+    // 22 Mbit/s to a height of 1604 and the measurement said the full 2160 was better —
+    // and the measurement is right by construction: it looked.
+    let src = source(3840, 2160, 24, None);
+    let chose = select(
+        &[
+            point(4, 1440, 85.60),
+            point(8, 1440, 90.20),
+            point(22, 2160, 96.10),
+        ],
+        TARGET_VMAF,
+        VMAF_STEP,
+    );
+
+    let laid =
+        from_measurement(&chose.rungs, &src, None, false).expect("a sound source was refused");
+    assert_eq!(
+        laid.rungs
+            .iter()
+            .map(|r| (r.bitrate_bps / 1_000_000, r.height))
+            .collect::<Vec<_>>(),
+        vec![(22, 2160), (8, 1440), (4, 1440)]
+    );
+
+    // Each rung carries what it is worth, and says it was measured here.
+    assert_eq!(
+        laid.rungs[0].quality,
+        Quality::MeasuredHere { vmaf_x100: 9610 }
+    );
+    assert_eq!(laid.rungs[0].quality.vmaf(), Some(96.1));
+    assert!(laid.rungs[0].reasons.contains(&Reason::MeasuredOptimum));
+
+    // And the geometry is the same as the formula's ladder gets: one place builds a rung.
+    assert_eq!(laid.rungs[0].width, 3840);
+    assert_eq!(laid.rungs[1].width, 2560, "the aspect was not kept");
+    assert!(laid.rungs[0].bufsize_bps >= laid.rungs[0].maxrate_bps);
+}
+
+#[test]
+fn a_borrowed_measurement_does_not_pass_for_one_taken_here() {
+    // The next episode of a season is usually the same source, so building on its
+    // measurement is right. Showing it as measured on THIS file is not (FR-145).
+    let src = source(3840, 2160, 24, Some(1080));
+    let chose = select(
+        &[point(6, 1728, 92.0), point(14, 1728, 96.4)],
+        TARGET_VMAF,
+        VMAF_STEP,
+    );
+
+    let borrowed = from_measurement(&chose.rungs, &src, None, true).expect("refused");
+    assert_eq!(
+        borrowed.rungs[0].quality,
+        Quality::Borrowed { vmaf_x100: 9640 }
+    );
+    assert!(borrowed.rungs[0]
+        .reasons
+        .contains(&Reason::BorrowedMeasurement));
+
+    // It is still enough to build on: the alternative is half an hour per episode.
+    assert!(buildable(&borrowed.rungs).is_ok());
+}
+
+#[test]
+fn a_ladder_out_of_the_formula_is_not_built() {
+    // This is the rule the whole measurement exists for (FR-141). The formula misses in
+    // both directions on real films, and building on it makes the miss permanent: hours
+    // of encoding and gigabytes on a server behind rungs nobody can defend.
+    let src = source(3840, 2160, 24, None);
+    let guessed = plan(Some(22_000_000), &src, None).expect("a sound source was refused");
+
+    for rung in &guessed.rungs {
+        assert_eq!(rung.quality, Quality::NotMeasured);
+        assert_eq!(
+            rung.quality.vmaf(),
+            None,
+            "a guess was handed out as a score"
+        );
+    }
+    assert_eq!(
+        buildable(&guessed.rungs),
+        Err(NotBuildable::RungsNotMeasured {
+            indexes: (0..guessed.rungs.len()).collect()
+        })
+    );
+
+    // And an empty ladder is refused as an empty ladder rather than as an unmeasured one:
+    // the two want different things said to a person.
+    assert_eq!(buildable(&[]), Err(NotBuildable::NoRungs));
+}
+
+#[test]
+fn one_rung_edited_by_hand_stops_the_build_by_itself() {
+    // A rung moved off the measured grid is no longer measured, and the ladder is only as
+    // measured as its least measured rung. Re-measuring one point is minutes; the half
+    // hour is the price of a whole grid, not of a correction.
+    let src = source(3840, 2160, 24, None);
+    let chose = select(
+        &[
+            point(4, 1440, 85.60),
+            point(8, 1440, 90.20),
+            point(22, 2160, 96.10),
+        ],
+        TARGET_VMAF,
+        VMAF_STEP,
+    );
+    let mut laid = from_measurement(&chose.rungs, &src, None, false).expect("refused");
+    assert!(buildable(&laid.rungs).is_ok());
+
+    laid.rungs[1].bitrate_bps = 12_000_000;
+    laid.rungs[1].quality = Quality::NotMeasured;
+    assert_eq!(
+        buildable(&laid.rungs),
+        Err(NotBuildable::RungsNotMeasured { indexes: vec![1] })
+    );
 }
