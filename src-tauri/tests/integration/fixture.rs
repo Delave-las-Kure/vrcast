@@ -19,6 +19,49 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+/// What a port is expected to say for itself.
+#[derive(Debug, Clone, Copy)]
+enum Speaks {
+    /// OpenSSH announces its version as soon as it accepts.
+    Ssh,
+    /// A web server says nothing until it is asked something.
+    Http,
+}
+
+impl Speaks {
+    /// Whether whatever stands behind this address answers as this protocol.
+    fn answer_from(self, address: &std::net::SocketAddr) -> Result<bool, String> {
+        use std::io::{Read, Write};
+
+        let mut stream = std::net::TcpStream::connect_timeout(address, Duration::from_millis(500))
+            .map_err(|e| e.to_string())?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(1500)))
+            .map_err(|e| e.to_string())?;
+        stream
+            .set_write_timeout(Some(Duration::from_millis(1500)))
+            .map_err(|e| e.to_string())?;
+
+        if matches!(self, Self::Http) {
+            // HTTP/1.0 on purpose: the answer ends with the connection, so nothing has to
+            // be parsed to know it finished.
+            stream
+                .write_all(b"HEAD / HTTP/1.0\r\n\r\n")
+                .map_err(|e| e.to_string())?;
+        }
+
+        let mut said = [0u8; 64];
+        let heard = stream.read(&mut said).map_err(|e| e.to_string())?;
+        let said = String::from_utf8_lossy(&said[..heard]);
+        Ok(match self {
+            Self::Ssh => said.starts_with("SSH-"),
+            // Any status at all: a 404 from the root is still a web server answering, and
+            // the question here is whether it is up, not whether it serves this path.
+            Self::Http => said.starts_with("HTTP/"),
+        })
+    }
+}
+
 /// The image's name. Built once and reused between test runs.
 ///
 /// The number in the tag is the contents' version: when the Dockerfile changes it MUST be
@@ -221,26 +264,42 @@ impl TestServer {
         // let a test start while the serving is still coming up, and it would fail once in
         // a while for a reason having nothing to do with it — the worst kind of check,
         // since a flickering one teaches people to run it again until it goes green.
-        self.wait_for_port(self.port, "the way in over SSH")?;
-        self.wait_for_port(self.http_port, "the serving")?;
-        // The ports are open, but the services need another moment to be ready to talk.
-        std::thread::sleep(Duration::from_millis(300));
+        self.wait_until_answers(self.port, "the way in over SSH", Speaks::Ssh)?;
+        self.wait_until_answers(self.http_port, "the serving", Speaks::Http)?;
         Ok(())
     }
 
-    fn wait_for_port(&self, port: u16, what: &str) -> Result<(), String> {
+    /// Wait until the service **answers**, not until its port accepts.
+    ///
+    /// **An open port proves nothing** (R-20), and this is where the project learned it a
+    /// second time. Docker publishes a port by putting a proxy in front of the container:
+    /// the proxy accepts a connection whether or not anything inside is listening yet, and
+    /// then resets it. A wait that stopped at "the port accepts" therefore stopped too
+    /// early, and the sleep that followed papered over the gap on a fast machine and not on
+    /// a loaded one. Continuous integration failed on 2026-08-26 with `Connection reset by
+    /// peer` while probing a host key — in a test that had nothing to do with the change it
+    /// was run for, which is the worst kind of failure: it teaches people to press the
+    /// button again.
+    ///
+    /// So the proof is the protocol's own first words. OpenSSH says who it is the moment it
+    /// accepts; a web server is asked something and has to answer.
+    fn wait_until_answers(&self, port: u16, what: &str, speaks: Speaks) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(30);
-        let address = format!("127.0.0.1:{port}")
+        let address: std::net::SocketAddr = format!("127.0.0.1:{port}")
             .parse()
             .map_err(|e| format!("a bad address: {e}"))?;
+
+        let mut last = String::from("nothing accepted the connection at all");
         while Instant::now() < deadline {
-            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() {
-                return Ok(());
+            match speaks.answer_from(&address) {
+                Ok(true) => return Ok(()),
+                Ok(false) => last = String::from("something answered, but not this protocol"),
+                Err(e) => last = e,
             }
             std::thread::sleep(Duration::from_millis(200));
         }
         Err(format!(
-            "{what} in the container did not start accepting connections within 30 seconds. \
+            "{what} in the container did not answer within 30 seconds ({last}). \
              The container's log:\n{}",
             self.sshd_log().unwrap_or_default()
         ))
