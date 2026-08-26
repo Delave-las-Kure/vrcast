@@ -253,11 +253,36 @@ fn quality_is_pinned_the_way_each_encoder_understands() {
     };
     let args = args_for(&source, &as_is(), &hardware);
     assert!(has(&args, "-cq") && !has(&args, "-crf"), "{args:?}");
-    // `-preset slow` is an x264 preset; the hardware encoders have their own
-    // names and reject this one.
+    // `-preset slow` is an x264 preset, and it must not reach hardware. The option name
+    // itself is not the test: asked of the bundled build on 2026-08-26, `h264_nvenc` has a
+    // `-preset` of its own running p1 to p7. What must not happen is one encoder being
+    // handed another's dialect.
     assert!(
-        !has(&args, "-preset"),
-        "an x264 preset was given to hardware: {args:?}"
+        !args.iter().any(|a| a == "slow"),
+        "an x264 preset value was given to hardware: {args:?}"
+    );
+
+    // And the other two makes of card, which used to be handed NVIDIA's option and would
+    // refuse to start on it. Asked of the bundled build the same day: `h264_amf` has no
+    // `-cq` at all and pins quality with `-rc cqp -qp_i`; `h264_qsv` uses
+    // `-global_quality`. This check could not be made before there was one place that knew
+    // the dialects.
+    let amd = Encoder::Hardware {
+        name: String::from("h264_amf"),
+    };
+    let args = args_for(&source, &as_is(), &amd);
+    assert!(
+        has(&args, "-qp_i") && !has(&args, "-cq") && !has(&args, "-crf"),
+        "AMD was handed somebody else's option: {args:?}"
+    );
+
+    let intel = Encoder::Hardware {
+        name: String::from("h264_qsv"),
+    };
+    let args = args_for(&source, &as_is(), &intel);
+    assert!(
+        has(&args, "-global_quality") && !has(&args, "-cq") && !has(&args, "-crf"),
+        "Intel was handed somebody else's option: {args:?}"
     );
 }
 

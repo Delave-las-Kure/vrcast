@@ -199,6 +199,8 @@ export type DetailCode =
   | "REASON_AUDIO_TOO_FAT"
 
   // what to say about the choice of encoder (FR-026)
+  | "NOTICE_PROBE_UNCALIBRATED"
+  | "NOTICE_PROBE_FAILED"
   | "NOTICE_NO_HARDWARE_FOUND"
   | "NOTICE_SOFTWARE_AS_ASKED"
   | "NOTICE_HARDWARE_FAILED"

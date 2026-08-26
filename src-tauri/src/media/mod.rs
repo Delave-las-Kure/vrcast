@@ -5,7 +5,10 @@
 //! floor below in `domain`, where they can be tested without a single file on disk.
 
 pub mod convert;
+pub mod encoder_args;
 pub mod encoders;
 pub mod ffmpeg;
+pub mod measure;
 pub mod probe;
+pub mod probe_complexity;
 pub mod validate;

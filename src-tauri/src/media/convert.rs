@@ -173,14 +173,13 @@ fn video_args(job: &ConvertJob<'_>, args: &mut Vec<String>) {
             push(args, job.encoder.ffmpeg_name());
             // Visually lossless. There is no target bitrate here, so quality is
             // pinned instead and the file lands wherever it lands.
-            if matches!(job.encoder, Encoder::Software) {
-                push(args, "-crf");
-                push(args, "16");
-                push(args, "-preset");
-                push(args, "slow");
-            } else {
-                push(args, "-cq");
-                push(args, "16");
+            //
+            // Through the dialect module rather than by hand: `-cq` is NVIDIA's own
+            // option, and pushing it at AMD's encoder or Intel's makes ffmpeg refuse to
+            // start. That is what used to happen here.
+            let family = super::encoder_args::family_of(job.encoder);
+            for a in super::encoder_args::quality_pinned(family, 16) {
+                push(args, &a);
             }
             common_video_args(job, level, args);
         }

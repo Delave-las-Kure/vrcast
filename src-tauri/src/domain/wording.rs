@@ -213,6 +213,10 @@ detail_codes! {
     // --- what to say about the choice of encoder (FR-026) ---
     NoticeNoHardwareFound => "NOTICE_NO_HARDWARE_FOUND",
     NoticeSoftwareAsAsked => "NOTICE_SOFTWARE_AS_ASKED",
+    /// The probe ran on an encoder the quality setting was never calibrated against.
+    NoticeProbeUncalibrated => "NOTICE_PROBE_UNCALIBRATED",
+    /// The probe could not run at all, and the ladder rests on the old constant.
+    NoticeProbeFailed => "NOTICE_PROBE_FAILED",
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 

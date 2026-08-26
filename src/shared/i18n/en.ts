@@ -366,6 +366,10 @@ export const en: Catalogue = {
     REASON_AUDIO_TOO_FAT: "the track is fatter than the target bitrate",
 
     // --- what to say about the choice of encoder ---
+    NOTICE_PROBE_UNCALIBRATED:
+      "The complexity probe ran on something other than an NVIDIA card, and the quality setting it uses was calibrated for one. The ladder came out, but its top rung rests on a number taken with a different ruler: if you know this material, check it against what you know, and run a full measurement for anything that matters.",
+    NOTICE_PROBE_FAILED:
+      "The material could not be measured, so the top rung comes from the old constant. A constant knows nothing about the material: on animation it asks for three times what is needed, and on dense action it understates. The rungs are worth going over by hand.",
     NOTICE_NO_HARDWARE_FOUND:
       "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
     NOTICE_SOFTWARE_AS_ASKED:
