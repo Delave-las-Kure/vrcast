@@ -86,6 +86,21 @@ export function About() {
         </a>
       </p>
 
+      {/* Attribution is a condition of the tables licence, not a courtesy — the same
+          standing as the obligations towards FFmpeg above. */}
+      <h2>{a.geoHeading}</h2>
+      <p>
+        {a.geoBody}{" "}
+        <a
+          href="https://creativecommons.org/licenses/by/4.0/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          {a.geoLicence}
+        </a>
+        {a.geoBodyTail}
+      </p>
+
       {schema !== null && (
         <p className="muted">{fill(a.schemaVersion, { schema }, t, lang)}</p>
       )}

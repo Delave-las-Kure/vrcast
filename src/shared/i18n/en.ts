@@ -783,6 +783,12 @@ export const en: Catalogue = {
       thirdPartyBodyTail:
         "beside the source code; it is generated from the dependency tree at build time rather than written by hand — otherwise it would be out of date within a month.",
       thirdPartyLink: "List of third-party components",
+      geoHeading: "Where a viewer is",
+      geoBody:
+        "Country, city and provider are worked out on your own computer from the IP-to-City Lite and IP-to-ASN Lite tables by DB-IP, available under",
+      geoLicence: "Creative Commons Attribution 4.0",
+      geoBodyTail:
+        ". The tables are not in the installer — the application fetches a current one itself and refreshes it monthly. Your viewers addresses go nowhere in the process: the lookup happens here.",
       schemaVersion: "Local storage version: {schema}. This is needed when investigating trouble.",
     },
   },

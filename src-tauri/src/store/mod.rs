@@ -10,6 +10,7 @@
 //! | cutting secrets out of output | [`redact`] | the guard stands at the exit, not at each call site |
 
 pub mod db;
+pub mod geo;
 pub mod library_cache;
 pub mod profiles;
 pub mod redact;

@@ -54,6 +54,12 @@ pub fn run() {
             let state: tauri::State<'_, commands::AppState> = app.state();
             commands::events::bridge_app_events(app.handle().clone(), &state);
 
+            // The tables of places, if the month has turned. In the background and from
+            // here rather than from `AppState::bootstrap`, for the same reason as the
+            // uploads below: it spawns work on the runtime, and the shell is prepared
+            // before the runtime exists.
+            commands::geo::api::refresh_in_background(&state);
+
             // Uploads from the previous run are restored here and NOT in
             // `AppState::bootstrap`: restoring spawns work on the runtime, and the
             // shell is prepared before the runtime exists. Calling it from there
@@ -102,6 +108,8 @@ pub fn run() {
             commands::viewers::ipc::viewers_history,
             commands::settings::ipc::settings_get,
             commands::settings::ipc::settings_set,
+            commands::geo::ipc::geo_status,
+            commands::geo::ipc::geo_update,
             commands::library::ipc::library_list,
             commands::library::ipc::media_create,
             commands::library::ipc::media_rename,

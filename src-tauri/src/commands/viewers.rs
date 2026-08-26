@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use super::error::Result;
 use super::AppState;
 use crate::domain::access_log::Asked;
-use crate::domain::geo::{GeoTable, Place};
+use crate::domain::geo::Place;
 use crate::domain::viewers::{VariantFacts, Viewer};
 use crate::server::viewers::{self, ViewerContext, ViewersUpdate, Watch};
 
@@ -79,7 +79,7 @@ struct LibraryContext {
     by_file: HashMap<String, VariantFacts>,
     /// A quality set's short name to the medium it belongs to.
     by_slug: HashMap<String, String>,
-    places: Arc<GeoTable>,
+    places: Arc<std::sync::RwLock<crate::store::geo::Places>>,
 }
 
 impl ViewerContext for LibraryContext {
@@ -103,12 +103,21 @@ impl ViewerContext for LibraryContext {
     }
 
     fn place(&self, ip: &str) -> Place {
-        self.places.look_up(ip).cloned().unwrap_or_default()
+        // Read under a lock rather than copied once at the start: the tables may arrive
+        // while a session is already being watched, and a viewer who appeared before them
+        // should be placed as soon as they land.
+        self.places
+            .read()
+            .map(|p| p.look_up(ip))
+            .unwrap_or_default()
     }
 }
 
 impl LibraryContext {
-    fn build(view: &super::library::LibraryView, places: Arc<GeoTable>) -> Self {
+    fn build(
+        view: &super::library::LibraryView,
+        places: Arc<std::sync::RwLock<crate::store::geo::Places>>,
+    ) -> Self {
         let mut by_file = HashMap::new();
         let mut by_slug = HashMap::new();
 

@@ -35,6 +35,11 @@ mod convert_kill;
 #[path = "integration/fixture.rs"]
 mod fixture;
 
+/// The tables of places, against the real ones (T162). Ignored by default: it downloads
+/// about seventy megabytes.
+#[path = "integration/geo_real.rs"]
+mod geo_real;
+
 /// A ready quality set in the container (T151). Used by the checks of Phases 4 and 6.
 #[path = "integration/hls_fixture.rs"]
 #[allow(dead_code)]

@@ -22,7 +22,19 @@
 
 Оба адреса ведут на неизменяемые точки, а не на главную ветку, которая уедет.
 
-## Ядро (Rust) — 659
+## Таблицы мест — скачиваются приложением
+
+Страна, город и провайдер зрителя определяются на компьютере пользователя по
+таблицам **DB-IP IP-to-City Lite** и **DB-IP IP-to-ASN Lite**.
+
+- источник: [db-ip.com](https://db-ip.com/db/lite.php)
+- условия: [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/)
+
+В установщик они не входят: приложение само берёт таблицу текущего месяца и
+обновляет её раз в месяц. Адреса зрителей при этом никуда не отправляются —
+поиск идёт на машине пользователя.
+
+## Ядро (Rust) — 661
 
 | Пакет | Версия | Лицензия | Источник |
 |---|---|---|---|
@@ -264,6 +276,7 @@
 | `inout` | 0.2.2 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/utils) |
 | `internal-russh-num-bigint` | 0.5.0 | MIT OR Apache-2.0 | [источник](https://github.com/rust-num/num-bigint) |
 | `ipnet` | 2.12.1 | MIT OR Apache-2.0 | [источник](https://github.com/krisprice/ipnet) |
+| `ipnetwork` | 0.21.1 | MIT OR Apache-2.0 | [источник](https://github.com/achanda/ipnetwork) |
 | `is-docker` | 0.2.0 | MIT | [источник](https://github.com/TheLarkInn/is-docker) |
 | `is-wsl` | 0.4.0 | MIT | [источник](https://github.com/TheLarkInn/is-wsl) |
 | `itoa` | 1.0.18 | MIT OR Apache-2.0 | [источник](https://github.com/dtolnay/itoa) |
@@ -302,6 +315,7 @@
 | `mac-notification-sys` | 0.6.15 | MIT/Apache-2.0 | [источник](https://github.com/h4llow3En/mac-notification-sys) |
 | `markup5ever` | 0.38.0 | MIT OR Apache-2.0 | [источник](https://github.com/servo/html5ever) |
 | `matchers` | 0.2.0 | MIT | [источник](https://github.com/hawkw/matchers) |
+| `maxminddb` | 0.30.3 | ISC | [источник](https://github.com/oschwald/maxminddb-rust) |
 | `md5` | 0.8.1 | Apache-2.0 OR MIT | [источник](https://github.com/stainless-steel/md5) |
 | `memchr` | 2.8.3 | Unlicense OR MIT | [источник](https://github.com/BurntSushi/memchr) |
 | `memoffset` | 0.9.1 | MIT | [источник](https://github.com/Gilnaa/memoffset) |
@@ -703,7 +717,7 @@
 | `set-cookie-parser` | 2.7.2 | MIT | [источник](nfriedly/set-cookie-parser) |
 | `zustand` | 5.0.15 | MIT | [источник](https://github.com/pmndrs/zustand) |
 
-## Тексты лицензий — 331
+## Тексты лицензий — 333
 
 Одинаковые тексты сведены вместе: у многих пакетов лицензия дословно совпадает.
 
@@ -4499,7 +4513,7 @@ DEALINGS IN THE SOFTWARE.
 
 </details>
 
-<details><summary>crc32fast 1.5.1, ctor 0.8.0, ctor-proc-macro 0.0.7, dpi 0.1.2, dtor 0.3.0, dtor-proc-macro 0.0.6 и ещё 24</summary>
+<details><summary>crc32fast 1.5.1, ctor 0.8.0, ctor-proc-macro 0.0.7, dpi 0.1.2, dtor 0.3.0, dtor-proc-macro 0.0.6 и ещё 25</summary>
 
 ```
 Apache License
@@ -10970,6 +10984,38 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 </details>
 
+<details><summary>ipnetwork 0.21.1</summary>
+
+```
+Copyright 2020 Developers of the ipnetwork project
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+</details>
+
 <details><summary>is-docker 0.2.0, is-wsl 0.4.0</summary>
 
 ```
@@ -11936,6 +11982,28 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+</details>
+
+<details><summary>maxminddb 0.30.3</summary>
+
+```
+ISC License
+
+Copyright (c) 2015, Gregory J. Oschwald <oschwald@gmail.com>
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
 </details>

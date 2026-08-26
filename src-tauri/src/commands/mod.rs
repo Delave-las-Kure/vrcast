@@ -12,6 +12,7 @@
 pub mod convert;
 pub mod error;
 pub mod events;
+pub mod geo;
 pub mod library;
 pub mod servers;
 pub mod settings;
@@ -57,9 +58,13 @@ pub struct AppState {
     pub viewers: Arc<viewers::ViewersWatch>,
     /// Where addresses are, looked up on this machine and nowhere else (FR-057).
     ///
-    /// Empty until the table is put into the package (T162), and empty is a working state:
-    /// every viewer is then shown as "not determined", which is the truth.
-    pub places: Arc<crate::domain::geo::GeoTable>,
+    /// Behind a lock because the tables arrive **after** the application has started: they
+    /// are fetched in the background, and a watch that began before they landed must start
+    /// answering once they have, rather than staying blind until the next restart.
+    ///
+    /// Empty is a working state, and the one the application ships in: every viewer is then
+    /// "not determined", which is the truth.
+    pub places: Arc<std::sync::RwLock<crate::store::geo::Places>>,
 }
 
 impl AppState {
@@ -106,7 +111,11 @@ impl AppState {
             secrets,
             events,
             viewers: Arc::new(viewers::ViewersWatch::default()),
-            places: Arc::new(crate::domain::geo::GeoTable::default()),
+            places: Arc::new(std::sync::RwLock::new(
+                crate::store::geo::dir()
+                    .map(|d| crate::store::geo::Places::open(&d))
+                    .unwrap_or_default(),
+            )),
         })
     }
 

@@ -153,6 +153,30 @@ function ffmpegSection() {
   ].join("\n");
 }
 
+/**
+ * The section about the tables of places.
+ *
+ * Not a dependency of the code and so not in either tree: the tables are fetched while the
+ * application runs. Their licence asks for attribution all the same, and a condition is a
+ * condition whether the file travels in the installer or arrives later.
+ */
+function placesSection() {
+  return [
+    "## Таблицы мест — скачиваются приложением",
+    "",
+    "Страна, город и провайдер зрителя определяются на компьютере пользователя по",
+    "таблицам **DB-IP IP-to-City Lite** и **DB-IP IP-to-ASN Lite**.",
+    "",
+    "- источник: [db-ip.com](https://db-ip.com/db/lite.php)",
+    "- условия: [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/)",
+    "",
+    "В установщик они не входят: приложение само берёт таблицу текущего месяца и",
+    "обновляет её раз в месяц. Адреса зрителей при этом никуда не отправляются —",
+    "поиск идёт на машине пользователя.",
+    "",
+  ].join("\n");
+}
+
 function table(rows) {
   const lines = ["| Пакет | Версия | Лицензия | Источник |", "|---|---|---|---|"];
   for (const r of rows.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))) {
@@ -205,6 +229,7 @@ function build() {
     "исходного кода описаны в разделе «О программе» самого приложения.",
     "",
     ffmpegSection(),
+    placesSection(),
     `## Ядро (Rust) — ${rust.length}`,
     "",
     table(rust),
