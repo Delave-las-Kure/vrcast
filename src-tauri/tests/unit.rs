@@ -35,6 +35,9 @@ mod geo;
 #[path = "unit/ladder.rs"]
 mod ladder;
 
+#[path = "unit/limits.rs"]
+mod limits;
+
 #[path = "unit/ladder_build.rs"]
 mod ladder_build;
 
