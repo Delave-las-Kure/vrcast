@@ -11,6 +11,7 @@
 
 pub mod convert;
 pub mod deploy;
+pub mod diag;
 pub mod error;
 pub mod events;
 pub mod geo;
