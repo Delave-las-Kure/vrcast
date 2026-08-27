@@ -44,7 +44,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Вне выкачиваемого дерева и потому переживает прогоны: у своей машины это заменяет кеш.
-  CARGO_TARGET_DIR: ${{ runner.workspace }}/../_cargo-target
+  #
+  # `github.workspace`, а не `runner.workspace`: в общем блоке `env` доступны только контексты
+  # `github`, `inputs`, `secrets` и `vars`, а свойства `workspace` у `runner` нет вовсе. Файл с
+  # таким выражением отвергается целиком — прогон падает без единого задания и без причины,
+  # которую видно из API. Поймано 2026-08-27, дважды подряд, и только `actionlint` назвал её.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/../_cargo-target
 
 jobs:
   frontend:

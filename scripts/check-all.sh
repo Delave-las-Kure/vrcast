@@ -69,6 +69,7 @@ step "Core: tests" cargo test --manifest-path src-tauri/Cargo.toml
 if [ "${OS:-}" = "Windows_NT" ]; then
   step "The uninstall hook's four cases"     powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/tests/uninstall-hook/run.ps1
 fi
+step "The workflow files" bash scripts/check-workflows.sh
 step "The version is in one place" bash scripts/check-version.sh
 step "Both themes line up" bash scripts/check-theme.sh
 step "Interface: types" npm run --silent typecheck
