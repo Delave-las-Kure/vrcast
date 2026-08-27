@@ -94,6 +94,14 @@ jobs:
       - name: Core tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  # **The expensive job, and it is kept on every push deliberately** (owner's decision,
+  # 2026-08-27). It builds the application for release on both platforms, and Windows minutes
+  # bill at double — so everything that can be cached is. What is left uncached is our own
+  # crate, which has to be rebuilt to be worth checking.
+  #
+  # A rarer schedule was the alternative and was turned down: the end-to-end check is already
+  # the slowest to run, and made rare as well it finds a breakage days after the change that
+  # caused it, when nobody remembers the change.
   e2e:
     name: End to end — the built application, driven
     runs-on: ${{ matrix.os }}
@@ -107,6 +115,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Its own cache, apart from the `core` job's: that one builds for test, this one for
+          # release, and the two profiles share no artefacts. One cache for both would be
+          # written twice a push and hit half as often.
+          shared-key: e2e-release
+          cache-all-crates: true
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -130,8 +143,29 @@ jobs:
       - name: Put the bundled FFmpeg in place
         run: node scripts/fetch-ffmpeg.mjs
 
+      # Compiled from source by `cargo install`, and it does not change between pushes: the
+      # version is pinned so the cache has something honest to key on. Unpinned, `--locked`
+      # still floats to whatever is newest, and the cache would miss on the day it moves —
+      # silently, looking like a slow run rather than a new version.
+      - name: Cache for the intermediary driver
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/tauri-driver
+            ~/.cargo/bin/tauri-driver.exe
+          key: tauri-driver-${{ runner.os }}-2.0.6
       - name: The intermediary driver
-        run: cargo install tauri-driver --locked
+        run: cargo install tauri-driver --version 2.0.6 --locked
+
+      # Twenty megabytes fetched by version. The key carries the runner image's label, because
+      # that is what moves the webview version — and when it moves, the driver has to move
+      # with it or refuse to attach.
+      - name: Cache for the platform WebDriver
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/target/webdriver
+          key: webdriver-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-webdriver.mjs') }}
 
       # What the harness actually drives is a WebView2, and the runner's image says nothing
       # about whether the runtime is there. Printed rather than assumed: the first run of this
