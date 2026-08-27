@@ -14,6 +14,7 @@ pub mod deploy;
 pub mod diag;
 pub mod error;
 pub mod events;
+pub mod forget;
 pub mod geo;
 pub mod ladder;
 pub mod library;
@@ -64,6 +65,16 @@ pub enum AppEvent {
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Db>,
+    /// Where this run keeps everything, when it keeps it anywhere.
+    ///
+    /// **`None` in tests, and that is a safety measure rather than a shortcut.** Removal
+    /// (FR-114) deletes this directory, and the first version of it worked the path out from
+    /// the environment instead — so a contract test, running with an in-memory database,
+    /// deleted the developer's own profiles and both place tables. Caught 2026-08-27, restored
+    /// from a copy made beforehand.
+    ///
+    /// Carried on the state, a test cannot reach a real directory: it has not been given one.
+    pub data_dir: Option<std::path::PathBuf>,
     pub tasks: TaskEngine,
     pub secrets: Arc<dyn SecretStore>,
     /// The channel for events unrelated to tasks.
@@ -85,8 +96,12 @@ impl AppState {
     /// Build the state with the real stores and sort out what the previous run left.
     pub fn bootstrap() -> Result<Self> {
         let path = Db::default_path()?;
-        let db = Arc::new(Db::open(path)?);
-        Self::with_db(db, Arc::new(OsSecretStore::new()))
+        let db = Arc::new(Db::open(path.clone())?);
+        let mut state = Self::with_db(db, Arc::new(OsSecretStore::new()))?;
+        // The one place a real directory is handed over. Everything else — tests included —
+        // gets `None` and can therefore delete nothing.
+        state.data_dir = path.parent().map(|p| p.to_path_buf());
+        Ok(state)
     }
 
     /// The same, but with the stores given — for tests.
@@ -121,6 +136,7 @@ impl AppState {
         let (events, _) = tokio::sync::broadcast::channel(64);
         Ok(Self {
             db,
+            data_dir: None,
             tasks,
             secrets,
             events,

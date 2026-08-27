@@ -632,6 +632,26 @@ export const en: Catalogue = {
       State: "Write the server-side version",
     },
 
+    forget: {
+      title: "Remove my data",
+      means:
+        "Everything the application keeps about you: settings, server profiles, the library cache, the place tables and the secrets in the system store. The videos on your server are not touched.",
+      dataDir: "Directory",
+      servers: "Server profiles",
+      secrets: "Secrets in the system store",
+      none: "none",
+      lockedOut: (names: string) =>
+        `These will become unreachable for good: ${names}. Password logins are off on them, and the key exists only here.`,
+      lockedOutAdvice:
+        "Save the key to a file before removing, or the way back to such a server is your hosting provider's console and a reinstall.",
+      agree: "I understand this cannot be undone",
+      remove: "Remove everything",
+      removing: "Removing…",
+      done: "Removed. The application can be uninstalled — nothing of yours is left behind.",
+      secretsLeft: (names: string) =>
+        `The system store would not give up these secrets: ${names}. They will have to be cleared by hand.`,
+      dirLeft: "The data directory could not be removed — something may be holding a file in it.",
+    },
     appearance: {
       title: "Appearance",
       theme: "Theme",

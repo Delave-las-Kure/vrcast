@@ -704,6 +704,25 @@ export interface Peaks {
   seconds: number;
 }
 
+// --- удаление всего, что приложение о человеке держит (FR-114) ---
+
+/** Что уйдёт, названное поимённо. Список, а не обещание. */
+export interface WhatWouldGo {
+  data_dir: string | null;
+  bytes: number;
+  servers: string[];
+  secrets: number;
+  /** Сервера, которые станут недоступны навсегда: ключ к ним есть только здесь. */
+  locked_out: string[];
+}
+
+export interface WhatWent {
+  data_dir_removed: boolean;
+  secrets_removed: number;
+  /** Секреты, которых хранилище не отдало. Названы, а не проглочены. */
+  secrets_left: string[];
+}
+
 /** Что изменит обновление серверной части (FR-129). */
 export interface UpgradePlan {
   from: number;

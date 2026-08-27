@@ -13,6 +13,10 @@ mod basics;
 mod contract_sync;
 
 /// T337 — состав серверной части версии 1 сверяется с кодом, а не обещается.
+/// T356–T358 — удаление всего, что приложение о человеке держит (FR-114).
+#[path = "contract/forget.rs"]
+mod forget;
+
 #[path = "contract/server_inventory.rs"]
 mod server_inventory;
 

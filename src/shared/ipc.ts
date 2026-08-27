@@ -57,6 +57,8 @@ import {
   type Logs,
   type Stalls,
   type Peaks,
+  type WhatWouldGo,
+  type WhatWent,
 } from "./contract";
 
 /**
@@ -131,6 +133,12 @@ export const ipc = {
   ) => call<Stalls>("diag_explain_stalls", { serverId, minutes, file: file ?? null }),
   /** Где пики у локального файла (FR-073). Сервер не трогается вовсе. */
   diagBitrate: (path: string) => call<Peaks>("diag_bitrate", { path }),
+
+  // --- удаление (FR-114) ---
+  /** Что уйдёт, если убрать всё. Ничего не меняет. */
+  forgetPreview: () => call<WhatWouldGo>("forget_preview"),
+  /** Убрать. Без `confirmed` — отказ, до того как что-либо тронуто. */
+  forgetEverything: (confirmed: boolean) => call<WhatWent>("forget_everything", { confirmed }),
 
   tasksList: () => call<Task[]>("tasks_list"),
   taskGet: (id: string) => call<Task>("task_get", { id }),

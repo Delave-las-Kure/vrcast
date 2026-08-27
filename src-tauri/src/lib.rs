@@ -147,6 +147,8 @@ pub fn run() {
             commands::diag::ipc::diag_logs,
             commands::diag::ipc::diag_explain_stalls,
             commands::diag::ipc::diag_bitrate,
+            commands::forget::ipc::forget_preview,
+            commands::forget::ipc::forget_everything,
             commands::ladder::ipc::ladder_build,
             commands::ladder::ipc::ladder_verify,
             commands::ladder::ipc::ladder_validate,

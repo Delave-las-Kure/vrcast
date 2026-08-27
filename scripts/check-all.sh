@@ -64,6 +64,11 @@ step "Core: format" cargo fmt --manifest-path src-tauri/Cargo.toml --check
 step "Core: clippy over all targets" \
   cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features integration -- -D warnings
 step "Core: tests" cargo test --manifest-path src-tauri/Cargo.toml
+# Windows only, and only where the NSIS compiler is: it arrives with a full bundle build.
+# The script says so and passes rather than pretending — see its own note.
+if [ "${OS:-}" = "Windows_NT" ]; then
+  step "The uninstall hook's four cases"     powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/tests/uninstall-hook/run.ps1
+fi
 step "The version is in one place" bash scripts/check-version.sh
 step "Both themes line up" bash scripts/check-theme.sh
 step "Interface: types" npm run --silent typecheck

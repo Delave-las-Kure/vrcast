@@ -11,6 +11,7 @@
  */
 
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { Forget } from "./Forget";
 import { useSettings } from "../../app/settings";
 import { useLang, useT, LANGUAGES } from "../../shared/i18n";
 import { useTheme, type ThemeChoice } from "../../app/theme";
@@ -92,6 +93,10 @@ export function Appearance() {
         </label>
         <p className="appearance__means">{words.animationsMeans}</p>
       </fieldset>
+
+      {/* Не про оформление — но это единственный раздел настроек, а прятать «убрать мои
+          данные» глубже некуда: искать его будут именно здесь. */}
+      <Forget />
     </div>
   );
 }

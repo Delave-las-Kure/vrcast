@@ -1313,3 +1313,56 @@ button:disabled {
   font-size: 13px;
   margin: 6px 0 0;
 }
+
+/* ---------- удаление данных ---------- */
+
+.forget {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  margin-top: 8px;
+  max-width: 560px;
+}
+
+.forget-list {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.forget-list code {
+  word-break: break-all;
+}
+
+/*
+ * Единственная потеря, которую нельзя отменить, — и выглядит она соответственно. Цвет тут
+ * не единственный признак: рядом стоит текст, который её называет.
+ */
+.forget-danger {
+  border-left: 3px solid var(--danger);
+  background: var(--danger-bg);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  margin: 12px 0;
+}
+
+.forget-warning {
+  color: var(--warning);
+}
+
+.forget-agree {
+  display: block;
+  margin: 12px 0;
+}
+
+button.danger {
+  background: var(--danger);
+  color: var(--text-inverse);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+button.danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
