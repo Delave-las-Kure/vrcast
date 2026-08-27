@@ -26,6 +26,7 @@ pub mod firewall;
 pub mod ipv6;
 pub mod machine;
 pub mod packages;
+pub mod references;
 pub mod services;
 pub mod ssh_hardening;
 pub mod ssh_key;
@@ -70,6 +71,15 @@ pub struct Context<'a> {
     /// The two things that cannot be found out from inside the connection we already
     /// have. See [`Proofs`].
     pub proofs: Proofs<'a>,
+    /// Was this server already deployed by us?
+    ///
+    /// It changes one thing and it matters: on a bare machine a configuration file is
+    /// simply written, and on a server already ours a file that differs from every
+    /// version we ever wrote was **edited by somebody**, and must not be overwritten
+    /// (the ownership rule of contracts/server-contract.md). A person who tuned their
+    /// own web server and found the application had quietly undone it would be right
+    /// to stop trusting it.
+    pub already_ours: bool,
 }
 
 /// What has to be established by **opening a new connection**, not by reading a file.
@@ -92,8 +102,19 @@ pub struct Proofs<'a> {
 
 impl Context<'_> {
     /// Run something on the server and hand back what it said.
+    ///
+    /// **A failed command hands back its complaint as well.** The applies below all end
+    /// in `echo done` under `set -e`, so a command that dies part-way prints nothing at
+    /// all to standard output — and the step then failed with an empty message. An empty
+    /// reason is worse than a wrong one: there is nothing to look up, nothing to search
+    /// for, and the person is left with the name of a step. Found by trimming a check and
+    /// watching it fail with nothing to say (2026-08-27).
     pub async fn ran(&self, command: &str) -> Result<String> {
-        Ok(self.conn.exec(command).await?.stdout)
+        let said = self.conn.exec(command).await?;
+        if said.ok() || said.stderr.trim().is_empty() {
+            return Ok(said.stdout);
+        }
+        Ok(format!("{}{}", said.stdout, said.stderr))
     }
 
     /// Ask the server a yes-or-no question.
@@ -103,7 +124,11 @@ impl Context<'_> {
     /// mean either "it is not so" or "I could not ask" — which are different answers and
     /// only one of them is an answer.
     pub async fn asks(&self, command: &str) -> Result<bool> {
-        Ok(self.ran(command).await?.trim() == "yes")
+        // Standard output ONLY, unlike `ran`. A yes-or-no question that also carried the
+        // command's complaints would answer "no" whenever anything on the way wrote a warning
+        // — which is how, for a few minutes, a perfectly configured fail2ban was reported as
+        // not installed (2026-08-27). What helps a failure's message ruins an answer.
+        Ok(self.conn.exec(command).await?.stdout.trim() == "yes")
     }
 
     /// The answer for a step that cannot be settled in this environment (T246).
@@ -256,7 +281,10 @@ pub async fn plan<C>(ctx: &C, steps: &[Step<C>]) -> Result<Vec<PlannedStep>> {
     for step in in_order(steps) {
         found.push((step.id, (step.check)(ctx).await?));
     }
-    Ok(deploy_steps::plan(&found, |id| changes_of(steps, id, ctx)))
+    let ids: Vec<StepId> = in_order(steps).iter().map(|s| s.id).collect();
+    Ok(deploy_steps::plan(&ids, &found, |id| {
+        changes_of(steps, id, ctx)
+    }))
 }
 
 /// Carry the deployment out, reporting each step as it goes (FR-123).

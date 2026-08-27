@@ -125,7 +125,7 @@ fn what_cannot_be_established_here_is_not_the_same_as_done() {
     assert!(!todo.contains(&StepId::Tuning));
 
     // ...but the plan says which was which, and does not call either of them done.
-    let shown = plan(&found, no_changes);
+    let shown = plan(&ORDER, &found, no_changes);
     let swap = shown
         .iter()
         .find(|s| s.id == StepId::Swap)
@@ -160,7 +160,7 @@ fn the_plan_shows_the_whole_deployment_and_in_its_own_order() {
     // only the remaining work would read differently on a repeat than on a first run, and the
     // person would have no way to tell "this was done earlier" from "this will not be done".
     let found = vec![(StepId::Packages, Checked::Applied)];
-    let shown = plan(&found, no_changes);
+    let shown = plan(&ORDER, &found, no_changes);
 
     assert_eq!(
         shown.len(),

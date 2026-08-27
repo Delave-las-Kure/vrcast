@@ -12,6 +12,7 @@ pub mod detect;
 pub mod disk;
 pub mod env_import;
 pub mod free_space;
+pub mod gate;
 pub mod hls_package;
 pub mod hls_verify;
 pub mod limits;
@@ -19,6 +20,7 @@ pub mod listing;
 pub mod manifest_io;
 pub mod probe_moov;
 pub mod reconcile;
+pub mod upgrade;
 pub mod upload;
 pub mod viewers;
 

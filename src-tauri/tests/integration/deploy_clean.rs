@@ -28,15 +28,15 @@ use vrcast_studio_lib::ssh::{fingerprint, Connection, Credentials, ServerAddress
 use super::deploy_fixture::{DeployTarget, Flavour, ROOT_PASSWORD};
 use super::test_key::{key_path, public_key_path, PASSPHRASE};
 
-const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
+pub const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 
-async fn address(target: &DeployTarget) -> ServerAddress {
+pub async fn address(target: &DeployTarget) -> ServerAddress {
     let (host, port) = target.address();
     ServerAddress::new(host, port)
 }
 
 /// A connection made with the password, the way a person first reaches a bought server.
-async fn by_password(target: &DeployTarget) -> Connection {
+pub async fn by_password(target: &DeployTarget) -> Connection {
     let a = address(target).await;
     let fp = fingerprint::probe(&a)
         .await
@@ -54,7 +54,7 @@ async fn by_password(target: &DeployTarget) -> Connection {
 /// Whether a fresh connection with the key works. **A new one every time** — the connection we
 /// already hold would go on working whatever we did to the settings, which is what makes it
 /// the wrong witness.
-async fn key_works(target: &DeployTarget) -> bool {
+pub async fn key_works(target: &DeployTarget) -> bool {
     let a = address(target).await;
     let Ok(fp) = fingerprint::probe(&a).await else {
         return false;
@@ -73,7 +73,7 @@ async fn key_works(target: &DeployTarget) -> bool {
 }
 
 /// Whether a password is actually refused.
-async fn password_refused(target: &DeployTarget) -> bool {
+pub async fn password_refused(target: &DeployTarget) -> bool {
     let a = address(target).await;
     let Ok(fp) = fingerprint::probe(&a).await else {
         return false;
@@ -118,6 +118,8 @@ async fn a_bare_machine_is_deployed_and_a_repeat_does_nothing() {
         server: ServerAddresses { v4: None, v6: None },
         public_key: public_key.clone(),
         machine,
+        // A bare machine: nothing here is anybody's work to preserve.
+        already_ours: false,
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,

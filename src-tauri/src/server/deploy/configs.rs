@@ -88,6 +88,24 @@ fn check<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<Checked>> {
 
 fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
     Box::pin(async move {
+        // **A file somebody edited is not ours to replace** (T285). On a server already
+        // ours, a main configuration that matches no version we ever wrote was written
+        // by a person — and the contract says we notice it, say so, and leave it alone.
+        // On a bare machine there is nothing to preserve and this does not apply.
+        if ctx.already_ours {
+            let there = ctx
+                .ran(&format!("cat {CADDYFILE} 2>/dev/null || true"))
+                .await?;
+            let there = there.trim_end_matches('\n');
+            if !there.is_empty() && !super::references::is_ours(there, ctx.domain) {
+                return Err(DeployError::Step {
+                    id: StepId::Configs,
+                    detail: format!("{CADDYFILE} was edited by hand and is not being overwritten"),
+                    advice: None,
+                });
+            }
+        }
+
         // The rules file first: the main configuration imports it, and a configuration
         // importing a file that is not there yet does not validate.
         let there = ctx

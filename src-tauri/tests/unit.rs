@@ -115,3 +115,6 @@ mod detect;
 
 #[path = "unit/deploy_engine.rs"]
 mod deploy_engine;
+
+#[path = "unit/gate.rs"]
+mod gate;

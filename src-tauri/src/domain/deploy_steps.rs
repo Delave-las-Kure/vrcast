@@ -77,8 +77,13 @@ pub const ORDER: [StepId; 15] = [
 
 /// A pair that must not be swapped, and why. Checked rather than remembered: all three were
 /// bought, and the third was bought with a server nobody could get back into.
-pub const MUST_PRECEDE: [(StepId, StepId); 3] = [
+pub const MUST_PRECEDE: [(StepId, StepId); 4] = [
     (StepId::Swap, StepId::Packages),
+    // Found by running it (2026-08-27): the directories step gives the log directory to
+    // the `caddy` user, and that user does not exist until the Caddy package makes it.
+    // The order was already right; the requirement was not written down, so a future
+    // rearrangement would have broken it with nothing to say but an empty failure.
+    (StepId::Packages, StepId::UserDirs),
     (StepId::SshKey, StepId::SshHardening),
     (StepId::Verify, StepId::State),
 ];
@@ -226,12 +231,18 @@ pub struct PlannedStep {
 /// plan that listed only the remaining work would say something different on a repeat than on
 /// a first run, and the person would have no way to tell "this was done earlier" from "this
 /// will not be done".
+/// `ids` is what the plan is about, in whatever order — it comes back in the deployment's
+/// own. Handed a subset, the plan speaks only of that subset: a step nobody checked
+/// reported as "not applied" is not a gap in the plan, it is the plan making something up,
+/// and "is there anything to do" then answers yes for ever.
 pub fn plan(
+    ids: &[StepId],
     found: &[(StepId, Checked)],
     changes_of: impl Fn(StepId) -> Vec<Change>,
 ) -> Vec<PlannedStep> {
     ORDER
         .iter()
+        .filter(|id| ids.contains(id))
         .map(|id| {
             let status = found
                 .iter()
