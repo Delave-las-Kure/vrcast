@@ -15,6 +15,9 @@ mod contract_sync;
 #[path = "contract/library.rs"]
 mod library;
 
+#[path = "contract/deploy.rs"]
+mod deploy;
+
 #[path = "contract/ladder.rs"]
 mod ladder;
 

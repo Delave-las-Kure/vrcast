@@ -17,8 +17,9 @@ use crate::domain::remote_name::{self, NameVerdict};
 use crate::domain::transfer::ResumeToken;
 use crate::domain::wording::Detail;
 use crate::server::free_space::{self, SpaceVerdict};
+use crate::server::gate::{self, Intent};
 use crate::server::upload::{self, UploadError, UploadPlan};
-use crate::server::{checksum, connect, disk, listing};
+use crate::server::{checksum, disk, listing};
 use crate::tasks::state::TaskKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -113,7 +114,10 @@ pub mod api {
         }
 
         // The pre-transfer checks go over a live connection.
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        // Before anything is sent: how much room there is, and who is watching.
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Read)
+            .await?
+            .conn;
         let checks = preflight(&profile, &conn, &clean_name, meta.len()).await?;
         conn.close().await;
 
@@ -456,7 +460,10 @@ pub mod api {
         let mut delay = FIRST_RETRY_DELAY;
 
         for attempt in 1..=MAX_ATTEMPTS {
-            let conn = match connect(secrets.as_ref(), &profile).await {
+            let conn = match gate::open(secrets.as_ref(), &profile, Intent::Change)
+                .await
+                .map(|opened| opened.conn)
+            {
                 Ok(c) => c,
                 Err(e) => {
                     if attempt == MAX_ATTEMPTS {

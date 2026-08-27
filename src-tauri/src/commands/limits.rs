@@ -15,8 +15,9 @@ use crate::domain::hls_master::{self, Variant};
 use crate::domain::limits_conf::Limit;
 use crate::domain::slow_master::shorten;
 use crate::domain::wording::Detail;
+use crate::server::gate::{self, Intent};
 use crate::server::limits::{LimitError, Serving};
-use crate::server::{connect, shell_quote};
+use crate::server::shell_quote;
 
 /// Where the media sit in an address on this project's servers.
 const SERVING_PREFIX: &str = "/videos";
@@ -61,7 +62,10 @@ pub mod api {
         request: &LimitRequest,
     ) -> Result<LimitPreview> {
         let profile = super::super::library::api::profile_of(state, &request.server_id)?;
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        // Only looking: what the set holds, so a cap can be offered against it.
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Read)
+            .await?
+            .conn;
         let variants = ladder_of(&conn, &profile.video_dir, &request.slug).await?;
         conn.close().await;
 
@@ -112,7 +116,9 @@ pub mod api {
         }
 
         let profile = super::super::library::api::profile_of(state, &request.server_id)?;
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
         let variants = ladder_of(&conn, &profile.video_dir, &request.slug).await?;
         let short = shorten(&variants, request.cap_bps, SERVING_PREFIX, &request.slug);
 
@@ -163,7 +169,9 @@ pub mod api {
         slug: &str,
     ) -> Result<()> {
         let profile = super::super::library::api::profile_of(state, server_id)?;
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
 
         let check_url =
             crate::domain::links::for_path(&profile.domain, None, &format!("{slug}/master.m3u8"))
@@ -202,7 +210,10 @@ pub mod api {
         server_id: &str,
     ) -> Result<Vec<Limit>> {
         let profile = super::super::library::api::profile_of(state, server_id)?;
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        // Only looking: which caps are in force.
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Read)
+            .await?
+            .conn;
         let serving = Serving {
             conn: &conn,
             video_dir: &profile.video_dir,

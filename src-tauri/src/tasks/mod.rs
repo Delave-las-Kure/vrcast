@@ -5,6 +5,7 @@
 //! of the application (FR-081), and cancelling has to end the whole process tree for
 //! certain (constitution, principle III).
 
+pub mod deploy;
 pub mod engine;
 pub mod ladder_build;
 pub mod process;

@@ -31,6 +31,7 @@ export type ErrorCode =
   // server state and deployment
   | "SERVER_FOREIGN"
   | "SERVER_TOO_NEW"
+  | "SERVER_NEEDS_UPGRADE"
   | "DEPLOY_STEP_FAILED"
   | "SWAP_FAILED"
   // library
@@ -170,6 +171,7 @@ export type DetailCode =
   | "STAGE_BUILDING_LADDER"
   | "STAGE_CUTTING_SEGMENTS"
   | "STAGE_VERIFYING_LADDER"
+  | "STAGE_DEPLOYING"
   | "STAGE_DONE"
 
   // what closing the application would do to a task (FR-086)

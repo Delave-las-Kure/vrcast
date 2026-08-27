@@ -10,6 +10,7 @@
 //! continuous integration has none.
 
 pub mod convert;
+pub mod deploy;
 pub mod error;
 pub mod events;
 pub mod geo;
@@ -42,6 +43,15 @@ use std::sync::Arc;
 pub enum AppEvent {
     /// The server's library changed: read it again.
     LibraryChanged { server_id: String },
+    /// A deployment has got another step done (FR-123).
+    ///
+    /// The whole list goes out each time rather than the one step that moved: a screen that
+    /// pieced the list together from a stream of single steps would show something different
+    /// if it missed one, and it will miss one — a person opens the screen part-way through.
+    DeployProgress {
+        server_id: String,
+        steps: Vec<crate::domain::deploy_steps::PlannedStep>,
+    },
     /// Who is watching has changed (FR-054).
     ///
     /// Sent rather than waited to be asked for: the list changes every few seconds, and
@@ -166,10 +176,27 @@ pub struct TaskOnClose {
 pub mod api {
     use super::*;
 
-    pub fn app_versions(state: &AppState) -> Result<Versions> {
+    /// What versions are in play (FR-128, T290).
+    ///
+    /// `server_id` is optional. The About screen asks about none; a server's card asks
+    /// about that server, and then the version of the server side goes in beside the
+    /// application's — side by side because apart they say nothing. "Server side 1"
+    /// means nothing until you know what this application deploys.
+    ///
+    /// A server that will not answer leaves `server` empty rather than failing the
+    /// whole call: a version panel that could not be shown because a machine was
+    /// asleep would be the application refusing to say what **it** is.
+    pub async fn app_versions(state: &AppState, server_id: Option<&str>) -> Result<Versions> {
+        let server = match server_id {
+            None => None,
+            Some(id) => deploy::api::server_detect(state, id)
+                .await
+                .ok()
+                .and_then(|s| s.server_version),
+        };
         Ok(Versions {
             app: env!("CARGO_PKG_VERSION").to_owned(),
-            server: None,
+            server,
             schema: state.db.schema_version()?,
         })
     }
@@ -319,8 +346,11 @@ pub mod ipc {
     use tauri::State;
 
     #[tauri::command]
-    pub fn app_versions(state: State<'_, AppState>) -> Result<Versions> {
-        api::app_versions(&state)
+    pub async fn app_versions(
+        state: State<'_, AppState>,
+        server_id: Option<String>,
+    ) -> Result<Versions> {
+        api::app_versions(&state, server_id.as_deref()).await
     }
 
     #[tauri::command]

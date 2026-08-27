@@ -78,6 +78,9 @@ error_codes! {
     // --- server state and deployment ---
     ServerForeign => "SERVER_FOREIGN",
     ServerTooNew => "SERVER_TOO_NEW",
+    /// The server side is older than this application can work with. Not a fault —
+    /// an offer, and the screen turns it into one (FR-129).
+    ServerNeedsUpgrade => "SERVER_NEEDS_UPGRADE",
     DeployStepFailed => "DEPLOY_STEP_FAILED",
     SwapFailed => "SWAP_FAILED",
 
@@ -246,6 +249,32 @@ impl std::error::Error for AppError {}
 pub type Result<T> = std::result::Result<T, AppError>;
 
 // --- turning lower-layer failures into contract codes ---
+
+/// The single door's refusals, as contract codes.
+///
+/// Each of the four sends a person somewhere different: buy nothing and look
+/// elsewhere, upgrade the application, upgrade the server side, or deploy. One flat
+/// "not allowed" would send them nowhere.
+impl From<crate::server::gate::Refusal> for AppError {
+    fn from(e: crate::server::gate::Refusal) -> Self {
+        use crate::server::gate::Refusal as R;
+        match e {
+            R::Ssh(inner) => inner.into(),
+            R::Foreign { reason } => {
+                AppError::new(ErrorCode::ServerForeign).with_cause(format!("{reason:?}"))
+            }
+            R::TooNew {
+                server,
+                app_expects,
+            } => AppError::new(ErrorCode::ServerTooNew)
+                .with_cause(format!("server {server}, application {app_expects}")),
+            R::NeedsUpgrade { server, app_min } => AppError::new(ErrorCode::ServerNeedsUpgrade)
+                .with_cause(format!("server {server}, at least {app_min}")),
+            R::NotDeployed => AppError::new(ErrorCode::ServerForeign)
+                .with_cause("nothing is deployed on this server"),
+        }
+    }
+}
 
 impl From<crate::ssh::SshError> for AppError {
     fn from(e: crate::ssh::SshError) -> Self {

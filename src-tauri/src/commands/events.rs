@@ -29,6 +29,8 @@ pub mod names {
     pub const LIBRARY_CHANGED: &str = "library:changed";
     pub const SERVER_STATE: &str = "server:state";
     pub const VIEWERS_UPDATE: &str = "viewers:update";
+    /// A deployment moved on a step (FR-123).
+    pub const DEPLOY_PROGRESS: &str = "deploy:progress";
 }
 
 /// Start forwarding task events to the interface.
@@ -166,6 +168,7 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                     let name = match &event {
                         AppEvent::LibraryChanged { .. } => names::LIBRARY_CHANGED,
                         AppEvent::ViewersUpdate(_) => names::VIEWERS_UPDATE,
+                        AppEvent::DeployProgress { .. } => names::DEPLOY_PROGRESS,
                     };
                     if let Err(e) = app.emit(name, &event) {
                         tracing::debug!(error = %e, "event not delivered to the interface");

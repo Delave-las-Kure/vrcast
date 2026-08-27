@@ -95,11 +95,11 @@ fn the_profile_list_holds_no_secrets() {
     assert_clean("servers_list", &list);
 }
 
-#[test]
-fn the_other_reading_commands_hold_no_secrets() {
+#[tokio::test]
+async fn the_other_reading_commands_hold_no_secrets() {
     let (s, _, _) = state_with_two_profiles();
 
-    assert_clean("app_versions", &api::app_versions(&s).unwrap());
+    assert_clean("app_versions", &api::app_versions(&s, None).await.unwrap());
     assert_clean("tasks_list", &api::tasks_list(&s).unwrap());
     assert_clean("tasks_on_close", &api::tasks_on_close(&s).unwrap());
 }

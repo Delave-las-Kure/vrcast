@@ -202,7 +202,15 @@ pub mod api {
         let settings = crate::store::settings::load(&state.db)?;
         let context = Arc::new(LibraryContext::build(&view, state.places.clone()));
 
-        let conn = crate::server::connect(state.secrets.as_ref(), &profile).await?;
+        // Watching only. A server that is somebody else's still shows who is pulling
+        // from it — and that is exactly the sort of thing its owner would want to see.
+        let conn = crate::server::gate::open(
+            state.secrets.as_ref(),
+            &profile,
+            crate::server::gate::Intent::Read,
+        )
+        .await?
+        .conn;
 
         let (tx, mut updates) = tokio::sync::mpsc::channel(64);
         let watch = viewers::start(

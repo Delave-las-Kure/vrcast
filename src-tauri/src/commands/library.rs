@@ -231,9 +231,8 @@ pub mod api {
     use crate::domain::manifest::Manifest;
     use crate::domain::media::{self, Media};
     use crate::domain::server_profile::ServerProfile;
-    use crate::server::{
-        connect, disk, listing, manifest_io, probe_moov, reconcile, SERVICE_ENTRIES,
-    };
+    use crate::server::gate::{self, Intent};
+    use crate::server::{disk, listing, manifest_io, probe_moov, reconcile, SERVICE_ENTRIES};
     use crate::ssh::Connection;
     use crate::store::{library_cache, profiles};
 
@@ -308,7 +307,11 @@ pub mod api {
 
     /// Read the whole library from the server.
     async fn build_from_server(state: &AppState, profile: &ServerProfile) -> Result<LibraryView> {
-        let conn = connect(state.secrets.as_ref(), profile).await?;
+        // Looking. Allowed even on somebody else's machine — looking is how a person finds
+        // out that it *is* somebody else's.
+        let conn = gate::open(state.secrets.as_ref(), profile, Intent::Read)
+            .await?
+            .conn;
         let dir = &profile.video_dir;
 
         let manifest = manifest_io::read(&conn, dir).await?;
@@ -428,7 +431,9 @@ pub mod api {
         media::validate_slug(&slug)
             .map_err(|e| AppError::new(ErrorCode::InvalidInput).with_detail(e.detail()))?;
 
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
         let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
 
         if !manifest.slug_available(&slug, None) {
@@ -477,7 +482,9 @@ pub mod api {
                 .map_err(|e| AppError::new(ErrorCode::InvalidInput).with_detail(e.detail()))?;
         }
 
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
         let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
 
         let Some(index) = manifest.media.iter().position(|m| m.id == media_id) else {
@@ -595,7 +602,9 @@ pub mod api {
         confirmed: bool,
     ) -> Result<String> {
         let profile = profile_of(state, server_id)?;
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
         let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
 
         let Some(index) = manifest.media.iter().position(|m| m.id == media_id) else {
@@ -638,7 +647,9 @@ pub mod api {
         _confirmed: bool,
     ) -> Result<()> {
         let profile = profile_of(state, server_id)?;
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
         let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
 
         if manifest.find_by_id(to_media_id).is_none() {
@@ -683,7 +694,9 @@ pub mod api {
         confirmed: bool,
     ) -> Result<()> {
         let profile = profile_of(state, server_id)?;
-        let conn = connect(state.secrets.as_ref(), &profile).await?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
 
         let entries = listing::list(&conn, &profile.video_dir).await?;
         let top = path.split('/').next().unwrap_or(path);

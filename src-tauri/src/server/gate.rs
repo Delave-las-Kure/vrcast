@@ -95,7 +95,7 @@ pub async fn open(
     profile: &ServerProfile,
     intent: Intent,
 ) -> Result<Opened, Refusal> {
-    let conn = super::connect(secrets, profile).await?;
+    let conn = super::connect_raw(secrets, profile).await?;
     let state = super::detect::detect(&conn, &profile.video_dir).await?;
 
     if let Err(refusal) = allowed(&state, intent) {

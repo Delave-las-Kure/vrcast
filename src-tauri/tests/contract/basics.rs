@@ -206,10 +206,12 @@ fn a_substitution_in_a_detail_goes_through_secret_redaction() {
 
 // ---------- the commands ----------
 
-#[test]
-fn app_versions_returns_the_versions() {
+#[tokio::test]
+async fn app_versions_returns_the_versions() {
     let s = state();
-    let v = api::app_versions(&s).unwrap();
+    // No server asked about: the About screen asks about none, and a version panel must not
+    // depend on a machine being awake to say what the application itself is.
+    let v = api::app_versions(&s, None).await.unwrap();
 
     assert!(!v.app.is_empty(), "the application's version is empty");
     assert!(v.schema >= 1, "the schema version was not filled in");

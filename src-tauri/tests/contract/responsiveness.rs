@@ -84,14 +84,23 @@ async fn reading_commands_answer_quickly_while_tasks_run() {
                 "servers_list",
                 measure(|| servers::servers_list(&s).map(|_| ())),
             ),
-            (
-                "app_versions",
-                measure(|| api::app_versions(&s).map(|_| ())),
-            ),
         ] {
             if elapsed > worst {
                 worst = elapsed;
                 worst_name = name;
+            }
+        }
+
+        // Measured apart from the rest because it is async now: asked about no server it
+        // touches nothing, and that is the case this promise is about — the About screen must
+        // answer at once whether or not a machine somewhere is awake.
+        {
+            let began = std::time::Instant::now();
+            let _ = api::app_versions(&s, None).await;
+            let elapsed = began.elapsed();
+            if elapsed > worst {
+                worst = elapsed;
+                worst_name = "app_versions";
             }
         }
         tokio::time::sleep(Duration::from_millis(5)).await;

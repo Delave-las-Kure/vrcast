@@ -154,6 +154,9 @@ detail_codes! {
     StageBuildingLadder => "STAGE_BUILDING_LADDER",
     StageCuttingSegments => "STAGE_CUTTING_SEGMENTS",
     StageVerifyingLadder => "STAGE_VERIFYING_LADDER",
+    /// A deployment is under way. Which step it is on goes out as its own event: the
+    /// screen shows the whole list with their states, and a single stage code could not.
+    StageDeploying => "STAGE_DEPLOYING",
     StageDone => "STAGE_DONE",
 
     // --- what closing the application would do to a task (FR-086) ---

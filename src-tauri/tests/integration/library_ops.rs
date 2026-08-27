@@ -366,14 +366,19 @@ async fn a_second_copy_of_the_application_gets_a_refusal_code_of_its_own() {
     // caught when the generation moves BETWEEN the read and the write. That is checked
     // directly, at the writing layer.
     use vrcast_studio_lib::server::manifest_io;
-    let conn = vrcast_studio_lib::server::connect(
+    // Through the door, like everything else. This check is about the catalogue and not about
+    // the door, but going round it would leave one call site that says nothing about what it
+    // is for — and one is all it takes.
+    let conn = vrcast_studio_lib::server::gate::open(
         state.secrets.as_ref(),
         &vrcast_studio_lib::store::profiles::get(&state.db, &id)
             .unwrap()
             .unwrap(),
+        vrcast_studio_lib::server::gate::Intent::Change,
     )
     .await
-    .expect("could not connect");
+    .expect("could not connect")
+    .conn;
 
     let read = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
     server

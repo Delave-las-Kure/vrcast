@@ -51,7 +51,17 @@ pub(crate) fn join_remote(dir: &str, name: &str) -> String {
 /// One point for the whole application: connecting is the only place a secret is taken
 /// out of the store, and spreading that across several places means forgetting the
 /// fingerprint check in one of them sooner or later.
-pub async fn connect(
+/// Reach a server — **without asking whether we may touch it**.
+///
+/// `pub(crate)` and named apart on purpose: outside this module the only way in is
+/// [`gate::open`], which says what the session is for and refuses a machine that is not
+/// ours to change. A door with a second entrance beside it is not a door, and the one
+/// place a prohibition is forgotten is the call site nobody looked at.
+///
+/// The two callers here are the ones that must not be gated: this function, from the
+/// gate itself, and the step-by-step server test, which exists precisely to find out
+/// what is at the other end.
+pub(crate) async fn connect_raw(
     secrets: &dyn crate::store::secrets::SecretStore,
     profile: &crate::domain::server_profile::ServerProfile,
 ) -> crate::ssh::Result<crate::ssh::Connection> {

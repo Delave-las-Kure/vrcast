@@ -230,7 +230,13 @@ pub mod api {
                 TaskKind::BuildLadder,
                 Some(request.server_id.clone()),
                 move |ctx| async move {
-                    let conn = crate::server::connect(secrets.as_ref(), &profile).await?;
+                    let conn = crate::server::gate::open(
+                        secrets.as_ref(),
+                        &profile,
+                        crate::server::gate::Intent::Change,
+                    )
+                    .await?
+                    .conn;
                     let job = crate::tasks::ladder_build::BuildJob {
                         conn: &conn,
                         video_dir: &profile.video_dir,

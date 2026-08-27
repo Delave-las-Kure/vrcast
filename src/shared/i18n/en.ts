@@ -67,6 +67,10 @@ export const en: Catalogue = {
     },
 
     // --- server state and deployment ---
+    SERVER_NEEDS_UPGRADE: {
+      message: "The server side needs updating",
+      hint: "The server is running a version older than this application works with. Update it from the server’s card — the files and the catalogue are kept.",
+    },
     SERVER_FOREIGN: {
       message: "Something else is already serving from this server",
       hint: "The application does not touch other people's configuration. Use a clean server, or remove the other setup by hand.",
@@ -340,6 +344,7 @@ export const en: Catalogue = {
     STAGE_BUILDING_LADDER: "preparing the variants",
     STAGE_CUTTING_SEGMENTS: "cutting into segments — on the server",
     STAGE_VERIFYING_LADDER: "checking that every variant is served",
+    STAGE_DEPLOYING: "Setting the server up",
     STAGE_DONE: "done",
 
     // --- what closing the application would do ---

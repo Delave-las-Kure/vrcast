@@ -41,7 +41,7 @@ const OWNED: [&str; 8] = [
 ];
 
 /// What an upgrade would do (FR-129).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Plan {
     /// The version on the server now.
     pub from: u32,
