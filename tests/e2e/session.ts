@@ -47,10 +47,14 @@ const START_WITHIN_MS = 20_000;
  */
 export function applicationPath(): string {
   const exe = process.platform === "win32" ? "vrcast-studio.exe" : "vrcast-studio";
-  const release = join(APP, "src-tauri", "target", "release", exe);
+  // `CARGO_TARGET_DIR` when it is set, and it is on the self-hosted runner: there the build
+  // lives outside the checked-out tree so that it survives between runs. Looking only in
+  // `src-tauri/target` would send the harness to a directory that is empty by design.
+  const targetDir = process.env.CARGO_TARGET_DIR ?? join(APP, "src-tauri", "target");
+  const release = join(targetDir, "release", exe);
   if (existsSync(release)) return release;
 
-  const debug = join(APP, "src-tauri", "target", "debug", exe);
+  const debug = join(targetDir, "debug", exe);
   const note = existsSync(debug)
     ? "\n  There is a debug build, and it will not do: it points the webview at the " +
       "development server rather than at the frontend built into it."

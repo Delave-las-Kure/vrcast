@@ -149,7 +149,7 @@ libvmaf — разработка Netflix, распространяется по 
 | `cfg_aliases` | 0.2.2 | MIT | [источник](https://github.com/katharostech/cfg_aliases) |
 | `cfg-expr` | 0.15.8 | MIT OR Apache-2.0 | [источник](https://github.com/EmbarkStudios/cfg-expr) |
 | `cfg-if` | 1.0.4 | MIT OR Apache-2.0 | [источник](https://github.com/rust-lang/cfg-if) |
-| `chacha20` | 0.10.1 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/stream-ciphers) |
+| `chacha20` | 0.10.2 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/stream-ciphers) |
 | `chrono` | 0.4.45 | MIT OR Apache-2.0 | [источник](https://github.com/chronotope/chrono) |
 | `cipher` | 0.4.4 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/traits) |
 | `cipher` | 0.5.2 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/traits) |
@@ -1346,7 +1346,7 @@ DEALINGS IN THE SOFTWARE.
 
 </details>
 
-<details><summary>aes-gcm 0.11.1, chacha20 0.10.1, ghash 0.6.0, polyval 0.7.3</summary>
+<details><summary>aes-gcm 0.11.1, chacha20 0.10.2, ghash 0.6.0, polyval 0.7.3</summary>
 
 ```
 Copyright (c) 2019-2026 The RustCrypto Project Developers

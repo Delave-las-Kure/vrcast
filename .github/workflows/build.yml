@@ -20,9 +20,20 @@ name: build
 # контейнерная интеграция через Docker, и разделение «собрано у меня» от «собрано начисто» —
 # исполнитель работает в своём каталоге, а не в рабочем дереве.
 #
-# **Системные библиотеки ставятся на машину один раз, а не заданием.** У своего исполнителя
-# нет права на `sudo apt-get`, и это правильно: зависимости — забота машины. Задание их
-# проверяет и говорит, что доставить, если чего-то нет.
+# **Проверки Linux идут в одноразовом контейнере** (`.github/ci-image/Dockerfile`), и это не
+# удобство, а вывод из происшествия. 2026-08-27 задание сделало на своей машине то, что делает
+# на машине GitHub: поставило rustup поверх настоящего и унесло `rustup.exe`, а с ним — все
+# ссылки в `.cargo/bin`, `cargo-deny` и `tauri-driver`. Ничего не пропало навсегда, но и рисковать
+# было нечем.
+#
+# Контейнер возвращает проверкам то, на чём они и рассчитаны работать: машину, которую выбрасывают.
+# Что они там поставят, сломают или оставят — уходит вместе с ней.
+#
+# **Windows остаётся своей машиной**, и иначе быть не может: сквозная оснастка правит настоящим
+# окном, а окна в контейнере Windows нет. Взамен задания там больше ничего не ставят — цепочка
+# Rust проверяется, а не устанавливается.
+#
+# Образ собирается один раз:  docker build -t vrcast-linux-check:2 .github/ci-image
 
 on:
   push:
@@ -32,11 +43,15 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Вне выкачиваемого дерева и потому переживает прогоны: у своей машины это заменяет кеш.
+  CARGO_TARGET_DIR: ${{ runner.workspace }}/../_cargo-target
 
 jobs:
   frontend:
     name: Interface — style and tests
     runs-on: [self-hosted, vrcast-linux]
+    container:
+      image: vrcast-linux-check:2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,6 +74,8 @@ jobs:
       matrix:
         os: [vrcast-win, vrcast-linux]
     runs-on: [self-hosted, '${{ matrix.os }}']
+    container:
+      image: ${{ matrix.os == 'vrcast-linux' && 'vrcast-linux-check:2' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,9 +83,12 @@ jobs:
         if: matrix.os == 'vrcast-linux'
         run: |
           missing=""
-          for p in libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf; do
+          for p in libwebkit2gtk-4.1-dev librsvg2-dev patchelf; do
             dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
           done
+          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
+            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-dev"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
@@ -76,13 +96,38 @@ jobs:
           fi
           echo "системные библиотеки на месте"
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # **Цепочка Rust проверяется, а не ставится.**
+      #
+      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
+      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
+      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
+      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
+      # переустановкой rustup.
+      #
+      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
+      - name: Цепочка Rust на месте
+        shell: bash
+        run: |
+          missing=""
+          for tool in cargo rustc; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
+          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
+          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
+            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-dev"
+          if [ -n "$missing" ]; then
+            echo "На машине исполнителя не хватает:$missing" >&2
+            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
+            exit 1
+          fi
+          cargo --version
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+      # Кеша сборки здесь нет намеренно: у своей машины `~/.cargo` свой и никуда не
+      # девается, а действие кеширования вычищает его перед сохранением — то есть лезет в
+      # настоящий каталог владельца. Вместо него `CARGO_TARGET_DIR` ниже: он держит сборку
+      # между прогонами, но вне рабочего дерева, которое исполнитель перевыкачивает.
 
       # FFmpeg is needed at BUILD time, not only when packaging: the Tauri bundler checks
       # that the bundled programs are there and refuses to build without them. So this step
@@ -133,17 +178,41 @@ jobs:
       fail-fast: false
       matrix:
         os: [vrcast-win, vrcast-linux]
+    container:
+      image: ${{ matrix.os == 'vrcast-linux' && 'vrcast-linux-check:2' || '' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          # Its own cache, apart from the `core` job's: that one builds for test, this one for
-          # release, and the two profiles share no artefacts. One cache for both would be
-          # written twice a push and hit half as often.
-          shared-key: e2e-release
-          cache-all-crates: true
+      # **Цепочка Rust проверяется, а не ставится.**
+      #
+      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
+      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
+      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
+      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
+      # переустановкой rustup.
+      #
+      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
+      - name: Цепочка Rust на месте
+        shell: bash
+        run: |
+          missing=""
+          for tool in cargo rustc; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
+          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
+          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
+            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-dev"
+          if [ -n "$missing" ]; then
+            echo "На машине исполнителя не хватает:$missing" >&2
+            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
+            exit 1
+          fi
+          cargo --version
+      # Кеша сборки здесь нет намеренно: у своей машины `~/.cargo` свой и никуда не
+      # девается, а действие кеширования вычищает его перед сохранением — то есть лезет в
+      # настоящий каталог владельца. Вместо него `CARGO_TARGET_DIR` ниже: он держит сборку
+      # между прогонами, но вне рабочего дерева, которое исполнитель перевыкачивает.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -155,10 +224,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           missing=""
-          for p in libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-                   webkit2gtk-driver xvfb; do
+          for p in libwebkit2gtk-4.1-dev librsvg2-dev patchelf webkit2gtk-driver xvfb; do
             dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
           done
+          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
+            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-dev"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
@@ -179,15 +250,17 @@ jobs:
       # version is pinned so the cache has something honest to key on. Unpinned, `--locked`
       # still floats to whatever is newest, and the cache would miss on the day it moves —
       # silently, looking like a slow run rather than a new version.
-      - name: Cache for the intermediary driver
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/tauri-driver
-            ~/.cargo/bin/tauri-driver.exe
-          key: tauri-driver-${{ runner.os }}-2.0.6
-      - name: The intermediary driver
-        run: cargo install tauri-driver --version 2.0.6 --locked
+      # Ставится только если его нет: на своей машине `~/.cargo/bin` никуда не девается
+      # между прогонами, и кеш здесь был бы и бесполезен, и лез бы в настоящий каталог
+      # владельца — ровно то, из-за чего отсюда убрано действие с цепочкой Rust.
+      - name: Промежуточный драйвер
+        shell: bash
+        run: |
+          if tauri-driver --help >/dev/null 2>&1; then
+            echo "tauri-driver уже на машине"
+          else
+            cargo install tauri-driver --version 2.0.6 --locked
+          fi
 
       # Twenty megabytes fetched by version. The key carries the runner image's label, because
       # that is what moves the webview version — and when it moves, the driver has to move
@@ -240,18 +313,55 @@ jobs:
   integration:
     name: Integration — a throwaway server in a container
     runs-on: [self-hosted, vrcast-linux]
+    container:
+      image: vrcast-linux-check:2
+      # **Сеть машины и её же демон.** Проверки поднимают свои контейнеры и достают их по
+      # опубликованным портам — то есть по `127.0.0.1` машины. Из обычного контейнера это была
+      # бы своя петля, где нет никого. Сокет — чтобы поднимать контейнеры на том же демоне, а
+      # не заводить демон внутри демона.
+      options: --network host -v /var/run/docker.sock:/var/run/docker.sock
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+      # **Цепочка Rust проверяется, а не ставится.**
+      #
+      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
+      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
+      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
+      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
+      # переустановкой rustup.
+      #
+      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
+      - name: Цепочка Rust на месте
+        shell: bash
+        run: |
+          missing=""
+          for tool in cargo rustc; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
+          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
+          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
+            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-dev"
+          if [ -n "$missing" ]; then
+            echo "На машине исполнителя не хватает:$missing" >&2
+            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
+            exit 1
+          fi
+          cargo --version
+      # Кеша сборки здесь нет намеренно: у своей машины `~/.cargo` свой и никуда не
+      # девается, а действие кеширования вычищает его перед сохранением — то есть лезет в
+      # настоящий каталог владельца. Вместо него `CARGO_TARGET_DIR` ниже: он держит сборку
+      # между прогонами, но вне рабочего дерева, которое исполнитель перевыкачивает.
       - name: Системные библиотеки на месте
         run: |
           missing=""
-          for p in libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf; do
+          for p in libwebkit2gtk-4.1-dev librsvg2-dev patchelf; do
             dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
           done
+          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
+            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-dev"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
@@ -333,9 +443,37 @@ jobs:
   licenses:
     name: Licence compatibility with GPL-3.0
     runs-on: [self-hosted, vrcast-linux]
+    container:
+      image: vrcast-linux-check:2
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # **Цепочка Rust проверяется, а не ставится.**
+      #
+      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
+      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
+      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
+      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
+      # переустановкой rustup.
+      #
+      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
+      - name: Цепочка Rust на месте
+        shell: bash
+        run: |
+          missing=""
+          for tool in cargo rustc; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
+          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
+          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
+            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-dev"
+          if [ -n "$missing" ]; then
+            echo "На машине исполнителя не хватает:$missing" >&2
+            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
+            exit 1
+          fi
+          cargo --version
       - uses: taiki-e/install-action@cargo-deny
       - name: Check the core dependencies' licences
         run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
@@ -367,6 +505,8 @@ jobs:
   guards:
     name: Isolation and no hardcoded servers
     runs-on: [self-hosted, vrcast-linux]
+    container:
+      image: vrcast-linux-check:2
     steps:
       - uses: actions/checkout@v4
       - name: Hardcoded servers (FR-004)
