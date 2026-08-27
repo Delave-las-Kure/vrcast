@@ -123,6 +123,43 @@ describe("the update screen", () => {
     expect(screen.getByText(ru.ui.tasks.closeLosing)).toBeInTheDocument();
   });
 
+  it("does not frighten a Linux copy about tasks nothing is going to stop", async () => {
+    // Only the Windows installer stops the application. On Linux the plugin rewrites the
+    // AppImage or hands the package to `dpkg`, and the running copy carries on with the old
+    // code — so a list of endangered tasks there warns about something that will not happen.
+    shared.check.mockResolvedValue(NEWER);
+    shared.onClose.mockResolvedValue(BUSY);
+    shared.standing.mockResolvedValue({ ...INSTALLED, installed_as: "deb" });
+    renderIn(<Update />);
+    await screen.findByText("1.2.3");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check }));
+    });
+
+    await screen.findByText(ru.ui.update.available("1.3.0"));
+    expect(screen.queryByText(ru.ui.tasks.closeLosing)).not.toBeInTheDocument();
+    expect(shared.onClose).not.toHaveBeenCalled();
+  });
+
+  it("says the new version starts next time, where the old one keeps running", async () => {
+    // Without this the button simply goes quiet and nothing appears to have happened.
+    shared.check.mockResolvedValue(NEWER);
+    shared.standing.mockResolvedValue({ ...INSTALLED, installed_as: "app_image" });
+    renderIn(<Update />);
+    await screen.findByText("1.2.3");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(ru.ui.update.agree));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.install }));
+    });
+    expect(await screen.findByTestId("update-installed")).toBeInTheDocument();
+  });
+
   it("warns a package copy about the password, and an AppImage not at all", async () => {
     shared.check.mockResolvedValue(NEWER);
     shared.standing.mockResolvedValue({ ...INSTALLED, installed_as: "deb" });

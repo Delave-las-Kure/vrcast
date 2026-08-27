@@ -680,9 +680,11 @@ export const en: Catalogue = {
       warnWindows:
         "The installer stops the application the moment it starts. Starting it again is up to you.",
       warnPackage:
-        "The system will ask for an administrator password: the package is installed as root. The application will be stopped.",
-      warnAppImage: "The application will rewrite itself and stop. Start it again afterwards.",
+        "The system will ask for an administrator password: the package is installed as root. The application carries on running — the new version begins at the next start.",
+      warnAppImage:
+        "The application will rewrite its own file and carry on running as before. The new version begins at the next start.",
       agree: "I understand the application will be stopped",
+      doneRestartLater: "The update is installed. The new version begins at the next start.",
     },
     appearance: {
       title: "Appearance",

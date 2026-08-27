@@ -8,11 +8,18 @@
  * only `updateCheck` goes anywhere — the rule is in the shape of the two calls rather than in a
  * comment asking the next person to be careful.
  *
- * **The running tasks are shown by the same component the close dialog uses.** Installing stops
- * the application — on Windows the installer kills it as its first act, with no event and no
- * delay — so "what happens to what I have running" is exactly the question closing asks, and
- * `tasks_on_close` already answers it per task: resumes, or starts over, and why. A dialog of
- * its own would be a second answer to one question, and the two would drift apart quietly.
+ * **The running tasks are shown only where installing stops the application**, which is
+ * Windows and nowhere else. There the installer kills the application as its first act, with no
+ * event and no delay, so "what happens to what I have running" is exactly the question closing
+ * asks — and `tasks_on_close` already answers it per task: resumes, or starts over, and why. It
+ * is shown by the component the close dialog uses, because a dialog of its own would be a
+ * second answer to one question and the two would drift apart quietly.
+ *
+ * On Linux nothing is stopped: the plugin rewrites the AppImage or hands the package to
+ * `dpkg`, and the running copy carries on with the old code until somebody starts it again.
+ * A list of endangered tasks there would be frightening a person about something that is not
+ * going to happen. (Read out of `tauri-plugin-updater` 2.10.1: the `process::exit(0)` after
+ * installing sits inside `#[cfg(windows)]`.)
  *
  * **What updating costs depends on how this copy was installed**, and the copy knows: the
  * bundler wrote it in. A package asks for an administrator password, an AppImage does not, and
@@ -58,6 +65,8 @@ export function Update() {
   const [running, setRunning] = useState<TaskOnClose[]>([]);
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
+  /** Only ever true where the application survives its own installer, which is not Windows. */
+  const [installed, setInstalled] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
 
@@ -93,19 +102,25 @@ export function Update() {
     setError(null);
     try {
       await ipc.updateInstall(true);
+      // Reached everywhere except Windows, where the installer stops the application first.
+      // Here the new version is on disk and the old one is still running, which is worth
+      // saying: otherwise the button goes quiet and nothing appears to have happened.
+      setInstalled(true);
+      setInstalling(false);
     } catch (e) {
-      // On Windows this line is never reached — the installer stops the application first.
-      // Wherever it is reached, the copy on disk is the one that was there before.
+      // Wherever this is reached, the copy on disk is the one that was there before.
       setError(e as AppError);
       setInstalling(false);
     }
   }, []);
 
-  // The list of running tasks is fetched once there is something to install, and not before: it
-  // is the answer to a question nobody has asked until then.
+  // The list of running tasks is fetched once there is something to install, and not before:
+  // it is the answer to a question nobody has asked until then — and only where installing
+  // actually stops the application.
   const available = found?.kind === "available" ? found : null;
+  const stopsTheApplication = standing?.installed_as === "windows";
   useEffect(() => {
-    if (!available) return;
+    if (!available || !stopsTheApplication) return;
     let alive = true;
     ipc
       .tasksOnClose()
@@ -118,7 +133,7 @@ export function Update() {
     return () => {
       alive = false;
     };
-  }, [available]);
+  }, [available, stopsTheApplication]);
 
   const packaged = standing !== null && standing.installed_as !== "unpackaged";
   const warning = standing ? warningFor(standing.installed_as, words) : null;
@@ -164,8 +179,9 @@ export function Update() {
         </div>
       )}
 
-      {available && <CloseConsequences items={running} />}
+      {available && stopsTheApplication && <CloseConsequences items={running} />}
       {available && warning && <p className="hint">{warning}</p>}
+      {installed && <p data-testid="update-installed">{words.doneRestartLater}</p>}
 
       {available && (
         <>

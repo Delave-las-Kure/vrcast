@@ -9,9 +9,12 @@
 //! the bundler writes it into the binary, and `bundle_type()` reads it back. A copy from a
 //! `.deb` updates through `dpkg`, which needs root, so the system will ask for a password
 //! before anything happens — worth saying beforehand rather than surprising somebody halfway.
-//! An AppImage rewrites itself in place with nothing to ask. A Windows copy is **killed by its
-//! own installer** the moment installation starts, which is why the screen shows the same list
-//! of running tasks that closing the application shows.
+//! An AppImage rewrites itself in place with nothing to ask.
+//!
+//! **Only a Windows copy is stopped by its own installer**, the moment installation starts,
+//! which is why the screen shows the running tasks there and only there. On Linux the
+//! application carries on with the old code until somebody starts it again — the
+//! `process::exit(0)` after installing lives inside `#[cfg(windows)]` in the plugin (2.10.1).
 //!
 //! **A build with no update settings says so.** The plugin is only registered when
 //! `plugins.updater` is in the configuration — see `lib.rs`, and the reason there — so on a
@@ -149,6 +152,9 @@ pub mod api {
     /// has to have happened before. That is why the screen shows the running tasks first, and
     /// why the answer to "what about my four-hour encode" is given while there is still
     /// somebody to give it to.
+    ///
+    /// Everywhere else it returns normally, and the running copy goes on being the old one:
+    /// the new version starts when somebody starts it.
     ///
     /// The check is made again here rather than carried over from the screen. It costs one
     /// request and removes a whole class of mistake: installing what was true five minutes ago.

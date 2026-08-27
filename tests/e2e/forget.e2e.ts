@@ -39,8 +39,20 @@ import { ensureDriver } from "../../scripts/fetch-webdriver.mjs";
 
 const onLinux = process.platform === "linux";
 
+// Said out loud rather than skipped in silence: a file that quietly does nothing on the
+// platform somebody is standing on reads exactly like a file that passed.
+if (!onLinux) {
+  console.warn(
+    `T359 does not run on ${process.platform}: the data directory cannot be pointed somewhere ` +
+      "disposable there, and the test would remove the real one. The Windows side is covered " +
+      "by the uninstaller hook's truth table and by scenario 10 of the quickstart.",
+  );
+}
+
 let scratch: string;
 let harness: Harness | undefined;
+/** The directory the application itself named on screen. Filled in by the first test. */
+let named: string | undefined;
 
 describe.skipIf(!onLinux)("removing everything, from the window", () => {
   beforeAll(async () => {
@@ -67,28 +79,33 @@ describe.skipIf(!onLinux)("removing everything, from the window", () => {
     const list = await harness.session.findFilled('[data-testid="forget-list"]');
     const said = await list.text();
 
-    // The directory named on screen has to be the one under this test's scratch. If it is
-    // not, the redirection did not take and the next test would be pressing "remove" on the
-    // real one — so this failure has to stop the run, not annoy it.
+    // The directory named on screen has to be the one under this test's scratch. If it is not,
+    // the redirection did not take and the next test would be pressing "remove" on the real
+    // one — so this failure has to stop the run, not annoy it.
     expect(said).toContain(scratch);
 
-    // And it has to be a directory that exists, with the database in it: a name on a screen
-    // is not a directory.
-    const data = join(scratch, "data");
-    expect(existsSync(data)).toBe(true);
-    const inside = readdirSync(data);
-    expect(inside.length).toBeGreaterThan(0);
+    // Pulled out of the screen rather than worked out here: the point of this test is that the
+    // path the application *names* is the path it *writes to*, and guessing the second one
+    // would be assuming exactly what is in question (T356).
+    named = /(\/[^\s]*vrcast-forget-[^\s]*)/.exec(said)?.[1];
+    expect(named).toBeDefined();
+
+    // And it has to be a directory that exists, with something in it: a name on a screen is
+    // not a directory.
+    expect(existsSync(named as string)).toBe(true);
+    expect(readdirSync(named as string).length).toBeGreaterThan(0);
   }, 60_000);
 
   it("removes it when the button is pressed, and says so", async () => {
     if (!harness) throw new Error("the application did not start");
 
-    const data = join(scratch, "data");
     // The catch again, in the test that does the pressing: this one is not allowed to run on
     // anything but our own scratch, whatever the test before it concluded.
-    if (!existsSync(data)) throw new Error("no scratch data directory — refusing to press");
-    const before = readdirSync(data);
-    expect(before.length).toBeGreaterThan(0);
+    if (!named || !named.includes(scratch)) {
+      throw new Error("the application did not name a directory inside our scratch — not pressing");
+    }
+    if (!existsSync(named)) throw new Error("the named directory is not there — not pressing");
+    expect(readdirSync(named).length).toBeGreaterThan(0);
 
     const agree = await harness.session.find('[data-testid="forget-agree"]');
     await agree.click();
@@ -103,22 +120,8 @@ describe.skipIf(!onLinux)("removing everything, from the window", () => {
     // is still there, and the person has been told the opposite.
     expect(await harness.session.has('[data-testid="forget-dir-left"]')).toBe(false);
 
-    const left = existsSync(data) ? readdirSync(data) : [];
-    expect(left).toEqual([]);
+    // The directory the application named is the directory that has to be gone. Checking a
+    // parent instead would pass on a run where something else happened to leave it empty.
+    expect(existsSync(named)).toBe(false);
   }, 60_000);
-});
-
-// Said out loud rather than skipped in silence: a test file that quietly does nothing on the
-// platform somebody is standing on reads exactly like a test file that passed.
-describe.skipIf(onLinux)("removing everything, from the window", () => {
-  it("is not run on this platform, and here is why", () => {
-    expect(process.platform).not.toBe("linux");
-    console.warn(
-      "T359 does not run on " +
-        process.platform +
-        ": the data directory cannot be pointed somewhere disposable there, and the test " +
-        "would remove the real one. The Windows side is covered by the uninstaller hook's " +
-        "truth table and by scenario 10 of the quickstart.",
-    );
-  });
 });
