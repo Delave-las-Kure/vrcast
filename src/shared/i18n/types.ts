@@ -53,5 +53,14 @@ export interface CatalogueCore {
  * recursively so the interface section can be grouped into objects.
  */
 export type Widen<T> = {
-  [K in keyof T]: T[K] extends string ? string : Widen<T[K]>;
+  [K in keyof T]: T[K] extends string
+    ? string
+    : // Функции проходят как есть. Почти всё в словаре — строка с подстановками, но
+      // несколько формулировок складываются из чисел прямо на месте («память 961 МБ,
+      // системный диск vda»), и заворачивать их в шаблон значило бы городить разбор ради
+      // двух предложений. Без этой ветви `Widen` съедал у функции её вызываемость, и
+      // словарь компилировался, а вызвать из него было нечего.
+      T[K] extends (...args: never[]) => unknown
+      ? T[K]
+      : Widen<T[K]>;
 };

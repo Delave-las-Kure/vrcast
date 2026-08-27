@@ -15,6 +15,12 @@ import {
   EVENTS,
   isAppError,
   type AppError,
+  type DeployPreview,
+  type DomainAnswer,
+  type Ipv6Choice,
+  type PlannedStep,
+  type ServerState,
+  type UpgradePlan,
   type ImportSuggestion,
   type LibraryChangedEvent,
   type LibraryView,
@@ -75,7 +81,34 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 // ---------- commands ----------
 
 export const ipc = {
-  appVersions: () => call<Versions>("app_versions"),
+  /** Версии рядом (FR-128). Без сервера — только про приложение, и без соединения. */
+  appVersions: (serverId?: string) =>
+    call<Versions>("app_versions", { serverId: serverId ?? null }),
+
+  // --- развёртывание ---
+  /** Что это за сервер (FR-120). Смотреть можно на любой, который отвечает. */
+  serverDetect: (serverId: string) => call<ServerState>("server_detect", { serverId }),
+  /**
+   * Ведёт ли домен сюда и сходится ли это с выбором про IPv6 (FR-137).
+   *
+   * Отдельная команда, чтобы человек мог проверить только что заведённую запись, не
+   * начиная развёртывания: запись расходится по сети минутами, и ответ на «ещё нет» —
+   * спросить снова, а не начать.
+   */
+  dnsCheck: (serverId: string, ipv6: Ipv6Choice) =>
+    call<DomainAnswer>("dns_check", { serverId, ipv6 }),
+  /** Что будет сделано, и ничего не делается (FR-122). */
+  deployPlan: (serverId: string, ipv6: Ipv6Choice) =>
+    call<DeployPreview>("deploy_plan", { serverId, ipv6 }),
+  /** Развернуть. Без `confirmed` — отказ. Возвращает номер задачи (FR-080). */
+  deployRun: (serverId: string, ipv6: Ipv6Choice, confirmed: boolean) =>
+    call<string>("deploy_run", { serverId, ipv6, confirmed }),
+  serverUpgradePlan: (serverId: string) =>
+    call<UpgradePlan>("server_upgrade_plan", { serverId }),
+  serverUpgradeRun: (serverId: string, confirmed: boolean) =>
+    call<string>("server_upgrade_run", { serverId, confirmed }),
+  /** Вернуть то, что заменило последнее обновление (FR-133). */
+  serverRollback: (serverId: string) => call<void>("server_rollback", { serverId }),
 
   tasksList: () => call<Task[]>("tasks_list"),
   taskGet: (id: string) => call<Task>("task_get", { id }),
@@ -295,6 +328,22 @@ export function onViewersUpdate(
   handler: (update: ViewersUpdateEvent) => void,
 ): Promise<UnlistenFn> {
   return tauriListen<ViewersUpdateEvent>(EVENTS.viewersUpdate, (ev) => handler(ev.payload));
+}
+
+/**
+ * Развёртывание подвинулось на шаг (FR-123).
+ *
+ * Приходит **весь** список, а не один подвинувшийся шаг: экран, собирающий список из
+ * потока одиночных, покажет другое, если один пропустит, — а он пропустит, потому что
+ * человек открывает экран посередине.
+ */
+export function onDeployProgress(
+  handler: (serverId: string, steps: PlannedStep[]) => void,
+): Promise<UnlistenFn> {
+  return tauriListen<{ server_id: string; steps: PlannedStep[] }>(
+    EVENTS.deployProgress,
+    (ev) => handler(ev.payload.server_id, ev.payload.steps),
+  );
 }
 
 export function onLibraryChanged(handler: (serverId: string) => void): Promise<UnlistenFn> {

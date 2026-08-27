@@ -514,6 +514,87 @@ export const en: Catalogue = {
       stepTooSmall: "together",
     },
 
+    serverState: {
+      title: "The server’s state",
+      asking: "Looking at what this server is…",
+      clean: "The server is bare: no serving is deployed on it.",
+      deployIt: "Set it up",
+      unfinished:
+        "The setup did not finish: a deployment was interrupted. Running it again does not redo what is done.",
+      finishIt: "Finish it",
+      versions: (server: number, app: number) =>
+        `Server side: version ${server}. This application deploys ${app}.`,
+      tooNew:
+        "The server side is newer than this application understands. Reading only for now: writing files where a newer layout does not keep them is how a working server is quietly broken.",
+      updateIt: "Update the server side",
+      foreign:
+        "This server already has somebody else’s serving on it. The application changes nothing here.",
+      unreachable: "The server did not answer. The last thing known is shown.",
+    },
+    deploy: {
+      title: "Set the server up",
+      willChange: "What will be done",
+      agreeAndStart: "Agreed — set it up",
+      running: "Setting it up. The screen may be closed; the work carries on.",
+      finished: "The server is set up and serving video over its domain.",
+      machine: (memoryMb: number, disk: string) =>
+        `${memoryMb} MB of memory, system disk ${disk}. On a machine with little memory installing packages is killed without a swap file — one will be made.`,
+
+      ipv6Question: "What should happen to IPv6 on this server?",
+      ipv6Keep: "Keep it",
+      ipv6KeepMeans:
+        "The protection will cover IPv6 as fully as IPv4. The domain must then have an AAAA record pointing at this server’s IPv6 address — otherwise viewers whose connection prefers IPv6 go nowhere, and the complaint arrives not as “the server is broken” but as “it doesn’t open for me”.",
+      ipv6Disable: "Turn it off",
+      ipv6DisableMeans:
+        "The serving will not answer over IPv6 at all. The domain must then have no AAAA record: left there, it goes on promising an address that has gone quiet.",
+
+      domainTitle: "The domain record",
+      domainAsking: "Asking the servers that hold the zone…",
+      domainOk: "The domain points at this server.",
+      domainNotPointed:
+        "The domain is not attached to the server. Create a record at your registrar.",
+      domainSpreadsSlowly:
+        "The change takes a few minutes to spread. Once the record is created, ask again.",
+      domainAskAgain: "Ask again",
+
+      stepApplied: "done",
+      stepToDo: "will be done",
+      stepFailed: "failed",
+      stepNotNeeded: "not needed on this server",
+      stepNotHere: "cannot be established here",
+    },
+
+    deploySteps: {
+      DnsCheck: "Check the domain record",
+      Swap: "Make a swap file",
+      Packages: "Install the packages",
+      UserDirs: "Create the user and the directories",
+      Configs: "Write the serving configuration",
+      Services: "Start the serving",
+      SshKey: "Put the key in place",
+      SshHardening: "Turn password logins off",
+      Firewall: "Close everything not needed",
+      Ipv6: "Carry out the IPv6 choice",
+      Fail2ban: "Turn password guessing away",
+      UnattendedUpgrades: "Turn on automatic security updates",
+      Tuning: "Tune the network and the disk for serving",
+      Verify: "Check the serving over the domain",
+      State: "Write the server-side version",
+    },
+
+    upgrade: {
+      title: "Update the server side",
+      fromTo: (from: number, to: number) =>
+        `The server is at version ${from}; this application deploys ${to}.`,
+      willChange: "What will change",
+      nothingToDo: "Everything is already in place — nothing to change.",
+      willKeep: "What will be copied aside first",
+      keepsVideosAndCatalogue:
+        "The videos and the catalogue are neither copied nor touched: they are your work, not our configuration. A rollback that restored the catalogue would undo everything uploaded since.",
+      agreeAndUpgrade: "Agreed — update",
+      rollBack: "Put it back as it was",
+      cancel: "Cancel",
+    },
     limits: {
       title: "Capping quality",
       explain:

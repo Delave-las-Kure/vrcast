@@ -6,9 +6,11 @@
  * exists, but nothing can connect through it, and staying quiet about that is worse
  * still.
  *
- * Disk space and the server-side version are not on the card yet: the first arrives
- * with the library, the second appears in Phase 7. No empty field is drawn for the
- * version — a line reading "Version: —" says nothing.
+ * Disk space is not on the card yet: it arrives with the library.
+ *
+ * The server-side version **is** here now (T294), and never on its own: it goes beside
+ * the version this application deploys, because apart they say nothing. "Server side 1"
+ * is a number until somebody says what the application deploys.
  */
 
 import { useEffect, useState } from "react";
@@ -16,6 +18,7 @@ import type { ServerProfile, TestStep } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useT } from "../../shared/i18n";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { ServerStateCard } from "./ServerStateCard";
 import { SetupWizard, TestSteps } from "./SetupWizard";
 import { isReady, useServers } from "./store";
 
@@ -117,6 +120,11 @@ function ServerCard({
           <button onClick={onActivate}>{t.ui.servers.makeActive}</button>
         )}
       </div>
+
+      {/* Что это за сервер — сразу под именем, до подробностей профиля. Человек, открывший
+          список, чаще всего пришёл именно за этим: развёрнут ли он, чей он, не пора ли его
+          обновить (T294). */}
+      {profile.host_fingerprint && <ServerStateCard serverId={profile.id} />}
 
       <dl className="server__facts">
         <div>

@@ -13,6 +13,7 @@ import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
 import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { ComingSoon } from "../features/shared/ComingSoon";
+import { DeployPage } from "../features/deploy/DeployPage";
 import { LadderPage } from "../features/ladder/LadderScreen";
 import { useActiveServer } from "../features/servers/store";
 import { LimitsList } from "../features/viewers/LimitsList";
@@ -62,6 +63,7 @@ function AppShell() {
           <Route path="/about" element={<About />} />
           <Route path="/ladder" element={<LadderPage />} />
           <Route path="/viewers" element={<ViewersScreen />} />
+          <Route path="/deploy" element={<DeployPage />} />
           <Route
             path="/limits"
             element={

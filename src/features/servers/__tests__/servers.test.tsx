@@ -25,6 +25,9 @@ const mockProbeFingerprint = vi.fn<() => Promise<string>>();
 const mockConfirmFingerprint = vi.fn();
 const mockServerRemove = vi.fn();
 const mockSetActive = vi.fn();
+const mockServerDetect = vi.fn<() => Promise<never>>(() =>
+  Promise.reject({ code: "SSH_UNREACHABLE" }),
+);
 const mockImportSuggestion = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
@@ -42,6 +45,9 @@ vi.mock("../../../shared/ipc", async () => {
       serverFingerprintConfirm: (...a: unknown[]) => mockConfirmFingerprint(...a),
       serverProbeFingerprint: (...a: unknown[]) => mockProbeFingerprint(...(a as [])),
       serverImportSuggestion: () => mockImportSuggestion(),
+      // Карточка сервера с T294 спрашивает, что это за сервер. Здесь он не отвечает — и
+      // это состояние настоящее: сервер, который молчит, не должен ронять список.
+      serverDetect: () => mockServerDetect(),
     },
   };
 });

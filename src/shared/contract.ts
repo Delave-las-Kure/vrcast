@@ -438,9 +438,92 @@ export interface TaskOnClose {
 
 export interface Versions {
   app: string;
-  /** The server-side version of the active server. Arrives in Phase 7. */
+  /**
+   * Версия серверной части — того сервера, про который спросили.
+   *
+   * Пусто, если не спрашивали ни про какой или если сервер не ответил. Рядом с
+   * версией приложения она что-то значит, порознь — нет.
+   */
   server: number | null;
   schema: number;
+}
+
+// ---------- развёртывание (Фаза 7) ----------
+
+/** Что за сервер по ту сторону (FR-120). */
+export type ServerKind = "Clean" | "Managed" | "Unfinished" | "Foreign" | "Unreachable";
+
+/** Как версия серверной части соотносится с той, что нужна приложению. */
+export type ServerCompat = "Ok" | "NeedsUpgrade" | "TooNew" | "NotDeployed" | "Unknown";
+
+/**
+ * Состояние сервера. Не хранится — выясняется при подключении.
+ *
+ * `Unfinished` — развёртывание, не дошедшее до конца: наши следы есть, метки нет.
+ * Экран говорит про него «настройка не закончена», а не «чужой сервер»: это наша
+ * незаконченная работа, и её надо предложить довести.
+ */
+export interface ServerState {
+  kind: ServerKind;
+  server_version: number | null;
+  app_expects: number;
+  app_min_supported: number;
+  compat: ServerCompat;
+  upgrade_available: boolean;
+  foreign_reason: unknown | null;
+}
+
+/** Выбор пользователя про IPv6 (FR-135). Молчаливого умолчания здесь нет. */
+export type Ipv6Choice = "Keep" | "Disable";
+
+/**
+ * Как стоит шаг развёртывания.
+ *
+ * Названо `DeployStepStatus`, а не `StepStatus`: последнее уже занято проверкой соединения
+ * с сервером, и это разные вещи — там «дошло / не дошло / не дошли», здесь «применено /
+ * не применено / провалено / пропущено, и почему».
+ */
+export type DeployStepStatus =
+  | "NotApplied"
+  | "Applied"
+  | { Failed: { detail: string } }
+  | { Skipped: { why: "NotNeeded" | { NotPossibleHere: { detail: string } } } };
+
+/** Один шаг, как его показывают человеку до согласия и по ходу (FR-122, FR-123). */
+export interface PlannedStep {
+  id: string;
+  /** Что именно изменит — кодами со значениями, а не готовой фразой. */
+  changes: unknown[];
+  /** Проваленный блокирующий останавливает развёртывание. */
+  blocking: boolean;
+  status: DeployStepStatus;
+}
+
+/** Что ответила проверка домена (FR-137, FR-140). */
+export interface DomainAnswer {
+  verdict: unknown;
+  /** Найденные адреса — то, что человек сверяет со страницей регистратора. */
+  a: string[];
+  aaaa: string[];
+  /** Что пойти и сделать. Код со значениями; формулировка — в словарях. */
+  advice: Detail | null;
+}
+
+/** Что сделает развёртывание, до того как что-либо сделано (FR-122). */
+export interface DeployPreview {
+  domain: DomainAnswer;
+  steps: PlannedStep[];
+  memory_mb: number;
+  disk: string;
+}
+
+/** Что изменит обновление серверной части (FR-129). */
+export interface UpgradePlan {
+  from: number;
+  to: number;
+  steps: PlannedStep[];
+  /** Что будет скопировано в сторону до первой правки (FR-133). */
+  backing_up: string[];
 }
 
 // ---------- events ----------
@@ -707,6 +790,7 @@ export const EVENTS = {
   libraryChanged: "library:changed",
   serverState: "server:state",
   viewersUpdate: "viewers:update",
+  deployProgress: "deploy:progress",
 } as const;
 
 export interface TaskProgressEvent {

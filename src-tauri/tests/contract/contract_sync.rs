@@ -150,6 +150,7 @@ fn the_event_names_match_both_ways() {
         names::LIBRARY_CHANGED,
         names::SERVER_STATE,
         names::VIEWERS_UPDATE,
+        names::DEPLOY_PROGRESS,
     ]
     .into_iter()
     .map(str::to_owned)
