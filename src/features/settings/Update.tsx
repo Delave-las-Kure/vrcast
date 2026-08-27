@@ -183,7 +183,9 @@ export function Update() {
       {available && warning && <p className="hint">{warning}</p>}
       {installed && <p data-testid="update-installed">{words.doneRestartLater}</p>}
 
-      {available && (
+      {/* Gone once it is installed: the work is done, and the next step is starting the
+          application again — not pressing this a second time. */}
+      {available && !installed && (
         <>
           <label>
             <input
