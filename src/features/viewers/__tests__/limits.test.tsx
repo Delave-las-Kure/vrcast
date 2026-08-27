@@ -18,8 +18,7 @@ const mockClear = vi.fn<(...a: unknown[]) => Promise<void>>();
 const mockList = vi.fn<() => Promise<QualityLimit[]>>();
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {
@@ -62,10 +61,7 @@ beforeEach(() => {
 describe("before the cap goes on", () => {
   it("shows what the viewer would be left with", async () => {
     // A person choosing a cap is choosing from what it leaves, not from a number.
-    renderIn(
-      <LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />,
-      "en",
-    );
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "en");
     await waitFor(() => expect(screen.getByTestId("kept")).toBeInTheDocument());
     expect(screen.getByTestId("kept")).toHaveTextContent("6.0 Mbit/s");
     expect(screen.getByTestId("kept")).toHaveTextContent("3.0 Mbit/s");
@@ -94,9 +90,7 @@ describe("before the cap goes on", () => {
       below_lightest: false,
     });
     renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "en");
-    await waitFor(() =>
-      expect(screen.getByTestId("warnings")).toHaveTextContent("3 viewers"),
-    );
+    await waitFor(() => expect(screen.getByTestId("warnings")).toHaveTextContent("3 viewers"));
   });
 
   it("says when the cap is below anything that exists, and still offers the lightest", async () => {

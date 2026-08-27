@@ -32,8 +32,7 @@ const mockMediaCreate = vi.fn();
 const mockMediaRename = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {
@@ -165,9 +164,7 @@ describe("the library", () => {
       view({
         media: [
           media({
-            files: [
-              file({ width: null, height: null, duration_s: null, bitrate_bps: null }),
-            ],
+            files: [file({ width: null, height: null, duration_s: null, bitrate_bps: null })],
           }),
         ],
       }),
@@ -235,9 +232,7 @@ describe("what was not recognised", () => {
   });
 
   it("lets a file be tied to a medium without touching its name", async () => {
-    mockLibraryList.mockResolvedValue(
-      view({ unrecognized: [file({ path: "чужой.mp4" })] }),
-    );
+    mockLibraryList.mockResolvedValue(view({ unrecognized: [file({ path: "чужой.mp4" })] }));
     draw();
 
     fireEvent.click(await screen.findByText(ru.ui.library.unrecognizedTitle));
@@ -280,9 +275,7 @@ describe("deleting", () => {
 
     mockMediaDelete.mockResolvedValueOnce("m1");
     fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
-    await waitFor(() =>
-      expect(mockMediaDelete).toHaveBeenCalledWith("srv_1", "m1", true),
-    );
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledWith("srv_1", "m1", true));
   });
 
   it("declining a deletion deletes nothing", async () => {
@@ -301,9 +294,7 @@ describe("deleting", () => {
     fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
     fireEvent.click(await screen.findByText(ru.ui.library.deleteNo));
 
-    await waitFor(() =>
-      expect(screen.queryByText(/Будет снято 1 файл/)).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByText(/Будет снято 1 файл/)).not.toBeInTheDocument());
     expect(mockMediaDelete).not.toHaveBeenCalledWith("srv_1", "m1", true);
   });
 });

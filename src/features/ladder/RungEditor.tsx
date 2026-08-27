@@ -15,13 +15,7 @@ import { useEffect, useState } from "react";
 
 import { useT } from "../../shared/i18n";
 import { ipc } from "../../shared/ipc";
-import type {
-  LadderVerdict,
-  Objection,
-  Quality,
-  Rung,
-  SourceFacts,
-} from "../../shared/contract";
+import type { LadderVerdict, Objection, Quality, Rung, SourceFacts } from "../../shared/contract";
 
 /** Megabits, as everything in this project is counted. */
 function mbps(bps: number): string {
@@ -50,10 +44,7 @@ function objectionText(objection: Objection, words: Record<string, string>): str
     );
   }
   if ("BufsizeTooLarge" in objection) {
-    return words.objectionBufsize.replace(
-      "{index}",
-      String(objection.BufsizeTooLarge.index + 1),
-    );
+    return words.objectionBufsize.replace("{index}", String(objection.BufsizeTooLarge.index + 1));
   }
   if ("LevelExceeded" in objection) {
     return words.objectionLevel

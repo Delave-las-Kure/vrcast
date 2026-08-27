@@ -136,17 +136,25 @@ impl Viewer {
     /// of those finishes, so the serving records it at once and what is being watched is
     /// known throughout. One endless request would be the other case entirely, the one a
     /// directly served file makes, and it is checked separately.
+    /// `rate` is the ceiling on the speed, in curl's notation (`"50k"`). A viewer of a set
+    /// held below what one segment needs falls behind the clock, and that — not a slow single
+    /// file — is what the ratio of content received to time lived is worked out from
+    /// (`domain::stalls`). Without it there is nothing to check a starving viewer against.
     pub fn start_watching_a_set(
         &self,
         slug: &str,
         rung: &str,
         segments: usize,
+        rate: Option<&str>,
     ) -> Result<(), String> {
         let names: Vec<String> = (0..segments)
             .map(|i| format!("http://{SERVER_ALIAS}/videos/{slug}/{rung}/seg{i}.ts"))
             .collect();
+        let limit = rate
+            .map(|r| format!(" --limit-rate {r}"))
+            .unwrap_or_default();
         let command = format!(
-            "while true; do for u in {}; do curl -sS -o /dev/null \"$u\" || sleep 1; done; done",
+            "while true; do for u in {}; do curl -sS{limit} -o /dev/null \"$u\" || sleep 1; done; done",
             names.join(" ")
         );
         let out = docker(&["exec", "-d", &self.id, "sh", "-c", &command])

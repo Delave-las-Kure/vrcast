@@ -32,9 +32,7 @@ function bodyFor(request: TaskNotifyRequest, t: Catalogue, lang: Lang): string {
   }
   const done = t.ui.notifications.done;
   const kind = request.kind as TaskKind;
-  return kind in done
-    ? done[kind as keyof typeof done]
-    : t.ui.notifications.lookInTasks;
+  return kind in done ? done[kind as keyof typeof done] : t.ui.notifications.lookInTasks;
 }
 
 export function useTaskNotifications() {
@@ -53,9 +51,7 @@ export function useTaskNotifications() {
 
         sendNotification({
           title:
-            request.state === "failed"
-              ? t.ui.notifications.failed
-              : t.ui.notifications.completed,
+            request.state === "failed" ? t.ui.notifications.failed : t.ui.notifications.completed,
           body: bodyFor(request, t, lang),
         });
       } catch {

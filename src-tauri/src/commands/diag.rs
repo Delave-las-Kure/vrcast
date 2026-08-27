@@ -71,7 +71,7 @@ pub mod api {
     pub async fn diag_health(state: &super::super::AppState, server_id: &str) -> Result<Health> {
         let profile = super::super::library::api::profile_of(state, server_id)?;
         let opened = gate::open(state.secrets.as_ref(), &profile, Intent::Read).await?;
-        let snapshot = health::look(&opened.conn, &profile.video_dir).await;
+        let snapshot = health::look(&opened.conn, &profile.video_dir, &profile.domain).await;
         opened.conn.close().await;
 
         let snapshot = snapshot?;

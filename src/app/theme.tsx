@@ -72,10 +72,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const value = useMemo(
-    () => ({ choice, resolved, setChoice }),
-    [choice, resolved, setChoice],
-  );
+  const value = useMemo(() => ({ choice, resolved, setChoice }), [choice, resolved, setChoice]);
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }

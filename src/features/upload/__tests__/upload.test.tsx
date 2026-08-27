@@ -15,7 +15,13 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
 import { fill } from "../../../shared/i18n/render";
-import type { AppError, LibraryView, ServerProfile, Task, TaskOnClose } from "../../../shared/contract";
+import type {
+  AppError,
+  LibraryView,
+  ServerProfile,
+  Task,
+  TaskOnClose,
+} from "../../../shared/contract";
 
 const mockUploadStart = vi.fn<(request: unknown) => Promise<string>>();
 const mockLibraryList = vi.fn<() => Promise<LibraryView>>();
@@ -26,8 +32,7 @@ const mockTasksReorder = vi.fn<(ids: string[]) => Promise<number>>();
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {
@@ -185,9 +190,7 @@ describe("what is said before it starts", () => {
     fireEvent.click(screen.getByText(ru.ui.preflight.uploadAnyway));
 
     await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
-    expect(mockUploadStart).toHaveBeenLastCalledWith(
-      expect.objectContaining({ confirmed: true }),
-    );
+    expect(mockUploadStart).toHaveBeenLastCalledWith(expect.objectContaining({ confirmed: true }));
   });
 
   it("not enough room is not something agreeing can settle", async () => {
@@ -270,21 +273,13 @@ describe("the queue", () => {
   });
 
   it("the first has nowhere to go up and the last nowhere to go down", () => {
-    renderIn(
-      <QueueOrder
-        queued={[task("a", 1), task("b", 2)]}
-        busy={false}
-        onReorder={vi.fn()}
-      />,
-    );
+    renderIn(<QueueOrder queued={[task("a", 1), task("b", 2)]} busy={false} onReorder={vi.fn()} />);
     expect(screen.getAllByLabelText(ru.ui.tasks.moveUp)[0]).toBeDisabled();
     expect(screen.getAllByLabelText(ru.ui.tasks.moveDown)[1]).toBeDisabled();
   });
 
   it("an empty queue is not shown at all", () => {
-    const { container } = renderIn(
-      <QueueOrder queued={[]} busy={false} onReorder={vi.fn()} />,
-    );
+    const { container } = renderIn(<QueueOrder queued={[]} busy={false} onReorder={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
   });
 });
@@ -309,9 +304,7 @@ describe("what closing would cost", () => {
     renderIn(<CloseConsequences items={[carriesOn, fromTheStart]} />);
     expect(screen.getByText(ru.ui.tasks.closeLosing)).toBeInTheDocument();
     expect(
-      screen.getByText(
-        fill(ru.details.ON_CLOSE_RESTARTS_LOSING, { percent: 40 }, ru, "ru"),
-      ),
+      screen.getByText(fill(ru.details.ON_CLOSE_RESTARTS_LOSING, { percent: 40 }, ru, "ru")),
     ).toBeInTheDocument();
   });
 

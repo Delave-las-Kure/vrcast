@@ -30,8 +30,7 @@ const mockBuild = vi.fn<(...a: unknown[]) => Promise<string>>();
 let finish: ((e: { id: string; state: string; error: unknown }) => void) | null = null;
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {
@@ -145,9 +144,7 @@ describe("where the rungs came from", () => {
       expect(screen.getByTestId("provenance")).toHaveTextContent(ru.ui.ladder.fromFormula),
     );
     expect(screen.getByTestId("build")).toBeDisabled();
-    expect(screen.getByTestId("build-blocked")).toHaveTextContent(
-      ru.ui.ladder.buildBlocked,
-    );
+    expect(screen.getByTestId("build-blocked")).toHaveTextContent(ru.ui.ladder.buildBlocked);
   });
 
   it("says a borrowed measurement is borrowed", async () => {
@@ -206,9 +203,7 @@ describe("what a rung is worth", () => {
       target: { value: "90" },
     });
 
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("above the source"),
-    );
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("above the source"));
   });
 });
 
@@ -234,9 +229,7 @@ describe("what a measurement will cost", () => {
 
     await waitFor(() => expect(screen.getByTestId("how-long")).toHaveTextContent("3 min"));
     expect(screen.getByTestId("how-long")).toHaveTextContent("12 points");
-    expect(screen.getByTestId("estimate-from")).toHaveTextContent(
-      en.ui.ladder.estimateFromModel,
-    );
+    expect(screen.getByTestId("estimate-from")).toHaveTextContent(en.ui.ladder.estimateFromModel);
   });
 
   it("counts only what is left when some of the grid is already measured", async () => {
@@ -414,10 +407,7 @@ describe("what the set is called", () => {
     // guesses down to something nobody meant — which is not obvious until the set is
     // somewhere nobody expected.
     mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
-    renderIn(
-      <LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />,
-      "en",
-    );
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "en");
 
     await waitFor(() => expect(screen.getByTestId("build")).toBeEnabled());
     fireEvent.change(screen.getByLabelText(en.ui.ladder.setName), {

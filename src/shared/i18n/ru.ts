@@ -633,6 +633,90 @@ const ui = {
     State: "Записать версию серверной части",
   },
 
+  diag: {
+    title: "Диагностика",
+    period: "За последние",
+    minutes: "минут",
+    refresh: "Спросить заново",
+    notDetermined: "Не удалось определить",
+    nothingYet: "Ещё не спрашивали.",
+    asking: "Спрашиваю сервер…",
+
+    healthTitle: "Состояние сервера",
+    ratingFine: "норма",
+    ratingWatch: "внимание",
+    ratingTrouble: "проблема",
+    ratingUnknown: "не выяснено",
+    rawTitle: "Что именно прочитано",
+    rawHint:
+      "Оценка выше сделана из этих чисел. Показаны, чтобы её было чем оспорить: она бывает неверна.",
+    readingServing: "Раздача",
+    readingDelivery: "Отдача по HTTPS",
+    readingFirewall: "Защита",
+    readingOpenPorts: "Открытые порты",
+    readingMemory: "Память",
+    readingServingCache: "Кеш раздачи",
+    readingSwap: "Подкачка",
+    readingDiskSpace: "Место на диске",
+    readingNetwork: "Сетевые настройки",
+    readingReadahead: "Упреждающее чтение",
+    readingAutoRestart: "Автоперезапуск",
+
+    logsTitle: "Журнал раздачи",
+    logsNothing: "За этот промежуток раздача ничего не записала.",
+    logsRequests: (n: number) => `Запросов: ${n}`,
+    logsAddresses: (n: number) => `Адресов: ${n}`,
+    logsUnreadable: (n: number) => `Строк не разобрано: ${n}`,
+    logsCodes: "Коды ответов",
+    logsRangesOk: "Куски отдаются — как и должно быть, преобладает 206.",
+    logsRangesBad: "Файлы отдаются целиком чаще, чем кусками. Смотреть можно, перематывать — нет.",
+    logsTopPaths: "Что чаще всего просили",
+    logsTopAddresses: "Кто чаще всего просил",
+    logsFailures: "Ошибки",
+    logsNoFailures: "Ошибок нет.",
+    logsLong: "Долгие запросы",
+    logsLongNormal:
+      "Долгий запрос сам по себе — норма: это длинная подкачка диапазона. Отмечены только те, что при этом почти ничего не доставили.",
+    logsCapped:
+      "Показано не всё: строк за этот промежуток больше, чем можно было принести. Возьмите промежуток короче.",
+
+    stallsTitle: "Почему встаёт картинка",
+    stallsNoViewers: "За этот промежуток никто не смотрел.",
+    stallsSetAside: "Не зрители",
+    stallsOurOwnCheck: "адрес самого сервера — это наши же проверки",
+    stallsTooLittle: (n: number) =>
+      `взято отрезков: ${n} — это кеш набирает себе, либо человек только что пришёл`,
+    stallsRatio: "Полученного против реального времени",
+    stallsLink: "Канал зрителя",
+    stallsInDownload: "внутри закачек",
+    stallsInDownloadHint:
+      "Второе число выше первого всегда: это скорость внутри закачек, без пауз между ними. Канал зрителя — первое.",
+    stallsSkipped: "Пропущено отрезков",
+    stallsRestarts: "Перезапусков плеера",
+    stallsWatching: "Смотрит",
+    stallsLoad: "Что делал сервер",
+    stallsLoadCpu: "Процессор",
+    stallsLoadDisk: "Чтение с диска",
+    stallsLoadOut: "Отдача",
+    stallsLoadCapacity: "из возможных",
+    stallsCapacityUnknown: "ёмкость канала не выяснена — виновным он не назначается",
+
+    bitrateTitle: "Пики битрейта файла",
+    bitratePick: "Выбрать файл",
+    bitrateHint:
+      "Файл читается здесь, сервер не трогается. Спросить можно и до заливки — тогда от этого больше всего пользы.",
+    bitrateAverage: "Средний",
+    bitrateMedian: "Медиана",
+    bitratePeak1: "Пик 1 секунды",
+    bitratePeak10: "Пик 10 секунд",
+    bitrateAt: "на",
+    bitrateWorst: "Где тяжелее всего",
+    bitratePeakOverAverage: (times: number) =>
+      `Пик 10-секундного окна выше среднего в ${times} раза.`,
+    bitrateAdvice:
+      "Плеер вешает именно этот пик, если канал зрителя ниже него. Лечится перекодом с ограничением пиков.",
+    bitrateEven: "Файл ровный: пики недалеко от среднего, и перекодировать его незачем.",
+  },
   upgrade: {
     title: "Обновить серверную часть",
     fromTo: (from: number, to: number) =>
@@ -718,25 +802,6 @@ const ui = {
     version: "версия {version}",
     aboutTitle: "О программе и лицензии",
     notReady: "Ещё не сделано",
-  },
-
-  comingSoon: {
-    useMeanwhile: "Пока пользуйтесь прежним способом:",
-    ladder: {
-      phase: "Фаза 5",
-      what: "Расчёт лесенки под конкретный источник и проверка отдачи каждого варианта.",
-      fallback: "скилл vrcast-hls",
-    },
-    limits: {
-      phase: "Фаза 6",
-      what: "Принудительное понижение качества для зрителя со слабым каналом — плеер VRChat сам этого не умеет.",
-      fallback: "gen-slow-masters.py и правка Caddyfile вручную",
-    },
-    diagnostics: {
-      phase: "Фаза 8",
-      what: "Состояние сервера с оценками, разбор журналов и вероятная причина подвисаний.",
-      fallback: "скилл vrcast-diagnose",
-    },
   },
 
   wizard: {

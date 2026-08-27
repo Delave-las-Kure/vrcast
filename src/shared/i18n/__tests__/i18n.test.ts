@@ -173,9 +173,7 @@ describe("what is said about falling back to the processor", () => {
     // that something went wrong. Same code, same wording, would say the opposite.
     expect(ru.details.NOTICE_SOFTWARE_AS_ASKED).toContain("как вы и просили");
     expect(en.details.NOTICE_SOFTWARE_AS_ASKED).toContain("as you asked");
-    expect(ru.details.NOTICE_SOFTWARE_AS_ASKED).not.toBe(
-      ru.details.NOTICE_NO_HARDWARE_FOUND,
-    );
+    expect(ru.details.NOTICE_SOFTWARE_AS_ASKED).not.toBe(ru.details.NOTICE_NO_HARDWARE_FOUND);
   });
 
   it("keeps the machine name out of the sentence a person reads", () => {

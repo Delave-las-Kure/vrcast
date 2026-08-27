@@ -209,15 +209,10 @@ export function UploadScreen() {
               <select
                 id="upload-limit"
                 value={limitBps === null ? "" : String(limitBps)}
-                onChange={(e) =>
-                  setLimitBps(e.target.value === "" ? null : Number(e.target.value))
-                }
+                onChange={(e) => setLimitBps(e.target.value === "" ? null : Number(e.target.value))}
               >
                 {LIMITS.map((limit) => (
-                  <option
-                    key={limit.key}
-                    value={limit.value === null ? "" : String(limit.value)}
-                  >
+                  <option key={limit.key} value={limit.value === null ? "" : String(limit.value)}>
                     {u[limit.key] as string}
                   </option>
                 ))}

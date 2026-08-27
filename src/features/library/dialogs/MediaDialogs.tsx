@@ -47,12 +47,7 @@ export function CreateMediaDialog({
 
       <label>
         <span>{l.fieldTitle}</span>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          required
-          autoFocus
-        />
+        <input value={title} onChange={(e) => setTitle(e.target.value)} required autoFocus />
       </label>
       {/* The explanation sits outside the label: inside, it becomes part of the
           field's name and is read aloud with it. */}
@@ -178,11 +173,7 @@ export function ConfirmDeleteDialog({
   const l = t.ui.library;
 
   return (
-    <div
-      className="dialog"
-      role="alertdialog"
-      aria-label={fill(l.deleteLabel, { what }, t, lang)}
-    >
+    <div className="dialog" role="alertdialog" aria-label={fill(l.deleteLabel, { what }, t, lang)}>
       <h3>{fill(l.deleteHeading, { what }, t, lang)}</h3>
       <p className="dialog__warning">{consequences}</p>
       <p className="muted">{l.deleteIrreversible}</p>
@@ -191,12 +182,7 @@ export function ConfirmDeleteDialog({
         <button type="button" onClick={onCancel} disabled={busy} autoFocus>
           {l.deleteNo}
         </button>
-        <button
-          type="button"
-          className="button--danger"
-          onClick={onConfirm}
-          disabled={busy}
-        >
+        <button type="button" className="button--danger" onClick={onConfirm} disabled={busy}>
           {busy ? l.deleting : l.deleteYes}
         </button>
       </div>

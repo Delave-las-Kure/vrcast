@@ -12,11 +12,11 @@ import { LibraryScreen } from "../features/library/LibraryScreen";
 import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
 import { ConvertScreen } from "../features/convert/ConvertScreen";
-import { ComingSoon } from "../features/shared/ComingSoon";
 import { DeployPage } from "../features/deploy/DeployPage";
 import { LadderPage } from "../features/ladder/LadderScreen";
 import { useActiveServer } from "../features/servers/store";
 import { LimitsList } from "../features/viewers/LimitsList";
+import { DiagPage } from "../features/diag/DiagPage";
 import { ViewersScreen } from "../features/viewers/ViewersScreen";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { UploadScreen } from "../features/upload/UploadScreen";
@@ -47,8 +47,6 @@ function AppShell() {
   // it says*, in the language in use.
   useTaskNotifications();
 
-  const soon = t.ui.comingSoon;
-
   return (
     <div className="layout">
       <Sidebar version={version} />
@@ -67,24 +65,10 @@ function AppShell() {
           <Route
             path="/limits"
             element={
-              activeServer ? (
-                <LimitsList serverId={activeServer} />
-              ) : (
-                <p>{t.ui.viewers.noServer}</p>
-              )
+              activeServer ? <LimitsList serverId={activeServer} /> : <p>{t.ui.viewers.noServer}</p>
             }
           />
-          <Route
-            path="/diagnostics"
-            element={
-              <ComingSoon
-                title={t.ui.sections.diagnostics}
-                phase={soon.diagnostics.phase}
-                what={soon.diagnostics.what}
-                fallback={soon.diagnostics.fallback}
-              />
-            }
-          />
+          <Route path="/diagnostics" element={<DiagPage />} />
         </Routes>
       </main>
     </div>

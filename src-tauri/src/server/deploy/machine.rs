@@ -57,13 +57,15 @@ printf 'swap_mb=%s\n' "$(awk '/^SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo
 printf 'free_disk_mb=%s\n' "$(df -Pm / 2>/dev/null | awk 'NR==2{print $4}')"
 printf 'disk=%s\n' "$(lsblk -ndo pkname "$(findmnt -no SOURCE / 2>/dev/null)" 2>/dev/null || lsblk -ndo name -e 7,11 2>/dev/null | head -n 1)"
 printf 'interface=%s\n' "$(ip -o -4 route show default 2>/dev/null | awk '{print $5; exit}')"
-printf 'container=%s\n' "$(systemd-detect-virt -c 2>/dev/null || true)"
+printf 'container=%s\n' "{CONTAINER}"
 printf 'addresses=%s\n' "$(ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ')"
 "#;
 
 /// Ask the machine about itself.
 pub async fn look(conn: &Connection) -> Result<Machine> {
-    let said = conn.exec(ASK).await?;
+    let said = conn
+        .exec(&ASK.replace("{CONTAINER}", crate::server::CONTAINER_KIND))
+        .await?;
     Ok(read(&said.stdout))
 }
 

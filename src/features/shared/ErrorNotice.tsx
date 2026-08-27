@@ -11,13 +11,7 @@ import type { AppError } from "../../shared/contract";
 import { useLang, useT } from "../../shared/i18n";
 import { renderError } from "../../shared/i18n/render";
 
-export function ErrorNotice({
-  error,
-  onDismiss,
-}: {
-  error: AppError;
-  onDismiss?: () => void;
-}) {
+export function ErrorNotice({ error, onDismiss }: { error: AppError; onDismiss?: () => void }) {
   const t = useT();
   const { lang } = useLang();
   const { message, hint } = renderError(error, t, lang);
@@ -30,11 +24,7 @@ export function ErrorNotice({
         {error.cause && <p className="notice__cause">{error.cause}</p>}
       </div>
       {onDismiss && (
-        <button
-          className="notice__close"
-          onClick={onDismiss}
-          aria-label={t.ui.common.dismiss}
-        >
+        <button className="notice__close" onClick={onDismiss} aria-label={t.ui.common.dismiss}>
           ×
         </button>
       )}

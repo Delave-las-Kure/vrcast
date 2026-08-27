@@ -77,11 +77,7 @@ export function About() {
         {a.thirdPartyBody} <code>THIRD-PARTY.md</code> {a.thirdPartyBodyTail}
       </p>
       <p>
-        <a
-          href={`${SOURCE_URL}/blob/main/THIRD-PARTY.md`}
-          target="_blank"
-          rel="noreferrer"
-        >
+        <a href={`${SOURCE_URL}/blob/main/THIRD-PARTY.md`} target="_blank" rel="noreferrer">
           {a.thirdPartyLink}
         </a>
       </p>
@@ -91,19 +87,13 @@ export function About() {
       <h2>{a.geoHeading}</h2>
       <p>
         {a.geoBody}{" "}
-        <a
-          href="https://creativecommons.org/licenses/by/4.0/"
-          target="_blank"
-          rel="noreferrer"
-        >
+        <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">
           {a.geoLicence}
         </a>
         {a.geoBodyTail}
       </p>
 
-      {schema !== null && (
-        <p className="muted">{fill(a.schemaVersion, { schema }, t, lang)}</p>
-      )}
+      {schema !== null && <p className="muted">{fill(a.schemaVersion, { schema }, t, lang)}</p>}
     </div>
   );
 }

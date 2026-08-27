@@ -110,11 +110,7 @@ export function renderError(
 }
 
 /** A stage name beside a running task. */
-export function renderStage(
-  stage: DetailCode | null,
-  catalogue: Catalogue,
-  lang: Lang,
-): string {
+export function renderStage(stage: DetailCode | null, catalogue: Catalogue, lang: Lang): string {
   if (!stage) return "";
   return fill(catalogue.details[stage] ?? stage, undefined, catalogue, lang);
 }

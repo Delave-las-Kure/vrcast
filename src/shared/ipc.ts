@@ -53,6 +53,10 @@ import {
   type LimitPreview,
   type QualityLimit,
   type LadderServedVerdict,
+  type Health,
+  type Logs,
+  type Stalls,
+  type Peaks,
 } from "./contract";
 
 /**
@@ -103,12 +107,30 @@ export const ipc = {
   /** Развернуть. Без `confirmed` — отказ. Возвращает номер задачи (FR-080). */
   deployRun: (serverId: string, ipv6: Ipv6Choice, confirmed: boolean) =>
     call<string>("deploy_run", { serverId, ipv6, confirmed }),
-  serverUpgradePlan: (serverId: string) =>
-    call<UpgradePlan>("server_upgrade_plan", { serverId }),
+  serverUpgradePlan: (serverId: string) => call<UpgradePlan>("server_upgrade_plan", { serverId }),
   serverUpgradeRun: (serverId: string, confirmed: boolean) =>
     call<string>("server_upgrade_run", { serverId, confirmed }),
   /** Вернуть то, что заменило последнее обновление (FR-133). */
   serverRollback: (serverId: string) => call<void>("server_rollback", { serverId }),
+
+  // --- диагностика ---
+  /** Как сервер себя чувствует (FR-070). */
+  diagHealth: (serverId: string) => call<Health>("diag_health", { serverId }),
+  /** Что раздача делала за промежуток (FR-071). */
+  diagLogs: (serverId: string, minutes: number) => call<Logs>("diag_logs", { serverId, minutes }),
+  /**
+   * Почему встаёт картинка (FR-072).
+   *
+   * `file` — то, что нашёл `diagBitrate`, если его уже запускали. Без него вывод «виноват
+   * файл» не выдаётся вовсе, и это правильно: файл в методе разбирается последним.
+   */
+  diagExplainStalls: (
+    serverId: string,
+    minutes: number,
+    file?: { average_mbit: number; peak_10s_mbit: number },
+  ) => call<Stalls>("diag_explain_stalls", { serverId, minutes, file: file ?? null }),
+  /** Где пики у локального файла (FR-073). Сервер не трогается вовсе. */
+  diagBitrate: (path: string) => call<Peaks>("diag_bitrate", { path }),
 
   tasksList: () => call<Task[]>("tasks_list"),
   taskGet: (id: string) => call<Task>("task_get", { id }),
@@ -129,8 +151,7 @@ export const ipc = {
 
   // --- servers ---
   serversList: () => call<ServerProfile[]>("servers_list"),
-  serverAdd: (input: ServerInput, secret: string) =>
-    call<string>("server_add", { input, secret }),
+  serverAdd: (input: ServerInput, secret: string) => call<string>("server_add", { input, secret }),
   serverUpdate: (id: string, input: ServerInput, secret: string | null) =>
     call<void>("server_update", { id, input, secret }),
   serverRemove: (id: string) => call<void>("server_remove", { id }),
@@ -138,28 +159,22 @@ export const ipc = {
   serverTest: (id: string) => call<TestStep[]>("server_test", { id }),
   serverFingerprintConfirm: (id: string, fingerprint: string) =>
     call<void>("server_fingerprint_confirm", { id, fingerprint }),
-  serverImportSuggestion: () =>
-    call<ImportSuggestion | null>("server_import_suggestion"),
+  serverImportSuggestion: () => call<ImportSuggestion | null>("server_import_suggestion"),
 
   // --- library ---
   libraryList: (serverId: string, refresh = false) =>
     call<LibraryView>("library_list", { serverId, refresh }),
   mediaCreate: (serverId: string, title: string, slug: string | null) =>
     call<string>("media_create", { serverId, title, slug }),
-  mediaRename: (
-    serverId: string,
-    mediaId: string,
-    title: string | null,
-    slug: string | null,
-  ) => call<void>("media_rename", { serverId, mediaId, title, slug }),
+  mediaRename: (serverId: string, mediaId: string, title: string | null, slug: string | null) =>
+    call<void>("media_rename", { serverId, mediaId, title, slug }),
   mediaDelete: (serverId: string, mediaId: string, confirmed: boolean) =>
     call<string>("media_delete", { serverId, mediaId, confirmed }),
   fileMove: (serverId: string, path: string, toMediaId: string, confirmed: boolean) =>
     call<void>("file_move", { serverId, path, toMediaId, confirmed }),
   fileDelete: (serverId: string, path: string, confirmed: boolean) =>
     call<void>("file_delete", { serverId, path, confirmed }),
-  linksFor: (serverId: string, path: string) =>
-    call<Links>("links_for", { serverId, path }),
+  linksFor: (serverId: string, path: string) => call<Links>("links_for", { serverId, path }),
 
   // --- viewers ---
   /**
@@ -168,8 +183,7 @@ export const ipc = {
    * Repeating it for the same server does nothing and is not an error: it is the ordinary
    * thing to do when the screen is opened again.
    */
-  viewersWatchStart: (serverId: string) =>
-    call<void>("viewers_watch_start", { serverId }),
+  viewersWatchStart: (serverId: string) => call<void>("viewers_watch_start", { serverId }),
   /** Switch it off. Quiet when nothing was being watched. */
   viewersWatchStop: () => call<void>("viewers_watch_stop"),
   /** Those who watched earlier in this session, and have since stopped (FR-055). */
@@ -201,11 +215,8 @@ export const ipc = {
     codec?: string;
     nativeHeight?: number | null;
   }) => call<MeasurePreview>("quality_measure_preview", { request }),
-  qualityMeasureStart: (request: {
-    path: string;
-    codec?: string;
-    nativeHeight?: number | null;
-  }) => call<string>("quality_measure_start", { request }),
+  qualityMeasureStart: (request: { path: string; codec?: string; nativeHeight?: number | null }) =>
+    call<string>("quality_measure_start", { request }),
   qualityMeasureResult: (sourceKey: string, codec: string) =>
     call<MeasurementView>("quality_measure_result", { sourceKey, codec }),
 
@@ -229,12 +240,8 @@ export const ipc = {
 
   // --- quality limits ---
   /** What capping this viewer would do. Nothing is changed (FR-066). */
-  limitPreview: (request: {
-    serverId: string;
-    ip: string;
-    slug: string;
-    capBps: number;
-  }) => call<LimitPreview>("limit_preview", { request }),
+  limitPreview: (request: { serverId: string; ip: string; slug: string; capBps: number }) =>
+    call<LimitPreview>("limit_preview", { request }),
   /**
    * Put the cap on. Refuses unless `confirmed`: what is being edited is the
    * configuration of the thing serving somebody's film at that moment.
@@ -289,9 +296,7 @@ export const ipc = {
  * The interface listens rather than polls: showing the progress of a task that runs
  * for hours by polling would make it the cause of the very stuttering we avoid.
  */
-export function onTaskProgress(
-  handler: (e: TaskProgressEvent) => void,
-): Promise<UnlistenFn> {
+export function onTaskProgress(handler: (e: TaskProgressEvent) => void): Promise<UnlistenFn> {
   return tauriListen<TaskProgressEvent>(EVENTS.taskProgress, (ev) => handler(ev.payload));
 }
 
@@ -306,9 +311,7 @@ export function onTaskDone(handler: (e: TaskDoneEvent) => void): Promise<Unliste
  * how long the task ran. The wording is the interface's: a notification is read by
  * the same person as everything else, and in the same language.
  */
-export function onTaskNotify(
-  handler: (e: TaskNotifyRequest) => void,
-): Promise<UnlistenFn> {
+export function onTaskNotify(handler: (e: TaskNotifyRequest) => void): Promise<UnlistenFn> {
   return tauriListen<TaskNotifyRequest>(EVENTS.taskNotify, (ev) => handler(ev.payload));
 }
 
@@ -340,9 +343,8 @@ export function onViewersUpdate(
 export function onDeployProgress(
   handler: (serverId: string, steps: PlannedStep[]) => void,
 ): Promise<UnlistenFn> {
-  return tauriListen<{ server_id: string; steps: PlannedStep[] }>(
-    EVENTS.deployProgress,
-    (ev) => handler(ev.payload.server_id, ev.payload.steps),
+  return tauriListen<{ server_id: string; steps: PlannedStep[] }>(EVENTS.deployProgress, (ev) =>
+    handler(ev.payload.server_id, ev.payload.steps),
   );
 }
 

@@ -25,8 +25,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {
@@ -169,9 +168,7 @@ describe("preparation screen", () => {
     renderIn(<ConvertScreen />);
     await pickSource();
 
-    expect(
-      await screen.findByText(ru.details.NOTICE_NO_HARDWARE_FOUND),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(ru.details.NOTICE_NO_HARDWARE_FOUND)).toBeInTheDocument();
   });
 
   it("names the accelerator that failed in a way a person recognises", async () => {
@@ -192,12 +189,7 @@ describe("preparation screen", () => {
     // sentence names the make of card, not the exact words around it.
     expect(
       await screen.findByText(
-        fill(
-          ru.details.NOTICE_HARDWARE_FAILED,
-          { encoder: "h264_nvenc" },
-          ru,
-          "ru",
-        ),
+        fill(ru.details.NOTICE_HARDWARE_FAILED, { encoder: "h264_nvenc" }, ru, "ru"),
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/h264_nvenc/)).not.toBeInTheDocument();
@@ -218,8 +210,24 @@ describe("preparation screen", () => {
     mockSourceProbe.mockResolvedValue(
       source({
         audio_tracks: [
-          { index: 0, codec: "aac", channels: 2, bitrate_bps: null, language: null, title: null, is_default: false },
-          { index: 1, codec: "ac3", channels: 6, bitrate_bps: null, language: null, title: null, is_default: true },
+          {
+            index: 0,
+            codec: "aac",
+            channels: 2,
+            bitrate_bps: null,
+            language: null,
+            title: null,
+            is_default: false,
+          },
+          {
+            index: 1,
+            codec: "ac3",
+            channels: 6,
+            bitrate_bps: null,
+            language: null,
+            title: null,
+            is_default: true,
+          },
         ],
       }),
     );

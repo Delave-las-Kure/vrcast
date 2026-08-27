@@ -65,9 +65,7 @@ export function CopyLink({ file }: { file: FileView }) {
         {file.cdn_url ? t.ui.library.linkFromServer : t.ui.library.linkCopy}
       </button>
       {file.cdn_url && (
-        <button onClick={() => void copy(file.cdn_url!, "cdn")}>
-          {t.ui.library.linkViaCdn}
-        </button>
+        <button onClick={() => void copy(file.cdn_url!, "cdn")}>{t.ui.library.linkViaCdn}</button>
       )}
       {copied && (
         <span className="copy-link__done" role="status">

@@ -20,13 +20,7 @@ import {
 } from "../../shared/i18n/format";
 import { CopyLink } from "./CopyLink";
 
-export function FileRow({
-  file,
-  onDelete,
-}: {
-  file: FileView;
-  onDelete?: (path: string) => void;
-}) {
+export function FileRow({ file, onDelete }: { file: FileView; onDelete?: (path: string) => void }) {
   const t = useT();
   const { lang } = useLang();
   const l = t.ui.library;
@@ -46,9 +40,7 @@ export function FileRow({
         {file.audio_codec && <span title={l.audio}>{file.audio_codec}</span>}
       </div>
 
-      {file.faststart_ok === false && (
-        <p className="file__warning">{l.faststartWarning}</p>
-      )}
+      {file.faststart_ok === false && <p className="file__warning">{l.faststartWarning}</p>}
       {!file.exists_on_server && <p className="file__warning">{l.missingWarning}</p>}
 
       <div className="file__actions">

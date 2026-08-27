@@ -633,6 +633,93 @@ export const en: Catalogue = {
       State: "Write the server-side version",
     },
 
+    diag: {
+      title: "Diagnosis",
+      period: "Over the last",
+      minutes: "minutes",
+      refresh: "Ask again",
+      notDetermined: "Could not be determined",
+      nothingYet: "Nothing asked yet.",
+      asking: "Asking the server…",
+
+      healthTitle: "The state of the server",
+      ratingFine: "fine",
+      ratingWatch: "worth a look",
+      ratingTrouble: "trouble",
+      ratingUnknown: "not established",
+      rawTitle: "What was actually read",
+      rawHint:
+        "The judgement above was made out of these figures. They are shown so it can be argued with: it is sometimes wrong.",
+      readingServing: "The serving",
+      readingDelivery: "Delivery over HTTPS",
+      readingFirewall: "Firewall",
+      readingOpenPorts: "Open ports",
+      readingMemory: "Memory",
+      readingServingCache: "Serving cache",
+      readingSwap: "Swap",
+      readingDiskSpace: "Disk space",
+      readingNetwork: "Network settings",
+      readingReadahead: "Readahead",
+      readingAutoRestart: "Automatic restart",
+
+      logsTitle: "The serving's log",
+      logsNothing: "The serving wrote nothing down over this stretch.",
+      logsRequests: (n: number) => `Requests: ${n}`,
+      logsAddresses: (n: number) => `Addresses: ${n}`,
+      logsUnreadable: (n: number) => `Lines that yielded nothing: ${n}`,
+      logsCodes: "Answers",
+      logsRangesOk: "Ranges are being served — 206 dominates, as it should.",
+      logsRangesBad:
+        "Whole files are served more often than ranges. Watching works, seeking does not.",
+      logsTopPaths: "Asked for most often",
+      logsTopAddresses: "Asked most often",
+      logsFailures: "Failures",
+      logsNoFailures: "No failures.",
+      logsLong: "Long requests",
+      logsLongNormal:
+        "A long request is normally fine: it is a long range fetch. Only the ones that delivered next to nothing are marked.",
+      logsCapped:
+        "Not everything is shown: this stretch holds more lines than could be brought across. Ask for a shorter one.",
+
+      stallsTitle: "Why the picture stops",
+      stallsNoViewers: "Nobody was watching over this stretch.",
+      stallsSetAside: "Not viewers",
+      stallsOurOwnCheck: "the server's own address — these are our own checks",
+      stallsTooLittle: (n: number) =>
+        `segments taken: ${n} — a cache filling itself, or somebody who has just arrived`,
+      stallsRatio: "Content received against real time",
+      stallsLink: "The viewer's link",
+      stallsInDownload: "inside the downloads",
+      stallsInDownloadHint:
+        "The second figure is always the higher: it is the speed inside the downloads, without the pauses between them. The viewer's link is the first.",
+      stallsSkipped: "Segments skipped",
+      stallsRestarts: "Player restarts",
+      stallsWatching: "Watching",
+      stallsLoad: "What the server was doing",
+      stallsLoadCpu: "Processor",
+      stallsLoadDisk: "Read off the disk",
+      stallsLoadOut: "Going out",
+      stallsLoadCapacity: "of a possible",
+      stallsCapacityUnknown:
+        "the link's capacity was not established — so it is never named as the culprit",
+
+      bitrateTitle: "The file's bitrate peaks",
+      bitratePick: "Choose a file",
+      bitrateHint:
+        "The file is read here and no server is touched. It can be asked before an upload too — which is when it helps most.",
+      bitrateAverage: "Average",
+      bitrateMedian: "Median",
+      bitratePeak1: "One-second peak",
+      bitratePeak10: "Ten-second peak",
+      bitrateAt: "at",
+      bitrateWorst: "Where it is heaviest",
+      bitratePeakOverAverage: (times: number) =>
+        `The ten-second peak is ${times} times the average.`,
+      bitrateAdvice:
+        "It is this peak that hangs a player whose link is below it. A re-encode with the peaks capped is the cure.",
+      bitrateEven:
+        "The file is even: its peaks are close to its average, and there is nothing to re-encode.",
+    },
     upgrade: {
       title: "Update the server side",
       fromTo: (from: number, to: number) =>
@@ -718,25 +805,6 @@ export const en: Catalogue = {
       version: "version {version}",
       aboutTitle: "About and licence",
       notReady: "Not built yet",
-    },
-
-    comingSoon: {
-      useMeanwhile: "Until then, use the old way:",
-      ladder: {
-        phase: "Phase 5",
-        what: "Working out a ladder for a particular source and checking that every variant is served.",
-        fallback: "the vrcast-hls skill",
-      },
-      limits: {
-        phase: "Phase 6",
-        what: "Forcing quality down for a viewer on a weak connection — the VRChat player cannot do this itself.",
-        fallback: "gen-slow-masters.py and editing the Caddyfile by hand",
-      },
-      diagnostics: {
-        phase: "Phase 8",
-        what: "The server's condition with verdicts, log analysis, and the likely cause of stalling.",
-        fallback: "the vrcast-diagnose skill",
-      },
     },
 
     wizard: {

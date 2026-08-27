@@ -60,7 +60,13 @@ export function ServerStateCard({ serverId }: { serverId: string }) {
   if (!state) return null;
 
   if (upgrading) {
-    return <UpgradeDialog serverId={serverId} onDone={() => setUpgrading(false)} onCancel={() => setUpgrading(false)} />;
+    return (
+      <UpgradeDialog
+        serverId={serverId}
+        onDone={() => setUpgrading(false)}
+        onCancel={() => setUpgrading(false)}
+      />
+    );
   }
 
   return (

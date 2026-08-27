@@ -33,15 +33,10 @@ const BITRATES: Array<{ key: keyof Catalogue["ui"]["convert"]; value: number | n
 ];
 
 /** Name a track the way a person can choose between two of them. */
-function trackLabel(
-  track: SourceFile["audio_tracks"][number],
-  t: Catalogue,
-  lang: Lang,
-): string {
+function trackLabel(track: SourceFile["audio_tracks"][number], t: Catalogue, lang: Lang): string {
   const named = [track.language, track.title].filter(Boolean).join(" — ");
   // Numbered from one: "track 0" reads like a bug report, not a choice.
-  const base =
-    named || fill(t.ui.convert.trackFallback, { n: track.index + 1 }, t, lang);
+  const base = named || fill(t.ui.convert.trackFallback, { n: track.index + 1 }, t, lang);
   const channels =
     track.channels === 1
       ? t.ui.convert.mono
@@ -253,11 +248,7 @@ export function ConvertScreen() {
             <div className="form__row">
               <label htmlFor="convert-out">{c.fieldOutput}</label>
               <div className="form__inline">
-                <button
-                  id="convert-out"
-                  onClick={() => void pickOutput()}
-                  disabled={busy}
-                >
+                <button id="convert-out" onClick={() => void pickOutput()} disabled={busy}>
                   {c.pick}
                 </button>
                 {outPath && <span className="form__value">{outPath}</span>}
@@ -268,11 +259,12 @@ export function ConvertScreen() {
       </div>
 
       {preview && (
-        <section className={`notice ${preview.lossless ? "notice--ok" : "notice--warning"}`} role="status">
+        <section
+          className={`notice ${preview.lossless ? "notice--ok" : "notice--warning"}`}
+          role="status"
+        >
           <div className="notice__body">
-            <strong className="notice__message">
-              {preview.lossless ? c.lossless : c.lossy}
-            </strong>
+            <strong className="notice__message">{preview.lossless ? c.lossless : c.lossy}</strong>
             <ul className="notice__list">
               <li>
                 {c.videoLine}{" "}
@@ -298,9 +290,7 @@ export function ConvertScreen() {
               </li>
             </ul>
             {preview.encoder_notice && (
-              <p className="notice__hint">
-                {renderDetail(preview.encoder_notice, t, lang)}
-              </p>
+              <p className="notice__hint">{renderDetail(preview.encoder_notice, t, lang)}</p>
             )}
           </div>
         </section>
@@ -316,11 +306,7 @@ export function ConvertScreen() {
       )}
 
       <div className="form__actions">
-        <button
-          className="button--primary"
-          disabled={!ready || busy}
-          onClick={() => void start()}
-        >
+        <button className="button--primary" disabled={!ready || busy} onClick={() => void start()}>
           {busy ? c.computing : c.start}
         </button>
       </div>

@@ -31,8 +31,7 @@ const mockServerDetect = vi.fn<() => Promise<never>>(() =>
 const mockImportSuggestion = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {
@@ -126,9 +125,7 @@ describe("the list of servers", () => {
     mockServersList.mockResolvedValue([makeProfile({ host_fingerprint: null })]);
     draw();
 
-    expect(
-      await screen.findByText(ru.ui.servers.fingerprintUnconfirmed),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.servers.fingerprintUnconfirmed)).toBeInTheDocument();
   });
 
   it("does not ask about removal blindly", async () => {
@@ -192,7 +189,9 @@ describe("the setup wizard", () => {
     fireEvent.click(await screen.findByText(ru.ui.servers.add));
 
     fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldName), { target: { value: "Тест" } });
-    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldHost), { target: { value: "203.0.113.10" } });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldHost), {
+      target: { value: "203.0.113.10" },
+    });
     fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldDomain), {
       target: { value: "stream.example.com" },
     });
@@ -225,7 +224,9 @@ describe("the setup wizard", () => {
 
     fireEvent.click(await screen.findByText(ru.ui.servers.add));
     fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldName), { target: { value: "Тест" } });
-    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldHost), { target: { value: "203.0.113.10" } });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldHost), {
+      target: { value: "203.0.113.10" },
+    });
     fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldDomain), {
       target: { value: "stream.example.com" },
     });
@@ -260,7 +261,9 @@ describe("the setup wizard", () => {
     fireEvent.click(await screen.findByText(ru.ui.servers.add));
     expect(await screen.findByText(ru.ui.wizard.importFound)).toBeInTheDocument();
     // The passphrase is spoken of honestly: it is not in the file and cannot be.
-    expect(screen.getByText(new RegExp(ru.ui.wizard.importNeedsPassphrase.trim()))).toBeInTheDocument();
+    expect(
+      screen.getByText(new RegExp(ru.ui.wizard.importNeedsPassphrase.trim())),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByText(ru.ui.wizard.importApply));
     await waitFor(() =>

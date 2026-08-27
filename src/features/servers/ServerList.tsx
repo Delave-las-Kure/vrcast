@@ -162,9 +162,7 @@ function ServerCard({
             <button className="button--danger" onClick={() => void remove()}>
               {t.ui.servers.removeYes}
             </button>
-            <button onClick={() => setConfirmingRemoval(false)}>
-              {t.ui.common.cancel}
-            </button>
+            <button onClick={() => setConfirmingRemoval(false)}>{t.ui.common.cancel}</button>
           </>
         ) : (
           <button className="button--danger" onClick={() => setConfirmingRemoval(true)}>

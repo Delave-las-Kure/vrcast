@@ -541,6 +541,169 @@ export interface DeployPreview {
   disk: string;
 }
 
+// --- диагностика (FR-070 – FR-073) ---
+
+/** Оценка одного показателя. «Не удалось выяснить» — отдельный ответ, не «норма». */
+export type Rating = "fine" | "watch" | "trouble" | "unknown";
+
+/** О чём показатель. Код: называет его интерфейс, на своём языке и в своём порядке. */
+export type Reading =
+  | "serving"
+  | "delivery"
+  | "firewall"
+  | "open_ports"
+  | "memory"
+  | "serving_cache"
+  | "swap"
+  | "disk_space"
+  | "network"
+  | "readahead"
+  | "auto_restart";
+
+export interface Rated {
+  about: Reading;
+  rating: Rating;
+  /** Что сказать — с числами, на которых держится. Готовых фраз ядро не шлёт. */
+  say: Detail;
+}
+
+/** Сырые показания. Показываются рядом с оценками: оценку должно быть чем оспорить. */
+export interface HealthSnapshot {
+  services: { name: string; state: string }[];
+  firewall_status: string | null;
+  memory: {
+    total_mb: number;
+    used_mb: number;
+    buff_cache_mb: number;
+    swap_total_mb: number;
+    swap_used_mb: number;
+  };
+  disk: { used_mb: number; free_mb: number };
+  tuning: {
+    congestion: string | null;
+    qdisc: string | null;
+    slow_start_after_idle: boolean | null;
+    readahead_kb: number | null;
+    restart: string | null;
+  };
+  open_ports: string[];
+  delivery: { Answered: { status: number } } | "Silent" | "NothingToServe";
+  watching_now: number;
+  container: boolean;
+}
+
+export interface Health {
+  snapshot: HealthSnapshot;
+  readings: Rated[];
+  worst: Rating;
+}
+
+export interface Counted {
+  what: string;
+  times: number;
+}
+
+export interface LongRequest {
+  client_ip: string;
+  path: string;
+  seconds: number;
+  bytes: number;
+  mbit_s: number;
+  /** Долгий запрос сам по себе — норма. Здесь стоит `true` только вместе с низкой скоростью. */
+  slow: boolean;
+}
+
+export interface LogsDigest {
+  lines: number;
+  requests: number;
+  unreadable: number;
+  by_status: Record<string, number>;
+  addresses: number;
+  top_paths: Counted[];
+  top_addresses: Counted[];
+  failures: { status: number; path: string; times: number }[];
+  long_requests: LongRequest[];
+  bytes_out: number;
+  from: string | null;
+  to: string | null;
+}
+
+export interface Logs {
+  digest: LogsDigest;
+  /** Упор в потолок строк. Сообщается вслух — иначе сводка тихо отвечает не на тот вопрос. */
+  reached_the_cap: boolean;
+  oldest: string | null;
+}
+
+/** Что делал сам сервер, пока зритель висел. */
+export interface ServerLoad {
+  cpu_busy: number;
+  disk_read_mb_s: number;
+  out_mbit_s: number;
+  /** Ноль означает «не выяснено», и тогда канал сервера в виновные не попадает. */
+  capacity_mbit_s: number;
+  cache_small: boolean;
+}
+
+export interface Watcher {
+  client_ip: string;
+  watching: string | null;
+  segments: number;
+  bytes: number;
+  first: string;
+  last: string;
+  elapsed_s: number;
+  /** Полученного против реального времени. Меньше 1.0 — не вытягивает. */
+  content_ratio: number | null;
+  /** Его канал: по стенным часам, с паузами. */
+  mbit_s: number | null;
+  /** Внутри закачек. Выше, и это НЕ его канал — показывается рядом ради самой разницы. */
+  in_download_mbit_s: number | null;
+  skipped: number[];
+  restarts: number;
+  reinits: number;
+  failures: number;
+}
+
+export type StallCause =
+  "nothing_wrong" | "viewer_link" | "server_link" | "disk" | "the_file_itself" | "unclear";
+
+export interface StallVerdict {
+  cause: StallCause;
+  /** Подтверждающие числа. Вывод бывает неверен, и без них его нечем оспорить (FR-072). */
+  say: Detail;
+}
+
+export interface SetAside {
+  client_ip: string;
+  why: "our_own_check" | { too_little: { segments: number } };
+}
+
+export interface Stalls {
+  watchers: Watcher[];
+  set_aside: SetAside[];
+  verdicts: StallVerdict[];
+  load: ServerLoad;
+}
+
+/** Окно фильма и где оно. */
+export interface BitrateWindow {
+  at_s: number;
+  length_s: number;
+  bitrate_bps: number;
+}
+
+/** Как файл выглядит с точки зрения канала зрителя (FR-073). */
+export interface Peaks {
+  average_bps: number;
+  median_bps: number;
+  one_second: BitrateWindow | null;
+  /** Пик 10-секундного окна — то самое, с чем сравнивают канал зрителя. */
+  wide: BitrateWindow | null;
+  worst_wide: BitrateWindow[];
+  seconds: number;
+}
+
 /** Что изменит обновление серверной части (FR-129). */
 export interface UpgradePlan {
   from: number;

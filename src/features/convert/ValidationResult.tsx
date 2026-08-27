@@ -50,12 +50,7 @@ export function ValidationResult({ result }: { result: Validation }) {
            */
           <details className="notice__details">
             <summary>
-              {fill(
-                t.ui.validation.ignoredSummary,
-                { n: result.ignored.length },
-                t,
-                lang,
-              )}
+              {fill(t.ui.validation.ignoredSummary, { n: result.ignored.length }, t, lang)}
             </summary>
             <ul className="notice__list">
               {result.ignored.map((p) => (

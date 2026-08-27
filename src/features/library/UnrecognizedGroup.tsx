@@ -40,19 +40,10 @@ export function UnrecognizedGroup({
 
   return (
     <section className="media media--unrecognized">
-      <button
-        className="media__head"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
+      <button className="media__head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="media__title">{t.ui.library.unrecognizedTitle}</span>
         <span className="media__facts">
-          {fill(
-            t.ui.library.unrecognizedCount,
-            { n: files.length, bytes: total },
-            t,
-            lang,
-          )}
+          {fill(t.ui.library.unrecognizedCount, { n: files.length, bytes: total }, t, lang)}
         </span>
       </button>
 

@@ -130,9 +130,7 @@ export function TasksPanel() {
   // otherwise the queue numbers would not match what the core actually does.
   const queued = useMemo(
     () =>
-      tasks
-        .filter((task) => task.state === "queued")
-        .sort((a, b) => a.queue_order - b.queue_order),
+      tasks.filter((task) => task.state === "queued").sort((a, b) => a.queue_order - b.queue_order),
     [tasks],
   );
 
@@ -172,10 +170,7 @@ export function TasksPanel() {
                   aria-valuemin={0}
                   aria-valuemax={100}
                 >
-                  <div
-                    className="progress__fill"
-                    style={{ width: `${task.progress * 100}%` }}
-                  />
+                  <div className="progress__fill" style={{ width: `${task.progress * 100}%` }} />
                 </div>
               )}
 
@@ -184,9 +179,7 @@ export function TasksPanel() {
                 {formatSpeed(task.speed_bps, t, lang) && (
                   <span>{formatSpeed(task.speed_bps, t, lang)}</span>
                 )}
-                {formatEta(task.eta_s, t, lang) && (
-                  <span>{formatEta(task.eta_s, t, lang)}</span>
-                )}
+                {formatEta(task.eta_s, t, lang) && <span>{formatEta(task.eta_s, t, lang)}</span>}
               </div>
 
               {task.error && (

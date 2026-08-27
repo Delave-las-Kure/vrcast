@@ -89,10 +89,7 @@ function MeasureOffer({
       */}
       <p data-testid="estimate-from">
         {preview.estimate_from_points > 0
-          ? words.estimateFromThisMachine.replace(
-              "{points}",
-              String(preview.estimate_from_points),
-            )
+          ? words.estimateFromThisMachine.replace("{points}", String(preview.estimate_from_points))
           : words.estimateFromModel}
       </p>
       <button type="button" onClick={onStart} disabled={running}>
@@ -117,7 +114,10 @@ function MeasureOffer({
  */
 function slugOf(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? "";
-  return name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-").toLowerCase();
+  return name
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .toLowerCase();
 }
 
 export function LadderPage() {
@@ -267,9 +267,7 @@ export function LadderScreen({
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
       {source && (
-        <p data-testid="source-facts">
-          {words.peakIs.replace("{peak}", bitrate(source.peak_bps))}
-        </p>
+        <p data-testid="source-facts">{words.peakIs.replace("{peak}", bitrate(source.peak_bps))}</p>
       )}
 
       {preview && <Provenance preview={preview} />}
@@ -290,9 +288,7 @@ export function LadderScreen({
         />
       )}
 
-      {preview && (
-        <RungEditor rungs={rungs} source={preview.source} onChange={setRungs} />
-      )}
+      {preview && <RungEditor rungs={rungs} source={preview.source} onChange={setRungs} />}
 
       {/*
         What the set will be called on the server. Offered rather than decided: the

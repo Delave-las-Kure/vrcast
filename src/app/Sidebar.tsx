@@ -16,8 +16,8 @@ export const SECTIONS = [
   { path: "/upload", key: "upload", ready: true },
   { path: "/ladder", key: "ladder", ready: true },
   { path: "/viewers", key: "viewers", ready: true },
-  { path: "/limits", key: "limits", ready: false },
-  { path: "/diagnostics", key: "diagnostics", ready: false },
+  { path: "/limits", key: "limits", ready: true },
+  { path: "/diagnostics", key: "diagnostics", ready: true },
   { path: "/tasks", key: "tasks", ready: true },
 ] as const;
 
@@ -33,11 +33,7 @@ export function Sidebar({ version }: { version: string | null }) {
       <div className="sidebar__brand">
         <span className="sidebar__title">VRCast Studio</span>
         {version && (
-          <NavLink
-            to="/about"
-            className="sidebar__version"
-            title={t.ui.sidebar.aboutTitle}
-          >
+          <NavLink to="/about" className="sidebar__version" title={t.ui.sidebar.aboutTitle}>
             {fill(t.ui.sidebar.version, { version }, t, lang)}
           </NavLink>
         )}

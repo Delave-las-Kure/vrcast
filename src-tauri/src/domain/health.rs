@@ -245,6 +245,12 @@ fn serving(snap: &Snapshot) -> Rated {
             Rating::Fine,
             Detail::new(DetailCode::HealthServingRunning),
         ),
+        // **"Unknown" is not "stopped".** The service manager answers that when it has never
+        // heard of the unit — and a machine serving perfectly well through something that is
+        // not systemd answers exactly that. Read as trouble, it produced a snapshot saying
+        // the serving was down and the delivery was fine in the same breath, which is not a
+        // judgement but a contradiction. Caught in a container on 2026-08-27.
+        Some("unknown") | Some("") => unknown(Reading::Serving),
         // The service is **named** rather than left as "something is down": T321 requires the
         // stopped service to be identified, and naming it is the difference between a person
         // knowing what to start and a person opening a console to find out.

@@ -120,6 +120,11 @@ mod ssh_live;
 #[path = "integration/viewers_live.rs"]
 mod viewers_live;
 
+/// T321 — диагностика против настоящего контейнера: остановленная служба названа, медленный
+/// зритель опознан как узкий канал, а быстрый с паузами — не как голодающий.
+#[path = "integration/diag_live.rs"]
+mod diag_live;
+
 /// The viewer helpers (T152). Used by the checks of Phases 4 and 6; until those are
 /// written it is only compiled, and that is deliberate — a helper nobody has compiled is
 /// not a helper.

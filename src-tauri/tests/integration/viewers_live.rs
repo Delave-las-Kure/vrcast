@@ -205,7 +205,7 @@ async fn both_ways_of_serving_put_their_viewer_in_the_list() {
     direct
         .start_watching(&film, Some("300k"))
         .expect("the pulling would not start");
-    set.start_watching_a_set("demo", "v2", 3)
+    set.start_watching_a_set("demo", "v2", 3, None)
         .expect("the watching of the set would not start");
 
     // Both are found within the ten seconds SC-005 allows...

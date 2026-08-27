@@ -17,12 +17,7 @@
  */
 
 import { useEffect, useState } from "react";
-import type {
-  AppError,
-  ImportSuggestion,
-  ServerInput,
-  TestStep,
-} from "../../shared/contract";
+import type { AppError, ImportSuggestion, ServerInput, TestStep } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
@@ -142,15 +137,11 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
         <ol className="wizard__steps">
           <li className={stage === "form" ? "is-current" : "is-done"}>{w.stepData}</li>
           <li
-            className={
-              stage === "fingerprint" ? "is-current" : stage === "form" ? "" : "is-done"
-            }
+            className={stage === "fingerprint" ? "is-current" : stage === "form" ? "" : "is-done"}
           >
             {w.stepFingerprint}
           </li>
-          <li className={stage === "test" || stage === "done" ? "is-current" : ""}>
-            {w.stepTest}
-          </li>
+          <li className={stage === "test" || stage === "done" ? "is-current" : ""}>{w.stepTest}</li>
         </ol>
       </header>
 
@@ -274,9 +265,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
 
             <div className="field">
               <label>
-                <span>
-                  {input.auth_kind === "key" ? w.fieldPassphrase : w.fieldPassword}
-                </span>
+                <span>{input.auth_kind === "key" ? w.fieldPassphrase : w.fieldPassword}</span>
                 <input
                   type="password"
                   value={secret}

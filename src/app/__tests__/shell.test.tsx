@@ -168,22 +168,6 @@ describe("language", () => {
   });
 });
 
-describe("unfinished sections", () => {
-  it("name the phase and what to use until then", async () => {
-    // A blank screen with no explanation looks broken, and "coming soon" says
-    // nothing. The section of the FURTHEST phase is used: this check has already
-    // failed twice because the section it looked at got finished — and it should
-    // fail from a breakage, not from success.
-    window.location.hash = "#/diagnostics";
-    renderIn(<App />);
-
-    expect(
-      await screen.findByText(ru.ui.comingSoon.diagnostics.phase),
-    ).toBeInTheDocument();
-    expect(await screen.findByText(/vrcast-diagnose/)).toBeInTheDocument();
-  });
-});
-
 describe("the task list", () => {
   it("shows a task with its state and its progress", async () => {
     mockTasksList.mockResolvedValue([makeTask()]);
@@ -244,9 +228,7 @@ describe("the task list", () => {
     ]);
     renderIn(<App />);
 
-    expect(
-      await screen.findByText(ru.details.UPLOAD_CHECKSUM_MISMATCH),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(ru.details.UPLOAD_CHECKSUM_MISMATCH)).toBeInTheDocument();
   });
 
   it("shows the core's error when the list could not be read", async () => {
@@ -255,9 +237,7 @@ describe("the task list", () => {
     renderIn(<App />);
 
     expect(await screen.findByRole("alert")).toBeInTheDocument();
-    expect(
-      await screen.findByText(ru.errors.STORAGE_FAILED.message),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(ru.errors.STORAGE_FAILED.message)).toBeInTheDocument();
     expect(await screen.findByText(ru.errors.STORAGE_FAILED.hint)).toBeInTheDocument();
   });
 });

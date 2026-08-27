@@ -27,11 +27,7 @@ import { ErrorNotice } from "../shared/ErrorNotice";
 import { FileRow } from "./FileRow";
 import { StaleBanner } from "./StaleBanner";
 import { UnrecognizedGroup } from "./UnrecognizedGroup";
-import {
-  ConfirmDeleteDialog,
-  CreateMediaDialog,
-  RenameMediaDialog,
-} from "./dialogs/MediaDialogs";
+import { ConfirmDeleteDialog, CreateMediaDialog, RenameMediaDialog } from "./dialogs/MediaDialogs";
 
 /** What is open on top of the list right now. */
 type Dialog =
@@ -218,9 +214,7 @@ export function LibraryScreen() {
           busy={busy}
           error={dialogError}
           onCancel={() => setDialog(null)}
-          onCreate={(title, slug) =>
-            void act(() => ipc.mediaCreate(active.id, title, slug))
-          }
+          onCreate={(title, slug) => void act(() => ipc.mediaCreate(active.id, title, slug))}
         />
       )}
       {dialog?.kind === "rename" && (
@@ -240,9 +234,7 @@ export function LibraryScreen() {
           consequences={dialog.consequences}
           busy={busy}
           onCancel={() => setDialog(null)}
-          onConfirm={() =>
-            void act(() => ipc.mediaDelete(active.id, dialog.media.id, true))
-          }
+          onConfirm={() => void act(() => ipc.mediaDelete(active.id, dialog.media.id, true))}
         />
       )}
       {dialog?.kind === "delete-file" && (
@@ -345,11 +337,7 @@ function MediaCard({
 
           <ul className="file-list">
             {media.files.map((f) => (
-              <FileRow
-                key={f.path}
-                file={f}
-                onDelete={disabled ? undefined : onDeleteFile}
-              />
+              <FileRow key={f.path} file={f} onDelete={disabled ? undefined : onDeleteFile} />
             ))}
           </ul>
 
@@ -388,9 +376,8 @@ function DiskBar({
     <div className="disk">
       <div className="disk__facts">
         <span>
-          {t.ui.library.diskFree}{" "}
-          <strong>{formatBytes(disk.free_bytes, lang)}</strong> {t.ui.library.diskOf}{" "}
-          {formatBytes(disk.total_bytes, lang)}
+          {t.ui.library.diskFree} <strong>{formatBytes(disk.free_bytes, lang)}</strong>{" "}
+          {t.ui.library.diskOf} {formatBytes(disk.total_bytes, lang)}
         </span>
         <span className="muted">
           {fill(t.ui.library.diskVideos, { bytes: disk.used_by_videos_bytes }, t, lang)}

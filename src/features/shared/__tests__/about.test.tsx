@@ -14,8 +14,7 @@ import { renderIn } from "../../../test-utils";
 const mockAppVersions = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return { ...actual, ipc: { appVersions: () => mockAppVersions() } };
 });
 

@@ -22,8 +22,7 @@ let send: ((update: ViewersUpdateEvent) => void) | null = null;
 const unlisten = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {
@@ -92,7 +91,17 @@ beforeEach(() => {
   mockServersList.mockResolvedValue([server]);
   mockLibraryList.mockResolvedValue({
     server_id: "s1",
-    media: [{ id: "m1", title: "Backrooms", slug: "backrooms", files: [], ladders: [], total_bytes: 0, created_at: "" }],
+    media: [
+      {
+        id: "m1",
+        title: "Backrooms",
+        slug: "backrooms",
+        files: [],
+        ladders: [],
+        total_bytes: 0,
+        created_at: "",
+      },
+    ],
     unrecognized: [],
     disk: null,
     stale: false,

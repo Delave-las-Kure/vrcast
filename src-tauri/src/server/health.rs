@@ -29,7 +29,7 @@ const SERVICES: [&str; 2] = [SERVING_SERVICE, "ufw"];
 /// Every question ends in `2>/dev/null` and a fallback: a server where one reading cannot be
 /// taken must come back missing that one reading, not as a command that failed and took the
 /// whole snapshot with it. That is what makes `Rating::Unknown` reachable at all.
-pub fn command(video_dir: &str) -> String {
+pub fn command(video_dir: &str, domain: &str) -> String {
     const ASK: &str = r#"
 IF=$(ip -o -4 route show default 2>/dev/null | awk '{print $5}' | head -n 1)
 DISK=$(lsblk -no PKNAME "$(findmnt -no SOURCE {VIDEO_DIR} 2>/dev/null || findmnt -no SOURCE / 2>/dev/null)" 2>/dev/null | head -n 1)
@@ -52,26 +52,46 @@ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -vE '^127\.|^\[::1\]' | sort -u |
 # saying anything about, so it is taken in the same breath as the cache itself — a figure a
 # minute older would be about a different machine.
 printf 'watching=%s\n' "$(ss -tnH state established 2>/dev/null | awk '$4 ~ /:(80|443)$/' | awk '{print $5}' | sed 's/:[0-9]*$//' | sort -u | wc -l)"
-# The serving asked over its own loopback, with a range: it is the answer that is checked,
-# not the port (R-20). The domain itself is asked from this machine instead, where a broken
-# certificate is visible — from the server's own side it never is.
+# The serving asked with a **range**, and its answer checked rather than the port (R-20).
+#
+# **Over the domain, resolved to the loopback.** A deployed Caddy binds the domain and
+# nothing else, so a plain request to 127.0.0.1 matches no site and comes back 404 — a
+# reading that would have called every healthy server broken. Caught in a container on
+# 2026-08-27, before it could be seen anywhere it mattered.
+#
+# The certificate is deliberately not verified: whether it is valid is asked from the other
+# machine, where the answer means something. From the server's own side a certificate always
+# looks fine, so checking it here would prove nothing and refuse plenty.
+#
+# Plain HTTP with the right Host is the second try, and it is what a container answers — its
+# Caddy listens on :80 with no domain at all. On a real server the first try is the one that
+# works, and a redirect coming back from the second means TLS is broken, which is worth
+# knowing and is not "fine".
 F=$(ls {VIDEO_DIR}/*.mp4 2>/dev/null | head -n 1)
 if [ -n "$F" ]; then
-  printf 'delivery=%s\n' "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -r 0-1000 "http://127.0.0.1/videos/$(basename "$F")" 2>/dev/null)"
+  N=$(basename "$F")
+  CODE=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 -r 0-1000 --resolve "{DOMAIN}:443:127.0.0.1" "https://{DOMAIN}/videos/$N" 2>/dev/null)
+  case "$CODE" in
+    2*) ;;
+    *) CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -r 0-1000 -H "Host: {DOMAIN}" "http://127.0.0.1/videos/$N" 2>/dev/null) ;;
+  esac
+  printf 'delivery=%s\n' "$CODE"
 else
   printf 'delivery=none\n'
 fi
-printf 'container=%s\n' "$(systemd-detect-virt --container 2>/dev/null || echo none)"
+printf 'container=%s\n' "{CONTAINER}"
 "#;
 
     ASK.replace("{VIDEO_DIR}", &super::shell_quote(video_dir))
         .replace("{SERVICES}", &SERVICES.join(" "))
         .replace("{SERVING}", SERVING_SERVICE)
+        .replace("{CONTAINER}", super::CONTAINER_KIND)
+        .replace("{DOMAIN}", domain)
 }
 
 /// Ask a server how it is, and say.
-pub async fn look(conn: &Connection, video_dir: &str) -> Result<Snapshot> {
-    let said = conn.exec(&command(video_dir)).await?;
+pub async fn look(conn: &Connection, video_dir: &str, domain: &str) -> Result<Snapshot> {
+    let said = conn.exec(&command(video_dir, domain)).await?;
     Ok(read(&said.stdout))
 }
 
@@ -143,8 +163,9 @@ pub fn read(said: &str) -> Snapshot {
             "port" => snap.open_ports.push(value.to_owned()),
             "watching" => snap.watching_now = value.parse().unwrap_or(0),
             "delivery" => snap.delivery = delivery_of(value),
-            // `systemd-detect-virt --container` prints `none` outside one, and the name of
-            // the technology inside — docker, lxc, podman. Anything but `none` is inside.
+            // `none` and nothing at all both mean a real machine. Reading `none` as the
+            // name of a container kind would make every real server answer "cannot be
+            // established here" about its kernel settings.
             "container" => snap.container = !value.is_empty() && value != "none",
             _ => {}
         }

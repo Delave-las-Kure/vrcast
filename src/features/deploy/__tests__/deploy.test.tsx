@@ -19,8 +19,7 @@ const mockPlan = vi.fn<() => Promise<DeployPreview>>();
 const mockRun = vi.fn<(...a: unknown[]) => Promise<string>>();
 
 vi.mock("../../../shared/ipc", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
   return {
     ...actual,
     ipc: {

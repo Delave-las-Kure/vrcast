@@ -43,6 +43,25 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
+/// What kind of container this is, if any — as one shell expression, asked from one place.
+///
+/// `systemd-detect-virt -c` is the right answer where it exists, and it does not always: it
+/// comes with systemd, and a machine can perfectly well be a container without systemd in it.
+/// The markers after it are what is left then. It prints `none` and exits non-zero on a real
+/// machine, so the callers read `none` and empty alike as "not a container".
+///
+/// **One expression rather than two.** Two copies of one reading have already once given this
+/// project two answers to the same question, and this particular question decides whether a
+/// step says "cannot be established here" — the answer nobody double-checks.
+pub(crate) const CONTAINER_KIND: &str = concat!(
+    "$(systemd-detect-virt -c 2>/dev/null",
+    " || { [ -f /.dockerenv ] && echo docker; }",
+    " || { [ -f /run/.containerenv ] && echo podman; }",
+    " || { grep -qaE '(docker|lxc|containerd|kubepods)' /proc/1/cgroup 2>/dev/null",
+    "      && echo container; }",
+    " || true)"
+);
+
 /// Join a directory and a name into a path on the server.
 pub(crate) fn join_remote(dir: &str, name: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), name)

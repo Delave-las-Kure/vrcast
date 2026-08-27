@@ -230,28 +230,6 @@ h1 {
   }
 }
 
-.coming-soon {
-  max-width: 560px;
-  animation: appear var(--speed) var(--ease);
-}
-
-.coming-soon__phase {
-  display: inline-block;
-  background: var(--bg-active);
-  color: var(--accent);
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  margin: 0 0 12px;
-}
-
-.coming-soon__fallback {
-  border-left: 3px solid var(--border);
-  padding-left: 12px;
-  color: var(--text-muted);
-}
-
 /* ---------- задачи ---------- */
 
 .task-list {
@@ -1055,5 +1033,139 @@ button:disabled {
 .notice__details code,
 .notice__list code {
   font-size: 12px;
+  word-break: break-all;
+}
+
+/* ---------- диагностика ---------- */
+
+.diag-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.diag-worst {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 12px;
+  font-weight: 600;
+}
+
+/*
+ * Цвет — не единственный признак. Оценка стоит рядом словом всегда, потому что
+ * дальтоник и человек в ярком свете читают одно и то же и оба читают текст.
+ */
+.diag-rating-fine {
+  color: var(--success);
+}
+
+.diag-rating-watch {
+  color: var(--warning);
+}
+
+.diag-rating-trouble {
+  color: var(--danger);
+}
+
+.diag-rating-unknown {
+  color: var(--text-muted);
+}
+
+.diag-readings {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.diag-readings li {
+  display: grid;
+  grid-template-columns: 200px 120px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.diag-reading-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.diag-reading-say {
+  color: var(--text-muted);
+}
+
+.diag-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.diag-warning {
+  border-left: 3px solid var(--warning);
+  padding-left: 12px;
+  color: var(--warning);
+}
+
+.diag-raw pre {
+  max-height: 320px;
+  overflow: auto;
+  background: var(--bg-active);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  font-size: 12px;
+}
+
+.diag-watchers {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.diag-watchers > li {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.diag-watcher-who {
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.diag-verdict {
+  margin: 0 0 8px;
+}
+
+.diag-figures {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.diag-figures dt {
+  color: var(--text-muted);
+}
+
+.diag-figures dd {
+  margin: 0;
+}
+
+.diag-set-aside,
+.diag-worst-windows,
+.diag-codes {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.diag-chosen {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-muted);
   word-break: break-all;
 }
