@@ -683,7 +683,10 @@ export const en: Catalogue = {
         "The system will ask for an administrator password: the package is installed as root. The application carries on running — the new version begins at the next start.",
       warnAppImage:
         "The application will rewrite its own file and carry on running as before. The new version begins at the next start.",
-      agree: "I understand the application will be stopped",
+      // Neutral, because the particulars differ: being stopped, an administrator password,
+      // a rewritten file — each is named by the warning right above the checkbox. One
+      // wording covering all three would be true on exactly one platform.
+      agree: "I understand a new version will be installed",
       doneRestartLater: "The update is installed. The new version begins at the next start.",
     },
     appearance: {
