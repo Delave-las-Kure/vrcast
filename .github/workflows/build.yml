@@ -33,7 +33,7 @@ name: build
 # окном, а окна в контейнере Windows нет. Взамен задания там больше ничего не ставят — цепочка
 # Rust проверяется, а не устанавливается.
 #
-# Образ собирается один раз:  docker build -t vrcast-linux-check:2 .github/ci-image
+# Образ собирается один раз:  docker build -t localhost:5000/vrcast-linux-check:2 .github/ci-image
 
 on:
   push:
@@ -56,7 +56,7 @@ jobs:
     name: Interface — style and tests
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: vrcast-linux-check:2
+      image: localhost:5000/vrcast-linux-check:2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,7 +86,7 @@ jobs:
           - os: vrcast-win
             container: ""
           - os: vrcast-linux
-            container: vrcast-linux-check:2
+            container: localhost:5000/vrcast-linux-check:2
     runs-on: [self-hosted, '${{ matrix.os }}']
     container: ${{ matrix.container }}
     steps:
@@ -127,9 +127,6 @@ jobs:
           done
           cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
           cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
-            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-dev"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
@@ -199,7 +196,7 @@ jobs:
           - os: vrcast-win
             container: ""
           - os: vrcast-linux
-            container: vrcast-linux-check:2
+            container: localhost:5000/vrcast-linux-check:2
     container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v4
@@ -221,9 +218,6 @@ jobs:
           done
           cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
           cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
-            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-dev"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
@@ -335,7 +329,7 @@ jobs:
     name: Integration — a throwaway server in a container
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: vrcast-linux-check:2
+      image: localhost:5000/vrcast-linux-check:2
       # **Сеть машины и её же демон.** Проверки поднимают свои контейнеры и достают их по
       # опубликованным портам — то есть по `127.0.0.1` машины. Из обычного контейнера это была
       # бы своя петля, где нет никого. Сокет — чтобы поднимать контейнеры на том же демоне, а
@@ -361,9 +355,6 @@ jobs:
           done
           cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
           cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
-            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-dev"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
@@ -465,7 +456,7 @@ jobs:
     name: Licence compatibility with GPL-3.0
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: vrcast-linux-check:2
+      image: localhost:5000/vrcast-linux-check:2
     steps:
       - uses: actions/checkout@v4
       # **Цепочка Rust проверяется, а не ставится.**
@@ -486,9 +477,6 @@ jobs:
           done
           cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
           cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
-            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-dev"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
@@ -527,7 +515,7 @@ jobs:
     name: Isolation and no hardcoded servers
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: vrcast-linux-check:2
+      image: localhost:5000/vrcast-linux-check:2
     steps:
       - uses: actions/checkout@v4
       - name: Hardcoded servers (FR-004)
