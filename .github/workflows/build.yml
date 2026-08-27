@@ -94,6 +94,63 @@ jobs:
       - name: Core tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  e2e:
+    name: End to end — the built application, driven
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # `webkit2gtk-driver` gives WebKitWebDriver, which tauri-driver forwards to, and xvfb
+      # gives the application somewhere to open its window: a runner has no display, and
+      # without one the window never appears and the driver waits for it forever.
+      - name: Tauri system dependencies and the WebDriver (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf webkit2gtk-driver xvfb
+
+      - run: npm ci
+      - name: Cache for the bundled FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
+      - name: Put the bundled FFmpeg in place
+        run: node scripts/fetch-ffmpeg.mjs
+
+      - name: The intermediary driver
+        run: cargo install tauri-driver --locked
+
+      # **`--features custom-protocol` is not optional, and not what it looks like.** What
+      # takes a Tauri binary out of development mode is that feature, not the release
+      # profile: its own build script reads `dev = !custom_protocol`. Without it the window
+      # opens on the dev server's address with nothing there, the harness drives the
+      # browser's error page, and every check fails for a reason that has nothing to do with
+      # the application. Found on the harness's first run, 2026-08-27.
+      - name: Build the frontend and the application
+        run: |
+          npm run build
+          cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
+
+      - name: Drive it (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:e2e
+      - name: Drive it (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run test:e2e
+
   integration:
     name: Integration — a throwaway server in a container
     runs-on: ubuntu-latest

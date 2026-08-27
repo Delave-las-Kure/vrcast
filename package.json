@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "echo \"сквозные тесты появятся в Фазе 1 (tauri-driver)\" && exit 0",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "format": "prettier --write .",
     "check:isolation": "bash scripts/check-isolation.sh",
     "check:no-hardcoded": "bash scripts/check-no-hardcoded-server.sh",
@@ -25,7 +25,8 @@
     "check:all": "bash scripts/check-all.sh",
     "ffmpeg": "node scripts/fetch-ffmpeg.mjs",
     "check:ffmpeg": "node scripts/fetch-ffmpeg.mjs --check",
-    "check:licenses": "license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow \"MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0\""
+    "check:licenses": "license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow \"MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0\"",
+    "webdriver": "node scripts/fetch-webdriver.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
