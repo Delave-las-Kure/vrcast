@@ -72,10 +72,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [vrcast-win, vrcast-linux]
+        include:
+          # **Контейнер задаётся строкой, а не полем `image`.** Пустое поле `image` файл не
+          # принимает вовсе — прогон падает целиком, без единого задания и без внятной
+          # причины (поймано 2026-08-27). Пустая же строка на месте всего `container:`
+          # означает «без контейнера», и это единственный способ дать контейнер одной ветви
+          # матрицы и не дать другой.
+          - os: vrcast-win
+            container: ""
+          - os: vrcast-linux
+            container: vrcast-linux-check:2
     runs-on: [self-hosted, '${{ matrix.os }}']
-    container:
-      image: ${{ matrix.os == 'vrcast-linux' && 'vrcast-linux-check:2' || '' }}
+    container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v4
 
@@ -177,9 +185,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [vrcast-win, vrcast-linux]
-    container:
-      image: ${{ matrix.os == 'vrcast-linux' && 'vrcast-linux-check:2' || '' }}
+        include:
+          # **Контейнер задаётся строкой, а не полем `image`.** Пустое поле `image` файл не
+          # принимает вовсе — прогон падает целиком, без единого задания и без внятной
+          # причины (поймано 2026-08-27). Пустая же строка на месте всего `container:`
+          # означает «без контейнера», и это единственный способ дать контейнер одной ветви
+          # матрицы и не дать другой.
+          - os: vrcast-win
+            container: ""
+          - os: vrcast-linux
+            container: vrcast-linux-check:2
+    container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v4
       # **Цепочка Rust проверяется, а не ставится.**
