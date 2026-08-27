@@ -64,6 +64,7 @@ step "Core: format" cargo fmt --manifest-path src-tauri/Cargo.toml --check
 step "Core: clippy over all targets" \
   cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features integration -- -D warnings
 step "Core: tests" cargo test --manifest-path src-tauri/Cargo.toml
+step "The version is in one place" bash scripts/check-version.sh
 step "Both themes line up" bash scripts/check-theme.sh
 step "Interface: types" npm run --silent typecheck
 step "Interface: style" npm run --silent lint

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# T325 — обе темы по-настоящему, а не одна с оговорками.
+# T325 — both themes for real, not one of them with excuses.
 #
-# Проверяется механически то, что механически проверяемо, и **только оно**:
+# What is checked is what can be checked by machine, and **only** that:
 #
-# 1. у каждого цветового токена светлой темы есть пара в тёмной. Токен без пары — это цвет,
-#    который в тёмной теме останется светлым, и заметят это на том экране, куда реже всего
-#    заходят;
-# 2. нигде, кроме двух блоков с токенами, нет цвета впрямую. Один `#fff`, поставленный на
-#    экране, который смотрели, — это обычный способ выпустить нечитаемую тему: он не
-#    переключается вместе со всем остальным и виден только там, куда не заглянули.
+# 1. every colour token of the light theme has a counterpart in the dark one. A token without
+#    one is a colour that stays light in the dark theme, and it will be noticed on the screen
+#    people visit least often;
+# 2. nowhere outside the two token blocks is a colour written out directly. One `#fff` put on
+#    the screen somebody happened to be looking at is the ordinary way to ship an unreadable
+#    theme: it does not switch with the rest, and it is visible only where nobody looked.
 #
-# Читаемость глазами этим не проверяется и не притворяется проверенной: это сценарий 9
-# quickstart, и его проходит человек.
+# Readability by eye is not checked here and does not pretend to be: that is scenario 9 of the
+# quickstart, and a person walks it.
 set -euo pipefail
 
 CSS="$(dirname "$0")/../src/app/styles.css"
@@ -27,7 +27,7 @@ text = open(path, encoding="utf-8").read()
 
 
 def block(selector):
-    """Тело правила по его заголовку."""
+    """The body of a rule, found by its selector."""
     i = text.index(selector + " {")
     depth = 0
     for j in range(i, len(text)):
@@ -37,7 +37,7 @@ def block(selector):
             depth -= 1
             if depth == 0:
                 return text[i:j]
-    raise SystemExit("не закрыт блок " + selector)
+    raise SystemExit("unclosed block: " + selector)
 
 
 light = block(":root")
@@ -51,28 +51,28 @@ dark_tokens = {m.group(1): m.group(2).strip() for m in TOKEN.finditer(dark)}
 
 problems = []
 
-# 1. Каждый цветовой токен светлой темы имеет пару в тёмной.
+# 1. Every colour token of the light theme has a counterpart in the dark one.
 for name, value in light_tokens.items():
     if not COLOUR.search(value):
-        continue  # не цвет: радиусы, скорости, кривые
+        continue  # not a colour: radii, speeds, easing curves
     if name not in dark_tokens:
-        problems.append("токен %s есть в светлой теме и отсутствует в тёмной" % name)
+        problems.append("token %s is in the light theme and missing from the dark one" % name)
 
-# 2. Ни одного цвета впрямую вне блоков с токенами.
+# 2. Not one colour written out directly outside the token blocks.
 rest = text.replace(light, "").replace(dark, "")
 for n, line in enumerate(rest.splitlines(), 1):
     stripped = line.strip()
     if stripped.startswith("*") or stripped.startswith("/*") or stripped.startswith("//"):
         continue
     if COLOUR.search(line):
-        problems.append("цвет впрямую вне токенов: %s" % stripped)
+        problems.append("a colour written out outside the tokens: %s" % stripped)
 
 if problems:
     for p in problems:
         print("  " + p)
     sys.exit(1)
 
-print("  токенов в светлой: %d, из них цветовых с парой в тёмной: %d" % (
+print("  %d tokens in the light theme, %d of them colours with a counterpart" % (
     len(light_tokens),
     sum(1 for n, v in light_tokens.items() if COLOUR.search(v)),
 ))
@@ -80,10 +80,10 @@ PY
 status=$?
 
 if [[ $status -ne 0 ]]; then
-	echo "${RED}--- обе темы: НЕ сходятся ---${OFF}" >&2
+	echo "${RED}--- the two themes: do NOT line up ---${OFF}" >&2
 	fail=1
 else
-	echo "${GREEN}--- обе темы: сходятся ---${OFF}"
+	echo "${GREEN}--- the two themes: line up ---${OFF}"
 fi
 
 exit $fail

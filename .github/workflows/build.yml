@@ -226,6 +226,10 @@ jobs:
       # T325. Здесь, а не в «Interface», потому что это охранная проверка того же рода:
       # один цвет, поставленный впрямую на экране, который смотрели, — и тёмная тема
       # ломается там, куда заглядывают реже всего.
+      - name: The version is in one place
+        # T341. Here for the same reason as its neighbours: two copies of one number drift
+        # apart silently, and the drift is visible only to whoever opens both files.
+        run: bash scripts/check-version.sh
       - name: Both themes line up
         run: bash scripts/check-theme.sh
       # The isolation check (principle VII) runs locally before a phase is handed over: CI
