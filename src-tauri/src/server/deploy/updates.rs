@@ -14,6 +14,10 @@ use crate::domain::deploy_steps::{Change, Checked, StepId};
 
 use super::{Context, DeployError, Result, Step};
 
+/// Что ставится. Открыто наружу по той же причине, что и у `fail2ban`: опись сверяется с
+/// шагом, а не с копией имени.
+pub const PACKAGE: &str = "unattended-upgrades";
+
 pub fn step<'a>() -> Step<Context<'a>> {
     Step {
         id: StepId::UnattendedUpgrades,
@@ -25,7 +29,7 @@ pub fn step<'a>() -> Step<Context<'a>> {
 
 fn changes(_: &Context<'_>) -> Vec<Change> {
     vec![Change::InstallsPackages {
-        names: vec![String::from("unattended-upgrades")],
+        names: vec![String::from(PACKAGE)],
     }]
 }
 

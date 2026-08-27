@@ -41,6 +41,34 @@ pub enum StepId {
     State,
 }
 
+impl StepId {
+    /// The name this step goes by in `resources/server/versions.json` (T337).
+    ///
+    /// Written out rather than derived from the variant's name: the composition of the server
+    /// side is frozen at version 1, and a name that renamed itself along with a Rust variant
+    /// would change what a **deployed server** is said to consist of without anybody deciding
+    /// to change it.
+    pub fn in_the_inventory(&self) -> &'static str {
+        match self {
+            Self::DnsCheck => "dns-check",
+            Self::Swap => "swap",
+            Self::Packages => "packages",
+            Self::UserDirs => "user-dirs",
+            Self::Configs => "configs",
+            Self::Services => "services",
+            Self::SshKey => "ssh-key",
+            Self::SshHardening => "ssh-hardening",
+            Self::Firewall => "firewall",
+            Self::Ipv6 => "ipv6",
+            Self::Fail2ban => "fail2ban",
+            Self::UnattendedUpgrades => "unattended-upgrades",
+            Self::Tuning => "tuning",
+            Self::Verify => "verify",
+            Self::State => "state",
+        }
+    }
+}
+
 /// The order a deployment goes in.
 ///
 /// Three places in it are not preferences (R-12, `data-model.md` section 10):

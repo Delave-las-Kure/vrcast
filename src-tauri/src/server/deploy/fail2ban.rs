@@ -11,6 +11,10 @@ use crate::domain::deploy_steps::{Change, Checked, StepId};
 
 use super::{Context, DeployError, Result, Step};
 
+/// Что ставится. Открыто наружу, чтобы опись серверной части (T337) сверялась с этим, а не
+/// с копией имени рядом с проверкой.
+pub const PACKAGE: &str = "fail2ban";
+
 const JAIL: &str = "/etc/fail2ban/jail.local";
 
 /// How long the apply waits for the jail to actually start guarding, in seconds.
@@ -47,7 +51,7 @@ pub fn step<'a>() -> Step<Context<'a>> {
 fn changes(_: &Context<'_>) -> Vec<Change> {
     vec![
         Change::InstallsPackages {
-            names: vec![String::from("fail2ban")],
+            names: vec![String::from(PACKAGE)],
         },
         Change::EnablesService {
             name: String::from("fail2ban"),
@@ -77,8 +81,10 @@ fn check<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<Checked>> {
 
 fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
     Box::pin(async move {
-        ctx.ran("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fail2ban")
-            .await?;
+        ctx.ran(&format!(
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {PACKAGE}"
+        ))
+        .await?;
         ctx.put_file(JAIL, JAIL_LOCAL).await?;
         // **Waiting for the jail, not for the unit.** `systemctl enable --now` comes back as
         // soon as the process is up, and fail2ban is then still reading its configuration and

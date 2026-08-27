@@ -223,6 +223,11 @@ jobs:
           FORBID_IP: ${{ secrets.FORBID_IP }}
           FORBID_DOMAIN: ${{ secrets.FORBID_DOMAIN }}
         run: bash scripts/check-no-hardcoded-server.sh
+      # T325. Здесь, а не в «Interface», потому что это охранная проверка того же рода:
+      # один цвет, поставленный впрямую на экране, который смотрели, — и тёмная тема
+      # ломается там, куда заглядывают реже всего.
+      - name: Both themes line up
+        run: bash scripts/check-theme.sh
       # The isolation check (principle VII) runs locally before a phase is handed over: CI
       # sees only the application's directory, while the protected files live outside the
       # repository.

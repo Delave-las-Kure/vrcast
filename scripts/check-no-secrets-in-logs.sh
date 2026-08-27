@@ -63,6 +63,15 @@ trap 'rm -f "$LOG" "$LOG.needles"' EXIT
 #
 # `cargo test` takes several filters and runs the union of them.
 CONTAINER_TESTS="upload_live viewers_live hls_live limits_live"
+# Веха D. Развёртывание — единственное место, где приложение **само заводит закрытый ключ**
+# (T290a), и он идёт по тем же путям, что и чужой: в хранилище системы, в соединение, в
+# отчёты шагов. Ключа этого нет ни в одном файле, так что искать его в журнале построчно
+# нечем — зато его заголовок `BEGIN OPENSSH PRIVATE KEY` уже стоит в списке искомого, и
+# утёкший ключ принесёт его с собой.
+#
+# Диагностика тут же: она читает журнал раздачи и адреса зрителей, а FR-057 запрещает
+# отдавать их куда бы то ни было — журнал приложения не исключение.
+CONTAINER_TESTS="$CONTAINER_TESTS deploy_clean deploy_versions deploy_resume diag_live"
 if [ "$MODE" = "container" ]; then
   # Milestone C brought output paths of its own, and none of them is touched by an
   # upload: watching viewers holds a connection open for as long as a screen is,

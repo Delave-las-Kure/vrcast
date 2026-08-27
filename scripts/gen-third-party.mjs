@@ -217,6 +217,45 @@ function dnsSection() {
   ].join("\n");
 }
 
+/**
+ * T336 — what the application puts on somebody else's server.
+ *
+ * Not part of our distribution and not our licence obligation: the deployment installs these
+ * out of the distribution's own repositories, onto a machine the person owns. Named all the
+ * same, and for a plain reason — a person who has let this application set their server up
+ * has a right to know what is now running on it and under what terms, and there is nowhere
+ * else they would look for that.
+ *
+ * The list is written by hand rather than read off a dependency tree, because there is no
+ * tree to read: it is what the deployment steps install, and the one place that knows is
+ * `src-tauri/src/server/deploy/`. It goes stale the day a step changes — which is why the
+ * step names are here beside it.
+ */
+function serverSideSection() {
+  return [
+    "## Серверная часть — ставится приложением на сервер пользователя",
+    "",
+    "В поставку приложения это не входит: развёртывание (FR-121) ставит их на сервер",
+    "**из репозиториев самой системы**, на машину, которая принадлежит пользователю. Названы",
+    "здесь потому, что человек, доверивший приложению настройку сервера, вправе знать, что на",
+    "нём теперь работает и на каких условиях, — а больше ему это узнать неоткуда.",
+    "",
+    "| Что | Зачем | Лицензия | Шаг развёртывания |",
+    "|---|---|---|---|",
+    "| [Caddy](https://github.com/caddyserver/caddy) | раздача видео по HTTPS, сертификат сам | Apache-2.0 | `packages`, `configs`, `services` |",
+    "| [fail2ban](https://github.com/fail2ban/fail2ban) | отваживает подбор пароля к SSH | GPL-2.0-or-later | `fail2ban` |",
+    "| [unattended-upgrades](https://github.com/mvo5/unattended-upgrades) | обновления безопасности сами | GPL-2.0-or-later | `updates` |",
+    "| [ufw](https://launchpad.net/ufw) | закрывает наружу всё лишнее | GPL-3.0 | `firewall` |",
+    "",
+    "**MediaMTX убран** решением владельца 2026-08-27 (T252): за вехи A–C приложение не",
+    "обратилось к нему ни разу, все зрительские ссылки идут через `/videos/…` с диска.",
+    "",
+    "**Rive тоже не появился** (T323): маскот нарисован в коде, и ни пакета, ни бинарного",
+    "файла со стороны для него не потребовалось.",
+    "",
+  ].join("\n");
+}
+
 function table(rows) {
   const lines = ["| Пакет | Версия | Лицензия | Источник |", "|---|---|---|---|"];
   for (const r of rows.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))) {
@@ -271,6 +310,7 @@ function build() {
     ffmpegSection(),
     placesSection(),
     dnsSection(),
+    serverSideSection(),
     `## Ядро (Rust) — ${rust.length}`,
     "",
     table(rust),

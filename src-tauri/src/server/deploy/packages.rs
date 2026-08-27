@@ -17,7 +17,10 @@ use crate::domain::deploy_steps::{Change, Checked, StepId};
 use super::{Context, DeployError, Result, Step};
 
 /// What is installed from the distribution's own archives.
-const FROM_APT: [&str; 6] = ["ffmpeg", "curl", "tar", "ufw", "ca-certificates", "gnupg"];
+/// Public so `versions.json` can be checked against **this** list rather than a copy of it
+/// beside the check (T337). A copy goes stale the first time a package is added, and the
+/// check then passes while guarding a composition nobody deploys.
+pub const FROM_APT: [&str; 6] = ["ffmpeg", "curl", "tar", "ufw", "ca-certificates", "gnupg"];
 
 /// Caddy comes from its own repository rather than as a pinned archive with a checksum.
 ///

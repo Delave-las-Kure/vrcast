@@ -12,6 +12,10 @@ mod basics;
 #[path = "contract/contract_sync.rs"]
 mod contract_sync;
 
+/// T337 — состав серверной части версии 1 сверяется с кодом, а не обещается.
+#[path = "contract/server_inventory.rs"]
+mod server_inventory;
+
 #[path = "contract/library.rs"]
 mod library;
 
