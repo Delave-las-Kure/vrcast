@@ -33,10 +33,20 @@ function place(viewer: Viewer, notKnown: string): string {
 export function ViewerRow({
   viewer,
   mediaTitle,
+  onLimit,
+  limitLabel,
 }: {
   viewer: Viewer;
   /** What the medium is called. Absent while the core does not yet know what is watched. */
   mediaTitle?: string;
+  /**
+   * Offer to cap this viewer's quality.
+   *
+   * On the row rather than anywhere else: the one thing a person wants to do about a
+   * viewer who is struggling is done where they are looking at them struggling.
+   */
+  onLimit?: () => void;
+  limitLabel?: string;
 }) {
   const t = useT();
   const { lang } = useLang();
@@ -83,6 +93,13 @@ export function ViewerRow({
           </ul>
         ) : (
           <span className="viewers__fine">{words.fine}</span>
+        )}
+      </td>
+      <td>
+        {onLimit && (
+          <button type="button" onClick={onLimit} data-testid={`limit-${viewer.ip}`}>
+            {limitLabel}
+          </button>
         )}
       </td>
     </tr>

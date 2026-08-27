@@ -135,6 +135,8 @@ pub fn run() {
             commands::limits::ipc::limits_list,
             commands::ladder::ipc::ladder_measure,
             commands::ladder::ipc::ladder_plan,
+            commands::ladder::ipc::ladder_build,
+            commands::ladder::ipc::ladder_verify,
             commands::ladder::ipc::ladder_validate,
             commands::quality::ipc::quality_measure_preview,
             commands::quality::ipc::quality_measure_start,

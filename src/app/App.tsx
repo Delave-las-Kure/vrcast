@@ -14,6 +14,8 @@ import { About } from "../features/shared/About";
 import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { ComingSoon } from "../features/shared/ComingSoon";
 import { LadderPage } from "../features/ladder/LadderScreen";
+import { useActiveServer } from "../features/servers/store";
+import { LimitsList } from "../features/viewers/LimitsList";
 import { ViewersScreen } from "../features/viewers/ViewersScreen";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { UploadScreen } from "../features/upload/UploadScreen";
@@ -26,6 +28,10 @@ import { ThemeProvider } from "./theme";
 function AppShell() {
   const [version, setVersion] = useState<string | null>(null);
   const t = useT();
+  // Which server the limits belong to. Read here rather than inside the screen so that a
+  // person who has not chosen one is told so, instead of being shown an empty list that
+  // looks like "nothing is capped".
+  const activeServer = useActiveServer()?.id ?? null;
 
   useEffect(() => {
     ipc
@@ -59,12 +65,11 @@ function AppShell() {
           <Route
             path="/limits"
             element={
-              <ComingSoon
-                title={t.ui.sections.limits}
-                phase={soon.limits.phase}
-                what={soon.limits.what}
-                fallback={soon.limits.fallback}
-              />
+              activeServer ? (
+                <LimitsList serverId={activeServer} />
+              ) : (
+                <p>{t.ui.viewers.noServer}</p>
+              )
             }
           />
           <Route

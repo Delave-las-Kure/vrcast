@@ -21,6 +21,9 @@ mod ladder;
 #[path = "contract/limits.rs"]
 mod limits;
 
+#[path = "contract/quality.rs"]
+mod quality;
+
 #[path = "contract/responsiveness.rs"]
 mod responsiveness;
 

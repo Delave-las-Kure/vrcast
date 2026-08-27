@@ -18,6 +18,7 @@ use crate::domain::ladder::{self, Layout, NotBuildable, Objection, Plan, Rung, S
 use crate::domain::wording::Detail;
 use crate::media::{encoders, ffmpeg, measure, probe_complexity};
 use crate::store::measurements;
+use crate::tasks::state::TaskKind;
 
 /// What the interface sends to have a ladder worked out.
 #[derive(Debug, Clone, Deserialize)]
@@ -40,6 +41,23 @@ fn h264() -> String {
 
 fn yes() -> bool {
     true
+}
+
+/// What the interface sends to build a quality set.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BuildRequest {
+    pub server_id: String,
+    /// The source on this machine that the variants are made from.
+    pub path: String,
+    /// The medium's own directory on the server.
+    pub slug: String,
+    /// The rungs, as the person has them on screen — measured or edited.
+    pub rungs: Vec<Rung>,
+    /// Which audio track to keep.
+    #[serde(default)]
+    pub audio_track: usize,
+    #[serde(default = "yes")]
+    pub prefer_hardware: bool,
 }
 
 /// Where a ladder's rungs came from.
@@ -167,6 +185,106 @@ pub mod api {
         })
     }
 
+    /// Build the set: prepare each variant, send it, cut it, and check it is served.
+    ///
+    /// Returns a task number at once (FR-080). Everything that can be refused quickly is
+    /// refused here, before a task exists — above all an unmeasured ladder, because
+    /// building one is hours of encoding spent on a guess (FR-141).
+    pub async fn ladder_build(
+        state: &super::super::AppState,
+        request: BuildRequest,
+    ) -> Result<String> {
+        ladder::buildable(&request.rungs).map_err(|why| match why {
+            ladder::NotBuildable::NoRungs => AppError::new(ErrorCode::InvalidInput),
+            ladder::NotBuildable::RungsNotMeasured { indexes } => {
+                AppError::new(ErrorCode::LadderNotMeasured).with_cause(format!(
+                    "rungs {}",
+                    indexes
+                        .iter()
+                        .map(|i| (i + 1).to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            }
+        })?;
+
+        let profile = super::super::library::api::profile_of(state, &request.server_id)?;
+        let source = super::super::api::source_probe(&request.path).await?;
+        let (encoder, _) = pick_encoder(request.prefer_hardware).await?;
+
+        let master_url = crate::domain::links::for_path(
+            &profile.domain,
+            None,
+            &format!("{}/master.m3u8", request.slug),
+        )
+        .origin;
+        // Somewhere local for a variant while it is being made. Beside the other working
+        // files rather than beside the source: a person's film directory is theirs, and a
+        // half-made variant appearing in it is alarming even when it is swept away after.
+        let work_dir = std::env::temp_dir().join("vrcast-ladder");
+        let secrets = state.secrets.clone();
+
+        let task_id = state
+            .tasks
+            .submit(
+                TaskKind::BuildLadder,
+                Some(request.server_id.clone()),
+                move |ctx| async move {
+                    let conn = crate::server::connect(secrets.as_ref(), &profile).await?;
+                    let job = crate::tasks::ladder_build::BuildJob {
+                        conn: &conn,
+                        video_dir: &profile.video_dir,
+                        owner: &format!("{}:{}", profile.user, profile.user),
+                        slug: &request.slug,
+                        source: &source,
+                        rungs: &request.rungs,
+                        encoder: &encoder,
+                        audio_track: request.audio_track,
+                        master_url: &master_url,
+                        work_dir: &work_dir,
+                    };
+                    let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;
+                    conn.close().await;
+                    outcome.map(|_| ()).map_err(build_error)
+                },
+            )
+            .await?;
+        Ok(task_id)
+    }
+
+    /// Ask the serving for every variant of a set (FR-047).
+    ///
+    /// Separate from building so that a set can be asked about at any time — a variant
+    /// can stop being served long after it was made, and nothing else would notice.
+    pub async fn ladder_verify(
+        state: &super::super::AppState,
+        server_id: &str,
+        slug: &str,
+    ) -> Result<crate::server::hls_verify::LadderVerdict> {
+        let profile = super::super::library::api::profile_of(state, server_id)?;
+        let master_url =
+            crate::domain::links::for_path(&profile.domain, None, &format!("{slug}/master.m3u8"))
+                .origin;
+
+        // What the description itself names is what is expected: asking for a number from
+        // elsewhere would let a set with a rung missing from its own description pass.
+        let verdict = crate::server::hls_verify::verify(&master_url, 0)
+            .await
+            .map_err(|e| AppError::new(ErrorCode::DomainNotServing).with_cause(e))?;
+        let expected = verdict.variants_in_master;
+        let verdict = crate::server::hls_verify::LadderVerdict {
+            variants_expected: expected,
+            ..verdict
+        };
+
+        if !verdict.ok() {
+            return Err(
+                AppError::new(ErrorCode::LadderIncomplete).with_cause(verdict.broken().join(", "))
+            );
+        }
+        Ok(verdict)
+    }
+
     /// Check rungs a person has edited (FR-044).
     ///
     /// A pure function, and called on every edit rather than at the end: learning that a
@@ -226,6 +344,20 @@ fn measured_plan(
     }))
 }
 
+fn build_error(e: crate::tasks::ladder_build::BuildError) -> AppError {
+    use crate::tasks::ladder_build::BuildError as E;
+    match e {
+        E::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+        E::NotBuildable(_) => AppError::new(ErrorCode::LadderNotMeasured),
+        // The one failure that names names: a person is owed "the lower rung" rather
+        // than "something went wrong", because the two ask for different work.
+        E::Incomplete(which) => {
+            AppError::new(ErrorCode::LadderIncomplete).with_cause(which.join(", "))
+        }
+        other => AppError::new(ErrorCode::Internal).with_cause(other),
+    }
+}
+
 fn refusal_text(refusal: ladder::Refusal) -> String {
     match refusal {
         ladder::Refusal::SourceBitrateTooLow { bitrate_bps } => format!(
@@ -259,6 +391,23 @@ pub mod ipc {
         request: LadderRequest,
     ) -> Result<LadderPreview> {
         api::ladder_plan(&state, &request).await
+    }
+
+    #[tauri::command]
+    pub async fn ladder_build(
+        state: State<'_, super::super::AppState>,
+        request: BuildRequest,
+    ) -> Result<String> {
+        api::ladder_build(&state, request).await
+    }
+
+    #[tauri::command]
+    pub async fn ladder_verify(
+        state: State<'_, super::super::AppState>,
+        server_id: String,
+        slug: String,
+    ) -> Result<crate::server::hls_verify::LadderVerdict> {
+        api::ladder_verify(&state, &server_id, &slug).await
     }
 
     #[tauri::command]

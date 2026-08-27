@@ -18,6 +18,7 @@ import { useActiveServer, useServers } from "../servers/store";
 import { useT } from "../../shared/i18n";
 import { ipc, onViewersUpdate } from "../../shared/ipc";
 import type { AppError, LibraryView, Viewer } from "../../shared/contract";
+import { LimitDialog } from "./LimitDialog";
 import { ViewerRow } from "./ViewerRow";
 
 /** What the library calls a medium, so the list can name what is being watched. */
@@ -64,6 +65,11 @@ export function ViewersScreen() {
   const titles = useMediaTitles(serverId);
 
   const [viewers, setViewers] = useState<Viewer[] | null>(null);
+  // Whom the person is about to cap, if anybody. The dialogue is opened from the row
+  // rather than from a screen of its own: capping is something done **to a viewer you
+  // are looking at**, and making somebody go elsewhere and retype an address would be
+  // three actions where SC-006 allows three altogether.
+  const [capping, setCapping] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
 
   useEffect(() => {
@@ -126,6 +132,7 @@ export function ViewersScreen() {
               <th>{words.columnSpeed}</th>
               <th>{words.columnFor}</th>
               <th>{words.columnState}</th>
+              <th />
             </tr>
           </thead>
           <tbody>
@@ -134,10 +141,22 @@ export function ViewersScreen() {
                 key={viewer.ip}
                 viewer={viewer}
                 mediaTitle={viewer.media_id ? titles[viewer.media_id] : undefined}
+                onLimit={() => setCapping(viewer.ip)}
+                limitLabel={t.ui.limits.title}
               />
             ))}
           </tbody>
         </table>
+      )}
+
+      {capping && serverId && (
+        <LimitDialog
+          serverId={serverId}
+          ip={capping}
+          media={Object.entries(titles).map(([slug, title]) => ({ slug, title }))}
+          onDone={() => setCapping(null)}
+          onCancel={() => setCapping(null)}
+        />
       )}
     </section>
   );

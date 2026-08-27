@@ -19,6 +19,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { RungEditor } from "./RungEditor";
+import { useActiveServer } from "../servers/store";
 import { useT } from "../../shared/i18n";
 import { ipc } from "../../shared/ipc";
 import type {
@@ -108,10 +109,22 @@ function MeasureOffer({
  * Separate from [`LadderScreen`] so that the screen itself can be checked without a file
  * dialogue — the dialogue belongs to the system and cannot be opened in a test.
  */
+/**
+ * The medium's directory, guessed from the file's own name.
+ *
+ * A guess, and only until the person is given somewhere to say otherwise: it is the same
+ * name the upload screen offers, so a set built here lands beside the file it came from.
+ */
+function slugOf(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? "";
+  return name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-").toLowerCase();
+}
+
 export function LadderPage() {
   const t = useT();
   const words = t.ui.ladder;
   const [path, setPath] = useState<string | null>(null);
+  const server = useActiveServer();
 
   const pick = async () => {
     const chosen = await open({
@@ -138,10 +151,20 @@ export function LadderPage() {
       </div>
     );
   }
-  return <LadderScreen path={path} />;
+  return <LadderScreen path={path} serverId={server?.id ?? null} slug={slugOf(path)} />;
 }
 
-export function LadderScreen({ path }: { path: string }) {
+export function LadderScreen({
+  path,
+  serverId,
+  slug,
+}: {
+  path: string;
+  /** Which server the set is built on. Nothing can be built without one. */
+  serverId?: string | null;
+  /** The medium's own directory on that server. */
+  slug?: string;
+}) {
   const t = useT();
   const words = t.ui.ladder;
 
@@ -150,6 +173,7 @@ export function LadderScreen({ path }: { path: string }) {
   const [offer, setOffer] = useState<MeasurePreview | null>(null);
   const [rungs, setRungs] = useState<Rung[]>([]);
   const [measuring, setMeasuring] = useState(false);
+  const [building, setBuilding] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
 
   useEffect(() => {
@@ -230,8 +254,20 @@ export function LadderScreen({ path }: { path: string }) {
         <RungEditor rungs={rungs} source={preview.source} onChange={setRungs} />
       )}
 
-      <button type="button" disabled={blocked !== null} data-testid="build">
-        {words.build}
+      <button
+        type="button"
+        disabled={blocked !== null || building}
+        data-testid="build"
+        onClick={() => {
+          if (!preview || !serverId) return;
+          setBuilding(true);
+          ipc
+            .ladderBuild({ serverId, path, slug: slug ?? slugOf(path), rungs })
+            .catch((e: AppError) => setError(e))
+            .finally(() => setBuilding(false));
+        }}
+      >
+        {building ? words.building : words.build}
       </button>
       {blocked && (
         <p role="note" data-testid="build-blocked">

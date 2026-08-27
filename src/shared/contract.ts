@@ -450,6 +450,27 @@ export type ViewerProblem = "SlowLink" | "Retransmits" | "Stalls";
  * here is ever filled in by guessing: a city invented from a neighbouring range looks
  * exactly like knowledge (FR-052).
  */
+/** What was found about one variant of a set that is being served. */
+export interface VariantVerdict {
+  sub: string;
+  playlist_served: boolean;
+  segments: number;
+  /** The playlist says where it ends. Without it a player waits for more for ever. */
+  complete: boolean;
+  first_segment_served: boolean;
+  /** Fragmented MP4 only: without its initialisation piece the segments are useless. */
+  init_served: boolean | null;
+  trouble: string | null;
+}
+
+/** Whether a set is served **whole** — success means every variant, not the first. */
+export interface LadderServedVerdict {
+  master_served: boolean;
+  variants_in_master: number;
+  variants_expected: number;
+  variants: VariantVerdict[];
+}
+
 // ---------- quality limits ----------
 
 /** One limit in force, as the **server** says it is (FR-064). */

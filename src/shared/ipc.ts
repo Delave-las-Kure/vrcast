@@ -46,6 +46,7 @@ import {
   type SourceMeasured,
   type LimitPreview,
   type QualityLimit,
+  type LadderServedVerdict,
 } from "./contract";
 
 /**
@@ -174,6 +175,24 @@ export const ipc = {
   }) => call<string>("quality_measure_start", { request }),
   qualityMeasureResult: (sourceKey: string, codec: string) =>
     call<MeasurementView>("quality_measure_result", { sourceKey, codec }),
+
+  /**
+   * Build the set. Returns a task number at once: this is hours of work.
+   *
+   * Refuses before any task exists when the rungs were not measured — the core does that,
+   * not the screen, so a way in that forgot to check cannot get past it either.
+   */
+  ladderBuild: (request: {
+    serverId: string;
+    path: string;
+    slug: string;
+    rungs: Rung[];
+    audioTrack?: number;
+    preferHardware?: boolean;
+  }) => call<string>("ladder_build", { request }),
+  /** Ask the serving for every variant of a set (FR-047). */
+  ladderVerify: (serverId: string, slug: string) =>
+    call<LadderServedVerdict>("ladder_verify", { serverId, slug }),
 
   // --- quality limits ---
   /** What capping this viewer would do. Nothing is changed (FR-066). */
