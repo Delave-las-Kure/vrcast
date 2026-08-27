@@ -1,16 +1,16 @@
 /**
- * T330 — маскот с точки зрения человека и машины.
+ * T330 — the mascot, from a person's side and from the machine's.
  *
- * Три обещания, и второе из них — единственное, ради чего настройка «выключить» вообще
- * что-то значит:
+ * Three promises, and the second is the only thing that makes the "turn it off" setting mean
+ * anything at all:
  *
- * 1. **настроение приходит из настоящих событий задач** (FR-102), а не из своего источника:
- *    разойдясь с экраном задач, маскот махал бы упавшей задаче;
- * 2. **выключённый — не загружается вовсе** (FR-103). Проверяется **отсутствием запроса**, а
- *    не отсутствием картинки: картинки нет и когда она просто не отрисовалась, так что
- *    проверка на картинку прошла бы и на маскоте, который честно скачался и спрятался;
- * 3. **беда важнее успеха**: маскот, показывающий «получилось» поверх упавшей задачи, прячет
- *    ровно то, ради чего на него смотрят.
+ * 1. **the mood comes from real task events** (FR-102) rather than from a source of its own:
+ *    let it drift from the task list and the mascot waves at a task that has just failed;
+ * 2. **turned off means not loaded at all** (FR-103). Checked by the **absence of a request**
+ *    rather than the absence of a picture: there is no picture either when one simply did not
+ *    render, so a picture check would pass on a mascot that dutifully downloaded and hid;
+ * 3. **trouble outranks success**: a mascot showing "it worked" over a failed task hides
+ *    exactly what people look at it for.
  */
 
 import { screen, waitFor } from "@testing-library/react";
@@ -20,17 +20,43 @@ import { renderIn, ru } from "../../../test-utils";
 import type { Settings, TaskDoneEvent, TaskProgressEvent } from "../../../shared/contract";
 
 /**
- * Поднято наверх вместе с самой подменой: фабрика `vi.mock` вычисляется раньше обычных
- * объявлений файла, и ссылка на простую переменную из неё не дотянулась бы.
+ * Hoisted along with the mock itself: a `vi.mock` factory is evaluated before the file's
+ * ordinary declarations, and a reference to a plain variable from inside it would not reach.
+ *
+ * **The handlers start as something that shouts, not as something that shrugs.** They used to
+ * start as no-ops, and they were never reset between tests — so an event fired before the new
+ * mascot had subscribed went to the previous test's unmounted one, changed nothing anybody
+ * could see, and the run ended with "expected success, got idle" and nothing to say why. It
+ * failed once in the Linux container and nowhere else, which is how a race behaves.
+ *
+ * So: a handler nobody has subscribed refuses the event out loud, `live` says whether anybody
+ * is listening at all, and each unsubscribe removes only its own handler — the cleanup runs in
+ * a microtask and can land after the next test has already subscribed.
  */
-const shared = vi.hoisted(() => ({
-  drawingAsked: vi.fn(),
-  settingsGet: vi.fn(),
-  handlers: {
-    progress: (_e: unknown) => {},
-    done: (_e: unknown) => {},
-  },
-}));
+const shared = vi.hoisted(() => {
+  // Returning `void` rather than the inferred `never`: a function that only ever throws
+  // cannot otherwise stand in the same slot as a real handler.
+  const stub =
+    (what: string): ((e: unknown) => void) =>
+    (_e: unknown) => {
+      throw new Error(
+        "a " +
+          what +
+          " event was fired while nothing was subscribed: the mascot had not " +
+          "mounted yet, or had already gone",
+      );
+    };
+  return {
+    drawingAsked: vi.fn(),
+    settingsGet: vi.fn(),
+    stub,
+    live: { progress: false, done: false },
+    handlers: {
+      progress: stub("progress"),
+      done: stub("done"),
+    },
+  };
+});
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -42,19 +68,31 @@ vi.mock("../../../shared/ipc", async () => {
     },
     onTaskProgress: (h: (e: unknown) => void) => {
       shared.handlers.progress = h;
-      return Promise.resolve(() => {});
+      shared.live.progress = true;
+      return Promise.resolve(() => {
+        if (shared.handlers.progress === h) {
+          shared.handlers.progress = shared.stub("progress");
+          shared.live.progress = false;
+        }
+      });
     },
     onTaskDone: (h: (e: unknown) => void) => {
       shared.handlers.done = h;
-      return Promise.resolve(() => {});
+      shared.live.done = true;
+      return Promise.resolve(() => {
+        if (shared.handlers.done === h) {
+          shared.handlers.done = shared.stub("done");
+          shared.live.done = false;
+        }
+      });
     },
     onViewersUpdate: () => Promise.resolve(() => {}),
   };
 });
 
 vi.mock("../MascotDrawing", async () => {
-  // Считается **сам факт запроса** модуля. Ленивая загрузка обращается сюда только когда
-  // маскот действительно рисуется, так что счётчик и есть ответ на «загрузился ли он».
+  // What is counted is **the module being asked for at all**. The lazy load reaches here only
+  // when the mascot really draws, so the counter is the answer to "was it loaded".
   shared.drawingAsked();
   return await vi.importActual<typeof import("../MascotDrawing")>("../MascotDrawing");
 });
@@ -97,9 +135,27 @@ function show() {
   );
 }
 
+/**
+ * Wait until this mascot is the one listening.
+ *
+ * Firing before it has subscribed is the whole of the flake this file used to have: the event
+ * reached nobody, the mood stayed as it was, and the failure named a mood rather than a cause.
+ */
+async function subscribed() {
+  await waitFor(() => {
+    expect(shared.live.progress).toBe(true);
+    expect(shared.live.done).toBe(true);
+  });
+}
+
 describe("the mascot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Nothing carried over from the test before: its mascot is gone, and its handler with it.
+    shared.handlers.progress = shared.stub("progress");
+    shared.handlers.done = shared.stub("done");
+    shared.live.progress = false;
+    shared.live.done = false;
     shared.settingsGet.mockResolvedValue(SETTINGS);
   });
 
@@ -107,6 +163,7 @@ describe("the mascot", () => {
     show();
     const drawing = await screen.findByTestId("mascot-drawing");
     expect(drawing).toHaveAttribute("data-mood", "idle");
+    await subscribed();
 
     shared.handlers.progress(progress());
     await waitFor(() =>
@@ -117,7 +174,8 @@ describe("the mascot", () => {
     await waitFor(() =>
       expect(screen.getByTestId("mascot-drawing")).toHaveAttribute("data-mood", "trouble"),
     );
-    // И вслух, а не только цветом: тому, кто слушает экран, картинка не говорит ничего.
+    // Out loud as well as in colour: to somebody listening to the screen a picture says
+    // nothing at all.
     expect(screen.getByTestId("mascot-drawing")).toHaveAttribute(
       "aria-label",
       ru.ui.appearance.mascotTrouble,
@@ -127,6 +185,7 @@ describe("the mascot", () => {
   it("is pleased when a task really finishes", async () => {
     show();
     await screen.findByTestId("mascot-drawing");
+    await subscribed();
 
     shared.handlers.progress(progress());
     shared.handlers.done(done());
@@ -136,9 +195,11 @@ describe("the mascot", () => {
   });
 
   it("does not congratulate a cancelled task", async () => {
-    // Человек сам её и отменил. Хвалить его за это нелепо, тревожиться тем более.
+    // The person cancelled it themselves. Praising them for that would be absurd, and worrying
+    // about it more so.
     show();
     await screen.findByTestId("mascot-drawing");
+    await subscribed();
 
     shared.handlers.progress(progress());
     shared.handlers.done(done({ state: "cancelled" }));
@@ -148,9 +209,10 @@ describe("the mascot", () => {
   });
 
   it("shows nothing at all when it is turned off", async () => {
-    // Здесь только про «не видно». Про «не загружен» — в `mascot-off.test.tsx`, отдельным
-    // файлом: в этом реестр модулей уже нагрет проверками выше, и счётчик запросов ответил
-    // бы про них, а не про эту проверку. Проверено: в общем файле она проходит всегда.
+    // Only "not visible" here. "Not loaded" is in `mascot-off.test.tsx`, in a file of its own:
+    // in this one the module registry is already warm from the tests above, and the request
+    // counter would be answering about them rather than about this check. Verified: in a
+    // shared file that check passes always.
     shared.settingsGet.mockResolvedValue({ ...SETTINGS, mascot: false });
     show();
 

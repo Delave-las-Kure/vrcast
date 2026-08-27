@@ -103,12 +103,23 @@ export class Harness {
    * `nativeDriver` is the platform's own WebDriver, found or fetched by
    * `scripts/fetch-webdriver.mjs`.
    */
-  static async start(nativeDriver: string): Promise<Harness> {
+  static async start(
+    nativeDriver: string,
+    /**
+     * Added to the environment the application is started in.
+     *
+     * The intermediary hands its own environment to the application it launches, so this is
+     * how a test can point the application somewhere other than the person's own directories.
+     * One test needs that badly: the one that presses "remove everything" (T359).
+     */
+    extraEnv: Record<string, string> = {},
+  ): Promise<Harness> {
     const application = applicationPath();
     const said: string[] = [];
 
     const driver = spawn(driverPath(), ["--port", String(PORT), "--native-driver", nativeDriver], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...extraEnv },
     });
     // Kept, not printed: on a good run it is noise, and on a bad one it is the only account
     // of what went wrong inside the intermediary.
