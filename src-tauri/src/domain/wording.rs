@@ -244,6 +244,22 @@ detail_codes! {
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 
+    // --- what to do about a domain that does not point here (FR-140) ---
+    //
+    // Not one code saying "the domain is wrong" but four saying what to do, because the
+    // four are different afternoons: create a record, correct one, remove one, or remove
+    // one that was never about this machine. A person who is told only that something is
+    // wrong goes to their registrar and guesses.
+    /// `record` — A or AAAA, `name` — the exact name, `value` — what to put in it.
+    DomainAddRecord => "DOMAIN_ADD_RECORD",
+    /// `record`, `name`, `to` — where it leads now, `value` — where it must lead.
+    DomainFixRecord => "DOMAIN_FIX_RECORD",
+    /// `record`, `name`, `to`. IPv6 is being turned off and the record still promises it.
+    DomainRemoveRecord => "DOMAIN_REMOVE_RECORD",
+    /// `name`, `to`. The machine has no IPv6 address at all, so whatever this leads to is
+    /// not it — the likeliest shape of a record left from the domain's previous life.
+    DomainServerHasNoIpv6 => "DOMAIN_SERVER_HAS_NO_IPV6",
+
     // --- transfer ---
     UploadFileUnreadable => "UPLOAD_FILE_UNREADABLE",
     UploadNotAFile => "UPLOAD_NOT_A_FILE",

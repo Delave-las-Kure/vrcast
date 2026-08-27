@@ -14,6 +14,7 @@
 //! Finding them out — with a growing pause, and going round the negative cache (FR-138,
 //! FR-139) — is `net::dns`'s work.
 
+use crate::domain::wording::{Detail, DetailCode};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -100,15 +101,32 @@ pub fn judge(records: &Records, server: &ServerAddresses, choice: Ipv6Choice) ->
 
     // The ordinary record. Absent, the domain is not attached in the sense a person means —
     // even if an AAAA exists, because most of the way to the server is over IPv4.
+    //
+    // **Unless the machine has no IPv4 address of its own.** Found while writing the
+    // wording for the refusal (T266): a server reachable only over IPv6 is unusual and
+    // real, and demanding an A record of it would send its owner to create a record
+    // pointing at nothing. There the A record must be absent and the AAAA one must lead
+    // here — which is the same rule read the other way round.
     match server.v4 {
         Some(ours) if records.a.contains(&ours) => {}
-        _ if records.a.is_empty() => return Verdict::NotPointed,
-        _ => {
+        Some(_) if records.a.is_empty() => return Verdict::NotPointed,
+        Some(_) => {
             return Verdict::PointsElsewhere {
                 record: RecordKind::A,
                 to: shown(&records.a),
             }
         }
+        None if !records.a.is_empty() => {
+            return Verdict::PointsElsewhere {
+                record: RecordKind::A,
+                to: shown(&records.a),
+            }
+        }
+        // No IPv4 on either side. Then everything rests on the IPv6 half below, and an
+        // IPv6 record that is missing there is the domain not being attached at all —
+        // not a mismatch of somebody's choice.
+        None if records.aaaa.is_empty() => return Verdict::NotPointed,
+        None => {}
     }
 
     // The IPv6 half.
@@ -156,5 +174,81 @@ impl Verdict {
     /// Whether a deployment may begin.
     pub fn may_begin(&self) -> bool {
         matches!(self, Self::Ok)
+    }
+
+    /// What the person has to go and do about it (FR-140).
+    ///
+    /// **Not "the domain does not resolve".** Somebody who has just bought their first
+    /// server gets nothing from that, nor from `NXDOMAIN`. What they can act on is the
+    /// record's type, its exact name and the exact value to give it — and, when a record
+    /// is already there, where it leads now, because the commonest cause is one left from
+    /// the domain's previous life and seeing the old address is what makes that obvious.
+    ///
+    /// The wording lives in the interface's dictionaries; this names the case and hands
+    /// over the values.
+    pub fn what_to_do(&self, domain: &str, server: &ServerAddresses) -> Option<Detail> {
+        let name = domain.trim().trim_end_matches('.');
+        let ipv4 = server.v4.map(|a| a.to_string()).unwrap_or_default();
+        let ipv6 = server.v6.map(|a| a.to_string()).unwrap_or_default();
+
+        Some(match self {
+            Self::Ok => return None,
+
+            // Nothing at all. Which record to ask for depends on what the machine has:
+            // telling the owner of an IPv6-only server to create an A record would send
+            // them to write down an address that does not exist.
+            Self::NotPointed => {
+                let (record, value) = if server.v4.is_some() {
+                    ("A", &ipv4)
+                } else {
+                    ("AAAA", &ipv6)
+                };
+                Detail::new(DetailCode::DomainAddRecord)
+                    .with("record", record)
+                    .with("name", name)
+                    .with("value", value.as_str())
+            }
+
+            Self::PointsElsewhere { record, to } => Detail::new(DetailCode::DomainFixRecord)
+                .with("record", record.as_str())
+                .with("name", name)
+                .with("to", to.join(", "))
+                .with(
+                    "value",
+                    match record {
+                        RecordKind::A => ipv4.as_str(),
+                        RecordKind::Aaaa => ipv6.as_str(),
+                    },
+                ),
+
+            Self::Ipv6Mismatch { problem } => match problem {
+                Ipv6Problem::Missing => Detail::new(DetailCode::DomainAddRecord)
+                    .with("record", "AAAA")
+                    .with("name", name)
+                    .with("value", ipv6.as_str()),
+                Ipv6Problem::PointsElsewhere { to } => Detail::new(DetailCode::DomainFixRecord)
+                    .with("record", "AAAA")
+                    .with("name", name)
+                    .with("to", to.join(", "))
+                    .with("value", ipv6.as_str()),
+                Ipv6Problem::ShouldNotExist { to } => Detail::new(DetailCode::DomainRemoveRecord)
+                    .with("record", "AAAA")
+                    .with("name", name)
+                    .with("to", to.join(", ")),
+                Ipv6Problem::ServerHasNone { to } => Detail::new(DetailCode::DomainServerHasNoIpv6)
+                    .with("name", name)
+                    .with("to", to.join(", ")),
+            },
+        })
+    }
+}
+
+impl RecordKind {
+    /// As a person writes it at their registrar.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::Aaaa => "AAAA",
+        }
     }
 }

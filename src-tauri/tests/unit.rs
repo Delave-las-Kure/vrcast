@@ -112,3 +112,6 @@ mod swap;
 
 #[path = "unit/detect.rs"]
 mod detect;
+
+#[path = "unit/deploy_engine.rs"]
+mod deploy_engine;

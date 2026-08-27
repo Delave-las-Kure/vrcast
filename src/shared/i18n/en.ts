@@ -420,6 +420,14 @@ export const en: Catalogue = {
     UPLOAD_ALREADY_RUNNING:
       "The file “{name}” is already being uploaded to this server. Wait for it to finish, or cancel that task.",
     UPLOAD_NAME_RESERVED: "That name belongs to an internal serving entry — choose another.",
+    DOMAIN_ADD_RECORD:
+      "Create a {record} record for “{name}” with the value {value} at your domain registrar. The change takes a few minutes to spread; the check can be run again.",
+    DOMAIN_FIX_RECORD:
+      "The {record} record for “{name}” currently leads to {to}. Change it to {value} — most often this is a record left over from the domain’s previous life.",
+    DOMAIN_REMOVE_RECORD:
+      "The {record} record for “{name}” leads to {to}, and IPv6 is to be turned off. Remove it: otherwise the domain goes on promising an address that will stop answering, and some viewers will try it first.",
+    DOMAIN_SERVER_HAS_NO_IPV6:
+      "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
     NOT_ENOUGH_SPACE:
       "The server is {short_by|bytes} short — {needed|bytes} needed, {free|bytes} free.",
     NAME_WILL_BE_REPLACED: "The file “{name}” is already being served — it will be replaced.",

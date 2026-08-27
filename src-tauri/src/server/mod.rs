@@ -7,6 +7,7 @@
 
 pub mod active_use;
 pub mod checksum;
+pub mod deploy;
 pub mod detect;
 pub mod disk;
 pub mod env_import;

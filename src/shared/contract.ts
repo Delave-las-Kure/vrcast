@@ -227,6 +227,11 @@ export type DetailCode =
   | "UPLOAD_NAME_EMPTY"
   | "UPLOAD_ALREADY_RUNNING"
   | "UPLOAD_NAME_RESERVED"
+  // Что именно завести у регистратора, с каким значением и куда ведёт сейчас (FR-140).
+  | "DOMAIN_ADD_RECORD"
+  | "DOMAIN_FIX_RECORD"
+  | "DOMAIN_REMOVE_RECORD"
+  | "DOMAIN_SERVER_HAS_NO_IPV6"
   | "NOT_ENOUGH_SPACE"
   | "NAME_WILL_BE_REPLACED"
   | "CDN_KEEPS_OLD_COPY"
