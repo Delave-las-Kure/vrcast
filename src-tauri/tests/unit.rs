@@ -97,3 +97,15 @@ mod validate;
 
 #[path = "unit/vmaf.rs"]
 mod vmaf;
+
+#[path = "unit/server_state.rs"]
+mod server_state;
+
+#[path = "unit/deploy_steps.rs"]
+mod deploy_steps;
+
+#[path = "unit/dns_verdict.rs"]
+mod dns_verdict;
+
+#[path = "unit/swap.rs"]
+mod swap;
