@@ -8,6 +8,22 @@
 
 name: build
 
+# **Свои исполнители, а не машины GitHub** (решение владельца 2026-08-27: платить за минуты
+# не хотим, репозиторий остаётся закрытым).
+#
+# Что этим потеряно, сказано прямо: обе находки сквозной оснастки пришли от **чужой** машины —
+# гонка на машине, где приложение запускается впервые, и несовпадение драйвера с WebView2.
+# Исполнитель на машине разработчика таких находок не даёт, и выдавать его зелёный за прежний
+# нельзя.
+#
+# Что осталось: обе платформы по-настоящему (Windows — своя, Linux — WSL2 Ubuntu 22.04),
+# контейнерная интеграция через Docker, и разделение «собрано у меня» от «собрано начисто» —
+# исполнитель работает в своём каталоге, а не в рабочем дереве.
+#
+# **Системные библиотеки ставятся на машину один раз, а не заданием.** У своего исполнителя
+# нет права на `sudo apt-get`, и это правильно: зависимости — забота машины. Задание их
+# проверяет и говорит, что доставить, если чего-то нет.
+
 on:
   push:
     branches: [main]
@@ -20,7 +36,7 @@ env:
 jobs:
   frontend:
     name: Interface — style and tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vrcast-linux]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,16 +57,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+        os: [vrcast-win, vrcast-linux]
+    runs-on: [self-hosted, '${{ matrix.os }}']
     steps:
       - uses: actions/checkout@v4
 
-      - name: Tauri system dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Системные библиотеки на месте (Linux)
+        if: matrix.os == 'vrcast-linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          missing=""
+          for p in libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf; do
+            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
+          done
+          if [ -n "$missing" ]; then
+            echo "На машине исполнителя не хватает:$missing" >&2
+            echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
+            exit 1
+          fi
+          echo "системные библиотеки на месте"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -104,11 +128,11 @@ jobs:
   # caused it, when nobody remembers the change.
   e2e:
     name: End to end — the built application, driven
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, '${{ matrix.os }}']
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [vrcast-win, vrcast-linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -127,12 +151,20 @@ jobs:
       # `webkit2gtk-driver` gives WebKitWebDriver, which tauri-driver forwards to, and xvfb
       # gives the application somewhere to open its window: a runner has no display, and
       # without one the window never appears and the driver waits for it forever.
-      - name: Tauri system dependencies and the WebDriver (Linux)
+      - name: Системные библиотеки и драйвер на месте (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-            patchelf webkit2gtk-driver xvfb
+          missing=""
+          for p in libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+                   webkit2gtk-driver xvfb; do
+            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
+          done
+          if [ -n "$missing" ]; then
+            echo "На машине исполнителя не хватает:$missing" >&2
+            echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
+            exit 1
+          fi
+          echo "системные библиотеки и драйвер на месте"
 
       - run: npm ci
       - name: Cache for the bundled FFmpeg
@@ -207,17 +239,25 @@ jobs:
 
   integration:
     name: Integration — a throwaway server in a container
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vrcast-linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Tauri system dependencies
+      - name: Системные библиотеки на месте
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          missing=""
+          for p in libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf; do
+            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
+          done
+          if [ -n "$missing" ]; then
+            echo "На машине исполнителя не хватает:$missing" >&2
+            echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
+            exit 1
+          fi
+          echo "системные библиотеки на месте"
       # FFmpeg is needed at BUILD time, not only when packaging: the Tauri bundler checks
       # that the bundled programs are there and refuses to build without them. So this step
       # stands in every job that builds the core at all — otherwise even `cargo test` fails.
@@ -292,7 +332,7 @@ jobs:
 
   licenses:
     name: Licence compatibility with GPL-3.0
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vrcast-linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -326,7 +366,7 @@ jobs:
 
   guards:
     name: Isolation and no hardcoded servers
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, vrcast-linux]
     steps:
       - uses: actions/checkout@v4
       - name: Hardcoded servers (FR-004)
