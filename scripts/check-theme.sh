@@ -15,10 +15,19 @@
 set -euo pipefail
 
 CSS="$(dirname "$0")/../src/app/styles.css"
+
+# **`python3`, then `python`.** Ubuntu ships only the first, Windows installers only the
+# second, and a script that names one of them works on one machine of the two. Found on the
+# self-hosted runner's first run: `python: command not found` on Ubuntu 22.04.
+PY_BIN=$(command -v python3 || command -v python || true)
+if [ -z "$PY_BIN" ]; then
+	echo "${RED}--- the two themes: NOT CHECKED (no python on this machine) ---${OFF}" >&2
+	exit 1
+fi
 RED=$'\033[31m'; GREEN=$'\033[32m'; OFF=$'\033[0m'
 fail=0
 
-python - "$CSS" <<'PY'
+"$PY_BIN" - "$CSS" <<'PY'
 import re
 import sys
 
