@@ -33,7 +33,7 @@ name: build
 # окном, а окна в контейнере Windows нет. Взамен задания там больше ничего не ставят — цепочка
 # Rust проверяется, а не устанавливается.
 #
-# Образ собирается один раз:  docker build -t localhost:5000/vrcast-linux-check:2 .github/ci-image
+# Образ собирается один раз:  docker build -t localhost:5000/vrcast-linux-check:3 .github/ci-image
 
 on:
   push:
@@ -56,7 +56,7 @@ jobs:
     name: Interface — style and tests
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: localhost:5000/vrcast-linux-check:2
+      image: localhost:5000/vrcast-linux-check:3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,7 +86,7 @@ jobs:
           - os: vrcast-win
             container: ""
           - os: vrcast-linux
-            container: localhost:5000/vrcast-linux-check:2
+            container: localhost:5000/vrcast-linux-check:3
     runs-on: [self-hosted, '${{ matrix.os }}']
     container: ${{ matrix.container }}
     steps:
@@ -196,7 +196,7 @@ jobs:
           - os: vrcast-win
             container: ""
           - os: vrcast-linux
-            container: localhost:5000/vrcast-linux-check:2
+            container: localhost:5000/vrcast-linux-check:3
     container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v4
@@ -321,20 +321,42 @@ jobs:
       - name: Drive it (Windows)
         if: runner.os == 'Windows'
         run: npm run test:e2e
+      # **Экран поднимается вручную, а не через `xvfb-run`.** Тот запускает Xvfb и ждёт от
+      # него сигнала готовности — и в этом образе не дожидается никогда: команда висит до
+      # упора, ничего не сказав. Сам Xvfb при этом работает, гнездо экрана появляется за
+      # секунду. Проверено 2026-08-27; ждать сигнала, которого нет, — не та задача, ради
+      # которой стоит держать посредника.
       - name: Drive it (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum npm run test:e2e
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+          export DISPLAY=:99
+          # Ждём именно гнездо, а не «немного»: пауза наугад либо коротка на нагруженной
+          # машине, либо тратит время на всех остальных.
+          for _ in $(seq 1 30); do
+            [ -e /tmp/.X11-unix/X99 ] && break
+            sleep 1
+          done
+          if [ ! -e /tmp/.X11-unix/X99 ]; then
+            echo "экран так и не поднялся за 30 с" >&2
+            exit 1
+          fi
+          npm run test:e2e
 
   integration:
     name: Integration — a throwaway server in a container
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: localhost:5000/vrcast-linux-check:2
-      # **Сеть машины и её же демон.** Проверки поднимают свои контейнеры и достают их по
-      # опубликованным портам — то есть по `127.0.0.1` машины. Из обычного контейнера это была
-      # бы своя петля, где нет никого. Сокет — чтобы поднимать контейнеры на том же демоне, а
-      # не заводить демон внутри демона.
-      options: --network host -v /var/run/docker.sock:/var/run/docker.sock
+      image: localhost:5000/vrcast-linux-check:3
+      # **Демон машины, но не её сеть.** Сокет — чтобы поднимать контейнеры на том же
+      # демоне, а не заводить демон внутри демона. А вот `--network host` отдать нельзя:
+      # исполнитель ведёт для задания-контейнера свою сеть и при попытке разделить сеть
+      # машины не создаёт контейнер вовсе, отвечая «Value cannot be null. (Parameter
+      # 'ContainerId')».
+      #
+      # Поэтому опубликованные порты достаются по имени, которое Docker Desktop заводит для
+      # машины, — см. `VRCAST_TEST_HOST` ниже и `TestServer::host`.
+      options: -v /var/run/docker.sock:/var/run/docker.sock
     steps:
       - uses: actions/checkout@v4
       # **Цепочка Rust проверяется, а не ставится.**
@@ -401,6 +423,10 @@ jobs:
       # Running on one thread is not optional: each test brings up a container of its own,
       # and a dozen at once only slows things down.
       - name: Tests against a real OpenSSH
+        env:
+          # Изнутри контейнера петля своя; опубликованные порты живут на машине, и Docker
+          # Desktop заводит для неё это имя.
+          VRCAST_TEST_HOST: host.docker.internal
         run: >
           cargo test --manifest-path src-tauri/Cargo.toml
           --features integration --test integration -- --test-threads=1
@@ -456,7 +482,7 @@ jobs:
     name: Licence compatibility with GPL-3.0
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: localhost:5000/vrcast-linux-check:2
+      image: localhost:5000/vrcast-linux-check:3
     steps:
       - uses: actions/checkout@v4
       # **Цепочка Rust проверяется, а не ставится.**
@@ -515,7 +541,7 @@ jobs:
     name: Isolation and no hardcoded servers
     runs-on: [self-hosted, vrcast-linux]
     container:
-      image: localhost:5000/vrcast-linux-check:2
+      image: localhost:5000/vrcast-linux-check:3
     steps:
       - uses: actions/checkout@v4
       - name: Hardcoded servers (FR-004)

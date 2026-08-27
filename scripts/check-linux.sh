@@ -20,7 +20,7 @@
 set -euo pipefail
 
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="vrcast-linux-check:2"
+IMAGE="vrcast-linux-check:3"
 # A named volume for the build directory: without one every run would rebuild all the
 # dependencies from scratch, and nobody would use the check.
 VOLUME="vrcast-linux-target"

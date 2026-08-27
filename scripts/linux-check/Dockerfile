@@ -36,7 +36,9 @@ RUN apt-get update \
 # What continuous integration needs on top of the developer's check.
 #
 # `webkit2gtk-driver` and `xvfb` are the end-to-end harness: it drives a real window, and a
-# machine with no display has nowhere to open one. `docker.io` is the client only — the
+# machine with no display has nowhere to open one. `xauth` goes with them rather than
+# instead of them: without it `xvfb-run` will not start at all, and says only that it
+# cannot find a command. `docker.io` is the client only — the
 # integration checks bring containers up on the machine's own daemon through its socket, and a
 # daemon inside a daemon would be both slower and a different thing from what is checked.
 # `git` is what checking out the sources needs; `python3`, the theme check.
@@ -47,6 +49,7 @@ RUN apt-get update \
       python3 \
       unzip \
       webkit2gtk-driver \
+      xauth \
       xvfb \
  && rm -rf /var/lib/apt/lists/*
 
