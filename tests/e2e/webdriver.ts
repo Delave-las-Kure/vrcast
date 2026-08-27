@@ -97,6 +97,30 @@ export class Session {
     );
   }
 
+  /**
+   * Find an element and wait until it actually has something in it.
+   *
+   * **Not the same as finding it.** The shell renders its frame at once and fills the section
+   * from the core a moment later — a database to open, migrations to run, a list to fetch. On
+   * a machine where that database does not exist yet the moment is long enough to read the
+   * frame as empty, and the check then fails on a first start rather than on a fault. Caught
+   * on the harness's first run in CI, where every machine is a first start.
+   */
+  async findFilled(css: string): Promise<Element> {
+    const element = await this.find(css);
+    const until = Date.now() + PATIENCE_MS;
+    for (;;) {
+      if ((await element.text()).trim().length > 0) return element;
+      if (Date.now() >= until) {
+        throw new Error(
+          `${css} is on the page but stayed empty for ${PATIENCE_MS / 1000}s. ` +
+            `The page reads: ${(await this.pageText()).slice(0, 300)}`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, LOOK_EVERY_MS));
+    }
+  }
+
   /** Whether an element matching this is on the page right now. No waiting. */
   async has(css: string): Promise<boolean> {
     const found = await call<unknown[]>(this.at("/elements"), "POST", {

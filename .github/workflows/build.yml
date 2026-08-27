@@ -133,6 +133,26 @@ jobs:
       - name: The intermediary driver
         run: cargo install tauri-driver --locked
 
+      # What the harness actually drives is a WebView2, and the runner's image says nothing
+      # about whether the runtime is there. Printed rather than assumed: the first run of this
+      # job failed on Windows with "DevToolsActivePort file doesn't exist", which is what a
+      # missing or mismatched runtime looks like from the driver's side.
+      - name: What webview is on this machine (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $keys = @{
+            'WebView2 (machine, 32)' = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+            'WebView2 (machine)'     = 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+            'WebView2 (user)'        = 'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+            'Edge'                   = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}'
+          }
+          foreach ($k in $keys.GetEnumerator()) {
+            if (Test-Path $k.Value) { "$($k.Key): $((Get-ItemProperty $k.Value).pv)" }
+            else { "$($k.Key): not registered" }
+          }
+
       # **`--features custom-protocol` is not optional, and not what it looks like.** What
       # takes a Tauri binary out of development mode is that feature, not the release
       # profile: its own build script reads `dev = !custom_protocol`. Without it the window

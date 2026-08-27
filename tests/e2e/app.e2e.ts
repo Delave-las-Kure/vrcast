@@ -43,17 +43,19 @@ describe("the built application", () => {
     // A shell that starts on a blank route looks broken to somebody who has just installed
     // it, and "it opened but was empty" is what they will report.
     expect(await harness.session.has(".content")).toBe(true);
-    const content = await harness.session.find(".content");
+    // Waiting, not sampling: the section fills from the core, and on a machine starting for
+    // the first time that takes a moment the sample lands inside.
+    const content = await harness.session.findFilled(".content");
     expect((await content.text()).trim().length).toBeGreaterThan(0);
   }, 60_000);
 
   it("moves to another section when its link is clicked", async () => {
     // Routing inside the webview, which is the one thing a screenshot cannot tell you about.
-    const before = await (await harness.session.find(".content")).text();
+    const before = await (await harness.session.findFilled(".content")).text();
     const link = await harness.session.find('a[href="#/servers"]');
     await link.click();
     // The same element, read again: the router replaces what is inside it.
-    const after = await (await harness.session.find(".content")).text();
+    const after = await (await harness.session.findFilled(".content")).text();
     expect(after).not.toBe(before);
   }, 60_000);
 });

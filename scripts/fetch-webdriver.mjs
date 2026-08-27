@@ -34,25 +34,63 @@ const APP = join(HERE, "..");
  */
 export const DRIVER_DIR = join(APP, "src-tauri", "target", "webdriver");
 
-/** The registry key Edge keeps its version under. */
-const EDGE_KEY =
-  "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}";
+/**
+ * Where the versions live, in the order they are asked for.
+ *
+ * **The WebView2 runtime first, and that is the whole point.** The application's window is a
+ * WebView2, not Edge, and the driver has to match *that*. They are usually the same version —
+ * on the machine this was written on both were 151.0.4129.107 — which is exactly why taking
+ * Edge's looks right until it is not. Edge is a fallback, for a machine that has it without a
+ * separate runtime registration.
+ *
+ * The runtime registers per machine or per user, and both are looked at: installed without
+ * administrator rights it lands under the user.
+ */
+const VERSION_KEYS = [
+  [
+    "WebView2",
+    "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+  ],
+  [
+    "WebView2",
+    "HKLM\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+  ],
+  [
+    "WebView2",
+    "HKCU\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+  ],
+  [
+    "Edge",
+    "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}",
+  ],
+  [
+    "Edge",
+    "HKLM\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}",
+  ],
+];
 
-function edgeVersion() {
-  const out = spawnSync("reg", ["query", EDGE_KEY, "/v", "pv"], { encoding: "utf8" });
-  const found = /pv\s+REG_SZ\s+([0-9.]+)/.exec(out.stdout ?? "");
-  return found ? found[1] : null;
+/** What the driver has to match, and which of the two it was read from. */
+export function webviewVersion() {
+  for (const [what, key] of VERSION_KEYS) {
+    const out = spawnSync("reg", ["query", key, "/v", "pv"], { encoding: "utf8" });
+    const found = /pv\s+REG_SZ\s+([0-9.]+)/.exec(out.stdout ?? "");
+    if (found) return { what, version: found[1] };
+  }
+  return null;
 }
 
 async function fetchWindowsDriver() {
-  const version = edgeVersion();
-  if (!version) {
+  const found = webviewVersion();
+  if (!found) {
     throw new Error(
-      "Microsoft Edge was not found in the registry. The end-to-end harness drives the " +
-        "application's webview, and on Windows that webview is Edge's — without it there is " +
-        "nothing to drive.",
+      "Neither the WebView2 runtime nor Edge is registered on this machine. The application's " +
+        "window IS a WebView2 — without the runtime it does not open at all, and there is " +
+        "nothing for the harness to drive.\n" +
+        "  Install it: https://developer.microsoft.com/microsoft-edge/webview2/",
     );
   }
+  const { what, version } = found;
+  console.log(`The webview to match: ${what} ${version}`);
 
   const exe = join(DRIVER_DIR, "msedgedriver.exe");
   const stamp = join(DRIVER_DIR, "version.txt");
