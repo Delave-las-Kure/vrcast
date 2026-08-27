@@ -44,6 +44,12 @@ mod deploy_fixture;
 #[path = "integration/deploy_clean.rs"]
 mod deploy_clean;
 
+#[path = "integration/deploy_versions.rs"]
+mod deploy_versions;
+
+#[path = "integration/deploy_resume.rs"]
+mod deploy_resume;
+
 #[path = "integration/deploy_stand.rs"]
 mod deploy_stand;
 
