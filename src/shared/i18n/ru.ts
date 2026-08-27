@@ -483,6 +483,7 @@ const ui = {
     measureStart: "Замерить",
     measureRunning: "Замер идёт — можно закрыть окно, работа не потеряется",
 
+    setName: "Имя набора на сервере",
     rungs: "Ступени",
     columnBitrate: "Битрейт",
     columnSize: "Кадр",

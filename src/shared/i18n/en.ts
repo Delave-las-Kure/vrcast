@@ -476,6 +476,7 @@ export const en: Catalogue = {
       measureStart: "Measure",
       measureRunning: "Measuring — you can close this: the work is not lost",
 
+      setName: "What the set is called on the server",
       rungs: "Rungs",
       columnBitrate: "Bitrate",
       columnSize: "Frame",

@@ -24,6 +24,10 @@ const mockLadderMeasure = vi.fn<() => Promise<SourceMeasured>>();
 const mockLadderValidate = vi.fn<() => Promise<LadderVerdict>>();
 const mockMeasurePreview = vi.fn<() => Promise<MeasurePreview>>();
 const mockMeasureStart = vi.fn<() => Promise<string>>();
+const mockBuild = vi.fn<(...a: unknown[]) => Promise<string>>();
+
+/** What the core would send when a task ends. Held so a test can end one when it likes. */
+let finish: ((e: { id: string; state: string; error: unknown }) => void) | null = null;
 
 vi.mock("../../../shared/ipc", async () => {
   const actual =
@@ -36,6 +40,13 @@ vi.mock("../../../shared/ipc", async () => {
       ladderValidate: () => mockLadderValidate(),
       qualityMeasurePreview: () => mockMeasurePreview(),
       qualityMeasureStart: () => mockMeasureStart(),
+      ladderBuild: (...a: unknown[]) => mockBuild(...a),
+    },
+    onTaskDone: async (handler: (e: unknown) => void) => {
+      finish = handler as typeof finish;
+      return () => {
+        finish = null;
+      };
     },
   };
 });
@@ -97,6 +108,8 @@ beforeEach(() => {
   });
   mockLadderValidate.mockResolvedValue({ objections: [], not_buildable: null });
   mockMeasureStart.mockResolvedValue("task-1");
+  mockBuild.mockResolvedValue("build-1");
+  finish = null;
 });
 
 describe("where the rungs came from", () => {
@@ -285,5 +298,137 @@ describe("the source itself", () => {
     await waitFor(() =>
       expect(screen.getByTestId("source-facts")).toHaveTextContent("41.0 Mbit/s"),
     );
+  });
+});
+
+describe("when the measurement ends", () => {
+  it("shows the rungs it chose without waiting to be reopened", async () => {
+    // The whole reason the screen listens at all. Without it the task runs to its end,
+    // the rungs sit in the store, and this goes on saying "measuring" until somebody
+    // thinks to close it and open it again.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 0,
+      about_seconds: 180,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: "h264_nvenc",
+      estimate_from_points: 0,
+      notices: [],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(screen.getByText(en.ui.ladder.measureStart)).toBeEnabled());
+    fireEvent.click(screen.getByText(en.ui.ladder.measureStart));
+    await waitFor(() => expect(mockMeasureStart).toHaveBeenCalled());
+    // And wait until the screen is actually listening. Firing before it is subscribed
+    // makes the check pass for the wrong reason: nothing happens, and "nothing happened"
+    // is exactly what two of these tests are looking for.
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    // The task ends, and the core now has a measured ladder to give.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    finish?.({ id: "task-1", state: "completed", error: null });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provenance")).toHaveTextContent(en.ui.ladder.fromMeasured),
+    );
+    expect(screen.getByTestId("build")).toBeEnabled();
+  });
+
+  it("does not reload when somebody else's task ends", async () => {
+    // A person may have a preparation and a transfer running beside this. Reloading on
+    // any task at all would be a flicker at best and a set appearing out of nowhere at
+    // worst.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 0,
+      about_seconds: 180,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: "h264_nvenc",
+      estimate_from_points: 0,
+      notices: [],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByText(en.ui.ladder.measureStart)).toBeEnabled());
+    fireEvent.click(screen.getByText(en.ui.ladder.measureStart));
+    await waitFor(() => expect(mockMeasureStart).toHaveBeenCalled());
+    // And wait until the screen is actually listening. Firing before it is subscribed
+    // makes the check pass for the wrong reason: nothing happens, and "nothing happened"
+    // is exactly what two of these tests are looking for.
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    const asked = mockLadderPlan.mock.calls.length;
+    finish?.({ id: "somebody-elses-task", state: "completed", error: null });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockLadderPlan.mock.calls.length).toBe(asked);
+  });
+
+  it("says so when the measurement failed rather than going quiet", async () => {
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 0,
+      about_seconds: 180,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: "h264_nvenc",
+      estimate_from_points: 0,
+      notices: [],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByText(en.ui.ladder.measureStart)).toBeEnabled());
+    fireEvent.click(screen.getByText(en.ui.ladder.measureStart));
+    await waitFor(() => expect(mockMeasureStart).toHaveBeenCalled());
+    // And wait until the screen is actually listening. Firing before it is subscribed
+    // makes the check pass for the wrong reason: nothing happens, and "nothing happened"
+    // is exactly what two of these tests are looking for.
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    finish?.({
+      id: "task-1",
+      state: "failed",
+      error: { code: "VMAF_UNAVAILABLE", details: [] },
+    });
+    await waitFor(() =>
+      expect(screen.getByText(en.errors.VMAF_UNAVAILABLE.message)).toBeInTheDocument(),
+    );
+  });
+});
+
+describe("what the set is called", () => {
+  it("is offered rather than decided, and what is typed is what is built", async () => {
+    // The guess comes from the file's own name, and a name with anything but Latin in it
+    // guesses down to something nobody meant — which is not obvious until the set is
+    // somewhere nobody expected.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(
+      <LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />,
+      "en",
+    );
+
+    await waitFor(() => expect(screen.getByTestId("build")).toBeEnabled());
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.setName), {
+      target: { value: "blue-eye-s01e01" },
+    });
+    fireEvent.click(screen.getByTestId("build"));
+
+    await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(1));
+    expect(mockBuild.mock.calls[0][0]).toMatchObject({
+      serverId: "s1",
+      slug: "blue-eye-s01e01",
+    });
   });
 });
