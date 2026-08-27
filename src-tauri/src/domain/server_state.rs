@@ -92,6 +92,12 @@ pub struct Facts {
     pub web_server_running: Option<String>,
     /// Is the serving directory there?
     pub video_dir_present: bool,
+    /// Is there something here that **only this application** puts on a server?
+    ///
+    /// The rules file it owns outright, or its serving directory. Nobody else creates
+    /// either, and both appear well before the state file — which is written last, on
+    /// purpose (T281).
+    pub our_own_marks: bool,
 }
 
 /// What the machine is.
@@ -104,6 +110,20 @@ pub enum Kind {
     /// Somebody else was here first — or our own marker cannot be read, which comes to the
     /// same thing: we do not know what this machine is.
     Foreign,
+    /// **A deployment of ours that did not reach its end** (found on the real stand,
+    /// 2026-08-27).
+    ///
+    /// Our directories and our rules file are here and the state file is not, because
+    /// the state file is written last. Without this case such a machine reads as
+    /// *foreign* — a web server is running and there is no marker — and the application
+    /// then refuses to touch its own half-finished work. A deployment interrupted at
+    /// any step would be unrecoverable by the thing that started it, which is the exact
+    /// opposite of what FR-124 and SC-015 promise.
+    ///
+    /// It is not `Clean`: the machine is half-configured, and telling a person it is
+    /// bare would be untrue. It is not `Managed`: nothing here may be served from until
+    /// the deployment is finished.
+    Unfinished,
     /// Could not be reached at all. Kept as a state rather than an error so that the last
     /// known picture can be shown with a stale mark instead of an empty screen.
     Unreachable,
@@ -204,6 +224,13 @@ pub fn judge(facts: &Facts) -> ServerState {
             // foreign, but a detector that only checks the path it knows — /etc/caddy —
             // walks straight past a machine running anything else, and that is the mistake
             // this order exists to make impossible.
+            // 2a. **Ours, and not finished.** Asked before either foreign branch: a
+            // deployment stopped part-way leaves a running web server and no state
+            // file, which is exactly what a stranger's machine looks like. Told apart
+            // by the things only this application puts there.
+            if facts.our_own_marks {
+                return plain(Kind::Unfinished, Compat::NotDeployed, None);
+            }
             if let Some(name) = &facts.web_server_running {
                 return plain(
                     Kind::Foreign,
@@ -285,6 +312,14 @@ pub fn allowed(state: &ServerState) -> Allowed {
         // Bare: there is nothing to read and nothing to change, and everything to set up.
         (Kind::Clean, _) => Allowed {
             read: false,
+            change_serving: false,
+            setup: Setup::Deploy,
+        },
+        // Half-configured: it may be looked at and it may be finished. Serving from it
+        // is refused — the deployment has not said it is ready, and it is the one that
+        // knows.
+        (Kind::Unfinished, _) => Allowed {
+            read: true,
             change_serving: false,
             setup: Setup::Deploy,
         },

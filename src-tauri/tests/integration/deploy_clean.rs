@@ -26,7 +26,7 @@ use vrcast_studio_lib::server::deploy::{self, machine, Context, Proofs};
 use vrcast_studio_lib::ssh::{fingerprint, Connection, Credentials, ServerAddress};
 
 use super::deploy_fixture::{DeployTarget, Flavour, ROOT_PASSWORD};
-use super::test_key::{key_path, public_key_path, PASSPHRASE};
+use vrcast_studio_lib::ssh::keygen;
 
 pub const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 
@@ -51,10 +51,16 @@ pub async fn by_password(target: &DeployTarget) -> Connection {
     .expect("the password would not get us in to a freshly made server")
 }
 
-/// Whether a fresh connection with the key works. **A new one every time** — the connection we
-/// already hold would go on working whatever we did to the settings, which is what makes it
-/// the wrong witness.
-pub async fn key_works(target: &DeployTarget) -> bool {
+/// Whether a fresh connection with **the key the application made** works.
+///
+/// A new connection every time: the one we already hold would go on working whatever we
+/// did to the settings, which is what makes it the wrong witness.
+///
+/// And the key is the application's own rather than the fixture's ready-made one (T290a).
+/// That is the claim being checked: a server bought with nothing but a root password gets
+/// a key made for it, and that key has to open the door — the step after this one turns
+/// the password off.
+pub async fn key_works(target: &DeployTarget, openssh: &str) -> bool {
     let a = address(target).await;
     let Ok(fp) = fingerprint::probe(&a).await else {
         return false;
@@ -62,9 +68,9 @@ pub async fn key_works(target: &DeployTarget) -> bool {
     Connection::connect(
         a,
         "root",
-        Credentials::Key {
-            path: key_path(),
-            passphrase: Some(PASSPHRASE.to_owned()),
+        Credentials::KeyText {
+            openssh: openssh.to_owned(),
+            passphrase: None,
         },
         &fp,
     )
@@ -92,9 +98,11 @@ pub async fn password_refused(target: &DeployTarget) -> bool {
 async fn a_bare_machine_is_deployed_and_a_repeat_does_nothing() {
     let mut target =
         DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
-    // The key has to exist before it can be put anywhere.
-    super::test_key::ensure().expect("the test key was not made");
-    let public_key = std::fs::read_to_string(public_key_path()).expect("no public key");
+    // The application makes its own key, the way it does for a server reached by password
+    // (T290a). Nothing is read from disk: the private half exists in memory here and in the
+    // operating system's store in the application.
+    let made = keygen::make("vrcast-studio: the check").expect("no key was made");
+    let public_key = made.public_openssh.clone();
 
     let conn = by_password(&target).await;
     let machine = machine::look(&conn)
@@ -106,7 +114,8 @@ async fn a_bare_machine_is_deployed_and_a_repeat_does_nothing() {
          would be attempted and would fail for the wrong reason"
     );
 
-    let key_proof = || -> BoxFuture<'_, bool> { Box::pin(key_works(&target)) };
+    let key_proof =
+        || -> BoxFuture<'_, bool> { Box::pin(key_works(&target, &made.private_openssh)) };
     let password_proof = || -> BoxFuture<'_, bool> { Box::pin(password_refused(&target)) };
     let ctx = Context {
         conn: &conn,

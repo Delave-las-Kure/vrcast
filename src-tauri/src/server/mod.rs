@@ -90,6 +90,11 @@ pub(crate) async fn connect_raw(
             passphrase: Some(secret),
         },
         AuthKind::Password => Credentials::Password(secret),
+        // The whole key, out of the store. No file is looked for because none was made.
+        AuthKind::ManagedKey => Credentials::KeyText {
+            openssh: secret,
+            passphrase: None,
+        },
     };
 
     Connection::connect(addr, &profile.user, credentials, &expected).await

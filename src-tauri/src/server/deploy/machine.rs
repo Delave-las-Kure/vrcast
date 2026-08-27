@@ -9,6 +9,8 @@
 //! person agrees to says "a swap file of 1280 MB", not "a swap file", and that number is
 //! known here.
 
+use std::net::IpAddr;
+
 use crate::ssh::{Connection, Result};
 
 /// Everything the steps need to know about the machine itself.
@@ -35,6 +37,17 @@ pub struct Machine {
     /// invisible here at all. Those steps answer "cannot be established here" rather than
     /// guessing, and this is how they know.
     pub container: Option<String>,
+    /// Every address the machine answers on, as it knows them.
+    ///
+    /// **Asked of the machine, not taken from how we reached it** — found on the real
+    /// stand (2026-08-27). The profile's host is the address we connect by; a server
+    /// reached over IPv4 may very well have an IPv6 address as well, and the rule about
+    /// keeping or turning off IPv6 (FR-137) turns entirely on whether it has one.
+    ///
+    /// Fed the connection address instead, the whole IPv6 half of that rule passed
+    /// silently on every server reached over IPv4 — which is every server. It looked
+    /// like agreement.
+    pub addresses: Vec<IpAddr>,
 }
 
 /// One block of shell, one answer.
@@ -45,6 +58,7 @@ printf 'free_disk_mb=%s\n' "$(df -Pm / 2>/dev/null | awk 'NR==2{print $4}')"
 printf 'disk=%s\n' "$(lsblk -ndo pkname "$(findmnt -no SOURCE / 2>/dev/null)" 2>/dev/null || lsblk -ndo name -e 7,11 2>/dev/null | head -n 1)"
 printf 'interface=%s\n' "$(ip -o -4 route show default 2>/dev/null | awk '{print $5; exit}')"
 printf 'container=%s\n' "$(systemd-detect-virt -c 2>/dev/null || true)"
+printf 'addresses=%s\n' "$(ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ')"
 "#;
 
 /// Ask the machine about itself.
@@ -71,6 +85,12 @@ pub fn read(said: &str) -> Machine {
             "free_disk_mb" => machine.free_disk_mb = value.parse().unwrap_or(0),
             "disk" => machine.disk = value.to_owned(),
             "interface" => machine.interface = value.to_owned(),
+            "addresses" => {
+                machine.addresses = value
+                    .split_whitespace()
+                    .filter_map(|one| one.parse().ok())
+                    .collect();
+            }
             "container" => {
                 // `systemd-detect-virt -c` prints "none" and exits non-zero on a real machine.
                 // Treating "none" as the name of a container kind would make every real server
@@ -91,6 +111,22 @@ impl Machine {
     /// Whether a step that cannot work in a container should say so.
     pub fn is_container(&self) -> bool {
         self.container.is_some()
+    }
+
+    /// The IPv4 address the machine knows itself by, if any.
+    pub fn ipv4(&self) -> Option<std::net::Ipv4Addr> {
+        self.addresses.iter().find_map(|a| match a {
+            IpAddr::V4(v4) => Some(*v4),
+            IpAddr::V6(_) => None,
+        })
+    }
+
+    /// The IPv6 one. Its presence is what decides whether an AAAA record is required.
+    pub fn ipv6(&self) -> Option<std::net::Ipv6Addr> {
+        self.addresses.iter().find_map(|a| match a {
+            IpAddr::V6(v6) => Some(*v6),
+            IpAddr::V4(_) => None,
+        })
     }
 
     /// How to say it, for the step's answer.

@@ -26,8 +26,18 @@ const MAX_NAME_LEN: usize = 100;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthKind {
+    /// A key file the person made and points at. `key_path` names it; the entry in the OS
+    /// store holds its passphrase.
     Key,
     Password,
+    /// A key the **application** made for this server (T290a).
+    ///
+    /// There is no file: the private half lives in the operating system's store entire, like
+    /// every other secret (constitution, principle IV). That is what makes "from a bought VPS
+    /// to a working link without a single command in a console" true — the ordinary first
+    /// contact with a server is an address and a root password, and a deployment cannot turn
+    /// password logins off until it has put a key there.
+    ManagedKey,
 }
 
 impl AuthKind {
@@ -35,6 +45,7 @@ impl AuthKind {
         match self {
             Self::Key => "key",
             Self::Password => "password",
+            Self::ManagedKey => "managed_key",
         }
     }
 
@@ -42,6 +53,7 @@ impl AuthKind {
         match s {
             "key" => Some(Self::Key),
             "password" => Some(Self::Password),
+            "managed_key" => Some(Self::ManagedKey),
             _ => None,
         }
     }
@@ -243,7 +255,9 @@ impl ServerProfile {
                     ));
                 }
             }
-            AuthKind::Password => {
+            // Both of these keep no file, so a path in the profile is a leftover — and a
+            // leftover path is the sort of thing that quietly gets used one day.
+            AuthKind::Password | AuthKind::ManagedKey => {
                 if self.key_path.is_some() {
                     problems.push(ProfileProblem::new(
                         "key_path",

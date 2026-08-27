@@ -82,7 +82,13 @@ pub mod api {
         ipv6: Ipv6Choice,
     ) -> Result<DomainAnswer> {
         let profile = super::super::library::api::profile_of(state, server_id)?;
-        Ok(look_at_domain(&profile, ipv6).await)
+        // The machine is asked before the domain is judged: whether it has an IPv6
+        // address of its own is what the IPv6 half of the rule turns on, and the profile
+        // cannot say.
+        let opened = gate::open(state.secrets.as_ref(), &profile, Intent::Read).await?;
+        let facts = machine::look(&opened.conn).await?;
+        opened.conn.close().await;
+        Ok(look_at_domain(&profile, &facts, ipv6).await)
     }
 
     /// Everything a deployment would change, and nothing changed (FR-122).
@@ -97,23 +103,44 @@ pub mod api {
         let facts = machine::look(&opened.conn).await?;
 
         // The domain is asked about here, before the person agrees to anything (FR-137).
-        let domain = look_at_domain(&profile, ipv6).await;
+        let domain = look_at_domain(&profile, &facts, ipv6).await;
 
-        let never = || -> futures::future::BoxFuture<'_, bool> { Box::pin(async { false }) };
+        // **What a plan may claim about the two proofs.**
+        //
+        // The key: we are signed in with it at this very moment, so on a key profile it
+        // plainly works — said as `true` because it is true, not for convenience. On a
+        // password profile there is no key yet and the answer is no.
+        //
+        // The password: **asked**, and that took a real server to see. Left unasked, the answer
+        // is "not established", the hardening step reads as still to do, and a plan on a
+        // perfectly hardened server says there is work waiting — for ever. Asking costs one
+        // connection that is meant to be refused, which is a read of the server and nothing
+        // more.
+        let signed_in_by_key = profile.auth_kind != AuthKind::Password;
+        let key_now = || -> futures::future::BoxFuture<'_, bool> {
+            Box::pin(async move { signed_in_by_key })
+        };
+        let where_it_is = ServerAddress::new(&profile.host, profile.port);
+        let as_whom = profile.user.clone();
+        let password_now = move || -> futures::future::BoxFuture<'_, bool> {
+            let where_it_is = where_it_is.clone();
+            let as_whom = as_whom.clone();
+            Box::pin(async move { passwords_are_off(where_it_is, as_whom).await })
+        };
         let ctx = Context {
             conn: &opened.conn,
             domain: &profile.domain,
             video_dir: &profile.video_dir,
             ipv6,
-            server: addresses_of(&profile).await,
+            server: addresses_of(&profile, &facts),
             public_key,
             machine: facts.clone(),
             already_ours: opened.state.kind == crate::domain::server_state::Kind::Managed,
             // Planning changes nothing and proves nothing: the two proofs open connections,
             // and a plan that logged in twice per step would be a plan nobody dared ask for.
             proofs: Proofs {
-                key_works: &never,
-                password_refused: &never,
+                key_works: &key_now,
+                password_refused: &password_now,
             },
         };
         let steps = deploy::all();
@@ -156,19 +183,40 @@ pub mod api {
         let facts = machine::look(&opened.conn).await?;
         let from = opened.state.server_version.unwrap_or_default();
 
-        let never = || -> futures::future::BoxFuture<'_, bool> { Box::pin(async { false }) };
+        // **What a plan may claim about the two proofs.**
+        //
+        // The key: we are signed in with it at this very moment, so on a key profile it
+        // plainly works — said as `true` because it is true, not for convenience. On a
+        // password profile there is no key yet and the answer is no.
+        //
+        // The password: **asked**, and that took a real server to see. Left unasked, the answer
+        // is "not established", the hardening step reads as still to do, and a plan on a
+        // perfectly hardened server says there is work waiting — for ever. Asking costs one
+        // connection that is meant to be refused, which is a read of the server and nothing
+        // more.
+        let signed_in_by_key = profile.auth_kind != AuthKind::Password;
+        let key_now = || -> futures::future::BoxFuture<'_, bool> {
+            Box::pin(async move { signed_in_by_key })
+        };
+        let where_it_is = ServerAddress::new(&profile.host, profile.port);
+        let as_whom = profile.user.clone();
+        let password_now = move || -> futures::future::BoxFuture<'_, bool> {
+            let where_it_is = where_it_is.clone();
+            let as_whom = as_whom.clone();
+            Box::pin(async move { passwords_are_off(where_it_is, as_whom).await })
+        };
         let ctx = Context {
             conn: &opened.conn,
             domain: &profile.domain,
             video_dir: &profile.video_dir,
             ipv6: Ipv6Choice::Keep,
-            server: addresses_of(&profile).await,
+            server: addresses_of(&profile, &facts),
             public_key,
             machine: facts,
             already_ours: true,
             proofs: Proofs {
-                key_works: &never,
-                password_refused: &never,
+                key_works: &key_now,
+                password_refused: &password_now,
             },
         };
         let steps = deploy::all();
@@ -214,7 +262,7 @@ pub mod api {
             domain: &profile.domain,
             video_dir: &profile.video_dir,
             ipv6: Ipv6Choice::Keep,
-            server: addresses_of(&profile).await,
+            server: addresses_of(&profile, &facts),
             public_key,
             machine: facts,
             already_ours: true,
@@ -230,13 +278,17 @@ pub mod api {
 }
 
 /// Ask the domain and judge it.
-async fn look_at_domain(profile: &ServerProfile, ipv6: Ipv6Choice) -> DomainAnswer {
+async fn look_at_domain(
+    profile: &ServerProfile,
+    machine: &Machine,
+    ipv6: Ipv6Choice,
+) -> DomainAnswer {
     // A lookup that could not be made at all is not a domain that is not attached, and must
     // not become one: the person would be sent to edit a record that was never wrong.
     let records = dns::look_up(&profile.domain, dns::DEFAULT_PATIENCE)
         .await
         .unwrap_or_else(|_| Records::default());
-    let server = addresses_of(profile).await;
+    let server = addresses_of(profile, machine);
     let verdict = dns_verdict::judge(&records, &server, ipv6);
     DomainAnswer {
         advice: verdict.what_to_do(&profile.domain, &server),
@@ -246,30 +298,28 @@ async fn look_at_domain(profile: &ServerProfile, ipv6: Ipv6Choice) -> DomainAnsw
     }
 }
 
-/// Where this server is.
+/// Where this server is, **as the server itself knows** (T332).
 ///
-/// The profile's host is what we reach it by, so it is the answer when it is an address. When
-/// it is a name, it is looked up — a person may well have entered the same name they are
-/// deploying under.
-async fn addresses_of(profile: &ServerProfile) -> ServerAddresses {
-    if let Ok(one) = profile.host.parse::<std::net::IpAddr>() {
-        return match one {
-            std::net::IpAddr::V4(v4) => ServerAddresses {
-                v4: Some(v4),
-                v6: None,
-            },
-            std::net::IpAddr::V6(v6) => ServerAddresses {
-                v4: None,
-                v6: Some(v6),
-            },
-        };
-    }
-    let found = dns::look_up(&profile.host, std::time::Duration::from_millis(1))
-        .await
-        .unwrap_or_default();
+/// Not the address in the profile. That one is how we reach the machine; a machine
+/// reached over IPv4 very often has an IPv6 address as well, and whether it has one is
+/// the whole of the rule about keeping or turning IPv6 off (FR-137).
+///
+/// Found on the real stand: fed the connection address, the IPv6 half of that rule
+/// passed silently on every server reached over IPv4 — which is every server. It did not
+/// fail; it agreed.
+///
+/// The profile's address is the fallback, for the moment before anything has been asked.
+fn addresses_of(profile: &ServerProfile, machine: &Machine) -> ServerAddresses {
+    let from_profile = profile.host.parse::<std::net::IpAddr>().ok();
     ServerAddresses {
-        v4: found.a.first().copied(),
-        v6: found.aaaa.first().copied(),
+        v4: machine.ipv4().or(match from_profile {
+            Some(std::net::IpAddr::V4(v4)) => Some(v4),
+            _ => None,
+        }),
+        v6: machine.ipv6().or(match from_profile {
+            Some(std::net::IpAddr::V6(v6)) => Some(v6),
+            _ => None,
+        }),
     }
 }
 
@@ -282,6 +332,19 @@ async fn addresses_of(profile: &ServerProfile) -> ServerAddresses {
 /// project keeps secrets in the operating system's store rather than in files (principle IV),
 /// while the way in takes a **path**. Left as a named gap instead of guessed at.
 fn public_key_for(secrets: &dyn SecretStore, profile: &ServerProfile) -> Result<String> {
+    if profile.auth_kind == AuthKind::ManagedKey {
+        let openssh = secrets
+            .get(&SecretRef::from_stored(&profile.secret_ref))
+            .map_err(|e| {
+                AppError::new(ErrorCode::KeyUnreadable)
+                    .with_cause(crate::store::redact::safe_display(&e))
+            })?;
+        let key = crate::ssh::auth::load_key_text(&openssh, None)?;
+        return key
+            .public_key()
+            .to_openssh()
+            .map_err(|e| AppError::new(ErrorCode::KeyUnreadable).with_cause(e));
+    }
     if profile.auth_kind != AuthKind::Key {
         return Err(AppError::new(ErrorCode::InvalidInput).with_cause(
             "this server's profile signs in with a password, and a deployment needs a key to \
@@ -294,13 +357,69 @@ fn public_key_for(secrets: &dyn SecretStore, profile: &ServerProfile) -> Result<
             AppError::new(ErrorCode::KeyUnreadable)
                 .with_cause(crate::store::redact::safe_display(&e))
         })?;
+    // The **path**, not the reference to the store. `secret_ref` names an entry holding this
+    // key's passphrase; the file itself is `key_path`. Reading one for the other looks right
+    // and fails with "no such path" — caught on the real stand, because the container checks
+    // build their own context and never come through here.
+    let Some(path) = profile.key_path.as_deref().filter(|p| !p.is_empty()) else {
+        return Err(AppError::new(ErrorCode::InvalidInput)
+            .with_cause("the profile says it signs in with a key and names no key file"));
+    };
     let key = crate::ssh::auth::load_key(
-        std::path::Path::new(&profile.secret_ref),
+        std::path::Path::new(path),
         Some(secret.as_str()).filter(|s| !s.is_empty()),
     )?;
     key.public_key()
         .to_openssh()
         .map_err(|e| AppError::new(ErrorCode::KeyUnreadable).with_cause(e))
+}
+
+/// Make a key for a server that is reached by password, and keep it (T290a).
+///
+/// The private half goes into the operating system's store under this server's own
+/// reference — the same place the password was, and it **replaces** it: two ways in kept
+/// side by side would mean the password living on in the store after the server had
+/// stopped accepting it, which is a secret that is no longer good for anything and can
+/// still leak.
+///
+/// The profile is not switched here. It is switched when the key is proved to work, and
+/// until then the password is what gets us in.
+fn make_key_for(profile: &ServerProfile) -> Result<crate::ssh::keygen::MadeKey> {
+    Ok(crate::ssh::keygen::make(&format!(
+        "vrcast-studio: {}",
+        profile.name
+    ))?)
+}
+
+/// Put the made key in the store and point the profile at it.
+///
+/// Called the moment the `ssh-key` step is known to have worked — **not** when the whole
+/// run ends. A deployment that fails after the hardening step leaves a server whose
+/// password no longer works; a profile still saying "password" would then be a person
+/// locked out of their own machine by a half-finished run.
+fn switch_to_managed_key(
+    state: &super::AppState,
+    profile: &ServerProfile,
+    private_openssh: &str,
+) -> Result<()> {
+    let reference = SecretRef::from_stored(&profile.secret_ref);
+    state
+        .secrets
+        .set(&reference, private_openssh)
+        .map_err(|e| {
+            AppError::new(ErrorCode::KeyUnreadable)
+                .with_cause(crate::store::redact::safe_display(&e))
+        })?;
+
+    let switched = ServerProfile {
+        auth_kind: AuthKind::ManagedKey,
+        // No file was made, so no path may be left behind: a leftover path is the sort of
+        // thing that quietly gets used one day.
+        key_path: None,
+        ..profile.clone()
+    };
+    crate::store::profiles::update(&state.db, &switched)?;
+    Ok(())
 }
 
 /// A failure inside the deployment layer, as a contract code.
@@ -326,10 +445,25 @@ async fn start(
     // Refused before a task exists: the door, the key, and the domain. Each of them costs one
     // question now and hours of somebody's evening later.
     let opened = gate::open(state.secrets.as_ref(), &profile, intent).await?;
+    // Asked before the connection is let go: the domain cannot be judged without knowing
+    // whether this machine has an IPv6 address of its own (T332).
+    let facts = machine::look(&opened.conn).await?;
     opened.conn.close().await;
-    let public_key = public_key_for(state.secrets.as_ref(), &profile)?;
 
-    let domain = look_at_domain(&profile, ipv6).await;
+    // **A server reached by password gets a key made for it** (T290a). It has to exist
+    // before the hardening step, or that step turns off the only way in — and the ordinary
+    // first contact with a bought server is exactly an address and a root password.
+    let made = if profile.auth_kind == AuthKind::Password {
+        Some(make_key_for(&profile)?)
+    } else {
+        None
+    };
+    let public_key = match &made {
+        Some(made) => made.public_openssh.clone(),
+        None => public_key_for(state.secrets.as_ref(), &profile)?,
+    };
+
+    let domain = look_at_domain(&profile, &facts, ipv6).await;
     if !domain.ok() {
         let mut error = AppError::new(match domain.verdict {
             Verdict::Ipv6Mismatch { .. } => ErrorCode::Ipv6Mismatch,
@@ -344,6 +478,8 @@ async fn start(
 
     let secrets = state.secrets.clone();
     let events = state.events.clone();
+    let inner = state.clone();
+    let made_private = made.as_ref().map(|m| m.private_openssh.clone());
     let task_kind = match kind {
         crate::tasks::deploy::Kind::Fresh => crate::tasks::state::TaskKind::Deploy,
         crate::tasks::deploy::Kind::Upgrade => crate::tasks::state::TaskKind::UpgradeServer,
@@ -357,7 +493,11 @@ async fn start(
             let facts: Machine = machine::look(&opened.conn).await?;
             let address = ServerAddress::new(&profile.host, profile.port);
             let user = profile.user.clone();
-            let key_path = std::path::PathBuf::from(&profile.secret_ref);
+            // What the proof signs in with. For a key we just made, the key itself: the
+            // profile still says "password" at this point, and asking it would prove the
+            // password works — which is not the question.
+            let made_private = made_private.clone();
+            let key_path = profile.key_path.clone().map(std::path::PathBuf::from);
             let passphrase = secrets
                 .get(&SecretRef::from_stored(&profile.secret_ref))
                 .ok()
@@ -371,26 +511,34 @@ async fn start(
                 let user = user.clone();
                 let key_path = key_path.clone();
                 let passphrase = passphrase.clone();
+                let made_private = made_private.clone();
                 move || -> futures::future::BoxFuture<'_, bool> {
                     let address = address.clone();
                     let user = user.clone();
                     let key_path = key_path.clone();
                     let passphrase = passphrase.clone();
+                    let made_private = made_private.clone();
                     Box::pin(async move {
+                        let credentials = match (&made_private, &key_path) {
+                            (Some(openssh), _) => Credentials::KeyText {
+                                openssh: openssh.clone(),
+                                passphrase: None,
+                            },
+                            (None, Some(path)) => Credentials::Key {
+                                path: path.clone(),
+                                passphrase,
+                            },
+                            // Nothing to sign in with. Said as "no" rather than as a
+                            // failure: the step above it refuses on the same footing, and
+                            // there it can say why.
+                            (None, None) => return false,
+                        };
                         let Ok(fp) = fingerprint::probe(&address).await else {
                             return false;
                         };
-                        Connection::connect(
-                            address,
-                            user,
-                            Credentials::Key {
-                                path: key_path,
-                                passphrase,
-                            },
-                            &fp,
-                        )
-                        .await
-                        .is_ok()
+                        Connection::connect(address, user, credentials, &fp)
+                            .await
+                            .is_ok()
                     })
                 }
             };
@@ -409,7 +557,7 @@ async fn start(
                 domain: &profile.domain,
                 video_dir: &profile.video_dir,
                 ipv6,
-                server: addresses_of(&profile).await,
+                server: addresses_of(&profile, &facts),
                 public_key,
                 machine: facts,
                 already_ours: kind == crate::tasks::deploy::Kind::Upgrade,
@@ -420,7 +568,12 @@ async fn start(
             };
 
             let steps = deploy::all();
+            // Kept as well as sent: the profile has to be switched the moment the key is
+            // known to be in, and that is known from the steps rather than from the run's
+            // outcome — a run that failed later still put the key there.
+            let mut seen: Vec<PlannedStep> = Vec::new();
             let mut report = |settled: &[PlannedStep]| {
+                seen = settled.to_vec();
                 let _ = events.send(super::AppEvent::DeployProgress {
                     server_id: server_id.clone(),
                     steps: settled.to_vec(),
@@ -428,6 +581,16 @@ async fn start(
             };
             let outcome = crate::tasks::deploy::run(&ctx, &steps, kind, &task, &mut report).await;
             opened.conn.close().await;
+
+            if let Some(private) = &made_private {
+                let key_is_in = seen.iter().any(|s| {
+                    s.id == crate::domain::deploy_steps::StepId::SshKey
+                        && matches!(s.status, crate::domain::deploy_steps::Status::Applied)
+                });
+                if key_is_in {
+                    switch_to_managed_key(&inner, &profile, private)?;
+                }
+            }
             outcome.map(|_| ())
         })
         .await?;

@@ -435,6 +435,12 @@ mod probe {
                 passphrase: Some(secret),
             },
             AuthKind::Password => Credentials::Password(secret),
+            // A key the application made for this server: the whole of it comes out of the
+            // store, and there is no file to point at.
+            AuthKind::ManagedKey => Credentials::KeyText {
+                openssh: secret,
+                passphrase: None,
+            },
         };
 
         let conn = match Connection::connect(

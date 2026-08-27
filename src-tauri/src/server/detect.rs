@@ -44,6 +44,7 @@ pub fn command(video_dir: &str) -> String {
     const ASK: &str = r#"
 printf 'caddyfile=%s\n' "$(test -f /etc/caddy/Caddyfile && echo yes || echo no)"
 printf 'video_dir=%s\n' "$(test -d {VIDEO_DIR} && echo yes || echo no)"
+printf 'ours=%s\n' "$(test -e /etc/caddy/vrcast-limits.conf -o -d /var/lib/vrcast && echo yes || echo no)"
 printf 'serving=%s\n' "$(ss -ltnH 2>/dev/null | awk '$4 ~ /:(80|443)$/' | head -n 1 | wc -l)"
 printf 'server_name=%s\n' "$(ss -ltnpH 2>/dev/null | awk '$4 ~ /:(80|443)$/' | grep -o 'users:((\"[^\"]*\"' | head -n 1 | sed 's/.*((\"//;s/\"//')"
 printf '%s\n' '{FENCE}'
@@ -88,6 +89,12 @@ pub fn read(said: &str) -> Facts {
             facts.caddyfile_present = value.trim() == "yes";
         } else if let Some(value) = line.strip_prefix("video_dir=") {
             facts.video_dir_present = value.trim() == "yes";
+        } else if let Some(value) = line.strip_prefix("ours=") {
+            // The rules file this application owns outright, or its own directory under
+            // /var/lib. Nobody else creates either, and both appear long before the state
+            // file — which is what makes an interrupted deployment tellable from a
+            // stranger's machine (T332).
+            facts.our_own_marks = value.trim() == "yes";
         } else if let Some(value) = line.strip_prefix("serving=") {
             serving = value.trim() == "1";
         } else if let Some(value) = line.strip_prefix("server_name=") {

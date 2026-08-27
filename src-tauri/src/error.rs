@@ -272,6 +272,10 @@ impl From<crate::server::gate::Refusal> for AppError {
                 .with_cause(format!("server {server}, at least {app_min}")),
             R::NotDeployed => AppError::new(ErrorCode::ServerForeign)
                 .with_cause("nothing is deployed on this server"),
+            // Not a failure of anything. The screen turns it into "already set up",
+            // and until it does, at least the words are the right way round.
+            R::AlreadyDeployed => AppError::new(ErrorCode::InvalidInput)
+                .with_cause("this server is already deployed and up to date"),
         }
     }
 }

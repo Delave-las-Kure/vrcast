@@ -146,8 +146,17 @@ impl Connection {
         credentials: Credentials,
     ) -> Result<()> {
         let result = match credentials {
-            Credentials::Key { path, passphrase } => {
-                let key = auth::load_key(&path, passphrase.as_deref())?;
+            Credentials::Key { .. } | Credentials::KeyText { .. } => {
+                let key = match &credentials {
+                    Credentials::Key { path, passphrase } => {
+                        auth::load_key(path, passphrase.as_deref())?
+                    }
+                    Credentials::KeyText {
+                        openssh,
+                        passphrase,
+                    } => auth::load_key_text(openssh, passphrase.as_deref())?,
+                    Credentials::Password(_) => unreachable!("matched above"),
+                };
                 // The signature hash for RSA is chosen by what the server supports: many
                 // servers no longer accept the old sha1.
                 let hash_alg = handle

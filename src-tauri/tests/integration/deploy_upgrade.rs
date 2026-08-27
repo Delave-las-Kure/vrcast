@@ -21,14 +21,15 @@ use vrcast_studio_lib::ssh::Connection;
 
 use super::deploy_clean::{by_password, key_works, password_refused, VIDEO_DIR};
 use super::deploy_fixture::{DeployTarget, Flavour};
-use super::test_key::public_key_path;
+use vrcast_studio_lib::ssh::keygen;
 
 /// A machine deployed once, ready to be upgraded.
-async fn deployed(target: &DeployTarget) -> (Connection, String) {
-    super::test_key::ensure().expect("the test key was not made");
-    let public_key = std::fs::read_to_string(public_key_path()).expect("no public key");
+/// A machine reached by password, and a key made for it the way the application makes one
+/// (T290a). The private half is handed back so the proof can sign in with it.
+async fn deployed(target: &DeployTarget) -> (Connection, keygen::MadeKey) {
+    let made = keygen::make("vrcast-studio: the check").expect("no key was made");
     let conn = by_password(target).await;
-    (conn, public_key)
+    (conn, made)
 }
 
 /// Everything a container can carry out. The two steps that ask the outside world about
@@ -63,10 +64,11 @@ fn steps_for_files<'a>(with_state: bool) -> Vec<deploy::Step<Context<'a>>> {
 #[tokio::test]
 async fn an_upgrade_keeps_every_video_and_the_catalogue() {
     let target = DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
-    let (conn, public_key) = deployed(&target).await;
+    let (conn, made) = deployed(&target).await;
     let machine = machine::look(&conn).await.expect("no machine facts");
 
-    let key_proof = || -> BoxFuture<'_, bool> { Box::pin(key_works(&target)) };
+    let key_proof =
+        || -> BoxFuture<'_, bool> { Box::pin(key_works(&target, &made.private_openssh)) };
     let password_proof = || -> BoxFuture<'_, bool> { Box::pin(password_refused(&target)) };
     let ctx = Context {
         conn: &conn,
@@ -74,7 +76,7 @@ async fn an_upgrade_keeps_every_video_and_the_catalogue() {
         video_dir: VIDEO_DIR,
         ipv6: Ipv6Choice::Keep,
         server: ServerAddresses { v4: None, v6: None },
-        public_key,
+        public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
         proofs: Proofs {
@@ -156,10 +158,11 @@ sha256sum {VIDEO_DIR}/film.mp4 {VIDEO_DIR}/library.json | cut -d' ' -f1"
 #[tokio::test]
 async fn a_rollback_puts_the_replaced_files_back() {
     let target = DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
-    let (conn, public_key) = deployed(&target).await;
+    let (conn, made) = deployed(&target).await;
     let machine = machine::look(&conn).await.expect("no machine facts");
 
-    let key_proof = || -> BoxFuture<'_, bool> { Box::pin(key_works(&target)) };
+    let key_proof =
+        || -> BoxFuture<'_, bool> { Box::pin(key_works(&target, &made.private_openssh)) };
     let password_proof = || -> BoxFuture<'_, bool> { Box::pin(password_refused(&target)) };
     let ctx = Context {
         conn: &conn,
@@ -167,7 +170,7 @@ async fn a_rollback_puts_the_replaced_files_back() {
         video_dir: VIDEO_DIR,
         ipv6: Ipv6Choice::Keep,
         server: ServerAddresses { v4: None, v6: None },
-        public_key,
+        public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
         proofs: Proofs {
@@ -206,10 +209,11 @@ async fn a_configuration_edited_by_hand_is_refused_rather_than_overwritten() {
     // putting our version back is the failure — and it is a failure nobody sees until their
     // own tuning stops working.
     let target = DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
-    let (conn, public_key) = deployed(&target).await;
+    let (conn, made) = deployed(&target).await;
     let machine = machine::look(&conn).await.expect("no machine facts");
 
-    let key_proof = || -> BoxFuture<'_, bool> { Box::pin(key_works(&target)) };
+    let key_proof =
+        || -> BoxFuture<'_, bool> { Box::pin(key_works(&target, &made.private_openssh)) };
     let password_proof = || -> BoxFuture<'_, bool> { Box::pin(password_refused(&target)) };
     let ctx = Context {
         conn: &conn,
@@ -217,7 +221,7 @@ async fn a_configuration_edited_by_hand_is_refused_rather_than_overwritten() {
         video_dir: VIDEO_DIR,
         ipv6: Ipv6Choice::Keep,
         server: ServerAddresses { v4: None, v6: None },
-        public_key,
+        public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
         proofs: Proofs {

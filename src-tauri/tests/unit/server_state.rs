@@ -39,6 +39,7 @@ fn our_state_file_within_range_is_our_server() {
         caddyfile_present: true,
         web_server_running: Some(String::from("caddy")),
         video_dir_present: true,
+        our_own_marks: true,
     });
     assert_eq!(state.kind, Kind::Managed);
     assert_eq!(state.compat, Compat::Ok);
@@ -242,4 +243,50 @@ fn a_server_that_will_not_answer_shows_what_was_known_and_is_touched_by_nothing(
         Setup::Nothing,
         "deploying to a server that is not answering is how a half-deployed machine is made"
     );
+}
+
+#[test]
+fn a_deployment_that_did_not_finish_is_ours_and_not_a_stranger_s() {
+    // **Found on the real stand** (2026-08-27), and it is the difference between SC-015 being
+    // true and being impossible. A deployment stopped part-way leaves a running web server,
+    // our directories and our rules file — and no state file, because the state file is
+    // written last on purpose. Read by the plain rule, that is a stranger's machine, and the
+    // application then refuses to finish its own work. Every interrupted deployment would be
+    // unrecoverable by the thing that started it.
+    let half_done = Facts {
+        state_file: None,
+        caddyfile_present: true,
+        web_server_running: Some(String::from("caddy")),
+        video_dir_present: true,
+        our_own_marks: true,
+    };
+    let state = judge(&half_done);
+    assert_eq!(state.kind, Kind::Unfinished, "read as {:?}", state.kind);
+
+    let may = allowed(&state);
+    assert_eq!(
+        may.setup,
+        Setup::Deploy,
+        "there is no way to finish what was started"
+    );
+    assert!(
+        !may.change_serving,
+        "a half-configured server was opened for serving from"
+    );
+    assert!(may.read, "and it must still be possible to look at it");
+}
+
+#[test]
+fn a_strangers_machine_is_still_a_strangers() {
+    // The other side of the same rule, and the one that must not be lost by adding the first.
+    // A machine with somebody's web server and none of our own marks is theirs, whatever else
+    // is true of it.
+    let theirs = Facts {
+        state_file: None,
+        caddyfile_present: false,
+        web_server_running: Some(String::from("nginx")),
+        video_dir_present: false,
+        our_own_marks: false,
+    };
+    assert_eq!(judge(&theirs).kind, Kind::Foreign);
 }

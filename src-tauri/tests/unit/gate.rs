@@ -81,13 +81,21 @@ fn an_older_server_side_is_offered_the_upgrade_and_not_written_to() {
 }
 
 #[test]
-fn a_bare_machine_is_for_deploying_and_nothing_else() {
+fn a_bare_machine_is_for_deploying_and_for_looking_at() {
     let bare = server(Kind::Clean, Compat::NotDeployed);
     assert!(allowed(&bare, Intent::Setup).is_ok());
     assert!(matches!(
         allowed(&bare, Intent::Change),
         Err(Refusal::NotDeployed)
     ));
+    // **And it may be looked at.** Found on the real stand: refusing this turned the one
+    // command whose job is to say "this machine is bare" into a command that refuses bare
+    // machines. There is nothing to read there, which is not the same as being forbidden
+    // to look.
+    assert!(
+        allowed(&bare, Intent::Read).is_ok(),
+        "a bare machine could not be looked at, so nothing could ever discover it is bare"
+    );
 }
 
 #[test]
@@ -140,10 +148,13 @@ fn every_combination_holds() {
                 kind == Kind::Clean || (kind == Kind::Managed && compat == Compat::NeedsUpgrade),
                 "{at}: the wrong answer about setting up"
             );
-            // Nothing that may be changed may not be read.
-            if allowed(&state, Intent::Change).is_ok() {
-                assert!(allowed(&state, Intent::Read).is_ok(), "{at}: writing blind");
-            }
+            // Looking is allowed everywhere, and that is the rule rather than an
+            // oversight: a person has to be able to find out what a machine is before
+            // anything can tell them what may be done with it.
+            assert!(
+                allowed(&state, Intent::Read).is_ok(),
+                "{at}: looking was refused"
+            );
         }
     }
 }

@@ -15,6 +15,7 @@ pub mod auth;
 pub mod connection;
 pub mod exec;
 pub mod fingerprint;
+pub mod keygen;
 pub mod sftp;
 pub mod stream;
 

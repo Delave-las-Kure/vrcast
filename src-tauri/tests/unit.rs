@@ -118,3 +118,6 @@ mod deploy_engine;
 
 #[path = "unit/gate.rs"]
 mod gate;
+
+#[path = "unit/keygen.rs"]
+mod keygen;
