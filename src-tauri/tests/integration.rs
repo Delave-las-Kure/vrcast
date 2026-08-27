@@ -32,6 +32,15 @@ mod channels;
 #[path = "integration/convert_kill.rs"]
 mod convert_kill;
 
+/// A bare server and somebody else's, for the deployment checks (T247). Kept apart from
+/// `fixture` because it brings its containers up differently — with systemd as PID 1 — and
+/// because it is the one fixture that guards the address it hands out (T249).
+#[path = "integration/deploy_fixture.rs"]
+mod deploy_fixture;
+
+#[path = "integration/deploy_stand.rs"]
+mod deploy_stand;
+
 #[path = "integration/fixture.rs"]
 mod fixture;
 

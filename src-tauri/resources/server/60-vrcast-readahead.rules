@@ -1,0 +1,13 @@
+# Ставится в /etc/udev/rules.d/60-vrcast-readahead.rules
+# readahead 8 МБ на системный диск.
+# Причина: дефолт 128 КБ упирался в латентность virtio (~7 мс/запрос) -> 17 МБ/с.
+# С 8 МБ замерено ~40-60 МБ/с при последовательной раздаче видео.
+# Применить без ребута:
+#   udevadm control --reload-rules && udevadm trigger --subsystem-match=block --sysname-match=vda
+# Проверить: cat /sys/block/vda/queue/read_ahead_kb  (должно быть 8192)
+#
+# ОТЛИЧИЕ ОТ ЭТАЛОНА СКИЛЛА: имя диска — подстановка {{DISK}}, а не vda.
+# В скилле оно записано жёстко с предупреждением поправить руками. Приложение правит
+# некому: оно определяет диск само (lsblk -d) и подставляет сюда. Жёсткое vda на
+# не-virtio железе не подошло бы ни к чему, и правило молча не применилось бы.
+SUBSYSTEM=="block", KERNEL=="{{DISK}}", ACTION=="add|change", ATTR{queue/read_ahead_kb}="8192"

@@ -72,7 +72,11 @@ impl Speaks {
 /// been the worst of the possible outcomes: continuous integration would have taken the old
 /// image out of its cache, and the checks of the viewers would have run against a container
 /// that serves nothing — passing or failing for reasons unrelated to the code.
-pub const IMAGE: &str = "vrcast-test-sshd:4";
+///
+/// Raised to 5 by T252a, when the container gained its state file. Without it the server
+/// reads as somebody else's under the recognition rule, and every changing operation would
+/// be refused on it once the detector exists.
+pub const IMAGE: &str = "vrcast-test-sshd:5";
 
 /// The prefix of the networks the fixture creates. The clean-up step in
 /// .github/workflows/build.yml looks for leftovers by it.

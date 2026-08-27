@@ -145,7 +145,11 @@ jobs:
           # A flickering guard is worse than none: it teaches people to re-run a build
           # without reading it — and one day they will re-run a real leak the same way.
           for _ in $(seq 1 15); do
-            left="$(docker ps -a --filter ancestor=vrcast-test-sshd:4 --format '{{.ID}} {{.Status}}')"
+            # Three sources now (T248). The serving container is looked for by its image;
+            # the two deployment ones by their NAME prefix instead — they are rebuilt and
+            # re-tagged more often than the serving one, and a guard keyed to a tag stops
+            # watching the moment the tag moves, silently and while still going green.
+            left="$(docker ps -a --filter ancestor=vrcast-test-sshd:5 --filter name=vrcast-deploy-target --format '{{.ID}} {{.Status}}')"
             [ -z "$left" ] && break
             sleep 1
           done

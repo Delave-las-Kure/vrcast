@@ -29,6 +29,24 @@ NEEDLES+=("/var/lib/vrcast/videos")   # the default path is allowed ONLY as a de
 SCOPE=(src src-tauri/src src-tauri/tauri.conf.json)
 [ -d src-tauri/capabilities ] && SCOPE+=(src-tauri/capabilities)
 
+# The tests, searched for the ADDRESS and the DOMAIN only (T249).
+#
+# They were outside the scope entirely until milestone D, and until milestone D that was
+# harmless: a test pointed at the wrong server spoils a file. Deployment rewrites the SSH
+# configuration, turns password logins off and switches the network filter on — pointed at a
+# working server it takes the serving down and can lock its owner out. The fixture guards the
+# address it hands out (deploy_fixture.rs), and this is the second lock: on the text, so that
+# an address cannot get in by another road.
+#
+# The path needle is deliberately NOT applied here. /var/lib/vrcast/videos is where the
+# container serves from, on purpose and in a dozen places — the paths take part in the checks,
+# and substituting them would check a different case.
+TEST_SCOPE=()
+[ -d src-tauri/tests ] && TEST_SCOPE+=(src-tauri/tests)
+ADDRESS_NEEDLES=()
+[ -n "${FORBID_IP:-}" ]     && ADDRESS_NEEDLES+=("$FORBID_IP")
+[ -n "${FORBID_DOMAIN:-}" ] && ADDRESS_NEEDLES+=("$FORBID_DOMAIN")
+
 # The one allowed exception: a line marked "FR-004-ok". It is needed for exactly one case —
 # a default value that goes into a new profile and is immediately there for a person to
 # edit. The exceptions are COUNTED and printed: a quietly growing list of marks is the same
@@ -54,6 +72,21 @@ for needle in "${NEEDLES[@]}"; do
     fail=1
   fi
 done
+
+# The tests. No exception mark is honoured here: a default value a person can edit is a
+# reasonable thing in the application and has no meaning at all in a test, where the address
+# is not offered to anybody — it is simply used.
+if [ "${#TEST_SCOPE[@]}" -gt 0 ] && [ "${#ADDRESS_NEEDLES[@]}" -gt 0 ]; then
+  for needle in "${ADDRESS_NEEDLES[@]}"; do
+    hits="$(grep -rInF "$needle" "${TEST_SCOPE[@]}" 2>/dev/null || true)"
+    [ -z "$hits" ] && continue
+    echo "THE LIVE SERVER'S ADDRESS WAS FOUND IN THE TESTS ($needle):" >&2
+    echo "$hits" >&2
+    echo "The checks run against the throwaway stand. Deployment against a working server" >&2
+    echo "does not spoil a file — it takes the serving down." >&2
+    fail=1
+  done
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "" >&2

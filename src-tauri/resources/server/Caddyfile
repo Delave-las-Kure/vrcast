@@ -1,0 +1,59 @@
+# Настройка раздачи. Разворачивается приложением, дальше только читается.
+#
+# Взята из .claude/skills/vrcast-deploy/reference/Caddyfile. Блок раздачи и блок журнала
+# перенесены дословно: каждая их строка куплена ошибкой — общее правило кеширования, типы
+# содержимого (без них Caddy отдаёт .ts как текст, а .m3u8 как звук), Accept-Ranges,
+# вращение журнала. Проверяет совпадение scripts/check-server-reference.sh.
+#
+# ДВА ОТЛИЧИЯ ОТ ЭТАЛОНА СКИЛЛА, оба намеренные:
+#
+# 1. Добавлена строка import: файл правил принадлежит приложению (R-03), и без неё
+#    ограничения качества не подключены ни к чему — приложение развернуло бы сервер,
+#    на котором его собственная возможность не работает. Договор с сервером её требует.
+#
+# 2. Убран проброс к MediaMTX. Решение владельца 2026-08-27 (T252): за вехи A–C
+#    приложение не обратилось к нему ни разу — все зрительские ссылки идут через
+#    /videos/… с диска, отрезки лесенки кладутся туда же. В spec.md, plan.md и договорах
+#    он не упомянут вовсе. Вместе с ним ушла и записанная ловушка: catch-all обязан был
+#    стоять на корне без handle_path, иначе Secure-cookie-редирект уходил в вечную петлю.
+#    Ловушки нет там, где нет проброса.
+
+{$SERVER_DOMAIN} {
+	encode gzip
+
+	# access-лог: JSON (чтобы потом забирать в Loki/Grafana), с ротацией.
+	# 50 МБ на файл, 5 файлов, максимум 30 дней -> потолок ~250 МБ.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	# Единственная строка основного конфига, указывающая на файл правил во владении
+	# приложения (R-03). Всё про ограничение качества пишется туда и больше никуда.
+	import /etc/caddy/vrcast-limits.conf
+
+	# VOD — прямая раздача файлов с диска (seekable) + статический HLS. ОСНОВНОЙ путь.
+	handle_path /videos/* {
+		root * /var/lib/vrcast/videos
+		header Access-Control-Allow-Origin "*"
+		header Accept-Ranges "bytes"
+		header Cache-Control "public, max-age=2592000, immutable"
+		# правильный MIME для HLS-статики (иначе Caddy отдаёт .ts как text/..., .m3u8 как audio/...)
+		@m3u8 path *.m3u8
+		header @m3u8 Content-Type "application/vnd.apple.mpegurl"
+		@ts path *.ts
+		header @ts Content-Type "video/mp2t"
+		@m4s path *.m4s
+		header @m4s Content-Type "video/mp4"
+		file_server
+	}
+
+	# корень — подсказка
+	handle / {
+		respond "VRCast. Видео: /videos/<имя>.mp4  |  Набор качеств: /videos/<имя>/master.m3u8" 200
+	}
+}

@@ -76,6 +76,28 @@ RUN printf '%s\n' \
 # checks, and substituting them would check a different case.
 RUN mkdir -p /var/lib/vrcast/videos /etc/vrcast /etc/caddy /var/log/caddy
 
+# The state file, and it is not decoration (T252a, found while laying out milestone D).
+#
+# The recognition rule of contracts/server-contract.md reads in this order: a state file
+# means the server is ours; no state file but a Caddyfile or a running web server means it
+# is **somebody else's**; neither means it is clean. This container has had a Caddyfile
+# since T149 and has never had a state file — so the moment `server_detect` exists it would
+# be recognised as foreign, and every changing operation of milestone C would be refused on
+# it. Nothing is broken today only because the detector is not written yet.
+#
+# The version is 1: the first composition of the server side. It is frozen at the end of
+# phase 7 (T337), and this file moves with it.
+RUN printf '%s\n' \
+      '{' \
+      '  "vrcast_server_version": 1,' \
+      '  "deployed_at": "2026-08-27T00:00:00Z",' \
+      '  "deployed_by_app": "0.1.0",' \
+      '  "steps_applied": ["user-dirs", "configs", "services"],' \
+      '  "video_dir": "/var/lib/vrcast/videos",' \
+      '  "domain": "vrcast-server"' \
+      '}' \
+      > /etc/vrcast/state.json
+
 # The file the application owns (R-03), with no rules in it to begin with. It has to exist
 # even so: importing a pattern that matches nothing is an error, Caddy would refuse to
 # start, and every check of milestone C would fail for a reason having nothing to do with
