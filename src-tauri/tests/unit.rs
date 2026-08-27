@@ -109,3 +109,6 @@ mod dns_verdict;
 
 #[path = "unit/swap.rs"]
 mod swap;
+
+#[path = "unit/detect.rs"]
+mod detect;

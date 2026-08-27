@@ -12,6 +12,7 @@ pub mod domain;
 pub mod error;
 pub mod logging;
 pub mod media;
+pub mod net;
 pub mod server;
 pub mod ssh;
 pub mod store;

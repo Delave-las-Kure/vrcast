@@ -189,6 +189,34 @@ function placesSection() {
   ].join("\n");
 }
 
+/**
+ * Name resolution, and why it belongs in a file about other people's work.
+ *
+ * Not a licence obligation — the library's terms are in the table like everything else —
+ * but a claim about where the person's data goes, which is the same kind of promise. The
+ * application says it does not hand anything to outside services; a resolver is exactly the
+ * sort of place that quietly does.
+ */
+function dnsSection() {
+  return [
+    "## Разрешение имён — от корневых серверов, без посредников",
+    "",
+    "Проверка доменной записи (FR-137…FR-140) идёт **обходом от корневых серверов DNS**",
+    "силами библиотеки `hickory-resolver`, а не через чужой публичный распознаватель.",
+    "",
+    "Причин две, и обе прикладные. Распознаватель самой машины кеширует **отрицательный**",
+    "ответ: пользователь заводит запись, жмёт «проверить» и видит «такого домена нет» ещё",
+    "десятки минут после того, как всё исправно. И он может вовсе не отвечать на нужные",
+    "запросы — заглушка, раздаваемая на этой машине, молчит про NS и SOA.",
+    "",
+    "Взять вместо него публичный распознаватель значило бы отдавать домен пользователя",
+    "постороннему на каждую проверку. Корень же — не посредник: с него начинается всякое",
+    "разрешение имени, и его адреса приложение везёт с собой, как это делает любой",
+    "распознаватель.",
+    "",
+  ].join("\n");
+}
+
 function table(rows) {
   const lines = ["| Пакет | Версия | Лицензия | Источник |", "|---|---|---|---|"];
   for (const r of rows.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))) {
@@ -242,6 +270,7 @@ function build() {
     "",
     ffmpegSection(),
     placesSection(),
+    dnsSection(),
     `## Ядро (Rust) — ${rust.length}`,
     "",
     table(rust),

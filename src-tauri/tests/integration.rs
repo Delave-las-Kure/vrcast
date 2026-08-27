@@ -41,6 +41,12 @@ mod deploy_fixture;
 #[path = "integration/deploy_stand.rs"]
 mod deploy_stand;
 
+#[path = "integration/detect_live.rs"]
+mod detect_live;
+
+#[path = "integration/dns_live.rs"]
+mod dns_live;
+
 #[path = "integration/fixture.rs"]
 mod fixture;
 
