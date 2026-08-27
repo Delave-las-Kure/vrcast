@@ -7,7 +7,8 @@
 # stops being offered updates. There is no second chance to notice, because nothing complains.
 #
 # So the cases here are the failures, not the success: a platform with no file, a file with no
-# signature, an empty signature, two candidates for one platform. The success case is checked
+# signature, an empty signature, two candidates for one platform, and the Linux case where
+# both shapes are lying about and only one is signed. The success case is checked
 # for the two things that actually have to be right — the key for the package copy, and each
 # signature landing on its own artefact.
 set -euo pipefail
@@ -77,6 +78,22 @@ fi
 full "$work/empty"; : >"$work/empty/vrcast-studio_1.2.3_amd64.deb.sig"
 if run "$work/empty" >/dev/null 2>&1; then
 	say_no "an empty signature was accepted"
+fi
+
+# --- both Linux shapes present, one of them signed ------------------------------------------
+#
+# The bundler makes either the v1-compatible archive or the AppImage signed directly, and a
+# build directory kept between runs can hold yesterday's other shape. The signed one is the
+# artefact; stopping at the unsigned one would fail a release that is perfectly complete.
+full "$work/both"; printf 'archive' >"$work/both/vrcast-studio_1.2.3_amd64.AppImage.tar.gz"
+if run "$work/both" >/dev/null; then
+	picked=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['platforms']['linux-x86_64']['url'].rsplit('/',1)[1])" "$work/latest.json")
+	case "$picked" in
+		*.AppImage) : ;;
+		*) say_no "an unsigned $picked was taken over the signed AppImage" ;;
+	esac
+else
+	say_no "an unsigned leftover archive beside a signed AppImage was treated as a failure"
 fi
 
 # --- two candidates for one platform --------------------------------------------------------

@@ -161,8 +161,11 @@ pub mod api {
         if !confirmed {
             return Err(AppError::new(ErrorCode::ConfirmationRequired));
         }
+        // Nothing was checked and nothing can be installed. "Install failed" rather than
+        // "check failed": nothing was asked of anybody, and the person is standing in front of
+        // an install button.
         if !configured(app) {
-            return Err(AppError::new(ErrorCode::UpdateCheckFailed));
+            return Err(AppError::new(ErrorCode::UpdateInstallFailed));
         }
 
         let updater = app

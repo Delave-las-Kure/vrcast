@@ -32,21 +32,36 @@ WANTED = {
 }
 
 
-def pick(bundles: pathlib.Path, patterns: list) -> pathlib.Path:
-    """The first file matching the first pattern that matches anything."""
+def pick(bundles: pathlib.Path, patterns: list):
+    """The first artefact matching a pattern **that has a signature beside it**.
+
+    Both halves matter. The Linux patterns name two shapes because the bundler makes one or the
+    other depending on how updater artefacts are configured: the v1-compatible archive, or the
+    AppImage signed directly. Whichever it made is the one with a `.sig` next to it — so a
+    candidate without one is not the artefact, it is the other shape lying around, and stopping
+    at it would fail a release that is perfectly complete.
+
+    Returns `(artefact, signature)`, or `(None, reason)` when nothing usable is there.
+    """
+    seen = []
     for pattern in patterns:
         # Sorted so that two candidates never depend on the order the filesystem happens to
         # hand them back: a release that differs between machines is a release nobody can check.
-        found = sorted(p for p in bundles.rglob(pattern) if not p.name.endswith(".sig"))
+        found = sorted(f for f in bundles.rglob(pattern) if not f.name.endswith(".sig"))
         if len(found) > 1:
             raise SystemExit(
                 "more than one file matches %s: %s%sPick a single artefact per platform; two of "
                 "them means the build made something it was not asked for."
-                % (pattern, ", ".join(p.name for p in found), "\n")
+                % (pattern, ", ".join(f.name for f in found), "\n")
             )
-        if found:
-            return found[0]
-    return None
+        for artefact in found:
+            seen.append(artefact.name)
+            signature = artefact.with_name(artefact.name + ".sig")
+            if signature.is_file() and signature.read_text(encoding="utf-8").strip():
+                return artefact, signature
+    if seen:
+        return None, "found %s, and not one of them carries a signature" % ", ".join(seen)
+    return None, "looked for %s" % ", ".join(patterns)
 
 
 def main() -> int:
@@ -67,23 +82,12 @@ def main() -> int:
     platforms = {}
     missing = []
     for key, patterns in WANTED.items():
-        artefact = pick(args.bundles, patterns)
+        artefact, signature = pick(args.bundles, patterns)
         if artefact is None:
-            missing.append("%s (looked for %s)" % (key, ", ".join(patterns)))
-            continue
-        signature = artefact.with_name(artefact.name + ".sig")
-        if not signature.is_file():
-            missing.append(
-                "%s: %s is here but %s is not — the build was not signed"
-                % (key, artefact.name, signature.name)
-            )
-            continue
-        text = signature.read_text(encoding="utf-8").strip()
-        if not text:
-            missing.append("%s: %s is empty" % (key, signature.name))
+            missing.append("%s: %s" % (key, signature))
             continue
         platforms[key] = {
-            "signature": text,
+            "signature": signature.read_text(encoding="utf-8").strip(),
             "url": "https://github.com/%s/releases/download/%s/%s"
             % (args.repo, urllib.parse.quote(args.tag), urllib.parse.quote(artefact.name)),
         }
