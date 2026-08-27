@@ -17,9 +17,24 @@ import { useEffect, useState } from "react";
 import { ipc } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
 import { fill } from "../../shared/i18n/render";
+import { Update } from "../settings/Update";
 
 /** Where the source lives. A GPL obligation, not a link "for the curious". */
 const SOURCE_URL = "https://github.com/Delave-las-Kure/vrcast";
+
+/**
+ * T360 — the address of the source **of this build**, not of whatever is newest.
+ *
+ * The sentence above the link promises the source of this very version and names the tag. It
+ * used to link to the repository root, which is the default branch: a person following it got
+ * somebody else's code with our promise attached. That is the shape of an obligation kept only
+ * in appearance — and this one is a licence condition, not a courtesy.
+ *
+ * With no version to hand the root is all there is, and then the promise is not made either.
+ */
+function sourceAt(version: string | null, path = ""): string {
+  return version ? `${SOURCE_URL}/tree/v${version}${path}` : SOURCE_URL;
+}
 
 export function About() {
   const [version, setVersion] = useState<string | null>(null);
@@ -50,24 +65,26 @@ export function About() {
         {version ? ` ${version}` : ""} — {a.tagline}
       </p>
 
+      <Update />
+
       <h2>{a.licenceHeading}</h2>
       <p>
         {a.licenceBody1a} <strong>{a.licenceName}</strong>
         {a.licenceBody1b}
       </p>
       <p>
-        {a.sourceLead} <em>{a.sourceThisVersion}</em>
+        {a.sourceLead}
         {version ? (
           <>
             {" "}
-            ({a.sourceTag} <code>v{version}</code>)
+            <em>{a.sourceThisVersion}</em> ({a.sourceTag} <code>v{version}</code>)
           </>
         ) : null}{" "}
         {a.sourceAvailableAt}
       </p>
       <p>
-        <a href={SOURCE_URL} target="_blank" rel="noreferrer">
-          {SOURCE_URL}
+        <a href={sourceAt(version)} target="_blank" rel="noreferrer">
+          {sourceAt(version)}
         </a>
       </p>
       <p className="muted">{a.sourceMissing}</p>
@@ -77,7 +94,17 @@ export function About() {
         {a.thirdPartyBody} <code>THIRD-PARTY.md</code> {a.thirdPartyBodyTail}
       </p>
       <p>
-        <a href={`${SOURCE_URL}/blob/main/THIRD-PARTY.md`} target="_blank" rel="noreferrer">
+        {/* The list belonging to this build. On `main` it would be the list of a build the
+            person does not have — the same fault as the source link above, one file along. */}
+        <a
+          href={
+            version
+              ? `${SOURCE_URL}/blob/v${version}/THIRD-PARTY.md`
+              : `${SOURCE_URL}/blob/main/THIRD-PARTY.md`
+          }
+          target="_blank"
+          rel="noreferrer"
+        >
           {a.thirdPartyLink}
         </a>
       </p>

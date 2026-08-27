@@ -222,6 +222,16 @@ export const en: Catalogue = {
       hint: "Read what is about to happen, then confirm. There will be no undoing it.",
     },
 
+    // --- updating the application itself ---
+    UPDATE_CHECK_FAILED: {
+      message: "Could not check for updates",
+      hint: "Check the network connection and try again. The application carries on as before.",
+    },
+    UPDATE_INSTALL_FAILED: {
+      message: "Could not install the update",
+      hint: "Download the installer from the releases page and run it yourself. The copy you have is untouched.",
+    },
+
     // --- everything else ---
     STORAGE_FAILED: {
       message: "Could not reach local storage",
@@ -652,7 +662,29 @@ export const en: Catalogue = {
         `The system store would not give up these secrets: ${names}. They will have to be cleared by hand.`,
       dirLeft: "The data directory could not be removed — something may be holding a file in it.",
     },
-    appearance: {
+    update: {
+    title: "Updates",
+    installed: "Version installed",
+    check: "Check for updates",
+    checking: "Checking…",
+    upToDate: "Nothing newer.",
+    notConfigured:
+      "This build carries no update settings, so there is nowhere to look. Builds from source are like this; released copies update.",
+    unpackaged:
+      "This is a build from the source tree, not an installed copy: there is nothing here to update.",
+    available: (version: string) => `Version ${version} is out.`,
+    published: "Published",
+    notes: "What is in it",
+    install: "Update",
+    installing: "Installing…",
+    warnWindows:
+      "The installer stops the application the moment it starts. Starting it again is up to you.",
+    warnPackage:
+      "The system will ask for an administrator password: the package is installed as root. The application will be stopped.",
+    warnAppImage: "The application will rewrite itself and stop. Start it again afterwards.",
+    agree: "I understand the application will be stopped",
+  },
+  appearance: {
       title: "Appearance",
       theme: "Theme",
       themeLight: "Light",

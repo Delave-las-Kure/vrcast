@@ -22,6 +22,7 @@ pub mod limits;
 pub mod quality;
 pub mod servers;
 pub mod settings;
+pub mod update;
 pub mod upload;
 pub mod viewers;
 

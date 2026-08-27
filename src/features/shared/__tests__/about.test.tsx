@@ -15,7 +15,16 @@ const mockAppVersions = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
-  return { ...actual, ipc: { appVersions: () => mockAppVersions() } };
+  return {
+    ...actual,
+    ipc: {
+      appVersions: () => mockAppVersions(),
+      // The update section sits on this screen, next to the version it is about. It asks
+      // nothing of the network here: a build with no update settings is the quiet case.
+      updateStanding: () =>
+        Promise.resolve({ current: "0.1.0", installed_as: "unpackaged", configured: false }),
+    },
+  };
 });
 
 const { About } = await import("../About");
@@ -37,10 +46,22 @@ describe("about the application", () => {
     expect(link).toHaveAttribute("href", expect.stringContaining("github.com"));
   });
 
-  it("ties the source to the version in hand", async () => {
-    // The GPL obligation is about the build that was received, not about "the latest".
+  it("ties the source to the version in hand — in the link, not only in the sentence", async () => {
+    // **T360.** The wording said "the source of this very version" and named the tag, while the
+    // link went to the repository root: the default branch, which is somebody else's code with
+    // our promise attached. Saying the tag and linking elsewhere is the obligation kept in
+    // appearance only, so the tag is asserted where it decides where a person lands.
     renderIn(<About />);
     expect(await screen.findByText("v0.1.0")).toBeInTheDocument();
+    const link = await screen.findByRole("link", { name: /github\.com/ });
+    expect(link).toHaveAttribute("href", expect.stringContaining("/tree/v0.1.0"));
+  });
+
+  it("points the list of other people's work at this build's list too", async () => {
+    // The same fault one file along: `main`'s list belongs to a build the person does not have.
+    renderIn(<About />);
+    const list = await screen.findByRole("link", { name: /Перечень|list/i });
+    expect(list).toHaveAttribute("href", expect.stringContaining("/blob/v0.1.0/THIRD-PARTY.md"));
   });
 
   it("says where the list of other people's work is", async () => {
@@ -53,6 +74,10 @@ describe("about the application", () => {
     mockAppVersions.mockRejectedValue(new Error("the core is unreachable"));
     renderIn(<About />);
     expect(await screen.findByText(/GNU General Public License/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /github\.com/ })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /github\.com/ });
+    expect(link).toBeInTheDocument();
+    // With no version there is no tag to point at, so the root is all there is — and the
+    // promise of "this very version" is not made either, rather than made and not kept.
+    expect(link).toHaveAttribute("href", "https://github.com/Delave-las-Kure/vrcast");
   });
 });

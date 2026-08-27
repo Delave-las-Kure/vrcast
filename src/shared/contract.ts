@@ -72,6 +72,8 @@ export type ErrorCode =
   | "INVALID_INPUT"
   | "CONFIRMATION_REQUIRED"
   // everything else
+  | "UPDATE_CHECK_FAILED"
+  | "UPDATE_INSTALL_FAILED"
   | "STORAGE_FAILED"
   | "INTERNAL";
 
@@ -721,6 +723,31 @@ export interface WhatWent {
   secrets_removed: number;
   /** Секреты, которых хранилище не отдало. Названы, а не проглочены. */
   secrets_left: string[];
+}
+
+// --- updating the application itself (FR-113) ---
+
+/**
+ * How the running copy was packaged. Not a curiosity: it decides where the update comes from,
+ * whether the system will ask for a password, and whether the application survives the install.
+ */
+export type InstalledAs = "windows" | "app_image" | "deb" | "rpm" | "unpackaged";
+
+/** What the check found. */
+export type Found =
+  | { kind: "not_configured" }
+  | { kind: "up_to_date" }
+  | { kind: "available"; version: string; notes: string | null; date: string | null };
+
+/**
+ * Where this copy stands — answerable without touching the network, which is why it is a
+ * separate call from the check. The screen shows this on opening; the check waits for a press.
+ */
+export interface UpdateStanding {
+  current: string;
+  installed_as: InstalledAs;
+  /** Whether this build has anywhere to look at all. */
+  configured: boolean;
 }
 
 /** Что изменит обновление серверной части (FR-129). */

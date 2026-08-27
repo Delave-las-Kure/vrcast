@@ -54,7 +54,22 @@ pub fn run() {
 
     let engine = state.tasks.clone();
 
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+
+    // **The updater goes in only when this build has somewhere to look.** Tauri reads a
+    // plugin's settings when the plugin is registered, and the updater's `pubkey` has no
+    // default: with no `plugins.updater` section the settings arrive as `null`, deserialising
+    // fails, and the application does not open at all. A build without update settings should
+    // be an ordinary build that does not update — not a build that will not start.
+    //
+    // What keeps "does not update" from quietly reaching a release is the release workflow,
+    // which refuses to build without the section (T362).
+    let mut builder = tauri::Builder::default();
+    if context.config().plugins.0.contains_key("updater") {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         // File choosing through the system dialog. A web one will not do: a file
         // chosen there has no path on disk, and a path is what an upload needs.
@@ -149,6 +164,9 @@ pub fn run() {
             commands::diag::ipc::diag_bitrate,
             commands::forget::ipc::forget_preview,
             commands::forget::ipc::forget_everything,
+            commands::update::ipc::update_standing,
+            commands::update::ipc::update_check,
+            commands::update::ipc::update_install,
             commands::ladder::ipc::ladder_build,
             commands::ladder::ipc::ladder_verify,
             commands::ladder::ipc::ladder_validate,
@@ -164,6 +182,6 @@ pub fn run() {
             commands::upload::ipc::upload_start,
             commands::upload::ipc::upload_resume,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

@@ -58,6 +58,8 @@ import {
   type Stalls,
   type Peaks,
   type WhatWouldGo,
+  type UpdateStanding,
+  type Found,
   type WhatWent,
 } from "./contract";
 
@@ -139,6 +141,14 @@ export const ipc = {
   forgetPreview: () => call<WhatWouldGo>("forget_preview"),
   /** Убрать. Без `confirmed` — отказ, до того как что-либо тронуто. */
   forgetEverything: (confirmed: boolean) => call<WhatWent>("forget_everything", { confirmed }),
+
+  // --- updating the application (FR-113) ---
+  /** Version and packaging. Answers from this machine alone — nothing leaves it. */
+  updateStanding: () => call<UpdateStanding>("update_standing"),
+  /** Whether there is a newer version. Runs when a person asks, and at no other time. */
+  updateCheck: () => call<Found>("update_check"),
+  /** Fetch it and put it on. Without `confirmed` — refused before anything is fetched. */
+  updateInstall: (confirmed: boolean) => call<void>("update_install", { confirmed }),
 
   tasksList: () => call<Task[]>("tasks_list"),
   taskGet: (id: string) => call<Task>("task_get", { id }),

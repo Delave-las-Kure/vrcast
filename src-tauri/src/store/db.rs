@@ -45,6 +45,12 @@ pub enum DbError {
     #[error("the local database was made by a newer version of the application (schema {found}, this build knows up to {known})")]
     TooNew { found: u32, known: u32 },
 
+    /// A migration left a reference pointing at a row that is not there. Said out loud
+    /// rather than passed over: the shape it takes otherwise is a queue full of tasks for a
+    /// server that no longer exists, and nothing anywhere to say why.
+    #[error("after migrating, {table} refers to a row that is not in {parent}")]
+    BrokenReferences { table: String, parent: String },
+
     #[error("could not determine the application data directory")]
     NoDataDir,
 
@@ -108,6 +114,20 @@ impl Db {
     }
 
     /// Apply the missing migrations. Safe to repeat: applied ones are skipped.
+    ///
+    /// **Referential integrity is off while this runs, and that is not a shortcut.** SQLite
+    /// cannot alter a constraint, so a migration that changes one builds the table anew,
+    /// copies the rows across and drops the old one — 0008 and 0009 both do exactly that.
+    /// With foreign keys on, `DROP TABLE` performs an implicit `DELETE FROM` first, and that
+    /// fires `ON DELETE CASCADE` on every child row: dropping `server_profiles` takes the
+    /// whole task queue with it. Measured 2026-08-28 on a database seeded at schema 1 — the
+    /// profiles arrived, the queue did not. Turning them off around a rebuild is the
+    /// procedure SQLite's own documentation gives.
+    ///
+    /// The pragma cannot live inside the migration file: it is a no-op within a transaction,
+    /// and every migration runs in one. So it sits here, around them — and what it suspends
+    /// is put back afterwards and then **checked**, because "off for a moment" is one edit
+    /// away from "off from now on", and nothing would notice.
     fn migrate(&self) -> Result<()> {
         let mut guard = self.conn.lock().expect("the database mutex is poisoned");
         let conn = &mut *guard;
@@ -122,6 +142,35 @@ impl Db {
             });
         }
 
+        // Nothing to apply is the ordinary case — every start after the first. Leave the
+        // connection exactly as it was found rather than switching integrity off and on
+        // again for no reason, and skip the check below: it has nothing to check.
+        if current == SCHEMA_VERSION {
+            return Ok(());
+        }
+
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let applied = Self::apply_from(conn, current);
+        // Back on whatever happened on the way. A failed migration leaving the connection
+        // without referential integrity would be the worse of the two faults, and the quiet
+        // one.
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        applied?;
+
+        let mut check = conn.prepare("PRAGMA foreign_key_check")?;
+        let mut rows = check.query([])?;
+        if let Some(row) = rows.next()? {
+            return Err(DbError::BrokenReferences {
+                table: row.get(0)?,
+                parent: row.get(2)?,
+            });
+        }
+        Ok(())
+    }
+
+    /// The migrations themselves, from `current` onwards. Split out so that whatever they
+    /// do, the caller gets to put referential integrity back.
+    fn apply_from(conn: &mut Connection, current: u32) -> Result<()> {
         for (version, sql) in MIGRATIONS {
             if *version <= current {
                 continue;

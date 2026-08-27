@@ -132,6 +132,10 @@ error_codes! {
     InvalidInput => "INVALID_INPUT",
     ConfirmationRequired => "CONFIRMATION_REQUIRED",
 
+    // --- updating the application itself ---
+    UpdateCheckFailed => "UPDATE_CHECK_FAILED",
+    UpdateInstallFailed => "UPDATE_INSTALL_FAILED",
+
     // --- everything else ---
     StorageFailed => "STORAGE_FAILED",
     Internal => "INTERNAL",

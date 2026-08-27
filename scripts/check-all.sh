@@ -71,6 +71,9 @@ if [ "${OS:-}" = "Windows_NT" ]; then
 fi
 step "The workflow files" bash scripts/check-workflows.sh
 step "The version is in one place" bash scripts/check-version.sh
+# Not the release itself — the script that assembles it. It runs once, unwatched, at the
+# one moment where a mistake publishes quietly instead of failing (T362).
+step "The release file assembler" bash scripts/test-latest-json.sh
 step "Both themes line up" bash scripts/check-theme.sh
 step "Interface: types" npm run --silent typecheck
 step "Interface: style" npm run --silent lint

@@ -1,0 +1,215 @@
+# T362 — what a person gets when they are handed a copy, and what they are owed with it.
+#
+# Triggered by a tag, and by nothing else. A release built from an untagged commit could not
+# keep the promise the "About" screen makes — that the source of *this* build is at `v{version}`
+# — because there would be no such tag to go to.
+#
+# **Nothing is built until the release could be a complete one.** The checks that can fail
+# cheaply run first, in one job, and every one of them guards a failure that would otherwise be
+# silent rather than loud:
+#
+#   - the tag and the version are the same number, or the source link leads to another build;
+#   - the settings say where updates come from, or the release installs a copy that will never
+#     be offered another one and will not say so (see `lib.rs`, and R-29 in tasks.md);
+#   - the signing key is here, or the artefacts go out unsigned and every installed copy
+#     refuses them, after the download, for no reason a person can see;
+#   - the FFmpeg source addresses still answer, or a licence obligation is broken at the exact
+#     moment somebody new is handed a copy.
+#
+# **The release notes are the tag's own message.** `git tag -a v1.2.3` and what is written there
+# becomes both the release body and the text the update screen shows under "what is in it". One
+# place, written by the person who knows what changed.
+#
+# The runners and the container are the same as in `build.yml`, and for the same reasons: these
+# are real machines, and jobs do not install things on them.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Creating the release and attaching files to it. Nothing else is asked for.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/../_cargo-target
+
+jobs:
+  preflight:
+    name: Before anything is built
+    timeout-minutes: 15
+    runs-on: [self-hosted, vrcast-linux]
+    container:
+      image: localhost:5000/vrcast-linux-check:3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, tags included: the version check compares the tag standing on
+          # HEAD with the number in Cargo.toml, and a shallow checkout has no tags to compare.
+          fetch-depth: 0
+
+      - name: The tag and the version are one number
+        run: bash scripts/check-version.sh
+
+      - name: This build knows where its updates come from
+        run: |
+          if ! grep -q '"updater"' src-tauri/tauri.conf.json; then
+            echo "src-tauri/tauri.conf.json has no plugins.updater section." >&2
+            echo "Without it the application still builds and still runs — it simply never" >&2
+            echo "updates, and nothing anywhere says so. That is not a release." >&2
+            echo "Needed there: the public key and the address updates are read from." >&2
+            exit 1
+          fi
+          echo "the update settings are in place"
+
+      - name: The signing key is here
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "The secret TAURI_SIGNING_PRIVATE_KEY is not set for this repository." >&2
+            echo "Unsigned artefacts are refused by every installed copy — after the" >&2
+            echo "download, with nothing on screen to explain it. Better to stop here." >&2
+            exit 1
+          fi
+          echo "the signing key is available to this run"
+
+      - name: The FFmpeg source addresses still answer
+        run: bash scripts/check-source-links.sh
+
+  bundle:
+    name: Installers — ${{ matrix.os }}
+    timeout-minutes: 90
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # A string rather than an `image:` field, for the reason spelled out in build.yml: an
+          # empty `image` is rejected and takes the whole run with it.
+          - os: vrcast-win
+            container: ""
+          - os: vrcast-linux
+            container: localhost:5000/vrcast-linux-check:3
+    runs-on: [self-hosted, '${{ matrix.os }}']
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The Rust toolchain is here
+        shell: bash
+        run: |
+          missing=""
+          for tool in cargo rustc; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          if [ -n "$missing" ]; then
+            echo "the runner is missing:$missing" >&2
+            echo "install once:  rustup toolchain install stable" >&2
+            exit 1
+          fi
+          cargo --version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache for the bundled FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries
+          key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
+      - name: Put the bundled FFmpeg in place
+        run: node scripts/fetch-ffmpeg.mjs
+
+      - run: npm ci
+
+      - name: Build the installers, signed
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Set even when empty: the signer reads the variable, and an unset one and an empty
+          # one are different things to it.
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
+
+      # **Brought into the workspace first, then uploaded from there.** The build directory
+      # lives outside the checkout on purpose — it is what survives between runs on a machine
+      # that is not thrown away — and uploading from outside the workspace is a corner of the
+      # upload action nobody here can test in advance. Copying costs a second.
+      - name: Gather what was built
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundles
+          bundle="$CARGO_TARGET_DIR/release/bundle"
+          if [ ! -d "$bundle" ]; then
+            echo "nothing was bundled: $bundle does not exist" >&2
+            exit 1
+          fi
+          for kind in exe msi deb AppImage tar.gz sig; do
+            find "$bundle" -type f -name "*.$kind" -exec cp {} bundles/ ';'
+          done
+          ls -l bundles
+
+      # Sorting out which file belongs to which platform is the publishing job's work, and it
+      # is done by a script that refuses rather than guesses.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.os }}
+          path: bundles/
+          if-no-files-found: error
+
+  publish:
+    name: The release itself
+    timeout-minutes: 30
+    needs: bundle
+    runs-on: [self-hosted, vrcast-linux]
+    container:
+      image: localhost:5000/vrcast-linux-check:3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: Assemble the file installed copies read
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' src-tauri/Cargo.toml | head -1)
+          # The tag's own message. An annotated tag is the convention here; a lightweight one
+          # leaves this empty, and an empty "what is in it" is honest — better than a
+          # sentence made up on the tag's behalf.
+          notes=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+          python3 scripts/latest-json.py \
+            --version "$version" \
+            --tag "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundles bundles \
+            --notes "$notes" \
+            --out latest.json
+          cat latest.json
+
+      - name: Publish, with everything owed alongside
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          notes=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+          # `LICENSE` and `THIRD-PARTY.md` go with the installers rather than being left in the
+          # repository: what a person is owed should not need looking for.
+          mapfile -t installers < <(find bundles -type f \
+            \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.tar.gz' \) | sort)
+          python3 scripts/publish-release.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --notes "$notes" \
+            --token "$TOKEN" \
+            "${installers[@]}" latest.json LICENSE THIRD-PARTY.md

@@ -77,6 +77,11 @@ mod redact;
 #[path = "unit/pseudonym.rs"]
 mod pseudonym;
 
+/// T353 — a database from an earlier build opens, migrates and keeps its rows. Here rather
+/// than among the integration tests: it needs no container, and that set is off by default.
+#[path = "unit/upgrade_keeps_state.rs"]
+mod upgrade_keeps_state;
+
 #[path = "unit/transfer.rs"]
 mod transfer;
 

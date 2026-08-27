@@ -20,7 +20,7 @@ name: build
 # контейнерная интеграция через Docker, и разделение «собрано у меня» от «собрано начисто» —
 # исполнитель работает в своём каталоге, а не в рабочем дереве.
 #
-# **Проверки Linux идут в одноразовом контейнере** (`.github/ci-image/Dockerfile`), и это не
+# **Проверки Linux идут в одноразовом контейнере** (`scripts/linux-check/Dockerfile`), и это не
 # удобство, а вывод из происшествия. 2026-08-27 задание сделало на своей машине то, что делает
 # на машине GitHub: поставило rustup поверх настоящего и унесло `rustup.exe`, а с ним — все
 # ссылки в `.cargo/bin`, `cargo-deny` и `tauri-driver`. Ничего не пропало навсегда, но и рисковать
@@ -33,7 +33,7 @@ name: build
 # окном, а окна в контейнере Windows нет. Взамен задания там больше ничего не ставят — цепочка
 # Rust проверяется, а не устанавливается.
 #
-# Образ собирается один раз:  docker build -t localhost:5000/vrcast-linux-check:3 .github/ci-image
+# Образ собирается один раз:  docker build -t localhost:5000/vrcast-linux-check:3 scripts/linux-check
 
 on:
   push:
@@ -54,6 +54,7 @@ env:
 jobs:
   frontend:
     name: Interface — style and tests
+    timeout-minutes: 30
     runs-on: [self-hosted, vrcast-linux]
     container:
       image: localhost:5000/vrcast-linux-check:3
@@ -74,6 +75,7 @@ jobs:
 
   core:
     name: Core — ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -183,6 +185,12 @@ jobs:
   # caused it, when nobody remembers the change.
   e2e:
     name: End to end — the built application, driven
+    # **Предел времени, а не бесконечность.** Исполнитель здесь один и настоящий:
+    # зависшее задание держит не абстрактную очередь, а машину владельца, и держит её
+    # столько, сколько GitHub позволит по умолчанию — шесть часов. Числа взяты с запасом
+    # против самого долгого удачного прогона, чтобы предел ловил зависание, а не
+    # медленный день.
+    timeout-minutes: 60
     runs-on: [self-hosted, '${{ matrix.os }}']
     strategy:
       fail-fast: false
@@ -345,6 +353,12 @@ jobs:
 
   integration:
     name: Integration — a throwaway server in a container
+    # **Предел времени, а не бесконечность.** Исполнитель здесь один и настоящий:
+    # зависшее задание держит не абстрактную очередь, а машину владельца, и держит её
+    # столько, сколько GitHub позволит по умолчанию — шесть часов. Числа взяты с запасом
+    # против самого долгого удачного прогона, чтобы предел ловил зависание, а не
+    # медленный день.
+    timeout-minutes: 90
     runs-on: [self-hosted, vrcast-linux]
     container:
       image: localhost:5000/vrcast-linux-check:3
