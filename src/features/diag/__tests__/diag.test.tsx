@@ -1,13 +1,14 @@
 /**
- * T320 — диагностика с точки зрения человека.
+ * T320 — the diagnostics, from a person's side.
  *
- * Проверяется не то, что экран рисуется, а три обещания вехи:
+ * What is checked is not that the screen renders, but the milestone's three promises:
  *
- * 1. **у каждого показателя видна своя оценка** — «в целом внимание» не говорит, куда смотреть;
- * 2. **вывод показан вместе с числами, на которых держится** (FR-072) — он бывает неверен, и
- *    без чисел его нечем оспорить;
- * 3. **«не удалось определить» — отдельное состояние**, а не пустой экран: пустоту читают как
- *    «всё хорошо» или как поломку приложения, и то и другое неправда.
+ * 1. **every reading carries its own verdict** — "worth a look overall" does not say where to
+ *    look;
+ * 2. **the verdict is shown with the numbers it rests on** (FR-072) — it is sometimes wrong,
+ *    and without the numbers there is nothing to argue with;
+ * 3. **"could not tell" is a state of its own**, not an empty screen: emptiness is read as
+ *    "all is well" or as the application being broken, and both are untrue.
  */
 
 import { screen, waitFor } from "@testing-library/react";
@@ -61,7 +62,8 @@ const SNAPSHOT: Health["snapshot"] = {
   container: false,
 };
 
-/** Раздача стоит, кеш мал, настройки ядра в контейнере не выяснены — все три оценки разом. */
+/** Serving down, the cache small, the kernel settings unknowable in a container — all three
+ *  verdicts at once. */
 const HEALTH: Health = {
   snapshot: SNAPSHOT,
   worst: "trouble",
@@ -177,17 +179,17 @@ describe("the diagnosis screen", () => {
   });
 
   it("does not dress up what could not be established as fine", async () => {
-    // Иначе прогон в контейнере отчитался бы о проверенных настройках ядра, которых там
-    // не видно вовсе, — и такому отчёту верят.
+    // Otherwise a run in a container would report kernel settings as checked when they
+    // cannot be seen there at all — and such a report gets believed.
     renderIn(<DiagScreen serverId="s1" />);
 
     await waitFor(() => expect(screen.getByTestId("reading-network")).toBeInTheDocument());
     const network = screen.getByTestId("reading-network");
     expect(network).toHaveAttribute("data-rating", "unknown");
-    // И словами тоже: разметка, которую человек не читает, ничего ему не говорит.
+    // In words too: markup a person does not read tells them nothing.
     expect(network).toHaveTextContent(ru.ui.diag.ratingUnknown);
     expect(network).not.toHaveTextContent(ru.ui.diag.ratingFine);
-    // Причина названа — «в контейнере этого не видно», а не молчание.
+    // The reason is named — "this cannot be seen in a container" — rather than left silent.
     expect(network.textContent ?? "").toContain("контейнер");
   });
 
@@ -201,17 +203,19 @@ describe("the diagnosis screen", () => {
     renderIn(<DiagScreen serverId="s1" />);
 
     await waitFor(() => expect(screen.getByTestId("verdict-203.0.113.24")).toBeInTheDocument());
-    // Сам вывод — с числами внутри фразы...
+    // The verdict itself, with the numbers inside the sentence...
     const verdict = screen.getByTestId("verdict-203.0.113.24");
     expect(verdict).toHaveTextContent("0.53");
     expect(verdict).toHaveTextContent("15.9");
-    // ...и те же числа отдельно, потому что по столбцу зрителей сравнивают глазами.
+    // ...and the same numbers apart from it, because viewers get compared down a column by
+    // eye.
     expect(screen.getByTestId("ratio-203.0.113.24")).toHaveTextContent("0.53");
     expect(screen.getByTestId("link-203.0.113.24")).toHaveTextContent("15,9");
   });
 
   it("keeps the viewer's link and the speed inside the downloads apart", async () => {
-    // Спутать их значит посоветовать человеку с исправной линией менять провайдера.
+    // Confusing the two means telling somebody with a perfectly good line to change
+    // provider.
     renderIn(<DiagScreen serverId="s1" />);
     await waitFor(() => expect(screen.getByTestId("link-203.0.113.24")).toBeInTheDocument());
 
@@ -238,7 +242,8 @@ describe("the diagnosis screen", () => {
     mockHealth.mockRejectedValue({ code: "SSH_UNREACHABLE", details: [] });
     renderIn(<DiagScreen serverId="s1" />);
 
-    // Не пустой экран: пустоту читают как «всё хорошо» либо как поломку приложения.
+    // Not an empty screen: emptiness is read as "all is well" or as the application being
+    // broken.
     await waitFor(() => expect(screen.queryByTestId("diag-asking")).not.toBeInTheDocument());
     expect(screen.queryByTestId("reading-serving")).not.toBeInTheDocument();
     expect(document.body.textContent?.trim().length ?? 0).toBeGreaterThan(0);

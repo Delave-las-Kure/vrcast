@@ -44,8 +44,8 @@ vi.mock("../../../shared/ipc", async () => {
       serverFingerprintConfirm: (...a: unknown[]) => mockConfirmFingerprint(...a),
       serverProbeFingerprint: (...a: unknown[]) => mockProbeFingerprint(...(a as [])),
       serverImportSuggestion: () => mockImportSuggestion(),
-      // Карточка сервера с T294 спрашивает, что это за сервер. Здесь он не отвечает — и
-      // это состояние настоящее: сервер, который молчит, не должен ронять список.
+      // Since T294 the server card asks what kind of server this is. Here it does not answer
+      // — and that state is a real one: a silent server must not bring the list down.
       serverDetect: () => mockServerDetect(),
     },
   };

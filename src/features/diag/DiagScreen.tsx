@@ -1,18 +1,19 @@
 /**
- * T317 — экран диагностики (FR-070, FR-071, FR-072).
+ * T317 — the diagnostics screen (FR-070, FR-071, FR-072).
  *
- * **Порядок разделов — это метод, а не вёрстка.** Сначала состояние сервера: спит он или
- * работает. Потом журнал: что раздача вообще делала. Потом разбор подвисаний: почему у этого
- * зрителя встаёт. И только потом файл — на отдельной вкладке, потому что до него доходят
- * последними. Перевёрнутый порядок — это вечер, потраченный на перекодирование фильма ради
- * чужого Wi-Fi.
+ * **The order of the sections is a method, not a layout.** First the state of the server:
+ * asleep or working. Then the log: what the serving has actually been doing. Then the reading
+ * of the stalls: why it stops for this particular viewer. And the file last, on a tab of its
+ * own, because that is where people get to last. The order reversed is an evening spent
+ * re-encoding a film for the sake of somebody else's Wi-Fi.
  *
- * **«Не удалось определить» — отдельное состояние, а не пустой экран.** Пустое место человек
- * читает как «всё хорошо» или как поломку приложения; и то и другое неправда, а разница между
- * ними — это разница между «идти чинить сервер» и «спросить ещё раз».
+ * **"Could not tell" is a state of its own, not an empty screen.** Emptiness is read as "all
+ * is well" or as the application being broken; both are untrue, and the difference between
+ * them is the difference between going to fix a server and asking once more.
  *
- * Ничего здесь сервер не меняет. Все четыре вопроса — на чтение, и потому их можно задать и
- * чужой машине, и той, что новее этого приложения: смотреть человеку нужно именно там.
+ * Nothing here changes the server. All four questions are read-only, which is why they can be
+ * asked of somebody else's machine and of one newer than this application: those are exactly
+ * the machines a person needs to look at.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -26,7 +27,7 @@ import { useT } from "../../shared/i18n";
 import { ipc } from "../../shared/ipc";
 import type { AppError, Health, Logs, Stalls } from "../../shared/contract";
 
-/** За сколько минут спрашивать журнал по умолчанию. */
+/** How many minutes of log to ask for by default. */
 const DEFAULT_MINUTES = 30;
 
 const PERIODS = [10, 30, 60, 120];
@@ -46,10 +47,10 @@ export function DiagScreen({ serverId }: { serverId: string }) {
     setAsking(true);
     setError(null);
     try {
-      // По очереди, а не разом: соединение одно, и три вопроса, поданных вместе, займут три
-      // канала из восьми — два из которых уже держит слежение за зрителями (R-04). А разбор
-      // подвисаний ещё и меряет живую нагрузку пять секунд, и мерить её, пока рядом идут
-      // наши же вопросы, значит мерить себя.
+      // One at a time rather than all at once: there is one connection, and three questions
+      // asked together take three channels out of eight — two of which the viewer watching
+      // already holds (R-04). The stall reading also measures live load for five seconds, and
+      // measuring it while our own questions run alongside is measuring ourselves.
       setHealth(await ipc.diagHealth(serverId));
       setLogs(await ipc.diagLogs(serverId, minutes));
       setStalls(await ipc.diagExplainStalls(serverId, minutes));

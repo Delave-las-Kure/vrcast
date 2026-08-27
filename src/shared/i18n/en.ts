@@ -663,28 +663,28 @@ export const en: Catalogue = {
       dirLeft: "The data directory could not be removed — something may be holding a file in it.",
     },
     update: {
-    title: "Updates",
-    installed: "Version installed",
-    check: "Check for updates",
-    checking: "Checking…",
-    upToDate: "Nothing newer.",
-    notConfigured:
-      "This build carries no update settings, so there is nowhere to look. Builds from source are like this; released copies update.",
-    unpackaged:
-      "This is a build from the source tree, not an installed copy: there is nothing here to update.",
-    available: (version: string) => `Version ${version} is out.`,
-    published: "Published",
-    notes: "What is in it",
-    install: "Update",
-    installing: "Installing…",
-    warnWindows:
-      "The installer stops the application the moment it starts. Starting it again is up to you.",
-    warnPackage:
-      "The system will ask for an administrator password: the package is installed as root. The application will be stopped.",
-    warnAppImage: "The application will rewrite itself and stop. Start it again afterwards.",
-    agree: "I understand the application will be stopped",
-  },
-  appearance: {
+      title: "Updates",
+      installed: "Version installed",
+      check: "Check for updates",
+      checking: "Checking…",
+      upToDate: "Nothing newer.",
+      notConfigured:
+        "This build carries no update settings, so there is nowhere to look. Builds from source are like this; released copies update.",
+      unpackaged:
+        "This is a build from the source tree, not an installed copy: there is nothing here to update.",
+      available: (version: string) => `Version ${version} is out.`,
+      published: "Published",
+      notes: "What is in it",
+      install: "Update",
+      installing: "Installing…",
+      warnWindows:
+        "The installer stops the application the moment it starts. Starting it again is up to you.",
+      warnPackage:
+        "The system will ask for an administrator password: the package is installed as root. The application will be stopped.",
+      warnAppImage: "The application will rewrite itself and stop. Start it again afterwards.",
+      agree: "I understand the application will be stopped",
+    },
+    appearance: {
       title: "Appearance",
       theme: "Theme",
       themeLight: "Light",

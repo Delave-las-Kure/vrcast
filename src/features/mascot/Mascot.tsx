@@ -1,15 +1,15 @@
 /**
- * T322, T327, T328 — маскот, его настроения и его выключатель (FR-102, FR-103).
+ * T322, T327, T328 — the mascot, its moods and its switch (FR-102, FR-103).
  *
- * **Выключённый маскот не загружается вовсе.** Иначе «выключён» означает лишь «не виден», а
- * ресурсы он тратит по-прежнему — и ровно на слабой машине, где его и выключили. Рисунок
- * лежит отдельным файлом и подтягивается по требованию: при выключенной настройке ветка с
- * `lazy` не выполняется, и запроса за ним не происходит. Проверяется это **отсутствием
- * запроса**, а не отсутствием картинки (T330): картинки нет и когда она просто не
- * отрисовалась.
+ * **A mascot that is turned off is not loaded at all.** Otherwise "off" means only "not
+ * visible" while it spends just as much — on exactly the weak machine where somebody turned it
+ * off. The drawing is a file of its own, fetched on demand: with the setting off the `lazy`
+ * branch never runs, and nothing is asked for. That is checked by the **absence of a request**
+ * rather than the absence of a picture (T330): there is no picture either when one simply did
+ * not render.
  *
- * **Настроение берётся из тех же событий, что и экран задач.** Правила — в `state.ts`, здесь
- * только подписка: разделено, чтобы правила можно было проверить без экрана.
+ * **The mood comes from the same events as the task screen.** The rules live in `state.ts` and
+ * only the subscription lives here: kept apart so the rules can be checked without a screen.
  */
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
@@ -29,14 +29,14 @@ import { useT } from "../../shared/i18n";
 import { onTaskDone, onTaskProgress, onViewersUpdate } from "../../shared/ipc";
 
 /**
- * Загружается по требованию, и это здесь главное.
+ * Fetched on demand, and that is the whole point of it here.
  *
- * Вынесено на уровень модуля, потому что `lazy` внутри тела компонента заводил бы новый
- * ленивый модуль на каждую перерисовку — и рисунок запрашивался бы снова и снова.
+ * Lifted to module level, because a `lazy` inside the component body would make a new lazy
+ * module on every render — and the drawing would be asked for again and again.
  */
 const Drawing = lazy(() => import("./MascotDrawing"));
 
-/** Как часто пересчитывать настроение: миг от события истекает сам собой. */
+/** How often to work the mood out again: a moment from an event expires on its own. */
 const TICK_MS = 500;
 
 export function Mascot() {
@@ -46,15 +46,15 @@ export function Mascot() {
   const [mood, setMood] = useState<Mood>("idle");
 
   /**
-   * Пока не известно — не показываем и, главное, **не грузим**.
+   * Until it is known: not shown, and — the point — **not loaded**.
    *
-   * Соблазн был обратный: маскот включён по умолчанию, так что «пока не прочитали — считаем
-   * включённым» выглядело разумно. Оно и работало — рисунок уезжал в загрузку на первой же
-   * отрисовке, до того как ядро успевало ответить «выключен», и настройка не мешала ему
-   * ровно ничем. Поймано проверкой `mascot-off`, которая для этого и написана.
+   * The temptation was the other way round. The mascot is on by default, so "assume on until
+   * we have read the setting" looked reasonable. And it worked: the drawing went off to be
+   * fetched on the very first render, before the core could answer "off", and the setting
+   * stopped it from nothing whatever. Caught by the `mascot-off` check, which exists for this.
    *
-   * Если ядро не ответило вовсе (`error`), берётся значение по умолчанию: не показать
-   * маскота из-за недоступной базы — это наказать человека за чужую поломку.
+   * If the core did not answer at all (`error`), the default is taken: hiding the mascot
+   * because a database is out of reach would punish a person for somebody else's fault.
    */
   const known = settings !== null || error !== null;
   const shown = known && settings?.mascot !== false;
@@ -81,8 +81,9 @@ export function Mascot() {
       }),
     ];
 
-    // Миг от события истекает без всякого события, и без этого маскот застревал бы в
-    // «получилось» до следующей задачи — то есть иногда навсегда.
+    // A moment from an event expires with no event of its own, and without this the mascot
+    // would be stuck on "it worked" until the next task — which is to say, sometimes for
+    // good.
     const timer = setInterval(refresh, TICK_MS);
 
     return () => {
@@ -98,8 +99,8 @@ export function Mascot() {
 
   return (
     <div className="mascot-slot" data-testid="mascot-slot">
-      {/* Пусто, пока рисунок едет. Заглушки нет намеренно: мигнуть серым кружком и
-          заменить его маскотом — это два движения там, где хватит одного. */}
+      {/* Empty while the drawing is on its way. No placeholder, deliberately: flashing a grey
+          circle and then swapping the mascot in is two movements where one will do. */}
       <Suspense fallback={null}>
         <Drawing mood={mood} label={moodLabel(mood, words)} />
       </Suspense>

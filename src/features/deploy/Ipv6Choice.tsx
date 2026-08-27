@@ -1,12 +1,14 @@
 /**
- * T292 — оставить IPv6 или отключить (FR-135).
+ * T292 — keep IPv6 or turn it off (FR-135).
  *
- * **Вопрос, а не умолчание.** Выбор меняет две вещи сразу: какие доменные записи обязаны
- * существовать и увидят ли раздачу зрители, чьё соединение предпочитает IPv6. Молчаливое
- * умолчание здесь — это решение про чужих зрителей, принятое за человека и без него.
+ * **A question, not a default.** The choice changes two things at once: which DNS records have
+ * to exist, and whether viewers whose connection prefers IPv6 will see the stream at all. A
+ * silent default here is a decision about other people's viewers, taken for a person and
+ * without them.
  *
- * Последствия обоих путей написаны рядом с самими путями, а не спрятаны в подсказку: тот,
- * кто впервые купил сервер, не знает, что такое AAAA, и узнать это должен здесь.
+ * What each path costs is written beside the path itself rather than hidden in a tooltip:
+ * somebody buying a server for the first time does not know what AAAA is, and here is where
+ * they should find out.
  */
 
 import { useT } from "../../shared/i18n";

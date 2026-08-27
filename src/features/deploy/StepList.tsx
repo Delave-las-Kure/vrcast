@@ -1,20 +1,20 @@
 /**
- * Шаги развёртывания списком — и до согласия, и по ходу (FR-122, FR-123).
+ * The deployment steps as a list — before the agreement and while it runs (FR-122, FR-123).
  *
- * Один список на оба случая намеренно. Человек, который только что читал, что будет сделано,
- * смотрит на то же самое, пока оно делается: те же шаги, в том же порядке, с меняющимися
- * пометками. Два разных списка заставляли бы искать глазами, где он остановился.
+ * One list for both, deliberately. Somebody who has just read what will be done looks at the
+ * same thing while it is being done: the same steps, in the same order, with the marks
+ * changing. Two different lists would make them hunt for where they had got to.
  *
- * **«Здесь не установить» — не «сделано».** Это ответ проверки, а не её отсутствие: в
- * контейнере нельзя ни включить подкачку, ни тронуть настройки ядра, и прогон, свернувший это
- * в «готово», отчитался бы о полностью развёрнутом сервере, у которого нет ни того ни
- * другого. Такому отчёту верят, и в этом вся беда.
+ * **"Cannot be done here" is not "done".** It is an answer from the check, not the absence of
+ * one: in a container neither swap nor the kernel settings can be touched, and a run that
+ * folded that into "ready" would report a fully deployed server that has neither. Such a report
+ * gets believed, and that is the whole of the trouble.
  */
 
 import { useT } from "../../shared/i18n";
 import type { DeployStepStatus, PlannedStep } from "../../shared/contract";
 
-/** Как назвать состояние шага. */
+/** What to call the state a step is in. */
 function mark(status: DeployStepStatus, words: Record<string, string>): string {
   if (status === "Applied") return words.stepApplied;
   if (status === "NotApplied") return words.stepToDo;
@@ -26,7 +26,7 @@ function mark(status: DeployStepStatus, words: Record<string, string>): string {
   return words.stepToDo;
 }
 
-/** Что именно пошло не так, когда что-то пошло не так. */
+/** What exactly went wrong, when something did. */
 function detailOf(status: DeployStepStatus): string | null {
   if (typeof status === "object" && "Failed" in status) return status.Failed.detail;
   if (typeof status === "object" && "Skipped" in status && typeof status.Skipped.why === "object") {
@@ -48,8 +48,8 @@ export function StepList({ steps }: { steps: PlannedStep[] }) {
           <li key={step.id}>
             <span>{names[step.id] ?? step.id}</span>
             <span>{mark(step.status, words)}</span>
-            {/* Причина рядом с шагом, а не в конце списка: к концу списка её уже не с чем
-                связать. */}
+            {/* The reason beside its step rather than at the end of the list: by the end of
+                the list there is nothing left to attach it to. */}
             {detail && <small>{detail}</small>}
           </li>
         );

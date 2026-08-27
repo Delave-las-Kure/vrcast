@@ -1,20 +1,21 @@
 /**
- * T291 — развернуть сервер (FR-121, FR-122, FR-123).
+ * T291 — deploying a server (FR-121, FR-122, FR-123).
  *
- * Три вещи, и каждая из них — обещание вехи D.
+ * Three things, and each of them a promise made by milestone D.
  *
- * **Ничего не происходит, пока человек не увидел список и не согласился** (FR-122). Список —
- * не «будет установлено несколько пакетов», а поимённо: какой пользователь, какие каталоги,
- * какие порты откроются, какие настройки ядра поменяются. Это чужая для нас машина, и её
- * хозяин вправе знать, что с ней сделают.
+ * **Nothing happens until a person has seen the list and agreed to it** (FR-122). Not "some
+ * packages will be installed", but by name: which user, which directories, which ports will be
+ * opened, which kernel settings will change. This is somebody else's machine, and its owner has
+ * a right to know what will be done to it.
  *
- * **Ход показывается по шагам** (FR-123). «Разворачиваю…» четыре минуты не говорит человеку
- * ничего о том, ждать ему или пойти поправить доменную запись. Шаги приходят событием со
- * **всем** списком: экран, собирающий его из потока одиночных, покажет другое, если один
- * пропустит, — а он пропустит, потому что человек открывает экран посередине.
+ * **Progress is shown step by step** (FR-123). Four minutes of "deploying…" tells a person
+ * nothing about whether to wait or to go and fix a DNS record. The steps arrive in an event
+ * carrying the **whole** list: a screen that assembled it from a stream of single ones would
+ * show something different the moment one went missing — and one will, because people open the
+ * screen halfway through.
  *
- * **Проваленный шаг назван.** «Развёртывание не удалось» и «не удался шаг с файрволом» ведут
- * человека в разные места, и только одно из них — место.
+ * **A failed step is named.** "Deployment failed" and "the firewall step failed" send a person
+ * to two different places, and only one of them is a place.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -41,16 +42,17 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   const [domain, setDomain] = useState<DomainAnswer | null>(null);
   const [preview, setPreview] = useState<DeployPreview | null>(null);
   const [live, setLive] = useState<PlannedStep[] | null>(null);
-  /** Номер идущей задачи, а не признак: рядом могут идти чужие, и чужой конец не наш. */
+  /** The id of the running task, not a flag: other tasks run alongside, and somebody else's
+   *  ending is not ours. */
   const [running, setRunning] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
 
   const domainOk = domain !== null && domain.advice === null;
 
-  // План спрашивается только когда домен в порядке. Спросить раньше можно, но список
-  // изменений, который нельзя применить, читается как предложение — и человек согласится
-  // с ним, а начать всё равно не выйдет.
+  // The plan is asked for only once the domain is right. Asking earlier is possible, but a
+  // list of changes that cannot be applied reads as an offer — a person agrees to it, and
+  // still nothing can start.
   useEffect(() => {
     if (!domainOk || running) return;
     let alive = true;
@@ -68,7 +70,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
     };
   }, [serverId, ipv6, domainOk, running]);
 
-  // Ход развёртывания.
+  // How the deployment is going.
   useEffect(() => {
     if (!running) return;
     let alive = true;
@@ -112,7 +114,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
 
       {error && <ErrorNotice error={error} />}
 
-      {/* Выбор идёт первым: от него зависит, какая доменная запись обязана быть. */}
+      {/* The choice comes first: which DNS record has to exist depends on it. */}
       <Ipv6Choice value={ipv6} onChange={setIpv6} disabled={running !== null} />
 
       <DomainCheck serverId={serverId} ipv6={ipv6} onAnswer={setDomain} />
@@ -127,8 +129,8 @@ export function DeployScreen({ serverId }: { serverId: string }) {
       {running === null && preview && (
         <>
           <h3>{words.willChange}</h3>
-          {/* Про машину — потому что от неё зависят два шага: маленькой делается файл
-              подкачки, и человек вправе знать, что на его сервере появится такой файл. */}
+          {/* About the machine, because two steps depend on it: a small one gets a swap file,
+              and a person has a right to know such a file will appear on their server. */}
           <p>{words.machine(preview.memory_mb, preview.disk)}</p>
           <StepList steps={preview.steps} />
           <button type="button" onClick={start} disabled={!domainOk}>

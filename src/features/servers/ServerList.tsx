@@ -121,9 +121,9 @@ function ServerCard({
         )}
       </div>
 
-      {/* Что это за сервер — сразу под именем, до подробностей профиля. Человек, открывший
-          список, чаще всего пришёл именно за этим: развёрнут ли он, чей он, не пора ли его
-          обновить (T294). */}
+      {/* What kind of server this is, straight under the name and before the profile's
+          details. Somebody opening the list has most often come for exactly that: is it
+          deployed, whose is it, is it due an upgrade (T294). */}
       {profile.host_fingerprint && <ServerStateCard serverId={profile.id} />}
 
       <dl className="server__facts">

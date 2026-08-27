@@ -1,14 +1,14 @@
 /**
- * T293 — ведёт ли домен на этот сервер (FR-137, FR-138, FR-140).
+ * T293 — does the domain lead to this server (FR-137, FR-138, FR-140).
  *
- * **Спрашивается заново, а не один раз.** Доменная запись расходится по сети минутами, и
- * человек, только что заведший её у регистратора, увидит здесь «ещё нет» — на что правильный
- * ответ спросить снова, а не начать развёртывание и не закрыть экран.
+ * **Asked again, not once.** A DNS record takes minutes to travel, and somebody who has just
+ * created one at their registrar will see "not yet" here — to which the right answer is to ask
+ * again, not to start the deployment and not to close the screen.
  *
- * И отказ здесь никогда не звучит как ошибка разрешения имени. Тому, кто впервые купил
- * сервер, `NXDOMAIN` не говорит ничего; ему нужны тип записи, её точное имя и точное
- * значение — а если запись уже есть, то ещё и куда она ведёт сейчас, потому что чаще всего
- * это остаток от прошлой жизни домена.
+ * And a refusal here never sounds like a name-resolution error. To somebody who has bought a
+ * server for the first time, `NXDOMAIN` says nothing; what they need is the record type, its
+ * exact name and its exact value — and, if a record already exists, where it leads now, because
+ * most often that is a leftover from the domain's previous life.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -26,7 +26,7 @@ export function DomainCheck({
 }: {
   serverId: string;
   ipv6: Ipv6Choice;
-  /** Наверх — чтобы экран развёртывания знал, можно ли начинать. */
+  /** Upwards, so the deployment screen knows whether it may begin. */
   onAnswer?: (answer: DomainAnswer) => void;
 }) {
   const t = useT();
@@ -50,9 +50,9 @@ export function DomainCheck({
       .finally(() => setAsking(false));
   }, [serverId, ipv6, onAnswer]);
 
-  // Спрашивается при открытии и при смене выбора про IPv6: тот же домен при «оставить» и
-  // при «отключить» — два разных вердикта, и показывать вчерашний было бы хуже, чем не
-  // показывать никакого.
+  // Asked on opening and whenever the IPv6 choice changes: the same domain gives two
+  // different verdicts under "keep" and under "turn off", and showing yesterday's would be
+  // worse than showing none.
   useEffect(ask, [ask]);
 
   const ok = answer !== null && answer.advice === null;
@@ -68,11 +68,11 @@ export function DomainCheck({
 
       {answer && !ok && (
         <>
-          {/* Что пойти и сделать — кодом со значениями; формулировка живёт в словаре. */}
+          {/* What to go and do — as a code with values; the wording lives in the catalogue. */}
           <p>{answer.advice ? renderDetail(answer.advice, t, lang) : words.domainNotPointed}</p>
 
-          {/* Куда ведёт сейчас. Показано отдельно от совета: человек сверяет это со
-              страницей своего регистратора глазами. */}
+          {/* Where it leads now. Shown apart from the advice: a person compares this with
+              their registrar's page by eye. */}
           {(answer.a.length > 0 || answer.aaaa.length > 0) && (
             <dl>
               {answer.a.length > 0 && (

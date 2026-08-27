@@ -1,18 +1,18 @@
 /**
- * T324 — настройки в одном месте, а не в двух.
+ * T324 — the settings in one place rather than two.
  *
- * **Два хранилища одного выбора расходятся молча.** Тема жила в `localStorage`, язык — там
- * же, а в базе ядра всё это время лежали поля `theme` и `language`, которые никто не читал.
- * Человек видел бы одну тему, настройки показывали другую, и починить он этого не может,
- * потому что второго места не видит.
+ * **Two stores holding one choice drift apart in silence.** The theme lived in `localStorage`,
+ * the language beside it, and all the while the core's database had `theme` and `language`
+ * columns nobody read. A person would see one theme while the settings screen showed another,
+ * and they cannot fix that, because the second place is not visible to them.
  *
- * Одно место — ядро. Не потому, что оно лучше, а потому, что оно одно на все окна и
- * переживает переустановку интерфейса: настройки лежат в той же базе, что и профили серверов,
- * и уезжают вместе с ней.
+ * The one place is the core. Not because it is better, but because there is one of it for every
+ * window, and it survives the interface being reinstalled: the settings sit in the same
+ * database as the server profiles and travel with it.
  *
- * **Записывает отсюда всё, что пишет настройки.** `settings_set` принимает объект целиком, и
- * два независимых писателя со своей копией затирали бы правки друг друга — тема, сохранённая
- * поверх устаревшего снимка, вернула бы старый язык. Поэтому копия одна и живёт здесь.
+ * **Everything that writes settings writes from here.** `settings_set` takes the whole object,
+ * so two independent writers each holding a copy would overwrite one another — a theme saved
+ * over a stale snapshot would bring back the old language. Hence one copy, and it lives here.
  */
 
 import {
@@ -29,19 +29,20 @@ import { ipc } from "../shared/ipc";
 import type { AppError, Settings } from "../shared/contract";
 
 interface SettingsContextValue {
-  /** `null`, пока не прочитаны. Не «значения по умолчанию»: показать чужой выбор как свой —
-   *  это моргнуть светлой темой в лицо тому, кто выбрал тёмную. */
+  /** `null` until they have been read. Not "the defaults": showing somebody else's choice as
+   *  theirs means flashing a light theme at a person who chose the dark one. */
   settings: Settings | null;
   update: (patch: Partial<Settings>) => void;
-  /** Что не сохранилось. Экран оформления показывает это; остальным знать не обязательно. */
+  /** What would not save. The appearance screen shows it; nothing else needs to know. */
   error: AppError | null;
 }
 
 /**
- * Пустышка на случай, когда провайдера нет.
+ * A stand-in for when there is no provider.
  *
- * Так живут проверки интерфейса: они поднимают один экран, а не всё приложение. Пустышка
- * названа пустышкой и ничего не хранит — молчаливого второго хранилища из неё не выйдет.
+ * That is how the interface tests live: they raise one screen rather than the whole
+ * application. The stand-in is named as one and keeps nothing — no quiet second store can grow
+ * out of it.
  */
 const NOTHING: SettingsContextValue = {
   settings: null,
@@ -74,9 +75,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setSettings((current) => {
       if (!current) return current;
       const merged = { ...current, ...patch };
-      // Применяется сразу, а сохраняется следом. Ждать ответа базы, чтобы перекрасить
-      // экран, — это задержка на переключателе, которую человек читает как «не нажалось»,
-      // и он нажимает ещё раз.
+      // Applied at once, saved after. Waiting for the database before repainting puts a lag
+      // on the switch, which a person reads as "it did not take" — and they press it again.
       setError(null);
       ipc.settingsSet(merged).catch((e: AppError) => setError(e));
       return merged;

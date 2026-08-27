@@ -1,15 +1,16 @@
 /**
- * T330 — выключённый маскот не загружается вовсе (FR-103).
+ * T330 — a mascot that is turned off is not loaded at all (FR-103).
  *
- * **Отдельный файл, и это не аккуратность.** Модуль, однажды загруженный, остаётся в реестре
- * до конца файла, и счётчик «запрашивался ли рисунок» после первой же проверки, где маскот
- * включён, отвечает про неё, а не про эту. В общем файле такая проверка проходит всегда — я
- * это и получил, прежде чем разнести их. У каждого файла реестр свой, и здесь счётчик
- * означает ровно то, что написано.
+ * **A file of its own, and that is not tidiness.** A module, once loaded, stays in the
+ * registry to the end of the file, so the "was the drawing asked for" counter answers about
+ * the first test where the mascot was on rather than about this one. In a shared file such a
+ * check passes always — which is what I got, before splitting them apart. Each file has its
+ * own registry, and here the counter means exactly what it says.
  *
- * **Проверяется отсутствием запроса, а не отсутствием картинки.** Картинки нет и у маскота,
- * который честно скачался и спрятался, — а он-то и есть то, что настройка должна была убрать:
- * выключают его на слабой машине, и «не виден» ей ничего не даёт.
+ * **Checked by the absence of a request, not the absence of a picture.** There is no picture
+ * either for a mascot that dutifully downloaded and then hid — and that mascot is precisely
+ * what the setting was meant to remove: it gets turned off on a weak machine, and "not
+ * visible" does nothing for one.
  */
 
 import { screen, waitFor } from "@testing-library/react";
@@ -62,7 +63,7 @@ describe("a mascot that was turned off", () => {
     );
 
     await waitFor(() => expect(shared.settingsGet).toHaveBeenCalled());
-    // Ещё немного времени: ленивая загрузка успела бы случиться, если бы началась.
+    // A little more time: the lazy load would have happened by now if it had begun.
     await new Promise((r) => setTimeout(r, 50));
 
     expect(shared.drawingAsked).not.toHaveBeenCalled();

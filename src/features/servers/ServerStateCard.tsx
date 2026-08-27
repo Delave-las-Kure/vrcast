@@ -1,19 +1,19 @@
 /**
- * T294 — что это за сервер, прямо в его карточке (FR-120, FR-128, FR-130, FR-132).
+ * T294 — what kind of server this is, right on its card (FR-120, FR-128, FR-130, FR-132).
  *
- * Пять состояний, и каждое ведёт человека в своё место. Общее «что-то не так» не ведёт
- * никуда:
+ * Five states, and each sends a person somewhere different. A general "something is wrong"
+ * sends them nowhere:
  *
- * - **чистый** — предложить развернуть;
- * - **незакончено** — предложить довести. Это наша собственная прерванная работа, и назвать
- *   её чужим сервером значит отказаться доводить своё же;
- * - **наш** — версия серверной части рядом с версией приложения. Порознь они не значат
- *   ничего: «серверная часть 1» — это число, пока не сказано, какую разворачивает приложение;
- * - **новее, чем мы понимаем** — предупредить и ничего не менять (FR-130). Приложение
- *   постарше, записывающее файлы туда, где новая раскладка их не держит, — это способ тихо
- *   сломать работающий сервер;
- * - **чужой** — сказать, **что именно** распознано (FR-132). «Посторонняя настройка» — это
- *   не то, с чем можно пойти и разобраться.
+ * - **clean** — offer to deploy;
+ * - **unfinished** — offer to finish. This is our own interrupted work, and calling it
+ *   somebody else's server means refusing to finish what we started;
+ * - **ours** — the server side's version beside the application's. Apart they mean nothing:
+ *   "server side 1" is a number until it is said which one the application deploys;
+ * - **newer than we understand** — warn and change nothing (FR-130). An older application
+ *   writing files where a newer layout does not keep them is a way to break a working server
+ *   quietly;
+ * - **somebody else's** — say **what exactly** was recognised (FR-132). "A foreign
+ *   configuration" is not something anybody can go and deal with.
  */
 
 import { useEffect, useState } from "react";
@@ -43,8 +43,8 @@ export function ServerStateCard({ serverId }: { serverId: string }) {
         if (alive) setState(got);
       })
       .catch((e: AppError) => {
-        // Сервер, который не ответил, — не поломка приложения. Показываем причину и не
-        // делаем вид, что состояние известно.
+        // A server that did not answer is not a fault in the application. The reason is
+        // shown, and the state is not pretended to be known.
         if (alive) setError(e);
       })
       .finally(() => {
@@ -87,7 +87,7 @@ export function ServerStateCard({ serverId }: { serverId: string }) {
 
       {state.kind === "Managed" && (
         <>
-          {/* Рядом, а не порознь. */}
+          {/* Together, not apart. */}
           <p>{words.versions(state.server_version ?? 0, state.app_expects)}</p>
           {state.compat === "TooNew" && <p>{words.tooNew}</p>}
           {(state.upgrade_available || state.compat === "NeedsUpgrade") && (
@@ -101,7 +101,7 @@ export function ServerStateCard({ serverId }: { serverId: string }) {
       {state.kind === "Foreign" && (
         <>
           <p>{words.foreign}</p>
-          {/* Что именно найдено. Без этого отказ не с чем связать. */}
+          {/* What exactly was found. Without it the refusal attaches to nothing. */}
           {state.foreign_reason !== null && <small>{JSON.stringify(state.foreign_reason)}</small>}
         </>
       )}

@@ -49,7 +49,7 @@ const INSTALLED: UpdateStanding = {
 const NEWER: Found = {
   kind: "available",
   version: "1.3.0",
-  notes: "Быстрее считает лестницу",
+  notes: "Works the ladder out faster",
   date: "2026-08-28",
 };
 
@@ -84,7 +84,9 @@ describe("the update screen", () => {
     renderIn(<Update />);
     await screen.findByText("1.2.3");
 
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check })); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check }));
+    });
     await waitFor(() => expect(shared.check).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(ru.ui.update.upToDate)).toBeInTheDocument();
   });
@@ -111,7 +113,9 @@ describe("the update screen", () => {
     renderIn(<Update />);
     await screen.findByText("1.2.3");
 
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check })); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check }));
+    });
 
     expect(await screen.findByText(ru.ui.update.available("1.3.0"))).toBeInTheDocument();
     await waitFor(() => expect(shared.onClose).toHaveBeenCalled());
@@ -124,14 +128,18 @@ describe("the update screen", () => {
     shared.standing.mockResolvedValue({ ...INSTALLED, installed_as: "deb" });
     const { unmount } = renderIn(<Update />);
     await screen.findByText("1.2.3");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check })); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check }));
+    });
     expect(await screen.findByText(ru.ui.update.warnPackage)).toBeInTheDocument();
     unmount();
 
     shared.standing.mockResolvedValue({ ...INSTALLED, installed_as: "app_image" });
     renderIn(<Update />);
     await screen.findByText("1.2.3");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check })); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check }));
+    });
     expect(await screen.findByText(ru.ui.update.warnAppImage)).toBeInTheDocument();
     expect(screen.queryByText(ru.ui.update.warnPackage)).not.toBeInTheDocument();
   });
@@ -140,14 +148,20 @@ describe("the update screen", () => {
     shared.check.mockResolvedValue(NEWER);
     renderIn(<Update />);
     await screen.findByText("1.2.3");
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check })); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: ru.ui.update.check }));
+    });
 
     const install = await screen.findByRole("button", { name: ru.ui.update.install });
     expect(install).toBeDisabled();
 
-    await act(async () => { fireEvent.click(screen.getByLabelText(ru.ui.update.agree)); });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText(ru.ui.update.agree));
+    });
     expect(install).toBeEnabled();
-    await act(async () => { fireEvent.click(install); });
+    await act(async () => {
+      fireEvent.click(install);
+    });
     expect(shared.install).toHaveBeenCalledWith(true);
   });
 });

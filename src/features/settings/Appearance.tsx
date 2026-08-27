@@ -1,13 +1,13 @@
 /**
- * T329 — оформление: тема, маскот, движение (FR-100, FR-103).
+ * T329 — appearance: the theme, the mascot, the movement (FR-100, FR-103).
  *
- * Все три поля лежали в `settings.rs` с самой вехи A, и ни одно не было доступно человеку:
- * настройка, которую нельзя изменить, — это не настройка, а значение по умолчанию с лишним
- * полем в базе.
+ * All three fields had been in `settings.rs` since milestone A, and not one of them could be
+ * reached by a person: a setting nobody can change is not a setting, it is a default with an
+ * extra column in the database.
  *
- * **Последствия написаны рядом с переключателями, а не в подсказке.** «Выключить движение»
- * ничего не говорит тому, у кого от него укачивает, — а «переходы между разделами и
- * шевеление маскота» говорит.
+ * **What each switch costs is written beside it, not tucked into a tooltip.** "Turn off
+ * movement" tells somebody who is made queasy by it nothing at all; "the fades between
+ * sections and the mascot's fidgeting" tells them.
  */
 
 import { ErrorNotice } from "../shared/ErrorNotice";
@@ -57,8 +57,8 @@ export function Appearance() {
               checked={lang === it.lang}
               onChange={() => setLang(it.lang)}
             />
-            {/* Каждый язык назван на себе самом: тот, кто попал в язык, которого не
-                читает, должен суметь найти свой. */}
+            {/* Each language is named in itself: somebody who has landed in a language they
+                cannot read has to be able to find their own. */}
             {it.label}
           </label>
         ))}
@@ -94,8 +94,8 @@ export function Appearance() {
         <p className="appearance__means">{words.animationsMeans}</p>
       </fieldset>
 
-      {/* Не про оформление — но это единственный раздел настроек, а прятать «убрать мои
-          данные» глубже некуда: искать его будут именно здесь. */}
+      {/* Not about appearance — but this is the only settings section there is, and there is
+          nowhere deeper to hide "remove my data": here is where people will look for it. */}
       <Forget />
     </div>
   );

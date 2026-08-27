@@ -1,9 +1,10 @@
 /**
- * Диагностика в разделе приложения.
+ * Diagnostics, as a section of the application.
  *
- * Сервер берётся из выбранного, а не из адреса: сюда приходят не из карточки сервера, а из
- * бокового меню — с жалобой «тормозит», а не с мыслью «посмотрю-ка вон тот сервер». Если ни
- * один не выбран, так и сказано: пустой экран человек прочитает как «всё хорошо».
+ * The server comes from the active one rather than from the address: people arrive here from
+ * the sidebar, not from a server card — with a complaint that things are stuttering, not with
+ * the thought of inspecting one particular server. If none is active, it says so: an empty
+ * screen would be read as "all is well".
  */
 
 import { DiagScreen } from "./DiagScreen";

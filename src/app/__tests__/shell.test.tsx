@@ -25,7 +25,7 @@ const mockAppVersions = vi.fn();
 const mockSettingsGet = vi.fn<() => Promise<Settings>>();
 const mockSettingsSet = vi.fn<(s: unknown) => Promise<Settings>>();
 
-/** Что отвечает ядро про настройки, пока проверка не сказала иного. */
+/** What the core answers about settings until a test says otherwise. */
 const SETTINGS: Settings = {
   viewer_activity_threshold_s: 30,
   geo_refine_outside: false,
@@ -47,8 +47,8 @@ vi.mock("../../shared/ipc", async () => {
       taskCancel: vi.fn(),
       taskPause: vi.fn(),
       taskResume: vi.fn(),
-      // Обёрткой, а не ссылкой: фабрика подмены поднимается наверх файла, и прямая
-      // ссылка на переменную вычислялась бы до того, как переменная появится.
+      // Wrapped rather than referenced: the mock factory is hoisted to the top of the file,
+      // and a direct reference would be evaluated before the variable exists.
       tasksReorder: (ids: string[]) => mockTasksReorder(ids),
       settingsGet: () => mockSettingsGet(),
       settingsSet: (s: unknown) => mockSettingsSet(s),
@@ -339,12 +339,12 @@ describe("appearance", () => {
   });
 
   it("follows the system when the system changes under it", async () => {
-    // Не только при запуске. Человек переключает тему системы вечером, и приложение,
-    // узнающее об этом лишь при следующем запуске, светит белым в тёмной комнате.
+    // Not only at startup. Somebody switches their system theme in the evening, and an
+    // application that only notices at the next start glares white in a dark room.
     let listener: (() => void) | null = null;
     let dark = false;
-    // `matches` — геттер, а не значение: провайдер спрашивает его в момент события, а не
-    // при создании, и застывшая копия отвечала бы про вчерашнюю систему.
+    // `matches` is a getter, not a value: the provider asks it when the event arrives rather
+    // than when it was made, and a frozen copy would answer about yesterday's system.
     vi.stubGlobal("matchMedia", (query: string) => ({
       get matches() {
         return dark;

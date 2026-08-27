@@ -1,17 +1,17 @@
 /**
- * Что раздача записала за промежуток (FR-071).
+ * What the serving wrote down over a stretch of time (FR-071).
  *
- * **Долгий запрос сам по себе — норма**, и здесь это сказано словами, а не спрятано в
- * пороге. Это длинная подкачка диапазона; на здоровом сервере таких большинство. Отмечены
- * только те, что при этом почти ничего не доставили, — иначе экран краснеет на исправной
- * машине, и после второго раза на него перестают смотреть.
+ * **A long request is ordinary in itself**, and that is said here in words rather than hidden
+ * inside a threshold. It is a long range fetch; on a healthy server most of them are. Marked
+ * are only the ones that delivered almost nothing while taking that long — otherwise the
+ * screen goes red on a working machine, and after the second time people stop looking at it.
  *
- * **206 должны преобладать.** Если чаще отдаются файлы целиком, значит куски не отдаются —
- * смотреть можно, перематывать нет, и жалоба придёт как «сломалось», не имея к сети никакого
- * отношения.
+ * **206s should be the majority.** If whole files are handed out more often, then pieces are
+ * not being handed out at all: watching works, seeking does not, and the complaint arrives as
+ * "it broke" with nothing to do with the network.
  *
- * **Упор в потолок строк говорится вслух.** Сводка, тихо покрывшая четверть запрошенного,
- * отвечает не на тот вопрос, который ей задали.
+ * **Hitting the line limit is said out loud.** A summary that quietly covered a quarter of
+ * what was asked for is answering a different question from the one it was given.
  */
 
 import { useLang, useT } from "../../shared/i18n";

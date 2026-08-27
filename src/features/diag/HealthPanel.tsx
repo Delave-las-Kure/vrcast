@@ -1,22 +1,22 @@
 /**
- * Состояние сервера, показатель за показателем (FR-070).
+ * The state of the server, reading by reading (FR-070).
  *
- * **Оценка и числа стоят рядом.** «Внимание» само по себе не говорит человеку ничего: он не
- * может ни проверить его, ни возразить ему, ни решить, что делать. Формулировка приходит из
- * ядра кодом с подставленными значениями — «кеш раздачи всего 100 МБ из 1900, а смотрят
- * трое», — и ниже лежат сырые показания целиком, на случай если оценка неверна. Она бывает
- * неверна.
+ * **The verdict and the numbers stand together.** "Worth a look" on its own tells a person
+ * nothing: they can neither check it, nor argue with it, nor decide what to do. The wording
+ * comes from the core as a code with values filled in — "the serving cache is only 100 MB of
+ * 1900, and three people are watching" — and the raw readings lie in full underneath, in case
+ * the verdict is wrong. It is sometimes wrong.
  *
- * **«Не выяснено» — своя оценка, не «норма».** В контейнере не видно ни настроек ядра, ни
- * диска, и панель, назвавшая это нормой, отчиталась бы о проверенном там, где ничего не
- * проверялось.
+ * **"Not determined" is a verdict of its own, not "fine".** In a container neither the kernel
+ * settings nor the disk can be seen, and a panel calling that fine would be reporting
+ * something checked where nothing was checked at all.
  */
 
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
 import type { Health, Rated, Rating, Reading } from "../../shared/contract";
 
-/** Как назвать оценку. */
+/** What to call a verdict. */
 function ratingWord(rating: Rating, words: Record<string, string>): string {
   if (rating === "fine") return words.ratingFine;
   if (rating === "watch") return words.ratingWatch;
@@ -24,7 +24,7 @@ function ratingWord(rating: Rating, words: Record<string, string>): string {
   return words.ratingUnknown;
 }
 
-/** Как назвать сам показатель. */
+/** What to call the reading itself. */
 function readingWord(about: Reading, words: Record<string, string>): string {
   const key = "reading" + about.replace(/(^|_)([a-z])/g, (_, __, c: string) => c.toUpperCase());
   return words[key] ?? about;
@@ -52,8 +52,8 @@ export function HealthPanel({ health }: { health: Health }) {
           >
             <span className="diag-reading-name">{readingWord(reading.about, words)}</span>
             <span className="diag-reading-mark">{ratingWord(reading.rating, words)}</span>
-            {/* Числа, на которых оценка держится. Не подсказка при наведении: то, что
-                видно только при наведении, не видно. */}
+            {/* The numbers the verdict rests on. Not a tooltip: what can only be seen by
+                hovering cannot be seen. */}
             <span className="diag-reading-say">{renderDetail(reading.say, t, lang)}</span>
           </li>
         ))}

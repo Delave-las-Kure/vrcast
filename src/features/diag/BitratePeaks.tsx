@@ -1,17 +1,17 @@
 /**
- * T318 — где именно у файла пики, а не одно число (FR-073).
+ * T318 — where a file's peaks actually are, rather than one number (FR-073).
  *
- * **«Пик 150 Мбит/с» без места — это повод для тревоги и не повод ни для чего ещё.** Человек,
- * которому сказали, где, может открыть фильм на этой секунде и увидеть там взрыв — и понять,
- * что перекодировать надо, а не гадать. Поэтому у каждого окна стоит хронометраж.
+ * **"A peak of 150 Mbit/s" with no place attached is grounds for alarm and for nothing else.**
+ * Told where, a person can open the film at that second, see the explosion in it, and know that
+ * re-encoding is needed rather than guess. So every window carries its timecode.
  *
- * **Считается пик десятисекундного окна, и он же сравнивается с каналом зрителя.**
- * Односекундный всплеск съедает любой буфер; средним по файлу закрыто всё. Десять секунд —
- * это примерно то, что буфер плеера держит, и стретч такой длины, который канал не тянет,
- * буфер прокапывает досуха.
+ * **What is counted is the peak of a ten-second window, and that is what is compared with a
+ * viewer's connection.** A one-second spike is swallowed by any buffer; an average over the
+ * film hides everything. Ten seconds is about what a player's buffer holds, and a stretch that
+ * long which the connection cannot carry drains the buffer dry.
  *
- * Сервер здесь не трогается вовсе: вопрос про файл, и ответ на него одинаков хоть до заливки,
- * хоть после. До — полезнее.
+ * The server is not touched here at all: the question is about the file, and the answer is the
+ * same before the upload as after. Before is more use.
  */
 
 import { useState } from "react";
@@ -23,7 +23,7 @@ import { formatBitrate, formatDuration } from "../../shared/i18n/format";
 import { ipc } from "../../shared/ipc";
 import type { AppError, BitrateWindow, Peaks } from "../../shared/contract";
 
-/** Сколько раз пик выше среднего. Ниже этого файл считается ровным. */
+/** How many times above the average a peak has to be. Below this a file counts as even. */
 const PEAK_WORTH_MENTIONING = 1.5;
 
 function Where({ window: w }: { window: BitrateWindow | null }) {

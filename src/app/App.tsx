@@ -36,8 +36,8 @@ function AppShell() {
   // looks like "nothing is capped".
   const activeServer = useActiveServer()?.id ?? null;
   const location = useLocation();
-  // Пока настройки не прочитаны — движение включено: оно включено по умолчанию, и
-  // дёрнуться один раз лучше, чем показаться неживым тому, кто его оставил.
+  // Until the settings have been read, movement is on: that is the default, and one stray
+  // flicker is better than looking dead to somebody who left it turned on.
   const motion = useSettings().settings?.animations !== false;
 
   useEffect(() => {
@@ -57,13 +57,13 @@ function AppShell() {
     <div className="layout">
       <Sidebar version={version} />
       {/*
-       * T326 — плавные переходы между разделами (FR-101), отключаемые настройкой (FR-103).
+       * T326 — fades between sections (FR-101), which a setting can turn off (FR-103).
        *
-       * Ключом стоит адрес: без него React считает содержимое тем же самым и переход
-       * происходит один раз, при первой отрисовке. Признак `data-motion` читает CSS —
-       * правило живёт рядом с самой анимацией и не разъезжается с ней, а системное
-       * «уменьшить движение» проверяется там же и перевешивает: то, что человек выключил
-       * в системе, приложение включать обратно не вправе.
+       * The address is the key: without it React takes the contents for the same thing and the
+       * fade happens once, on the first render. The `data-motion` attribute is read by CSS —
+       * the rule lives beside the animation and cannot drift away from it — and the system's
+       * own "reduce motion" is checked in the same place and outranks ours: what somebody has
+       * turned off system-wide is not for the application to turn back on.
        */}
       <main className="content" data-motion={motion ? "on" : "off"}>
         <Routes key={location.pathname}>
@@ -93,8 +93,8 @@ function AppShell() {
 
 export default function App() {
   return (
-    // Настройки снаружи всех: и тема, и язык теперь берутся оттуда, а не из двух
-    // хранилищ, которые расходились молча (T324).
+    // Settings outermost: the theme and the language both come from there now, rather than
+    // from two stores that drifted apart in silence (T324).
     <SettingsProvider>
       <LanguageProvider>
         <ThemeProvider>

@@ -1,16 +1,18 @@
 /**
- * T356–T358 — «убрать мои данные» изнутри приложения (FR-114).
+ * T356–T358 — "remove my data", from inside the application (FR-114).
  *
- * **Почему это живёт здесь, а не только в деинсталляторе.** Из трёх форматов поставки спросить
- * при удалении может ровно один: у деинсталлятора Windows есть флажок, `deb` выполняет свой
- * сценарий удаления без всякого диалога, а AppImage не устанавливается вовсе — это файл,
- * который стёрли. Приложение — единственное место, которое есть у всех троих.
+ * **Why this lives here and not only in the uninstaller.** Of the three ways this is handed
+ * out, exactly one can ask a question at removal time: the Windows uninstaller has its
+ * checkbox, a `.deb` runs its removal script with nobody to ask, and an AppImage is not
+ * installed at all — it is a file somebody deleted. The application is the one place all three
+ * have.
  *
- * **И только оно достаёт секреты.** Они лежат в хранилище операционной системы, а не в
- * каталоге данных: ни флажок, ни `postrm` их не трогают. После удаления убирать их некому.
+ * **And it is the only one that can reach the secrets.** They sit in the operating system's
+ * own store, not in the data directory: neither the checkbox nor `postrm` touches them. Once
+ * the application is gone there is nobody left to clear them.
  *
- * **Список, а не обещание.** «Удалить мои данные» без перечня каждый читает по-своему, а
- * решает тот, кто потом уже не проверит.
+ * **A list, not a promise.** "Delete my data" without one is read differently by everybody who
+ * reads it, and the person deciding is the one who cannot check afterwards.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -65,8 +67,8 @@ export function Forget() {
         <h3>{words.title}</h3>
         <p data-testid="forget-done">{words.done}</p>
         {went.secrets_left.length > 0 && (
-          // Сказано вслух: человек, которому ответили «всё убрано», пока записи остались,
-          // услышал неправду и проверить её ему нечем.
+          // Said out loud: somebody told "everything is gone" while entries remain has been
+          // told something untrue, and has no way of checking it.
           <p className="forget-warning" data-testid="forget-left">
             {words.secretsLeft(went.secrets_left.join(", "))}
           </p>
@@ -103,8 +105,8 @@ export function Forget() {
           </ul>
 
           {would.locked_out.length > 0 && (
-            // **Единственная потеря, которую нельзя отменить.** У сервера, развёрнутого этим
-            // приложением, вход по паролю выключен, и ключ к нему есть только здесь.
+            // **The one loss that cannot be undone.** A server deployed by this application
+            // has password logins turned off, and the only key to it is the one in here.
             <div className="forget-danger" data-testid="forget-locked-out">
               <p>{words.lockedOut(would.locked_out.join(", "))}</p>
               <p>{words.lockedOutAdvice}</p>

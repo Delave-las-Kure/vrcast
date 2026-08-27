@@ -1,11 +1,11 @@
 /**
- * T291–T293 — развёртывание с точки зрения человека.
+ * T291–T293 — deployment, from a person's side.
  *
- * Проверяется то, ради чего эти экраны существуют, а не то, что они рисуются. Три обещания:
- * ничего не начинается, пока список изменений не показан и с ним не согласились; отказ по
- * домену говорит, что пойти и сделать, а не «не удалось»; и «здесь не установить» не
- * выглядит как «сделано» — иначе отчёт о полностью развёрнутом сервере, у которого нет ни
- * подкачки, ни тюнинга, читался бы как успех.
+ * What is checked is what these screens exist for, not that they render. Three promises:
+ * nothing starts until the list of changes has been shown and agreed to; a refusal about the
+ * domain says what to go and do rather than "it failed"; and "cannot be done here" does not
+ * look like "done" — otherwise a report about a fully deployed server that has neither swap
+ * nor tuning would read as a success.
  */
 
 import { fireEvent, screen, waitFor } from "@testing-library/react";
@@ -62,7 +62,7 @@ const PREVIEW: DeployPreview = {
   steps: [
     step("DnsCheck", "Applied"),
     step("Swap", "NotApplied"),
-    step("Tuning", { Skipped: { why: { NotPossibleHere: { detail: "в контейнере нельзя" } } } }),
+    step("Tuning", { Skipped: { why: { NotPossibleHere: { detail: "not in a container" } } } }),
   ],
 };
 
@@ -73,35 +73,35 @@ beforeEach(() => {
   mockRun.mockResolvedValue("task-1");
 });
 
-describe("развёртывание", () => {
-  it("показывает, что будет сделано, и не начинает само", async () => {
+describe("deployment", () => {
+  it("shows what will be done, and does not start of its own accord", async () => {
     renderIn(<DeployScreen serverId="s1" />, "ru");
 
     await waitFor(() => expect(screen.getByText(ru.ui.deploy.willChange)).toBeTruthy());
 
-    // Шаги названы поимённо, а не «несколько действий».
+    // The steps are named one by one, not "a few actions".
     expect(screen.getByText(ru.ui.deploySteps.Swap)).toBeTruthy();
     expect(screen.getByText(ru.ui.deploySteps.DnsCheck)).toBeTruthy();
 
-    // **Ничего не запущено.** Экран открыт, план показан, задачи нет.
+    // **Nothing has been started.** The screen is open, the plan is shown, there is no task.
     expect(mockRun).not.toHaveBeenCalled();
   });
 
-  it("начинает только по согласию, и говорит серверу, что согласие есть", async () => {
+  it("starts only on agreement, and tells the core the agreement was given", async () => {
     renderIn(<DeployScreen serverId="s1" />, "ru");
     await waitFor(() => expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeTruthy());
 
     fireEvent.click(screen.getByText(ru.ui.deploy.agreeAndStart));
 
     await waitFor(() => expect(mockRun).toHaveBeenCalled());
-    // Третьим доводом идёт подтверждение. Отправить `false` отсюда значило бы получить
-    // отказ, которого человек не заслужил, — он только что согласился.
+    // The third argument is the confirmation. Sending `false` from here would earn a refusal
+    // the person did not deserve — they have just agreed.
     expect(mockRun.mock.calls[0]?.[2]).toBe(true);
   });
 
-  it("«здесь не установить» не выглядит как «сделано»", async () => {
-    // Свёрнутые в «готово», такие шаги дают отчёт о полностью развёрнутом сервере, у
-    // которого нет ни подкачки, ни тюнинга. Такому отчёту верят.
+  it('does not let "cannot be done here" look like "done"', async () => {
+    // Folded into "ready", steps like these produce a report about a fully deployed server
+    // that has neither swap nor tuning. Such a report gets believed.
     renderIn(<DeployScreen serverId="s1" />, "ru");
     await waitFor(() => expect(screen.getByText(ru.ui.deploySteps.Tuning)).toBeTruthy());
 
@@ -109,21 +109,21 @@ describe("развёртывание", () => {
     expect(screen.queryAllByText(ru.ui.deploy.stepApplied).length).toBe(1);
   });
 
-  it("домен, ведущий не сюда, останавливает начало и говорит, что делать", async () => {
+  it("stops the start when the domain leads elsewhere, and says what to do", async () => {
     mockDnsCheck.mockResolvedValue(DOMAIN_WRONG);
     renderIn(<DeployScreen serverId="s1" />, "ru");
 
-    // Куда ведёт сейчас — это то, что человек сверяет со страницей регистратора.
+    // Where it leads now is what a person compares with their registrar's page.
     await waitFor(() => expect(screen.getByText("198.51.100.7")).toBeTruthy());
     expect(screen.getByText(ru.ui.deploy.domainAskAgain)).toBeTruthy();
 
-    // Плана нет вовсе: список изменений, который нельзя применить, читается как
-    // предложение, и человек согласится с ним впустую.
+    // There is no plan at all: a list of changes that cannot be applied reads as an offer,
+    // and a person agrees to it for nothing.
     expect(screen.queryByText(ru.ui.deploy.willChange)).toBeNull();
     expect(mockPlan).not.toHaveBeenCalled();
   });
 
-  it("спрашивает домен заново по просьбе — запись расходится минутами", async () => {
+  it("asks about the domain again when asked to — a record takes minutes to travel", async () => {
     mockDnsCheck.mockResolvedValue(DOMAIN_WRONG);
     renderIn(<DeployScreen serverId="s1" />, "ru");
     await waitFor(() => expect(screen.getByText(ru.ui.deploy.domainAskAgain)).toBeTruthy());
@@ -133,9 +133,9 @@ describe("развёртывание", () => {
     await waitFor(() => expect(mockDnsCheck.mock.calls.length).toBeGreaterThan(asked));
   });
 
-  it("смена выбора про IPv6 спрашивает домен заново", async () => {
-    // Тот же домен при «оставить» и при «отключить» — два разных вердикта. Показывать
-    // вчерашний хуже, чем не показывать никакого.
+  it("asks about the domain again when the IPv6 choice changes", async () => {
+    // The same domain gives two different verdicts under "keep" and under "turn off". Showing
+    // yesterday's is worse than showing none.
     renderIn(<DeployScreen serverId="s1" />, "ru");
     await waitFor(() => expect(mockDnsCheck).toHaveBeenCalled());
 

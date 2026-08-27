@@ -1,18 +1,19 @@
 /**
- * Почему у зрителя встаёт картинка — с числами, на которых держится вывод (FR-072).
+ * Why a viewer's picture stops — with the numbers the reading rests on (FR-072).
  *
- * **Вывод без чисел нечем оспорить, а он бывает неверен.** Поэтому рядом с «не хватает канала
- * у зрителя» стоит и полученное против реального времени, и сама скорость, и сколько
- * отрезков плеер перепрыгнул. Человек, который видит эти числа, может не согласиться —
- * человек, который видит одну фразу, может только поверить.
+ * **A verdict with no numbers cannot be argued with, and it is sometimes wrong.** So beside
+ * "the viewer's connection is not enough" stand what was delivered against real time, the
+ * speed itself, and how many segments the player skipped. Somebody who sees those numbers can
+ * disagree; somebody who sees one sentence can only believe it.
  *
- * **Две скорости показаны обе, и подписаны.** Внутри закачек всегда выходит больше, чем по
- * стенным часам: это та же вода, налитая за меньшее время. Канал зрителя — второе число, и
- * спутать их значит посоветовать человеку с исправной линией менять провайдера.
+ * **Both speeds are shown, and both are labelled.** Inside the downloads it always comes out
+ * higher than by the wall clock: the same water poured in less time. The viewer's connection
+ * is the second number, and confusing the two means telling somebody with a perfectly good
+ * line to change provider.
  *
- * **Не-зрители показаны, а не выброшены.** Кеш, набирающий себе пару отрезков, и наши
- * собственные проверки — это то, что человек мог бы принять за зрителя; видеть, что их
- * узнали, полезнее, чем не видеть их вовсе.
+ * **Non-viewers are shown, not thrown away.** A cache taking a couple of segments for itself,
+ * and our own checks, are exactly what a person might mistake for a viewer; seeing that they
+ * were recognised is more use than not seeing them at all.
  */
 
 import { useLang, useT } from "../../shared/i18n";
@@ -20,7 +21,7 @@ import { renderDetail } from "../../shared/i18n/render";
 import { formatBitrate } from "../../shared/i18n/format";
 import type { Stalls, Watcher } from "../../shared/contract";
 
-/** Число с двумя знаками, либо прочерк. Прочерк — не ноль: ноль читается как измерение. */
+/** A number to two places, or a dash. A dash is not a zero: a zero reads as a measurement. */
 function ratio(value: number | null, nothing: string): string {
   return value === null ? nothing : `${value.toFixed(2)}×`;
 }
@@ -82,8 +83,9 @@ export function StallsPanel({ stalls }: { stalls: Stalls }) {
                   </p>
                 )}
 
-                {/* Те же числа отдельным списком, а не только внутри фразы: по ним
-                    сравнивают зрителей между собой, и глазами это делается по столбцу. */}
+                {/* The same numbers as a list of their own, not only inside the sentence:
+                    they are what viewers get compared by, and by eye that is done down a
+                    column. */}
                 <dl className="diag-figures">
                   <dt>{words.stallsRatio}</dt>
                   <dd data-testid={`ratio-${w.client_ip}`}>{ratio(w.content_ratio, nothing)}</dd>

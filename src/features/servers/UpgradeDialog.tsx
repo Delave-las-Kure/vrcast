@@ -1,13 +1,15 @@
 /**
- * T295 — обновить серверную часть (FR-129, FR-131, FR-133).
+ * T295 — upgrading the server side (FR-129, FR-131, FR-133).
  *
- * **Перечень изменений, а не «доступно обновление».** Человек подтверждает изменение машины,
- * которая для него чужая и на которой лежат его фильмы; он вправе знать, чего именно.
+ * **A list of changes, not "an update is available".** A person is agreeing to a change to a
+ * machine that is not theirs to begin with and that holds their films; they have a right to
+ * know what change.
  *
- * И рядом — что будет скопировано в сторону до первой правки, потому что обещание «можно
- * вернуть как было» стоит ровно столько, сколько человек про него знает. Каталог видео и
- * опись в этот список не входят и входить не должны: это его работа, а не наша настройка, и
- * откат, вернувший опись, отменил бы всё залитое с тех пор.
+ * And beside it, what will be copied aside before the first edit — because the promise that it
+ * can be put back is worth exactly as much as a person knows about it. The video directory and
+ * the manifest are not on that list and must not be: that is their work, not our
+ * configuration, and a rollback that restored the manifest would undo everything uploaded
+ * since.
  */
 
 import { useEffect, useState } from "react";
@@ -86,8 +88,8 @@ export function UpgradeDialog({
           )}
 
           <h4>{words.willKeep}</h4>
-          {/* Названы поимённо. «Будет сделана резервная копия» — это не обещание, которое
-              можно проверить, а этот список можно. */}
+          {/* Named one by one. "A backup will be made" is not a promise anybody can check;
+              this list is. */}
           <ul>
             {plan.backing_up.map((path) => (
               <li key={path}>{path}</li>
@@ -112,8 +114,9 @@ export function UpgradeDialog({
             {words.cancel}
           </button>
 
-          {/* Возврат стоит рядом с обновлением, а не прячется: к нему тянутся тогда, когда
-              обновление только что пошло не так, и искать его в этот момент — лишнее. */}
+          {/* Rolling back stands beside upgrading rather than hiding: people reach for it
+              just after an upgrade has gone wrong, and hunting for it at that moment is one
+              thing too many. */}
           <button
             type="button"
             disabled={running !== null}
