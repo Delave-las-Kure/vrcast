@@ -1,9 +1,9 @@
 /**
  * Language of the interface: Russian and English (FR-106).
  *
- * The choice is stored locally and survives a restart. The default is taken from
- * the system: someone who never opens the settings should still get their own
- * language on the first run.
+ * The choice lives in the core, beside every other setting (T324), and survives a
+ * restart with them. The default is taken from the system: someone who never opens
+ * the settings should still get their own language on the first run.
  *
  * The core does not compose prose any more. It returns a code and the values to
  * substitute; every wording lives here, in one catalogue per language. That keeps
@@ -23,8 +23,7 @@ import {
 import { ru } from "./ru";
 import { en } from "./en";
 import type { Catalogue, Lang } from "./catalogue";
-
-const STORAGE_KEY = "vrcast.lang";
+import { useSettings } from "../../app/settings";
 
 const CATALOGUES: Record<Lang, Catalogue> = { ru, en };
 
@@ -46,14 +45,16 @@ function isLang(v: unknown): v is Lang {
   return v === "ru" || v === "en";
 }
 
-function readStored(): Lang | null {
-  try {
-    const v = localStorage.getItem(STORAGE_KEY);
-    return isLang(v) ? v : null;
-  } catch {
-    // Storage can be unavailable. Not a reason to refuse to start.
-    return null;
-  }
+/**
+ * The chosen language, as the core stores it (T324).
+ *
+ * **Not `localStorage`.** It used to be, while the core kept a `language` field of its own
+ * that nobody read — two stores of one choice, which diverge silently and cannot be mended
+ * by the person, who does not know about the second one.
+ */
+function chosen(settings: { language: string | null } | null): Lang | null {
+  const v = settings?.language;
+  return isLang(v) ? v : null;
 }
 
 /**
@@ -79,16 +80,16 @@ export function LanguageProvider({
   /** Used by tests to pin a language instead of depending on the environment. */
   initial?: Lang;
 }) {
-  const [lang, setLangState] = useState<Lang>(() => initial ?? readStored() ?? systemLang());
+  const { settings, update } = useSettings();
+  const [fallback] = useState<Lang>(() => initial ?? systemLang());
 
-  const setLang = useCallback((l: Lang) => {
-    setLangState(l);
-    try {
-      localStorage.setItem(STORAGE_KEY, l);
-    } catch {
-      // The choice will not survive a restart, but it does apply right now.
-    }
-  }, []);
+  // Pinned by a test wins; then the person's choice out of the core; then the system's.
+  // Until the core has answered, the system's — showing English to somebody who chose
+  // Russian for a moment is better than holding the whole window blank while a database
+  // is read.
+  const lang: Lang = initial ?? chosen(settings) ?? fallback;
+
+  const setLang = useCallback((l: Lang) => update({ language: l }), [update]);
 
   // The document language is what screen readers and the browser's own spelling rules
   // go by; leaving it at the build-time default would have English text announced with

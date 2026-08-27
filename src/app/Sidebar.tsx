@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import { LANGUAGES, useLang, useT } from "../shared/i18n";
 import { fill } from "../shared/i18n/render";
 import { useTheme, type ThemeChoice } from "./theme";
+import { Mascot } from "../features/mascot/Mascot";
 
 /**
  * The sections, in the order work goes through them: server, library, doing, checking.
@@ -19,6 +20,7 @@ export const SECTIONS = [
   { path: "/limits", key: "limits", ready: true },
   { path: "/diagnostics", key: "diagnostics", ready: true },
   { path: "/tasks", key: "tasks", ready: true },
+  { path: "/appearance", key: "appearance", ready: true },
 ] as const;
 
 const THEME_ORDER: ThemeChoice[] = ["light", "dark", "system"];
@@ -61,6 +63,8 @@ export function Sidebar({ version }: { version: string | null }) {
         ))}
       </ul>
 
+      <Mascot />
+
       <div className="sidebar__footer">
         <label className="sidebar__theme">
           <span>{t.ui.common.language}</span>
@@ -80,11 +84,11 @@ export function Sidebar({ version }: { version: string | null }) {
         </label>
 
         <label className="sidebar__theme">
-          <span>{t.ui.common.appearance}</span>
+          <span>{t.ui.appearance.theme}</span>
           <select
             value={choice}
             onChange={(e) => setChoice(e.target.value as ThemeChoice)}
-            aria-label={t.ui.common.appearance}
+            aria-label={t.ui.appearance.theme}
           >
             {THEME_ORDER.map((k) => (
               <option key={k} value={k}>

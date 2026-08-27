@@ -11,9 +11,9 @@
  * which is exactly backwards.
  */
 
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppError, Task, TaskOnClose } from "../../shared/contract";
+import type { AppError, Settings, Task, TaskOnClose } from "../../shared/contract";
 import { en, renderIn, ru } from "../../test-utils";
 import { fill } from "../../shared/i18n/render";
 
@@ -22,6 +22,19 @@ const mockTasksList = vi.fn<() => Promise<Task[]>>();
 const mockTasksOnClose = vi.fn<() => Promise<TaskOnClose[]>>();
 const mockTasksReorder = vi.fn<(ids: string[]) => Promise<number>>();
 const mockAppVersions = vi.fn();
+const mockSettingsGet = vi.fn<() => Promise<Settings>>();
+const mockSettingsSet = vi.fn<(s: unknown) => Promise<Settings>>();
+
+/** Что отвечает ядро про настройки, пока проверка не сказала иного. */
+const SETTINGS: Settings = {
+  viewer_activity_threshold_s: 30,
+  geo_refine_outside: false,
+  concurrent_heavy_tasks: 1,
+  mascot: true,
+  animations: true,
+  language: null,
+  theme: null,
+};
 
 vi.mock("../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../shared/ipc")>("../../shared/ipc");
@@ -34,7 +47,11 @@ vi.mock("../../shared/ipc", async () => {
       taskCancel: vi.fn(),
       taskPause: vi.fn(),
       taskResume: vi.fn(),
-      tasksReorder: mockTasksReorder,
+      // Обёрткой, а не ссылкой: фабрика подмены поднимается наверх файла, и прямая
+      // ссылка на переменную вычислялась бы до того, как переменная появится.
+      tasksReorder: (ids: string[]) => mockTasksReorder(ids),
+      settingsGet: () => mockSettingsGet(),
+      settingsSet: (s: unknown) => mockSettingsSet(s),
       tasksQueueOrder: vi.fn(async () => []),
       // Returns a list rather than nothing: the real command always hands back a
       // list, and a replacement returning undefined would test behaviour that
@@ -46,11 +63,13 @@ vi.mock("../../shared/ipc", async () => {
     onTaskDone: vi.fn(async () => () => {}),
     onTaskNotify: vi.fn(async () => () => {}),
     onLibraryChanged: vi.fn(async () => () => {}),
+    onViewersUpdate: vi.fn(async () => () => {}),
   };
 });
 
 const { default: App } = await import("../App");
 const { ThemeProvider } = await import("../theme");
+const { SettingsProvider } = await import("../settings");
 const { ErrorNotice } = await import("../../features/shared/ErrorNotice");
 
 function makeTask(over: Partial<Task> = {}): Task {
@@ -75,15 +94,20 @@ function makeTask(over: Partial<Task> = {}): Task {
 beforeEach(() => {
   vi.clearAllMocks();
   mockAppVersions.mockResolvedValue({ app: "0.1.0", server: null, schema: 2 });
+  mockSettingsGet.mockResolvedValue(SETTINGS);
+  mockSettingsSet.mockImplementation(async (s) => s as Settings);
   mockTasksList.mockResolvedValue([]);
   mockTasksOnClose.mockResolvedValue([]);
   mockTasksReorder.mockResolvedValue(0);
   document.documentElement.dataset.theme = "";
   localStorage.clear();
-  // The application picks its language from the system when nothing is stored, and
-  // `navigator.language` differs between a developer's machine and CI. Pinning it
+  // The application picks its language from the system when the core has nothing stored,
+  // and `navigator.language` differs between a developer's machine and CI. Pinning it
   // keeps a failure here about the code rather than about where it ran.
-  localStorage.setItem("vrcast.lang", "ru");
+  //
+  // Pinned **through the core** (T324): that is now the one place the choice lives, and a
+  // test that set `localStorage` would be testing a store the application no longer reads.
+  mockSettingsGet.mockResolvedValue({ ...SETTINGS, language: "ru" });
   // HashRouter keeps the address in the window itself and it survives unmounting:
   // without a reset the next test opens on whatever section the last one left.
   window.location.hash = "#/";
@@ -113,7 +137,10 @@ describe("the shell", () => {
     // The version is decoration. Its absence is no reason for a full-screen error.
     mockAppVersions.mockRejectedValue(new Error("core unavailable"));
     renderIn(<App />);
-    expect(await screen.findByText(ru.ui.sections.tasks)).toBeInTheDocument();
+    // Looked for inside the menu: the name of the open section is also its heading, and a
+    // search across the page finds two.
+    const nav = await screen.findByRole("navigation", { name: ru.ui.sidebar.sections });
+    expect(within(nav).getByText(ru.ui.sections.tasks)).toBeInTheDocument();
     expect(
       screen.queryByText(fill(ru.ui.sidebar.version, { version: "0.1.0" }, ru, "ru")),
     ).not.toBeInTheDocument();
@@ -127,7 +154,7 @@ describe("the shell", () => {
 
 describe("language", () => {
   it("shows the interface in English when English is chosen", async () => {
-    localStorage.setItem("vrcast.lang", "en");
+    mockSettingsGet.mockResolvedValue({ ...SETTINGS, language: "en" });
     renderIn(<App />, "en");
 
     const nav = await screen.findByRole("navigation", { name: en.ui.sidebar.sections });
@@ -155,7 +182,13 @@ describe("language", () => {
     const chooser = await screen.findByLabelText(ru.ui.common.language);
     fireEvent.change(chooser, { target: { value: "en" } });
 
-    expect(localStorage.getItem("vrcast.lang")).toBe("en");
+    // Handed to the core, which is the one place the choice lives (T324). It used to go
+    // into `localStorage` while the core kept a `language` field nobody read — and two
+    // stores of one choice diverge silently, leaving a person looking at one language
+    // while the settings claim another.
+    await waitFor(() => {
+      expect(mockSettingsSet).toHaveBeenCalledWith(expect.objectContaining({ language: "en" }));
+    });
   });
 
   it("names each language in itself", async () => {
@@ -280,9 +313,11 @@ describe("showing errors", () => {
 describe("appearance", () => {
   it("follows the system by default", async () => {
     renderIn(
-      <ThemeProvider>
-        <span>content</span>
-      </ThemeProvider>,
+      <SettingsProvider>
+        <ThemeProvider>
+          <span>content</span>
+        </ThemeProvider>
+      </SettingsProvider>,
     );
     await waitFor(() => {
       expect(["light", "dark"]).toContain(document.documentElement.dataset.theme);
@@ -290,28 +325,68 @@ describe("appearance", () => {
   });
 
   it("remembers the choice between starts", async () => {
-    localStorage.setItem("vrcast.theme", "dark");
+    mockSettingsGet.mockResolvedValue({ ...SETTINGS, theme: "dark" });
     renderIn(
-      <ThemeProvider>
-        <span>content</span>
-      </ThemeProvider>,
+      <SettingsProvider>
+        <ThemeProvider>
+          <span>content</span>
+        </ThemeProvider>
+      </SettingsProvider>,
     );
     await waitFor(() => {
       expect(document.documentElement.dataset.theme).toBe("dark");
     });
   });
 
-  it("does not fall over when local storage is unavailable", async () => {
-    // In some environments touching it throws — the application still has to start.
-    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
+  it("follows the system when the system changes under it", async () => {
+    // Не только при запуске. Человек переключает тему системы вечером, и приложение,
+    // узнающее об этом лишь при следующем запуске, светит белым в тёмной комнате.
+    let listener: (() => void) | null = null;
+    let dark = false;
+    // `matches` — геттер, а не значение: провайдер спрашивает его в момент события, а не
+    // при создании, и застывшая копия отвечала бы про вчерашнюю систему.
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() {
+        return dark;
+      },
+      media: query,
+      addEventListener: (_: string, f: () => void) => {
+        listener = f;
+      },
+      removeEventListener: () => {},
+    }));
+
     renderIn(
-      <ThemeProvider>
-        <span>content</span>
-      </ThemeProvider>,
+      <SettingsProvider>
+        <ThemeProvider>
+          <span>content</span>
+        </ThemeProvider>
+      </SettingsProvider>,
+    );
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+
+    dark = true;
+    await act(async () => {
+      listener?.();
+    });
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    vi.unstubAllGlobals();
+  });
+
+  it("does not fall over when the core cannot be asked", async () => {
+    // The settings live in a database now, and a database can be unreachable. Appearance
+    // is not worth a screen a person cannot get past — the system's theme will do.
+    mockSettingsGet.mockRejectedValue({ code: "STORAGE_FAILED", details: [] });
+    renderIn(
+      <SettingsProvider>
+        <ThemeProvider>
+          <span>content</span>
+        </ThemeProvider>
+      </SettingsProvider>,
     );
     expect(screen.getByText("content")).toBeInTheDocument();
-    spy.mockRestore();
+    await waitFor(() => {
+      expect(["light", "dark"]).toContain(document.documentElement.dataset.theme);
+    });
   });
 });

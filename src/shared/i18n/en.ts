@@ -510,7 +510,6 @@ export const en: Catalogue = {
       loading: "Loading…",
       nothing: "—",
       language: "Language",
-      appearance: "Appearance",
       theme: { light: "Light", dark: "Dark", system: "Follow the system" },
     },
 
@@ -633,6 +632,28 @@ export const en: Catalogue = {
       State: "Write the server-side version",
     },
 
+    appearance: {
+      title: "Appearance",
+      theme: "Theme",
+      themeLight: "Light",
+      themeDark: "Dark",
+      themeSystem: "As in the system",
+      language: "Language",
+      mascot: "Mascot",
+      mascotOn: "Show the mascot",
+      mascotMeans:
+        "It shows the same things the task list does: work, success, failure and a viewer in trouble. Turned off, it is not loaded at all rather than merely hidden.",
+      animations: "Motion",
+      animationsOn: "Smooth transitions",
+      animationsMeans:
+        "Transitions between sections and the mascot's movement. Turned off here or by the system's \u00abreduce motion\u00bb setting \u2014 what the system has turned off cannot be turned back on here.",
+
+      mascotIdle: "The mascot is resting",
+      mascotWorking: "The mascot is busy working",
+      mascotSuccess: "The mascot is pleased: it worked",
+      mascotTrouble: "The mascot is worried: something did not work",
+      mascotViewerTrouble: "The mascot is worried: a viewer is struggling",
+    },
     diag: {
       title: "Diagnosis",
       period: "Over the last",
@@ -797,6 +818,7 @@ export const en: Catalogue = {
       viewers: "Viewers",
       limits: "Limits",
       diagnostics: "Diagnostics",
+      appearance: "Appearance",
       tasks: "Tasks",
     },
 
