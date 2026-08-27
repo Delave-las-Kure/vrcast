@@ -115,6 +115,7 @@ fn apply(ctx: &Stand) -> BoxFuture<'_, vrcast_studio_lib::server::deploy::Result
             return Err(DeployError::Step {
                 id,
                 detail: String::from("the stand was told to fail here"),
+                advice: None,
             });
         }
         Ok(())
@@ -284,4 +285,20 @@ async fn a_cancelled_run_stops_where_it_is() {
         stand.asked().is_empty(),
         "a cancelled run still asked the server about things"
     );
+}
+
+#[test]
+fn the_assembled_deployment_is_every_step_exactly_once() {
+    // The list in `all()` is written by hand and the engine imposes the order anyway — so what
+    // is left to get wrong is forgetting one, and a deployment short of a step reports success
+    // and leaves the server without it. `ordering_holds` refuses a list that is not the whole
+    // deployment, which is what makes this a check rather than a comment.
+    use vrcast_studio_lib::domain::deploy_steps::ordering_holds;
+
+    let ids: Vec<StepId> = vrcast_studio_lib::server::deploy::all()
+        .iter()
+        .map(|step| step.id)
+        .collect();
+    ordering_holds(&ids).expect("the assembled deployment is not the deployment");
+    assert_eq!(ids, ORDER.to_vec());
 }

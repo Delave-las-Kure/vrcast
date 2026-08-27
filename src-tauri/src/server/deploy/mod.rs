@@ -19,10 +19,30 @@
 //! complaint, and for six months `sshd -T` said password logins were on, while twenty-two
 //! thousand attempts a day went at it. An apply that returns quietly proves nothing.
 
+pub mod configs;
+pub mod dns_check;
+pub mod fail2ban;
+pub mod firewall;
+pub mod ipv6;
+pub mod machine;
+pub mod packages;
+pub mod services;
+pub mod ssh_hardening;
+pub mod ssh_key;
+pub mod state_file;
+pub mod swap;
+pub mod tuning;
+pub mod updates;
+pub mod user_dirs;
+pub mod verify;
+
 use futures::future::BoxFuture;
+
+pub use machine::Machine;
 
 use crate::domain::deploy_steps::{self, Change, Checked, PlannedStep, Status, StepId, ORDER};
 use crate::domain::dns_verdict::{Ipv6Choice, ServerAddresses};
+use crate::domain::wording::Detail;
 use crate::ssh::{Connection, SshError};
 
 /// What every step is given.
@@ -43,6 +63,116 @@ pub struct Context<'a> {
     pub server: ServerAddresses,
     /// The public half of the key to put on the server, in `authorized_keys` form.
     pub public_key: String,
+    /// What the machine is like — memory, disk, interface, whether it is a container.
+    /// Asked once before anything runs, so a step's `changes` can be exact without
+    /// being able to ask anything.
+    pub machine: Machine,
+    /// The two things that cannot be found out from inside the connection we already
+    /// have. See [`Proofs`].
+    pub proofs: Proofs<'a>,
+}
+
+/// What has to be established by **opening a new connection**, not by reading a file.
+///
+/// This is the whole lesson of the hardening step. On the live server it was written,
+/// it ran without complaint, and for six months the effective configuration said
+/// password logins were allowed — while twenty-two thousand attempts a day went at it.
+/// A file with the right line in it proves that the line is in the file.
+///
+/// Neither can be asked over the connection we are already using: it is open, it will
+/// go on working whatever we do to the settings, and that is exactly what makes it the
+/// wrong witness.
+#[derive(Clone, Copy)]
+pub struct Proofs<'a> {
+    /// Does logging in **with our key** work, on a connection of its own?
+    pub key_works: &'a (dyn Fn() -> BoxFuture<'a, bool> + Sync),
+    /// Is logging in **with a password** actually refused?
+    pub password_refused: &'a (dyn Fn() -> BoxFuture<'a, bool> + Sync),
+}
+
+impl Context<'_> {
+    /// Run something on the server and hand back what it said.
+    pub async fn ran(&self, command: &str) -> Result<String> {
+        Ok(self.conn.exec(command).await?.stdout)
+    }
+
+    /// Ask the server a yes-or-no question.
+    ///
+    /// The command must print `yes` or `no` rather than lean on its exit code: a command
+    /// that is not there at all also exits non-zero, and "the check said no" would then
+    /// mean either "it is not so" or "I could not ask" — which are different answers and
+    /// only one of them is an answer.
+    pub async fn asks(&self, command: &str) -> Result<bool> {
+        Ok(self.ran(command).await?.trim() == "yes")
+    }
+
+    /// The answer for a step that cannot be settled in this environment (T246).
+    pub fn not_here(&self, what: &str) -> Checked {
+        Checked::NotPossibleHere {
+            detail: self.machine.container_detail(what),
+        }
+    }
+
+    /// Is the file on the server already exactly this?
+    ///
+    /// Compared by digest rather than by "does it exist": a configuration file that
+    /// exists is not the same as the configuration we mean to deploy, and reading
+    /// existence as done is how a server ends up running an older reference for ever.
+    /// It is also what makes a repeat cheap — an unchanged file is not rewritten, and
+    /// so the service is not reloaded for nothing.
+    pub async fn file_is(&self, path: &str, body: &str) -> Result<bool> {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(body.as_bytes());
+        let ours = hex::encode(hasher.finalize());
+        let theirs = self
+            .ran(&format!(
+                "sha256sum -- {} 2>/dev/null | cut -d' ' -f1",
+                crate::server::shell_quote(path)
+            ))
+            .await?;
+        Ok(theirs.trim() == ours)
+    }
+
+    /// Put a file on the server, whole or not at all.
+    ///
+    /// Written beside and moved into place. A configuration written straight into its
+    /// final path is readable half-written by whatever reloads next, and on a web
+    /// server's main configuration that is the serving down rather than a bad edit.
+    pub async fn put_file(&self, path: &str, body: &str) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        let temp = format!("{path}.vrcast.tmp");
+        let sftp = self.conn.sftp().await?;
+        // `create` and not `write`: the library's `write` opens without creating, and on
+        // a path that does not exist yet gives "no such file" — the name promises one
+        // thing and does another (caught on a live server on 2026-08-25).
+        let written = async {
+            let mut file = sftp.create(temp.clone()).await?;
+            file.write_all(body.as_bytes()).await?;
+            file.flush().await?;
+            file.shutdown().await?;
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        }
+        .await;
+
+        if let Err(e) = written {
+            let _ = self
+                .ran(&format!("rm -f -- {}", crate::server::shell_quote(&temp)))
+                .await;
+            return Err(DeployError::Ssh(crate::ssh::SshError::sftp(
+                crate::store::redact::safe_display(&e),
+            )));
+        }
+
+        self.ran(&format!(
+            "mv -f -- {} {}",
+            crate::server::shell_quote(&temp),
+            crate::server::shell_quote(path)
+        ))
+        .await?;
+        Ok(())
+    }
 }
 
 /// Function pointers rather than a trait: the trait would have to be dyn-compatible to live
@@ -73,9 +203,15 @@ pub type Result<T> = std::result::Result<T, DeployError>;
 pub enum DeployError {
     /// A step failed. Names it, because "the deployment failed" and "the firewall step
     /// failed" are different things to act on (FR-123).
+    ///
+    /// `advice` carries what the person should go and do about it, as a code with values
+    /// rather than a sentence — the wordings live in the interface's dictionaries. The
+    /// domain check is the step that has something to say here: "create an A record for
+    /// this name with this value" is actionable, and "the deployment failed" is not.
     Step {
         id: StepId,
         detail: String,
+        advice: Option<Detail>,
     },
     /// A step's apply returned without complaint and its check still says the thing is not
     /// so. Kept apart from an ordinary failure on purpose: this is the shape of the mistake
@@ -97,7 +233,7 @@ impl From<SshError> for DeployError {
 impl std::fmt::Display for DeployError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Step { id, detail } => write!(f, "step {id:?} failed: {detail}"),
+            Self::Step { id, detail, .. } => write!(f, "step {id:?} failed: {detail}"),
             Self::NotTaken { id } => write!(
                 f,
                 "step {id:?} reported success and its check still says it was not applied"
@@ -197,10 +333,11 @@ pub async fn run<C>(
                     // to a server missing what they need, and every failure after it would say
                     // "missing" — a page of consequences with the cause five screens up.
                     if deploy_steps::stops_the_run(step.id) {
-                        return Err(DeployError::Step {
-                            id: step.id,
-                            detail,
-                        });
+                        // The step's own error is handed back untouched rather than rebuilt
+                        // from its text. The domain check puts what to do about it in there
+                        // — which record to create, with what value — and a rebuilt error
+                        // would arrive with that advice quietly missing.
+                        return Err(e);
                     }
                     continue;
                 }
@@ -241,4 +378,29 @@ fn settled<C>(steps: &[Step<C>], id: StepId, ctx: &C, status: &Status) -> Planne
         blocking: deploy_steps::blocking(id),
         status: status.clone(),
     }
+}
+
+/// The whole deployment.
+///
+/// Listed in the order it runs in, though the engine imposes that anyway ([`in_order`]) — a
+/// list assembled by hand is exactly where the order would be got wrong, and the three
+/// mandatory pairs are each one that fails without failing.
+pub fn all<'a>() -> Vec<Step<Context<'a>>> {
+    vec![
+        dns_check::step(),
+        swap::step(),
+        packages::step(),
+        user_dirs::step(),
+        configs::step(),
+        services::step(),
+        ssh_key::step(),
+        ssh_hardening::step(),
+        firewall::step(),
+        ipv6::step(),
+        fail2ban::step(),
+        updates::step(),
+        tuning::step(),
+        verify::step(),
+        state_file::step(),
+    ]
 }

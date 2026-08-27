@@ -38,6 +38,9 @@ mod convert_kill;
 #[path = "integration/deploy_fixture.rs"]
 mod deploy_fixture;
 
+#[path = "integration/deploy_clean.rs"]
+mod deploy_clean;
+
 #[path = "integration/deploy_stand.rs"]
 mod deploy_stand;
 
