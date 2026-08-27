@@ -53,8 +53,8 @@ pub const SEGMENTS_TO_BE_A_VIEWER: usize = 4;
 /// a number that swings by a factor of three depending on which second the log was cut in.
 pub const SHORTEST_SPAN_S: f64 = 5.0;
 
-/// The name the initialisation piece of a fragmented set is served under.
-pub const INIT_PIECE: &str = "init.mp4";
+/// What our own packaging names segments with (`hls_package`: `seg_%05d`).
+pub const SEGMENT_PREFIX: &str = "seg_";
 
 /// Above this share of the server's capacity going out, the server's own link is the limit.
 ///
@@ -191,7 +191,7 @@ pub fn sift(requests: &[Request], server_addresses: &[String]) -> Sifted {
     let mut set_aside = Vec::new();
 
     for (client_ip, mine) in by_address {
-        if server_addresses.iter().any(|a| *a == client_ip) {
+        if server_addresses.contains(&client_ip) {
             set_aside.push(SetAside {
                 client_ip,
                 why: NotAViewer::OurOwnCheck,
@@ -262,11 +262,8 @@ fn assemble(client_ip: &str, mine: &[&Request]) -> Watcher {
             // about it — which is why a direct file gets no starving verdict at all.
             Asked::DirectFile { .. } => {}
             Asked::SetDescription { .. } => restarts += 1,
-            Asked::RungPlaylist { .. } | Asked::Other => {
-                if r.path.ends_with(INIT_PIECE) {
-                    reinits += 1;
-                }
-            }
+            Asked::SetInit { .. } => reinits += 1,
+            Asked::RungPlaylist { .. } | Asked::Other => {}
         }
     }
 
@@ -308,11 +305,11 @@ fn assemble(client_ip: &str, mine: &[&Request]) -> Watcher {
 /// what is missing is the entire point.
 pub fn segment_number(path: &str) -> Option<u32> {
     let name = path.rsplit('/').next()?;
-    let digits: String = name
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(char::is_ascii_digit)
-        .collect();
+    // Anchored on the prefix rather than on "the first digit in the name". `init.mp4` has a
+    // digit in it, and reading that one made every fragmented set look as though it had asked
+    // for segment four — a gap of three at the start of every single session.
+    let after = name.strip_prefix(SEGMENT_PREFIX)?;
+    let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
 }
 
@@ -360,9 +357,7 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
     }
 
     if let Some(load) = load {
-        if load.capacity_mbit_s > 0.0
-            && load.out_mbit_s / load.capacity_mbit_s > SERVER_LINK_BUSY
-        {
+        if load.capacity_mbit_s > 0.0 && load.out_mbit_s / load.capacity_mbit_s > SERVER_LINK_BUSY {
             return Verdict {
                 cause: Cause::ServerLink,
                 say: Detail::new(DetailCode::StallsServerLink)

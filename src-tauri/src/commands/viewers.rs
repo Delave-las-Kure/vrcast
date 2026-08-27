@@ -103,7 +103,8 @@ impl ViewerContext for LibraryContext {
             Asked::DirectFile { name } => self.by_file.get(name).cloned().unwrap_or_default(),
             Asked::SetDescription { slug, .. }
             | Asked::RungPlaylist { slug, .. }
-            | Asked::Segment { slug, .. } => VariantFacts {
+            | Asked::Segment { slug, .. }
+            | Asked::SetInit { slug, .. } => VariantFacts {
                 media_id: self.by_slug.get(slug).cloned(),
                 variant: asked.rung().map(str::to_owned),
                 // What a rung needs is written in the description of the quality set, and

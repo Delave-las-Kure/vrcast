@@ -236,8 +236,7 @@ export const en: Catalogue = {
   details: {
     // --- server profile fields ---
     PROFILE_ID_EMPTY: "The profile's internal number is empty.",
-    PROFILE_NAME_EMPTY:
-      "The profile needs a name — it is how you will tell your servers apart.",
+    PROFILE_NAME_EMPTY: "The profile needs a name — it is how you will tell your servers apart.",
     PROFILE_NAME_TOO_LONG: "The name is longer than {max} characters — shorten it.",
     PROFILE_NAME_TAKEN: "A profile named “{name}” already exists — choose another.",
     PROFILE_HOST_EMPTY: "Enter the server's address — an IP address or a name.",
@@ -248,8 +247,7 @@ export const en: Catalogue = {
     PROFILE_USER_HAS_SPACES: "The user name must not contain spaces.",
     PROFILE_SECRET_REF_EMPTY: "No reference to a secret in the system store was set.",
     PROFILE_KEY_PATH_REQUIRED: "Signing in by key needs the path to the private key file.",
-    PROFILE_KEY_PATH_UNUSED:
-      "Signing in by password does not use a key path — remove it.",
+    PROFILE_KEY_PATH_UNUSED: "Signing in by password does not use a key path — remove it.",
     PROFILE_NOT_FOUND: "There is no such server — its profile may have been deleted.",
     FINGERPRINT_EMPTY: "The fingerprint is empty — there is nothing to confirm.",
 
@@ -316,7 +314,8 @@ export const en: Catalogue = {
       "There is nothing to encode with: the bundled build has neither a hardware H.264 encoder nor a software one.",
     PLAN_NO_AUDIO_TRACKS:
       "The file has no audio track at all. Check that this is the right file: video without sound does not go into service.",
-    PLAN_NO_SUCH_TRACK: "There is no audio track {number} in the file — there are {available} in all.",
+    PLAN_NO_SUCH_TRACK:
+      "There is no audio track {number} in the file — there are {available} in all.",
     PLAN_HEIGHT_ZERO: "The frame height cannot be zero.",
     PLAN_HEIGHT_ABOVE_SOURCE:
       "You are asking for {asked} lines where the source has {source}. The picture can be stretched, but no detail will appear from it — only the file and the time will grow.",
@@ -382,8 +381,7 @@ export const en: Catalogue = {
     REASON_VIDEO_NOT_H264: "video is {codec} — the VRChat player only plays H.264",
     REASON_VIDEO_PIX_FMT:
       "video is H.264 but in {pix_fmt} rather than yuv420p — a strict player will not take it",
-    REASON_TONEMAP:
-      "the source is in high dynamic range and has to be brought down to ordinary",
+    REASON_TONEMAP: "the source is in high dynamic range and has to be brought down to ordinary",
     REASON_RESIZE: "the frame size is changing",
     REASON_KEYFRAMES_UNALIGNED:
       "The source's keyframes do not fall where the segment boundaries will",
@@ -440,6 +438,58 @@ export const en: Catalogue = {
       "The CDN will keep the previous copy for a while, and viewers will get the old one.",
     VIEWERS_ACTIVE_UPLOAD:
       "The server is serving data right now — {connections} connections are open. An upload will push what they are watching out of its memory and playback will stall.",
+
+    // The state of the server (FR-070). Every reading carries the figures it rests on.
+    HEALTH_NOT_ESTABLISHED: "Could not be established.",
+    HEALTH_NOT_IN_CONTAINER:
+      "Not visible inside a container: the kernel settings and the disk belong to the host.",
+    HEALTH_SERVING_RUNNING: "The serving is running.",
+    HEALTH_SERVING_STOPPED:
+      "The serving service «{service}» is not running: {state}. Viewers will get nothing right now.",
+    HEALTH_DELIVERY_OK: "The server answers over HTTPS and understands a range request ({status}).",
+    HEALTH_DELIVERY_NO_RANGES:
+      "The server sent the whole file instead of the range asked for ({status}). Watching works, seeking does not.",
+    HEALTH_DELIVERY_REFUSED: "The server answered {status} to its own check.",
+    HEALTH_DELIVERY_SILENT: "The server did not answer over HTTPS.",
+    HEALTH_NOTHING_TO_SERVE: "Nothing to check: there is no video on the server yet.",
+    HEALTH_FIREWALL_ON: "The firewall is on.",
+    HEALTH_FIREWALL_OFF:
+      "The firewall is off: {status}. Everything that listens is open to the outside.",
+    HEALTH_OPEN_PORTS: "Ports open to the outside: {count} — {ports}.",
+    HEALTH_MEMORY: "Memory: {used_mb} MB used of {total_mb}.",
+    HEALTH_CACHE_IDLE:
+      "The serving cache holds {cache_mb} MB. Nobody is watching, so there is nothing to fill it with.",
+    HEALTH_CACHE_SMALL:
+      "The serving cache holds only {cache_mb} MB of {total_mb} while {watching} are watching. So it is being served off the disk rather than out of memory.",
+    HEALTH_CACHE_OK:
+      "The serving cache holds {cache_mb} MB, {watching} watching. Served out of memory.",
+    HEALTH_NO_SWAP:
+      "There is no swap at all, and {total_mb} MB of memory. At the peak of an install that may not be enough.",
+    HEALTH_SWAP_IN_USE: "{used_mb} MB of {total_mb} in swap. Memory is short.",
+    HEALTH_SWAP_OK: "Swap is barely touched: {used_mb} MB of {total_mb}.",
+    HEALTH_DISK: "{free_mb} MB free of {total_mb} on the disk.",
+    HEALTH_NETWORK_TUNED: "The network is tuned: {congestion}.",
+    HEALTH_NETWORK_UNTUNED:
+      "The network is not set the way it was measured: {congestion}/{qdisc} instead of {wanted_congestion}/{wanted_qdisc}. The serving works, only slower.",
+    HEALTH_READAHEAD_OK: "The disk's readahead is {kb} KB.",
+    HEALTH_READAHEAD_SMALL:
+      "The disk's readahead is {kb} KB instead of {wanted_kb}. Measured, that is the difference between 17 and 40–60 MB/s.",
+    HEALTH_NO_AUTO_RESTART:
+      "The serving does not come back on its own: after a crash it will lie there until somebody notices.",
+    HEALTH_AUTO_RESTART: "The serving comes back on its own: {mode}.",
+
+    // Why the picture stops (FR-072). The conclusion is sometimes wrong, and has to be arguable.
+    STALLS_TOO_SHORT: "Too short a stretch — {seconds} s. There is nothing to judge by.",
+    STALLS_KEEPING_UP:
+      "The viewer is keeping up: {ratio}× of real time received, link {mbit_s} Mbit/s. The gaps between their requests are a full buffer, not a stall.",
+    STALLS_SERVER_LINK:
+      "The server's own link is the limit: {out_mbit_s} Mbit/s going out of {capacity_mbit_s} possible.",
+    STALLS_DISK:
+      "{disk_read_mb_s} MB/s is being read off the disk, and {ratio}× of real time received. The viewers are spread along the timeline and their pieces do not fit in memory.",
+    STALLS_FILE_PEAKS:
+      "The viewer's {mbit_s} Mbit/s carries the average bitrate of {average_mbit} but not the ten-second peak of {peak_10s_mbit}. It is the file that hangs the player; a re-encode with the peaks capped is the cure.",
+    STALLS_VIEWER_LINK:
+      "The viewer's link is short: {ratio}× of real time received at {mbit_s} Mbit/s (inside the downloads — {in_download_mbit_s}). Segments skipped: {skipped}, player restarts: {restarts}.",
   },
 
   plurals: {
@@ -506,7 +556,8 @@ export const en: Catalogue = {
       building: "Building — this takes a while",
       objections: "Objections",
       objectionAboveSource: "Rung {index}: above the source — those bits add nothing but weight",
-      objectionBufsize: "Rung {index}: the buffer is larger than the ceiling — real peaks will exceed it and a viewer will stall",
+      objectionBufsize:
+        "Rung {index}: the buffer is larger than the ceiling — real peaks will exceed it and a viewer will stall",
       objectionLevel: "Rung {index}: the variant does not fit the level it declares, {level}",
       objectionOrder: "Rung {index}: the rungs are not in descending order",
       objectionStep: "Rung {index}: {times} times the one below — too far {tooMuch}",
@@ -609,7 +660,8 @@ export const en: Catalogue = {
 
       listTitle: "Limits in force",
       listEmpty: "Nothing is capped.",
-      listFromServer: "Read from the server rather than from a note here: a note goes stale the hour somebody edits the server by hand.",
+      listFromServer:
+        "Read from the server rather than from a note here: a note goes stale the hour somebody edits the server by hand.",
       columnWho: "Address",
       columnMedia: "Medium",
       columnCap: "Cap",
@@ -741,8 +793,7 @@ export const en: Catalogue = {
       noActive: "Choose an active server in the Servers section.",
       notReady:
         "The fingerprint of the server “{name}” is not confirmed. Until it is, the application will not connect to it.",
-      lead:
-        "The file will go to the server “{name}”. Uploading happens in the background — this screen can be closed and the task followed in the Tasks section.",
+      lead: "The file will go to the server “{name}”. Uploading happens in the background — this screen can be closed and the task followed in the Tasks section.",
       fieldFile: "File",
       pickFile: "Choose a file…",
       pickTitle: "Choose the prepared file",
@@ -808,7 +859,8 @@ export const en: Catalogue = {
       pick: "Choose…",
       lossless:
         "There will be no re-encoding — the file is carried across as it is, without loss and in minutes.",
-      lossy: "The file has to be re-encoded. That is hours where carrying it across would take minutes.",
+      lossy:
+        "The file has to be re-encoded. That is hours where carrying it across would take minutes.",
       videoLine: "Video:",
       audioLine: "Audio:",
       copyAsIs: "carry across as it is",
@@ -872,8 +924,7 @@ export const en: Catalogue = {
       fieldTitle: "Title",
       fieldSlugOptional: "Short name (optional)",
       fieldSlugPlaceholder: "made from the title",
-      slugHint:
-        "It goes into file names and links: Latin letters, digits, hyphens, underscores.",
+      slugHint: "It goes into file names and links: Latin letters, digits, hyphens, underscores.",
       creating: "Creating…",
       create: "Create",
       renameHeading: "Rename “{title}”",
@@ -973,8 +1024,7 @@ export const en: Catalogue = {
 
     about: {
       title: "About",
-      tagline:
-        "managing a streaming server: library, file preparation, uploading, viewers.",
+      tagline: "managing a streaming server: library, file preparation, uploading, viewers.",
       licenceHeading: "Licence and source code",
       licenceBody1a: "This application is distributed under the",
       licenceName: "GNU General Public License, version 3 or later",

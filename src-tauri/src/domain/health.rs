@@ -65,7 +65,7 @@ pub enum Reading {
 }
 
 /// One reading, judged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rated {
     pub about: Reading,
     pub rating: Rating,
@@ -125,7 +125,7 @@ pub enum Delivery {
 }
 
 /// Everything read off the machine in one go.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub services: Vec<Service>,
     /// The first line of `ufw status`, which is the one that knows. See the module note.

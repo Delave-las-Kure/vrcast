@@ -32,6 +32,15 @@ mod engine;
 #[path = "unit/geo.rs"]
 mod geo;
 
+#[path = "unit/health.rs"]
+mod health;
+
+#[path = "unit/log_digest.rs"]
+mod log_digest;
+
+#[path = "unit/stalls.rs"]
+mod stalls;
+
 #[path = "unit/ladder.rs"]
 mod ladder;
 

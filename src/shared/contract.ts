@@ -237,7 +237,41 @@ export type DetailCode =
   | "NOT_ENOUGH_SPACE"
   | "NAME_WILL_BE_REPLACED"
   | "CDN_KEEPS_OLD_COPY"
-  | "VIEWERS_ACTIVE_UPLOAD";
+  | "VIEWERS_ACTIVE_UPLOAD"
+  // Состояние сервера: каждая оценка приходит с числами, на которых держится (FR-070).
+  | "HEALTH_NOT_ESTABLISHED"
+  | "HEALTH_NOT_IN_CONTAINER"
+  | "HEALTH_SERVING_RUNNING"
+  | "HEALTH_SERVING_STOPPED"
+  | "HEALTH_DELIVERY_OK"
+  | "HEALTH_DELIVERY_NO_RANGES"
+  | "HEALTH_DELIVERY_REFUSED"
+  | "HEALTH_DELIVERY_SILENT"
+  | "HEALTH_NOTHING_TO_SERVE"
+  | "HEALTH_FIREWALL_ON"
+  | "HEALTH_FIREWALL_OFF"
+  | "HEALTH_OPEN_PORTS"
+  | "HEALTH_MEMORY"
+  | "HEALTH_CACHE_IDLE"
+  | "HEALTH_CACHE_SMALL"
+  | "HEALTH_CACHE_OK"
+  | "HEALTH_NO_SWAP"
+  | "HEALTH_SWAP_IN_USE"
+  | "HEALTH_SWAP_OK"
+  | "HEALTH_DISK"
+  | "HEALTH_NETWORK_TUNED"
+  | "HEALTH_NETWORK_UNTUNED"
+  | "HEALTH_READAHEAD_OK"
+  | "HEALTH_READAHEAD_SMALL"
+  | "HEALTH_NO_AUTO_RESTART"
+  | "HEALTH_AUTO_RESTART"
+  // Почему у зрителя встаёт картинка — причина и подтверждающие числа (FR-072).
+  | "STALLS_TOO_SHORT"
+  | "STALLS_KEEPING_UP"
+  | "STALLS_SERVER_LINK"
+  | "STALLS_DISK"
+  | "STALLS_FILE_PEAKS"
+  | "STALLS_VIEWER_LINK";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {
@@ -261,11 +295,7 @@ export interface AppError {
 
 /** Tell an error of the contract from any other surprise. */
 export function isAppError(e: unknown): e is AppError {
-  return (
-    typeof e === "object" &&
-    e !== null &&
-    typeof (e as AppError).code === "string"
-  );
+  return typeof e === "object" && e !== null && typeof (e as AppError).code === "string";
 }
 
 // ---------- servers ----------
@@ -395,13 +425,7 @@ export type TaskKind =
   | "upgrade_server"
   | "diagnose";
 
-export type TaskState =
-  | "queued"
-  | "running"
-  | "paused"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type TaskState = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
 export interface Task {
   id: string;
@@ -648,9 +672,7 @@ export type Objection =
   | { BadStep: { index: number; times: number } };
 
 /** Why a ladder must not be built yet. Separate from soundness on purpose. */
-export type NotBuildable =
-  | { code: "NO_RUNGS" }
-  | { code: "RUNGS_NOT_MEASURED"; indexes: number[] };
+export type NotBuildable = { code: "NO_RUNGS" } | { code: "RUNGS_NOT_MEASURED"; indexes: number[] };
 
 export interface LadderVerdict {
   objections: Objection[];

@@ -277,6 +277,78 @@ detail_codes! {
     CdnKeepsOldCopy => "CDN_KEEPS_OLD_COPY",
     /// `connections` — how many are open right now. What an upload would do to them.
     ViewersActiveUpload => "VIEWERS_ACTIVE_UPLOAD",
+
+    // --- the state of the server (FR-070) ---
+    //
+    // Every one of these carries the numbers it rests on, and that is not decoration: a
+    // reading shown as a bare word is a reading nobody can check, and these are read by
+    // somebody deciding whether to touch their server at all.
+    /// Could not be found out. Never shown as "fine" — see `domain::health`.
+    HealthNotEstablished => "HEALTH_NOT_ESTABLISHED",
+    /// Cannot be found out **in a container** (T246): kernel settings and a real disk.
+    HealthNotInContainer => "HEALTH_NOT_IN_CONTAINER",
+    HealthServingRunning => "HEALTH_SERVING_RUNNING",
+    /// `service` — which one, `state` — what the machine called it. Named, not implied.
+    HealthServingStopped => "HEALTH_SERVING_STOPPED",
+    /// `status` — 206, which is what a range request deserves.
+    HealthDeliveryOk => "HEALTH_DELIVERY_OK",
+    /// `status`. It served the whole file instead of the range: playing works, seeking does not.
+    HealthDeliveryNoRanges => "HEALTH_DELIVERY_NO_RANGES",
+    /// `status` — 4xx or 5xx to our own request.
+    HealthDeliveryRefused => "HEALTH_DELIVERY_REFUSED",
+    HealthDeliverySilent => "HEALTH_DELIVERY_SILENT",
+    /// No video on the server yet, so nothing was asked for. Not a fault.
+    HealthNothingToServe => "HEALTH_NOTHING_TO_SERVE",
+    HealthFirewallOn => "HEALTH_FIREWALL_ON",
+    /// `status` — what `ufw status` said. Read from there and never from `is-active`.
+    HealthFirewallOff => "HEALTH_FIREWALL_OFF",
+    /// `count`, `ports`. Listed for the person to read; not judged.
+    HealthOpenPorts => "HEALTH_OPEN_PORTS",
+    /// `total_mb`, `used_mb`.
+    HealthMemory => "HEALTH_MEMORY",
+    /// `cache_mb`. Nobody watching, so nothing is cached — which is not news.
+    HealthCacheIdle => "HEALTH_CACHE_IDLE",
+    /// `cache_mb`, `total_mb`, `watching`. Small **while somebody is watching**.
+    HealthCacheSmall => "HEALTH_CACHE_SMALL",
+    /// `cache_mb`, `watching`.
+    HealthCacheOk => "HEALTH_CACHE_OK",
+    /// `total_mb` — the memory the machine has, since that is why swap was wanted.
+    HealthNoSwap => "HEALTH_NO_SWAP",
+    /// `used_mb`, `total_mb`.
+    HealthSwapInUse => "HEALTH_SWAP_IN_USE",
+    /// `used_mb`, `total_mb`.
+    HealthSwapOk => "HEALTH_SWAP_OK",
+    /// `free_mb`, `total_mb`.
+    HealthDisk => "HEALTH_DISK",
+    /// `congestion`.
+    HealthNetworkTuned => "HEALTH_NETWORK_TUNED",
+    /// `congestion`, `qdisc`, `wanted_congestion`, `wanted_qdisc`.
+    HealthNetworkUntuned => "HEALTH_NETWORK_UNTUNED",
+    /// `kb`.
+    HealthReadaheadOk => "HEALTH_READAHEAD_OK",
+    /// `kb`, `wanted_kb`.
+    HealthReadaheadSmall => "HEALTH_READAHEAD_SMALL",
+    HealthNoAutoRestart => "HEALTH_NO_AUTO_RESTART",
+    /// `mode`.
+    HealthAutoRestart => "HEALTH_AUTO_RESTART",
+
+    // --- why a viewer's picture stops (FR-072) ---
+    //
+    // A cause and the figures behind it, because this conclusion is sometimes wrong and a
+    // conclusion nobody can check is a conclusion nobody can argue with.
+    /// `seconds` — too short a stretch to work anything out from.
+    StallsTooShort => "STALLS_TOO_SHORT",
+    /// `ratio`, `mbit_s`. They are keeping up; the gaps between their requests are a full
+    /// buffer, not a stall.
+    StallsKeepingUp => "STALLS_KEEPING_UP",
+    /// `out_mbit_s`, `capacity_mbit_s`.
+    StallsServerLink => "STALLS_SERVER_LINK",
+    /// `disk_read_mb_s`, `ratio`.
+    StallsDisk => "STALLS_DISK",
+    /// `mbit_s`, `average_mbit`, `peak_10s_mbit`.
+    StallsFilePeaks => "STALLS_FILE_PEAKS",
+    /// `ratio`, `mbit_s`, `in_download_mbit_s`, `skipped`, `restarts`.
+    StallsViewerLink => "STALLS_VIEWER_LINK",
 }
 
 impl TryFrom<String> for DetailCode {

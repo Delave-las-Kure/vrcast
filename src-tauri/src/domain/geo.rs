@@ -66,3 +66,87 @@ pub fn is_not_public(address: &IpAddr) -> bool {
         }
     }
 }
+
+// ---------- T310: is the viewer behind a tunnel? ----------
+
+/// The size a whole path carries when nothing along it is cutting.
+///
+/// Anything smaller means something in between is wrapping the traffic — a tunnel, a VPN, or
+/// a PPPoE line — and the practical consequence is the same either way: what is measured to
+/// the address is the path to *that* box, and the rest of the way to the person's headset is
+/// not visible from here.
+pub const WHOLE_PATH_MTU: u16 = 1500;
+
+/// Words in a provider's name that suggest a machine room rather than a home.
+///
+/// **Kept deliberately short, and never enough on its own to conclude anything.** The curated
+/// "is this hosting" flag the diagnosis skill used comes from an outside service, and handing
+/// it a viewer's address is precisely what FR-057 forbids — so what is left is the provider's
+/// name out of the local table, and a name is a hint. Half the world's home providers have
+/// "LLC" in theirs; a list long enough to catch every machine room would call them all VPNs.
+const MACHINE_ROOM_WORDS: [&str; 6] = [
+    "hosting",
+    "datacenter",
+    "data center",
+    "colocation",
+    "cloud",
+    "vps",
+];
+
+/// What can be said about a tunnel between the server and the viewer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tunnel {
+    /// The path is whole and the provider looks like a home one. Nothing in the way.
+    NoSign,
+    /// The provider's name looks like a machine room. A hint, not a finding: see
+    /// [`MACHINE_ROOM_WORDS`].
+    Possible { provider: String },
+    /// The path is cut, which is measured rather than guessed.
+    Likely { mtu: u16 },
+    /// **The measurement is not valid**, and saying so is the whole reason this exists.
+    ///
+    /// When the address answers no pings at all, every size fails — and a probe where every
+    /// size fails says nothing about the path. The skill's script once printed "the viewer is
+    /// behind a VPN" unconditionally here and was wrong on the first real complaint it met: a
+    /// home line with ICMP turned off was announced as a machine room behind a tunnel.
+    CannotTell,
+}
+
+impl Tunnel {
+    /// Whether the person should be advised to watch without their VPN.
+    ///
+    /// Only on the measured sign. Advice given on a hint is advice given to people who have
+    /// no VPN to turn off, and they will do as they are told and come back no better.
+    pub fn worth_advising(&self) -> bool {
+        matches!(self, Self::Likely { .. })
+    }
+}
+
+/// Judge, from what can be seen here and nowhere else.
+///
+/// `largest_whole_packet` is the biggest packet that made the trip, as the server measured it;
+/// `None` when nothing was measured. `pings_answered` is whether the address answers at all —
+/// if it does not, the size probe is meaningless and is not read.
+pub fn tunnel(place: &Place, largest_whole_packet: Option<u16>, pings_answered: bool) -> Tunnel {
+    if !pings_answered {
+        return Tunnel::CannotTell;
+    }
+    if let Some(mtu) = largest_whole_packet {
+        if mtu < WHOLE_PATH_MTU {
+            return Tunnel::Likely { mtu };
+        }
+    }
+    if let Some(org) = &place.asn_org {
+        let lower = org.to_lowercase();
+        if MACHINE_ROOM_WORDS.iter().any(|w| lower.contains(w)) {
+            return Tunnel::Possible {
+                provider: org.clone(),
+            };
+        }
+    }
+    if largest_whole_packet.is_none() {
+        return Tunnel::CannotTell;
+    }
+    Tunnel::NoSign
+}

@@ -160,6 +160,13 @@ pub enum Asked {
     RungPlaylist { slug: String, rung: String },
     /// A segment of one rung. This is what a watching of a quality set consists of.
     Segment { slug: String, rung: String },
+    /// The stream headers a fragmented set begins with.
+    ///
+    /// Told apart from a segment although it sits in the same directory and is fetched in the
+    /// same breath. It carries no film, so counting it as a segment inflates every count of
+    /// how much a viewer received — and a healthy player fetches it exactly once a session,
+    /// which makes a second fetch a fact worth having (`domain::stalls`).
+    SetInit { slug: String, rung: String },
     /// Something outside the serving, or a shape not known here.
     Other,
 }
@@ -171,7 +178,8 @@ impl Asked {
             Self::DirectFile { name } => Some(name),
             Self::SetDescription { slug, .. }
             | Self::RungPlaylist { slug, .. }
-            | Self::Segment { slug, .. } => Some(slug),
+            | Self::Segment { slug, .. }
+            | Self::SetInit { slug, .. } => Some(slug),
             Self::Other => None,
         }
     }
@@ -179,7 +187,9 @@ impl Asked {
     /// Which rung is being received, when it is a quality set.
     pub fn rung(&self) -> Option<&str> {
         match self {
-            Self::RungPlaylist { rung, .. } | Self::Segment { rung, .. } => Some(rung),
+            Self::RungPlaylist { rung, .. }
+            | Self::Segment { rung, .. }
+            | Self::SetInit { rung, .. } => Some(rung),
             _ => None,
         }
     }
@@ -190,7 +200,10 @@ impl Asked {
     /// yet watching. What the watching is made of is segments — and, for a direct file, the
     /// one long request for the file itself.
     pub fn is_pulling_video(&self) -> bool {
-        matches!(self, Self::DirectFile { .. } | Self::Segment { .. })
+        matches!(
+            self,
+            Self::DirectFile { .. } | Self::Segment { .. } | Self::SetInit { .. }
+        )
     }
 }
 
@@ -202,6 +215,14 @@ pub const SET_DESCRIPTION: &str = "master.m3u8";
 
 /// The name a rung's playlist is served under.
 pub const RUNG_PLAYLIST: &str = "stream.m3u8";
+
+/// The name the stream headers of a fragmented set are served under.
+///
+/// The literal name, because that is what our own packaging writes
+/// (`hls_package`: `-hls_fmp4_init_filename init.mp4`). A set built by something else may
+/// name it otherwise, and then it reads as a segment — which is the same answer as before
+/// this variant existed, and no worse.
+pub const SET_INIT: &str = "init.mp4";
 
 /// Work out what a path points at.
 pub fn what_was_asked_for(path: &str) -> Asked {
@@ -235,6 +256,11 @@ pub fn what_was_asked_for(path: &str) -> Asked {
         },
         // /videos/<slug>/<rung>/stream.m3u8
         [slug, rung, tail] if *tail == RUNG_PLAYLIST => Asked::RungPlaylist {
+            slug: (*slug).to_owned(),
+            rung: (*rung).to_owned(),
+        },
+        // /videos/<slug>/<rung>/init.mp4
+        [slug, rung, tail] if *tail == SET_INIT => Asked::SetInit {
             slug: (*slug).to_owned(),
             rung: (*rung).to_owned(),
         },
