@@ -17,6 +17,7 @@ pub mod server;
 pub mod ssh;
 pub mod store;
 pub mod tasks;
+pub mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

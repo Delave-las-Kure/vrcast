@@ -149,3 +149,6 @@ mod keygen;
 
 #[path = "unit/spawn_hygiene.rs"]
 mod spawn_hygiene;
+
+#[path = "unit/tray.rs"]
+mod tray;
