@@ -38,8 +38,9 @@
 
 /// What the segments weigh against the MP4 they were cut from.
 ///
-/// The heavier of the two measurements above. Held down by a test (T406) so that it cannot
-/// be quietly lowered to a figure nobody measured.
+/// The heavier of the two measurements above. Held down at build time in
+/// `tests/unit/ladder_size.rs` (T406) so that it cannot be quietly lowered to a figure
+/// nobody measured.
 pub const SEGMENTS_OVER_MP4: f64 = 1.046;
 
 /// The audio budget a re-encoded track is held to, in bits per second.

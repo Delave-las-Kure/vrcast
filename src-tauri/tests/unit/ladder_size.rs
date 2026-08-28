@@ -71,19 +71,19 @@ fn a_source_of_unknown_length_asks_for_nothing_rather_than_for_a_guess() {
     assert_eq!(bytes_for_rung(4_000_000, AUDIO_BUDGET_BPS, -1.0), 0);
 }
 
-#[test]
-fn the_container_overhead_is_not_quietly_lowered_below_what_was_measured() {
-    // **The number most likely to be tuned down by somebody watching a check refuse.** It is
-    // a reading, not a preference: 1.0457 at 1.5 Mbit/s and 1.0296 at 5, with the bundled
-    // FFmpeg on 2026-08-28. The larger is taken because the overhead grows as a share on the
-    // light rungs, and a ladder's bottom is where the light rungs are.
-    assert!(
-        SEGMENTS_OVER_MP4 >= 1.046,
-        "the segment overhead was lowered to {SEGMENTS_OVER_MP4}, below the 1.046 that was \
-         measured. Every set would then be reckoned smaller than it is, and the refusal this \
-         feeds would let through exactly the builds that do not fit"
-    );
-}
+/// **The number most likely to be tuned down by somebody watching a check refuse.**
+///
+/// It is a reading, not a preference: 1.0457 at 1.5 Mbit/s and 1.0296 at 5, with the bundled
+/// FFmpeg on 2026-08-28. The larger is taken because the overhead grows as a share on the
+/// light rungs, and a ladder's bottom is where the light rungs are. Lowered, every set is
+/// reckoned smaller than it is, and the refusal this feeds lets through exactly the builds
+/// that do not fit.
+///
+/// Guarded at **build** time rather than in a test body. Clippy was right that comparing a
+/// constant is decided before anything runs — so the right place for it is the compiler,
+/// where lowering the number stops being a red test and becomes a build that will not
+/// finish.
+const _: () = assert!(SEGMENTS_OVER_MP4 >= 1.046);
 
 #[test]
 fn the_estimate_never_comes_out_under_the_nominal_bytes() {
