@@ -70,6 +70,7 @@ if [ "${OS:-}" = "Windows_NT" ]; then
   step "The uninstall hook's four cases"     powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/tests/uninstall-hook/run.ps1
 fi
 step "The workflow files" bash scripts/check-workflows.sh
+step "The leak guard's rule" bash scripts/check-leak-guard.sh
 step "The version is in one place" bash scripts/check-version.sh
 # Not the release itself — the script that assembles it. It runs once, unwatched, at the
 # one moment where a mistake publishes quietly instead of failing (T362).

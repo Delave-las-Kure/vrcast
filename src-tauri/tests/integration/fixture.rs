@@ -275,8 +275,14 @@ pub fn note_leak(what: &str) {
 ///
 /// A job is killed whenever a push supersedes one still running, which is not rare.
 pub fn sweep_abandoned_networks() {
-    let Ok(out) = docker(&["network", "ls", "--format", "{{.Name}}"]) else {
-        return;
+    let out = match docker(&["network", "ls", "--format", "{{.Name}}"]) {
+        Ok(out) => out,
+        // Being unable to list them is not nothing to report: the sweep then does nothing at
+        // all, and every network any run leaks stays for good with no sign of why.
+        Err(e) => {
+            note_leak(&format!("the networks could not be listed at all: {e}"));
+            return;
+        }
     };
     for name in String::from_utf8_lossy(&out.stdout).lines() {
         let name = name.trim();
@@ -294,7 +300,22 @@ pub fn sweep_abandoned_networks() {
         .unwrap_or_default();
 
         if attached.is_empty() {
-            let _ = docker(&["network", "rm", name]);
+            // **The refusal used to be swallowed here too.** `let _ = docker(…)` on an empty
+            // network reads as "nothing to do", and it is the one line that had to speak: a
+            // build stayed red for four runs with three leaked networks and not a word about
+            // any of them, and this is where two of the three would have explained
+            // themselves. Docker refuses to remove a network with a stale endpoint while
+            // `inspect` shows no containers at all — "empty" and "removable" are not the
+            // same thing, and only Docker's own sentence tells them apart.
+            match docker(&["network", "rm", name]) {
+                Ok(o) if o.status.success() => {}
+                Ok(o) => note_leak(&format!(
+                    "the network {name} has nothing attached and would still not go. Docker \
+                     refused with: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                )),
+                Err(e) => note_leak(&format!("the network {name} could not be asked about: {e}")),
+            }
             continue;
         }
 

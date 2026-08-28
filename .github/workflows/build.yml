@@ -444,6 +444,25 @@ jobs:
       - name: Put the bundled FFmpeg in place
         run: node scripts/fetch-ffmpeg.mjs
 
+      # **Что уже лежало здесь до нас.** Раннер свой, и сеть, утёкшая однажды, остаётся на
+      # нём навсегда: имя несёт номер сделавшего её процесса, так что под тем же именем к ней
+      # никто уже не придёт. Без этой записи сторож в конце валит **каждую** последующую
+      # сборку за чужую утечку — а сборка, красная всегда, учит не читать красное, и это
+      # ровно тот довод, который в этом же файле уже записан про мигающего сторожа.
+      #
+      # Записанное не прощается: оно печатается отдельным списком, и подметание всё так же
+      # пытается его убрать. Не сходится только приговор — задание отвечает за то, что
+      # утекло в нём.
+      - name: What was already lying about
+        shell: bash
+        run: |
+          docker network ls --format '{{.Name}}' \
+            | grep -E '^vrcast-(test-net|deploy-target)-' > /tmp/vrcast-networks-before.txt || true
+          if [ -s /tmp/vrcast-networks-before.txt ]; then
+            echo "networks left by earlier runs, before this one started:"
+            cat /tmp/vrcast-networks-before.txt
+          fi
+
       # Running on one thread is not optional: each test brings up a container of its own,
       # and a dozen at once only slows things down.
       # Адрес заданию больше не называется. Фикстура сама узнаёт, что работает в контейнере,
@@ -504,23 +523,41 @@ jobs:
             [ -z "$nets" ] && break
             sleep 1
           done
-          if [ -n "$nets" ]; then
-            echo "dangling networks were left:" >&2
-            echo "$nets" >&2
-            # And what the fixture had to say about them. It writes here because cargo keeps
-            # a test's output to itself unless the test *fails* — and a leak left by a test
-            # that passed is exactly the case this guard exists for. Two red builds on
-            # 2026-08-28 reported a network name and nothing else, and both times the
-            # explanation had been written and thrown away.
-            if [ -f "${TMPDIR:-/tmp}/vrcast-leaks.log" ]; then
+          # Only the ones this run made. The older ones are printed too — they are a real
+          # fault and somebody has to clear them off the machine — but they are not this
+          # run's verdict.
+          before=/tmp/vrcast-networks-before.txt
+          [ -f "$before" ] || : > "$before"
+          fresh="$(printf '%s\n' "$nets" | grep -vxF -f "$before" || true)"
+          # What the fixture had to say. It writes to a file because cargo keeps a test's
+          # output to itself unless the test *fails* — and a leak left by a test that passed
+          # is exactly the case this guard exists for. Two red builds on 2026-08-28 named a
+          # network and nothing else, and both times the explanation had been written and
+          # thrown away. Printed whenever anything is left, old or new: on an old one it is
+          # the sweep saying why it could not clear it, which is the whole diagnosis.
+          say_what_the_tests_said() {
+            if [ -s "${TMPDIR:-/tmp}/vrcast-leaks.log" ]; then
               echo "what the tests said about them:" >&2
               cat "${TMPDIR:-/tmp}/vrcast-leaks.log" >&2
             else
-              echo "the tests said nothing: nothing even tried to remove them." >&2
+              echo "the tests left no note about them." >&2
             fi
+          }
+
+          if [ -n "$fresh" ]; then
+            echo "dangling networks were left by this run:" >&2
+            echo "$fresh" >&2
+            say_what_the_tests_said
             exit 1
           fi
-          echo "no networks left"
+          if [ -n "$nets" ]; then
+            echo "networks from earlier runs are still on this machine; this run added none:" >&2
+            echo "$nets" >&2
+            echo "They do not clear themselves. The sweep tries on every deployment test." >&2
+            say_what_the_tests_said
+          else
+            echo "no networks left"
+          fi
 
   licenses:
     name: Licence compatibility with GPL-3.0
