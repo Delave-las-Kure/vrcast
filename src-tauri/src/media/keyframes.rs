@@ -25,7 +25,7 @@ const LOOK_AT_SECONDS: u32 = 120;
 /// the one guess in a ladder that a viewer pays for.
 pub async fn spacing_s(path: &Path) -> Result<Option<f64>, ffmpeg::FfmpegError> {
     let ffprobe = ffmpeg::locate("ffprobe")?;
-    let output = tokio::process::Command::new(ffprobe)
+    let output = crate::tasks::process::quiet(ffprobe)
         .args([
             "-v",
             "error",

@@ -47,7 +47,7 @@ const WORST_KEPT: usize = 5;
 /// ever notices.
 pub async fn measure(path: &Path) -> Result<Measured, ffmpeg::FfmpegError> {
     let ffprobe = ffmpeg::locate("ffprobe")?;
-    let output = tokio::process::Command::new(ffprobe)
+    let output = crate::tasks::process::quiet(ffprobe)
         .args([
             "-v",
             "error",
@@ -135,7 +135,7 @@ pub fn from_packets(csv: &str) -> Measured {
 /// series, not the worst few moments of it.
 pub async fn seconds_of(path: &Path) -> Result<Vec<u64>, ffmpeg::FfmpegError> {
     let ffprobe = ffmpeg::locate("ffprobe")?;
-    let output = tokio::process::Command::new(ffprobe)
+    let output = crate::tasks::process::quiet(ffprobe)
         .args([
             "-v",
             "error",

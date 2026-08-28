@@ -21,6 +21,39 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 
+/// A short external program, started without a window of its own.
+///
+/// For the reads that finish in a moment and have nothing to kill: examining a source,
+/// listing keyframes, asking FFmpeg what it can do. `ManagedProcess` below is for the work
+/// that runs for hours and must die on command; putting these through it would mean a job
+/// object and a process group for something that lives for eighty milliseconds.
+///
+/// **What it is for is the flag.** A released build on Windows has no console of its own,
+/// so a child started without `CREATE_NO_WINDOW` is handed a brand new console window by
+/// the system — which appears and vanishes. Seven places used to start programs directly
+/// and every one of them flickered; choosing a single file made five of them appear in a
+/// row. Nothing made anybody think about it, so `tests/unit/spawn_hygiene.rs` now does:
+/// `Command::new` outside this file fails the build.
+///
+/// Standard input is closed as well. It was closed in two of those seven places and open in
+/// five, for no reason anybody could name, and an open one is how a background program ends
+/// up waiting forever for a keypress nobody will make.
+pub fn quiet(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.stdin(Stdio::null());
+
+    #[cfg(windows)]
+    {
+        // No `CommandExt` import: tokio's own `Command` carries `creation_flags`, and the
+        // std trait would only shadow it — which is why `spawn_in` below does not import it
+        // either.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    cmd
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProcessError {
     #[error("could not start {program}: {reason}")]

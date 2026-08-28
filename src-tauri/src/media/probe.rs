@@ -33,7 +33,7 @@ pub type Result<T> = std::result::Result<T, ProbeError>;
 pub async fn probe(path: &Path) -> Result<SourceFile> {
     let ffprobe = ffmpeg::locate("ffprobe")?;
 
-    let out = tokio::process::Command::new(&ffprobe)
+    let out = crate::tasks::process::quiet(&ffprobe)
         .args([
             "-v",
             "error",

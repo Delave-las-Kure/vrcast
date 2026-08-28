@@ -146,3 +146,6 @@ mod gate;
 
 #[path = "unit/keygen.rs"]
 mod keygen;
+
+#[path = "unit/spawn_hygiene.rs"]
+mod spawn_hygiene;

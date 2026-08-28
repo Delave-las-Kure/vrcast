@@ -14,7 +14,6 @@
 //! `convert.rs`. Here there is only "is there anything to work with at all".
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FfmpegError {
@@ -131,6 +130,22 @@ fn target_triple() -> String {
 
 /// Check the bundled build: does it start, and can it do what is needed.
 pub async fn probe_self() -> Result<FfmpegInfo> {
+    // **Worked out once.** Three programs are started below, and the answer cannot change
+    // while the application runs: the build ships beside it. It used to be worked out
+    // afresh on every recomputation of the preparation preview — so choosing a file and
+    // then changing the audio track started six FFmpeg processes to learn the same thing
+    // twice, at about eighty milliseconds a time, each one a console window flashing on a
+    // Windows desktop.
+    //
+    // Only a success is kept. A failure here means the bundled build will not run at all,
+    // and remembering that would take away the one thing that might still help: asking
+    // again after somebody has released it from quarantine.
+    EXAMINED.get_or_try_init(examine).await.cloned()
+}
+
+static EXAMINED: tokio::sync::OnceCell<FfmpegInfo> = tokio::sync::OnceCell::const_new();
+
+async fn examine() -> Result<FfmpegInfo> {
     let path = locate("ffmpeg")?;
     // ffprobe is needed as much as ffmpeg: without it a source cannot be examined. Missing
     // either of the two is the same trouble, and it must be reported here rather than at
@@ -214,9 +229,8 @@ fn encoder_names(listing: &str) -> impl Iterator<Item = &str> {
 }
 
 async fn run(path: &Path, args: &[&str]) -> Result<String> {
-    let out = tokio::process::Command::new(path)
+    let out = crate::tasks::process::quiet(path)
         .args(args)
-        .stdin(Stdio::null())
         .output()
         .await
         .map_err(|e| FfmpegError::NotRunnable(format!("{}: {e}", path.display())))?;
@@ -266,7 +280,7 @@ pub fn filter_present(listing: &str, name: &str) -> bool {
 /// callers all have something sensible to do with that.
 pub async fn bitrate_of(path: &Path) -> Option<u64> {
     let ffprobe = locate("ffprobe").ok()?;
-    let out = tokio::process::Command::new(ffprobe)
+    let out = crate::tasks::process::quiet(ffprobe)
         .args([
             "-v",
             "error",

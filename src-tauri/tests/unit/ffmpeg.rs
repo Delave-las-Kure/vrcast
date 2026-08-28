@@ -120,3 +120,50 @@ async fn the_bundled_build_can_do_what_it_was_bundled_for() {
          graphics card there would be nothing to prepare files with"
     );
 }
+
+#[tokio::test]
+async fn the_bundled_build_is_examined_once_however_often_it_is_asked_about() {
+    // `probe_self` starts three programs: `-version`, `-encoders`, `-filters`. It is called
+    // from `pick_encoder`, from `convert_preview`, which the preparation screen recomputes
+    // on every change to a field. So choosing a file and then changing the audio track ran
+    // six FFmpeg processes to learn twice over what cannot change: the build ships beside
+    // the application. Eighty milliseconds a time, and on Windows a console window flashing
+    // on the desktop for each one.
+    //
+    // **Calibrated here rather than assumed**, and against a single start rather than
+    // against a first call of its own. The first draft timed one call and then another and
+    // required the second to be ten times faster — which is only true when this test is the
+    // first in the binary to ask. It shares a process with four hundred others and it is
+    // not. That check passed on one run and failed on the next, which is the worst thing a
+    // check can do.
+    use std::time::Instant;
+    use vrcast_studio_lib::media::ffmpeg;
+    use vrcast_studio_lib::tasks::process::quiet;
+
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    };
+
+    // Whatever went before, the answer is known by now.
+    let first = ffmpeg::probe_self().await.expect("the build would not answer");
+
+    // What one process start costs on this machine, right now.
+    let started = Instant::now();
+    let _ = quiet(&ff)
+        .args(["-hide_banner", "-version"])
+        .output()
+        .await
+        .expect("the bundled build would not run");
+    let one_start = started.elapsed();
+
+    let started = Instant::now();
+    let second = ffmpeg::probe_self().await.expect("the build would not answer twice");
+    let asking_again = started.elapsed();
+
+    assert_eq!(first, second, "the same build described two different ways");
+    assert!(
+        asking_again * 5 < one_start,
+        "asking again cost {asking_again:?}, against {one_start:?} for a single process          start — so the three of them were started all over again"
+    );
+}

@@ -184,7 +184,7 @@ async fn encode_piece(
     }
     args.push(out.to_string_lossy().into_owned());
 
-    let status = tokio::process::Command::new(&ffmpeg_bin)
+    let status = crate::tasks::process::quiet(&ffmpeg_bin)
         .args(&args)
         .output()
         .await
