@@ -11,8 +11,8 @@ use crate::domain::deploy_steps::{Change, Checked, StepId};
 
 use super::{Context, DeployError, Result, Step};
 
-/// Что ставится. Открыто наружу, чтобы опись серверной части (T337) сверялась с этим, а не
-/// с копией имени рядом с проверкой.
+/// What is installed. Public so that the inventory of the server side (T337) compares
+/// against this, and not against a copy of the name kept beside the check.
 pub const PACKAGE: &str = "fail2ban";
 
 const JAIL: &str = "/etc/fail2ban/jail.local";

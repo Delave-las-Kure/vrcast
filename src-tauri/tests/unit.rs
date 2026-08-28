@@ -158,3 +158,6 @@ mod ladder_size;
 
 #[path = "unit/notices.rs"]
 mod notices;
+
+#[path = "unit/code_language.rs"]
+mod code_language;

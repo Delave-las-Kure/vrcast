@@ -14,8 +14,8 @@ use crate::domain::deploy_steps::{Change, Checked, StepId};
 
 use super::{Context, DeployError, Result, Step};
 
-/// Что ставится. Открыто наружу по той же причине, что и у `fail2ban`: опись сверяется с
-/// шагом, а не с копией имени.
+/// What is installed. Public for the same reason as in `fail2ban`: the inventory compares
+/// against the step, not against a copy of the name.
 pub const PACKAGE: &str = "unattended-upgrades";
 
 pub fn step<'a>() -> Step<Context<'a>> {
