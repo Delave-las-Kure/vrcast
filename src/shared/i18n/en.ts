@@ -441,6 +441,10 @@ export const en: Catalogue = {
       "The {record} record for “{name}” leads to {to}, and IPv6 is to be turned off. Remove it: otherwise the domain goes on promising an address that will stop answering, and some viewers will try it first.",
     DOMAIN_SERVER_HAS_NO_IPV6:
       "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
+    LADDER_NOT_ENOUGH_SPACE:
+      "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
+    LADDER_SPACE_UNKNOWN:
+      "How much room the set would take could not be worked out, so the build is going ahead without that check.",
     NOT_ENOUGH_SPACE:
       "The server is {short_by|bytes} short — {needed|bytes} needed, {free|bytes} free.",
     NAME_WILL_BE_REPLACED: "The file “{name}” is already being served — it will be replaced.",

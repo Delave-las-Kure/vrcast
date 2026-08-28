@@ -44,9 +44,14 @@ vi.mock("../../../shared/ipc", async () => {
       convertValidate: vi.fn(),
     },
     onTaskDone: async (handler: (e: unknown) => void) => {
-      finish = handler as typeof finish;
+      const mine = handler as typeof finish;
+      finish = mine;
+      // **Only its own.** A component unmounting from an earlier test runs its cleanup
+      // whenever React gets round to it, and a plain `finish = null` there wipes out the
+      // subscription the *current* test just made — so the event has nobody to reach and
+      // the test fails on a timeout, sometimes. The same flake as the mascot's, 2026-08-28.
       return () => {
-        finish = null;
+        if (finish === mine) finish = null;
       };
     },
   };
@@ -277,6 +282,11 @@ describe("preparation screen", () => {
       </MemoryRouter>,
     );
     await pickSource();
+    // **Wait for the button to be pressable.** The preview arrives a tick after the source
+    // does, and the button is disabled until it has. Clicking earlier clicks nothing, the
+    // task never starts, and the test fails somewhere further down on a timeout — which is
+    // exactly how this one flaked, one run in five.
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
     fireEvent.click(screen.getByText(ru.ui.convert.start));
     await waitFor(() => expect(mockConvertStart).toHaveBeenCalled());
 
@@ -304,6 +314,11 @@ describe("preparation screen", () => {
       </MemoryRouter>,
     );
     await pickSource();
+    // **Wait for the button to be pressable.** The preview arrives a tick after the source
+    // does, and the button is disabled until it has. Clicking earlier clicks nothing, the
+    // task never starts, and the test fails somewhere further down on a timeout — which is
+    // exactly how this one flaked, one run in five.
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
     fireEvent.click(screen.getByText(ru.ui.convert.start));
     await waitFor(() => expect(finish).not.toBeNull());
 
@@ -329,6 +344,11 @@ describe("preparation screen", () => {
     expect(screen.getByLabelText(ru.ui.convert.fieldTrack)).toBeInTheDocument();
     expect(container.querySelector("#convert-bitrate")).toBeNull();
 
+    // **Wait for the button to be pressable.** The preview arrives a tick after the source
+    // does, and the button is disabled until it has. Clicking earlier clicks nothing, the
+    // task never starts, and the test fails somewhere further down on a timeout — which is
+    // exactly how this one flaked, one run in five.
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
     fireEvent.click(screen.getByText(ru.ui.convert.start));
     await waitFor(() => expect(mockConvertStart).toHaveBeenCalled());
     expect(mockConvertStart.mock.calls[0][0]).toMatchObject({ target_kbps: null });

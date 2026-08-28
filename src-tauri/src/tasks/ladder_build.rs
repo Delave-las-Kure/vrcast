@@ -16,6 +16,7 @@ use crate::domain::hls_master::{self, Variant};
 use crate::domain::hls_package::{ToCut, SEGMENT_SECONDS};
 use crate::domain::ladder::{self, NotBuildable, Rung};
 use crate::domain::ladder_build::{self, VariantWork};
+use crate::domain::ladder_size;
 use crate::domain::source::SourceFile;
 use crate::domain::wording::{Detail, DetailCode};
 use crate::media::encoders::Encoder;
@@ -30,6 +31,19 @@ pub enum BuildError {
 
     #[error("the ladder was built but is not served whole: {}", .0.join(", "))]
     Incomplete(Vec<String>),
+
+    /// The set will not fit, and that was worked out before a byte of it was made.
+    ///
+    /// **A bar, not a warning.** Room does not appear out of consent, and a set that runs
+    /// into the end of the disk halfway leaves variants of the first rungs being served and
+    /// the next one half written — the state hardest to reason about from the outside.
+    #[error("the set needs {needed} bytes and {free} are free, short by {short_by}")]
+    NotEnoughSpace {
+        needed: u64,
+        free: u64,
+        short_by: u64,
+        rungs: usize,
+    },
 
     #[error("the build was cancelled")]
     Cancelled,
@@ -97,6 +111,13 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     );
 
     let mut notices: Vec<Detail> = work.iter().flat_map(|w| w.notices.clone()).collect();
+
+    // **Will it fit?** Asked once, here, before a byte is encoded. A set is hours of work
+    // and tens of gigabytes; running into the end of the disk halfway leaves the first
+    // rungs being served, the next one half written, and a person with no idea which is
+    // which.
+    room_for_the_set(job, &work, &mut notices).await?;
+
     let mut prepared = 0usize;
     let mut reused = 0usize;
 
@@ -202,6 +223,78 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
 /// Takes its parts rather than the whole job so that it can be checked against a real
 /// server on its own: what is uncertain here is how the shell behaves when the file is not
 /// there, and that is not something to reason about.
+/// Refuse a set that will not fit, before any of it is made.
+///
+/// **A bar, not a warning**: room does not appear out of consent. The upload path keeps the
+/// same distinction and for the same reason (`commands::upload::space_error`).
+///
+/// What is already on the server is credited at what it actually weighs, in one listing
+/// rather than a round trip per variant. Without that, rebuilding a set to change one rung
+/// would be judged as though the whole set had to be made again, and refused on a disk that
+/// had room for it all along.
+async fn room_for_the_set(
+    job: &BuildJob<'_>,
+    work: &[VariantWork],
+    notices: &mut Vec<Detail>,
+) -> Result<(), BuildError> {
+    // What the audio will weigh. A re-encoded track is held to the budget; a copied one is
+    // whatever the source carries, and a multichannel track carries far more. Where the
+    // source does not say, the budget is the floor rather than the answer — guessing low
+    // here is guessing in the one direction this check exists to avoid.
+    let audio_bps = job
+        .source
+        .audio_tracks
+        .get(job.audio_track)
+        .and_then(|t| t.bitrate_bps)
+        .unwrap_or(ladder_size::AUDIO_BUDGET_BPS)
+        .max(ladder_size::AUDIO_BUDGET_BPS);
+
+    let bitrates: Vec<u64> = work.iter().map(|w| w.rung.bitrate_bps).collect();
+    let needed = ladder_size::bytes_for_set(&bitrates, audio_bps, job.source.duration_s);
+    if needed == 0 {
+        // The source's length is unknown, so there is nothing to reckon with. Said out loud:
+        // a check that could not run must not look like one that ran and was content.
+        notices.push(Detail::new(DetailCode::LadderSpaceUnknown));
+        return Ok(());
+    }
+
+    let disk = match crate::server::disk::usage(job.conn, job.video_dir).await {
+        Ok(disk) => disk,
+        Err(e) => {
+            // The server would not say. That is not a reason to refuse hours of work —
+            // it is a reason to say the check did not happen.
+            tracing::warn!(error = %e, "could not read the free space before building a set");
+            notices.push(Detail::new(DetailCode::LadderSpaceUnknown));
+            return Ok(());
+        }
+    };
+
+    let already: u64 = match crate::server::listing::list(job.conn, job.video_dir).await {
+        Ok(entries) => entries
+            .iter()
+            .filter(|e| work.iter().any(|w| w.file == e.name))
+            .map(|e| e.size_bytes)
+            .sum(),
+        // No credit rather than a wrong one: over-counting what is needed refuses a build
+        // that would have fitted, and that costs a person one look at the number.
+        Err(_) => 0,
+    };
+
+    match crate::server::free_space::check(&disk, needed, already) {
+        crate::server::free_space::SpaceVerdict::Fits => Ok(()),
+        crate::server::free_space::SpaceVerdict::NotEnough {
+            needed,
+            free,
+            short_by,
+        } => Err(BuildError::NotEnoughSpace {
+            needed,
+            free,
+            short_by,
+            rungs: work.len(),
+        }),
+    }
+}
+
 pub async fn variant_already_there(
     conn: &Connection,
     video_dir: &str,

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::error::{AppError, ErrorCode, Result};
 use crate::domain::ladder::{self, Layout, NotBuildable, Objection, Plan, Rung, SourceFacts};
-use crate::domain::wording::Detail;
+use crate::domain::wording::{Detail, DetailCode};
 use crate::media::{encoders, ffmpeg, measure, probe_complexity};
 use crate::store::measurements;
 use crate::tasks::state::TaskKind;
@@ -360,6 +360,20 @@ fn build_error(e: crate::tasks::ladder_build::BuildError) -> AppError {
         E::Incomplete(which) => {
             AppError::new(ErrorCode::LadderIncomplete).with_cause(which.join(", "))
         }
+        E::NotEnoughSpace {
+            needed,
+            free,
+            short_by,
+            rungs,
+        } => AppError::new(ErrorCode::RemoteDiskFull)
+            .with_detail(
+                Detail::new(DetailCode::LadderNotEnoughSpace)
+                    .with("short_by", short_by)
+                    .with("needed", needed)
+                    .with("free", free)
+                    .with("rungs", rungs as u64),
+            )
+            .with_cause(format!("short_by={short_by}")),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }

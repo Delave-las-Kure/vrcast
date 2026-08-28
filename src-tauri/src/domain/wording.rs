@@ -272,6 +272,20 @@ detail_codes! {
     UploadNameReserved => "UPLOAD_NAME_RESERVED",
     /// `short_by`, `needed`, `free` — bytes.
     NotEnoughSpace => "NOT_ENOUGH_SPACE",
+    /// `short_by`, `needed`, `free` — bytes; `rungs` — how many variants were counted.
+    ///
+    /// **Not `NotEnoughSpace`**, and the difference is the word "about". For a transfer the
+    /// size is the file's, known to the byte. For a set it is a reckoning made before
+    /// anything is encoded — and somebody told "25 GB are needed" who then frees exactly
+    /// 25 GB has been misled by a number that was never that precise. The count of rungs is
+    /// there because it is what a person can actually act on: drop one and it fits.
+    LadderNotEnoughSpace => "LADDER_NOT_ENOUGH_SPACE",
+    /// The room could not be worked out — the source's length is unknown, or the server
+    /// would not say what is free.
+    ///
+    /// Said rather than swallowed: a check that cannot run must not look like one that ran
+    /// and was content.
+    LadderSpaceUnknown => "LADDER_SPACE_UNKNOWN",
     /// `name` — the file that will be replaced.
     NameWillBeReplaced => "NAME_WILL_BE_REPLACED",
     CdnKeepsOldCopy => "CDN_KEEPS_OLD_COPY",

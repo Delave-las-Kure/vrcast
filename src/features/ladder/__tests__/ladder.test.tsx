@@ -42,9 +42,14 @@ vi.mock("../../../shared/ipc", async () => {
       ladderBuild: (...a: unknown[]) => mockBuild(...a),
     },
     onTaskDone: async (handler: (e: unknown) => void) => {
-      finish = handler as typeof finish;
+      const mine = handler as typeof finish;
+      finish = mine;
+      // **Only its own.** A component unmounting from an earlier test runs its cleanup
+      // whenever React gets round to it, and a plain `finish = null` there wipes out the
+      // subscription the *current* test just made — so the event has nobody to reach and
+      // the test fails on a timeout, sometimes. The same flake as the mascot's, 2026-08-28.
       return () => {
-        finish = null;
+        if (finish === mine) finish = null;
       };
     },
   };
