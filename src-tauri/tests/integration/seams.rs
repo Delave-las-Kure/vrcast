@@ -154,6 +154,14 @@ async fn measuring_quality_runs_whole_and_picks_up_where_it_stopped() {
         chunk_starts: chunks::reference_chunks(&seconds, 5),
         chunk_s: 5,
         borrowed_from: None,
+        donor_anchor_mbps: None,
+        material: Some(measurements::Material {
+            codec: String::from("h264"),
+            pix_fmt: String::from("yuv420p"),
+            color_transfer: None,
+            duration_s: seconds.len() as f64,
+            peak_bps: None,
+        }),
     };
 
     let encoder = an_encoder();

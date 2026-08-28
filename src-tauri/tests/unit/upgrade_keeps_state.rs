@@ -34,6 +34,8 @@ const RELEASED: &[&str] = &[
     include_str!("../../src/store/migrations/0010_process_owner.sql"),
     include_str!("../../src/store/migrations/0011_task_notices.sql"),
     include_str!("../../src/store/migrations/0012_task_batch.sql"),
+    include_str!("../../src/store/migrations/0013_donor_anchor.sql"),
+    include_str!("../../src/store/migrations/0014_material.sql"),
 ];
 
 /// A directory that removes itself, so a failing test does not leave databases behind.

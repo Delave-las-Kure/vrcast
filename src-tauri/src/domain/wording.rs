@@ -300,6 +300,18 @@ detail_codes! {
     ObjectionBadStep => "OBJECTION_BAD_STEP",
     /// The batch stopped here rather than building something it objects to (T439).
     ChainStoppedByObjection => "CHAIN_STOPPED_BY_OBJECTION",
+
+    // Why one film's measurement cannot be lent to another (T431). Which field it was, so
+    // that a person is not left comparing two files by eye against a list of eight things
+    // this application looked at.
+    LendFrameDiffers => "LEND_FRAME_DIFFERS",
+    LendFpsDiffers => "LEND_FPS_DIFFERS",
+    LendNativeHeightDiffers => "LEND_NATIVE_HEIGHT_DIFFERS",
+    LendCodecDiffers => "LEND_CODEC_DIFFERS",
+    LendPixelFormatDiffers => "LEND_PIXEL_FORMAT_DIFFERS",
+    LendColourTransferDiffers => "LEND_COLOUR_TRANSFER_DIFFERS",
+    LendTooShort => "LEND_TOO_SHORT",
+    LendMaterialNotKnown => "LEND_MATERIAL_NOT_KNOWN",
     /// `name` — the file that will be replaced.
     NameWillBeReplaced => "NAME_WILL_BE_REPLACED",
     CdnKeepsOldCopy => "CDN_KEEPS_OLD_COPY",

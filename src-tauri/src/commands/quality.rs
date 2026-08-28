@@ -394,8 +394,8 @@ pub mod api {
                 quality_measure_result(state, &borrowed.source_key, &borrowed.codec).await
             }
             Err(LendRefusal::NothingToLend) => Err(AppError::new(ErrorCode::MeasurementNotFound)),
-            Err(LendRefusal::DifferentMaterial) => {
-                Err(AppError::new(ErrorCode::MeasurementDifferentMaterial))
+            Err(LendRefusal::DifferentMaterial(why)) => {
+                Err(AppError::new(ErrorCode::MeasurementDifferentMaterial).detail(why.code()))
             }
         }
     }
@@ -460,7 +460,21 @@ async fn prepare(request: &MeasureRequest) -> Result<(Run, encoders::Encoder, Ve
             anchor_mbps,
             chunk_starts,
             chunk_s: CHUNK_S as u64,
+            // Kept rather than thrown away (T434). Every one of these was read a few lines
+            // above and dropped, and lending then compared five fields and called it "the
+            // same material".
+            material: Some(measurements::Material {
+                codec: source.video_codec.clone(),
+                pix_fmt: source.pix_fmt.clone(),
+                color_transfer: source.color_transfer.clone(),
+                duration_s: source.duration_s,
+                peak_bps: source.peak_bps,
+            }),
+            // A freshly prepared run knows nothing about any loan. `begin` keeps what is
+            // already stored rather than taking these (T430) — writing `None` here does not
+            // erase a mark, and must not be made to.
             borrowed_from: None,
+            donor_anchor_mbps: None,
         },
         encoder,
         notices,

@@ -455,6 +455,22 @@ export const en: Catalogue = {
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
       "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
+    LEND_FRAME_DIFFERS:
+      "A different frame size. A measurement is tied to heights, and the heights are tied to the source's frame.",
+    LEND_FPS_DIFFERS:
+      "A different frame rate. At the same bits per second each frame gets a different share, and the point where quality falls away sits elsewhere.",
+    LEND_NATIVE_HEIGHT_DIFFERS:
+      "The material's real height differs: one is upscaled and the other is not (or they were upscaled from different heights). The height above which no more detail appears is not the same for both.",
+    LEND_CODEC_DIFFERS:
+      "The sources are in different codecs. The codec decides how much picture a bit buys, which is the very question a measurement answers. This used to compare only whether the source was HEVC, so AV1 and VP9 passed as H.264.",
+    LEND_PIXEL_FORMAT_DIFFERS:
+      "A different pixel format: 10-bit holds a gradient where 8-bit bands. At one bitrate that is a different picture.",
+    LEND_COLOUR_TRANSFER_DIFFERS:
+      "Different transfer curves (SDR against HDR). HDR spends its bits elsewhere, and a measurement of one says nothing about the other.",
+    LEND_TOO_SHORT:
+      "The film is too short: the measurement runs on the donor's chunks, and the last of them begins after this file ends. There would be nothing there to measure.",
+    LEND_MATERIAL_NOT_KNOWN:
+      "One of the two measurements does not record what material it was made on: it is older than these columns. Vouching for what nobody looked at will not do — measure again.",
     LADDER_NO_ROOM_HERE:
       "This machine has no room for one variant: {needed} bytes are needed, {free} are free, {short_by} short. Writing to {at}. Variants are made one at a time and removed as soon as they are sent, so one is all that is needed — and there is nowhere to put even that. Free some space, or choose another folder in the settings.",
     LADDER_SPACE_UNKNOWN:
