@@ -58,6 +58,9 @@ pub struct BuildRequest {
     pub audio_track: usize,
     #[serde(default = "yes")]
     pub prefer_hardware: bool,
+    /// Which batch this build belongs to (T445). `None` for a build a person started.
+    #[serde(default)]
+    pub batch: Option<crate::tasks::store::Batch>,
 }
 
 /// Where a ladder's rungs came from.
@@ -245,9 +248,10 @@ pub mod api {
 
         let task_id = state
             .tasks
-            .submit(
+            .submit_in_batch(
                 TaskKind::BuildLadder,
                 Some(request.server_id.clone()),
+                request.batch.clone(),
                 move |ctx| async move {
                     let conn = crate::server::gate::open(
                         secrets.as_ref(),

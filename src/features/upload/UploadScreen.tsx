@@ -22,6 +22,7 @@ import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue } from "../../shared/i18n";
 import { fill } from "../../shared/i18n/render";
 import { isReady, useActiveServer, useServers } from "../servers/store";
+import { basename } from "../shared/names";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { PreflightWarnings, canConfirm } from "./PreflightWarnings";
 
@@ -38,12 +39,6 @@ const LIMITS: Array<{ key: keyof Catalogue["ui"]["upload"]; value: number | null
   { key: "limit50", value: 6_250_000 },
   { key: "limit100", value: 12_500_000 },
 ];
-
-/** The file name out of a full path — with either separator. */
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/);
-  return parts[parts.length - 1] ?? path;
-}
 
 export function UploadScreen() {
   const profiles = useServers((s) => s.profiles);

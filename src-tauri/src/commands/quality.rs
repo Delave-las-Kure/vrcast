@@ -42,6 +42,13 @@ pub struct MeasureRequest {
     /// season in, come back to a season on the server.
     #[serde(default)]
     pub then_build: Option<ThenBuild>,
+    /// Which batch this measurement belongs to, and what to call the film (T445).
+    ///
+    /// Carried on to the build the chain starts, so that "stop the whole batch" reaches both
+    /// halves of every film. A batch whose builds were outside it would go on encoding for
+    /// hours after somebody pressed stop.
+    #[serde(default)]
+    pub batch: Option<crate::tasks::store::Batch>,
 }
 
 /// What the build after a measurement needs that the measurement does not already know.
@@ -209,43 +216,49 @@ pub mod api {
         let chained = state.clone();
         let for_build = request.clone();
 
+        let batch = request.batch.clone();
         let task_id = state
             .tasks
-            .submit(TaskKind::MeasureQuality, None, move |ctx| async move {
-                let job = MeasureJob {
-                    source: Path::new(&source),
-                    run: &run,
-                    encoder: &encoder,
-                    db: &db,
-                };
-                let outcome = quality_measure::run(&job, &ctx).await.map_err(to_error)?;
-                ctx.report_important(1.0, DetailCode::StageDone);
-                // A partial measurement is an argument against building from it — the
-                // optimum may be outside what was measured — and it used to go no further
-                // than this log line (T416).
-                for notice in &outcome.notices {
-                    ctx.add_notice(notice.clone());
-                }
-                tracing::info!(
-                    measured = outcome.measured,
-                    total = outcome.total,
-                    rungs = outcome.selection.rungs.len(),
-                    "quality measured"
-                );
-
-                // **And on to the build, if that is what was asked for** (T438). At the very
-                // end, and after the cancellation check: a person who stopped the measurement
-                // did not ask for hours of encoding to start in its place.
-                if let Some(onward) = onward {
-                    if ctx.is_cancelled() {
-                        // Stopped means stopped. Somebody who broke off a measurement did not
-                        // ask for hours of encoding to begin in its place.
-                        return Ok(());
+            .submit_in_batch(
+                TaskKind::MeasureQuality,
+                None,
+                batch,
+                move |ctx| async move {
+                    let job = MeasureJob {
+                        source: Path::new(&source),
+                        run: &run,
+                        encoder: &encoder,
+                        db: &db,
+                    };
+                    let outcome = quality_measure::run(&job, &ctx).await.map_err(to_error)?;
+                    ctx.report_important(1.0, DetailCode::StageDone);
+                    // A partial measurement is an argument against building from it — the
+                    // optimum may be outside what was measured — and it used to go no further
+                    // than this log line (T416).
+                    for notice in &outcome.notices {
+                        ctx.add_notice(notice.clone());
                     }
-                    then_build(&chained, &for_build, &onward, &ctx).await?;
-                }
-                Ok(())
-            })
+                    tracing::info!(
+                        measured = outcome.measured,
+                        total = outcome.total,
+                        rungs = outcome.selection.rungs.len(),
+                        "quality measured"
+                    );
+
+                    // **And on to the build, if that is what was asked for** (T438). At the very
+                    // end, and after the cancellation check: a person who stopped the measurement
+                    // did not ask for hours of encoding to start in its place.
+                    if let Some(onward) = onward {
+                        if ctx.is_cancelled() {
+                            // Stopped means stopped. Somebody who broke off a measurement did not
+                            // ask for hours of encoding to begin in its place.
+                            return Ok(());
+                        }
+                        then_build(&chained, &for_build, &onward, &ctx).await?;
+                    }
+                    Ok(())
+                },
+            )
             .await?;
 
         Ok(task_id)
@@ -304,6 +317,9 @@ pub mod api {
                 rungs: plan.plan.rungs.clone(),
                 audio_track: onward.audio_track,
                 prefer_hardware: measured.prefer_hardware,
+                // The same batch as the measurement that started it. A build outside its
+                // batch would go on encoding for hours after somebody pressed stop.
+                batch: measured.batch.clone(),
             },
         )
         .await?;

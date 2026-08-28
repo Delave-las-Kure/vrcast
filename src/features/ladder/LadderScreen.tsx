@@ -20,6 +20,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { MeasuredPoints } from "./MeasuredPoints";
+import { slugOf } from "../shared/names";
 import { RungEditor } from "./RungEditor";
 import { useActiveServer } from "../servers/store";
 import { useLang, useT } from "../../shared/i18n";
@@ -162,20 +163,6 @@ function MeasureOffer({
  * Separate from [`LadderScreen`] so that the screen itself can be checked without a file
  * dialogue — the dialogue belongs to the system and cannot be opened in a test.
  */
-/**
- * The medium's directory, guessed from the file's own name.
- *
- * A guess, and only until the person is given somewhere to say otherwise: it is the same
- * name the upload screen offers, so a set built here lands beside the file it came from.
- */
-function slugOf(path: string): string {
-  const name = path.split(/[\\/]/).pop() ?? "";
-  return name
-    .replace(/\.[^.]+$/, "")
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .toLowerCase();
-}
-
 export function LadderPage() {
   const t = useT();
   const words = t.ui.ladder;

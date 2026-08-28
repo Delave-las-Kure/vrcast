@@ -14,6 +14,7 @@ import { About } from "../features/shared/About";
 import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { DeployPage } from "../features/deploy/DeployPage";
 import { LadderPage } from "../features/ladder/LadderScreen";
+import { BatchScreen } from "../features/batch/BatchScreen";
 import { useActiveServer } from "../features/servers/store";
 import { LimitsList } from "../features/viewers/LimitsList";
 import { Appearance } from "../features/settings/Appearance";
@@ -75,6 +76,7 @@ function AppShell() {
           <Route path="/upload" element={<UploadScreen />} />
           <Route path="/about" element={<About />} />
           <Route path="/ladder" element={<LadderPage />} />
+          <Route path="/batch" element={<BatchScreen />} />
           <Route path="/viewers" element={<ViewersScreen />} />
           <Route path="/deploy" element={<DeployPage />} />
           <Route

@@ -617,6 +617,7 @@ fn nothing_the_screens_send_is_quietly_dropped() {
             rungs: Vec::new(),
             audio_track: 0,
             prefer_hardware: true,
+            batch: None,
         },
     );
     nothing_sent_is_dropped(
@@ -627,6 +628,7 @@ fn nothing_the_screens_send_is_quietly_dropped() {
             native_height: None,
             prefer_hardware: true,
             then_build: None,
+            batch: None,
         },
     );
     nothing_sent_is_dropped(

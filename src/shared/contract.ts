@@ -927,6 +927,8 @@ export interface LadderPlanRequest {
 
 /** Build the quality set on a server. */
 export interface LadderBuildRequest {
+  /** Which batch this build belongs to (T445). Null for one a person started. */
+  batch?: Batch | null;
   server_id: string;
   /** The source on this machine the variants are made from. */
   path: string;
@@ -950,6 +952,9 @@ export interface QualityMeasureRequest {
    *  a screen. By then the window may be shut or in the tray, and a decision taken by a
    *  closed window is taken by nobody. That is the whole of what a batch is. */
   then_build?: ThenBuild | null;
+  /** Which batch this measurement belongs to, and what to call the film (T445). Carried on
+   *  to the build the chain starts, so "stop the whole batch" reaches both halves. */
+  batch?: Batch | null;
 }
 
 /** What the build after a measurement needs that the measurement does not already know.

@@ -159,8 +159,10 @@ fn the_chain_is_in_the_core_and_not_on_a_screen() {
     )
     .expect("quality.rs would not read");
 
+    // Either way in — `submit` or `submit_in_batch`. Named by the kind rather than by the
+    // function, because the function is the part that has already changed once.
     let at = source
-        .find("submit(TaskKind::MeasureQuality")
+        .find("TaskKind::MeasureQuality,")
         .expect("the measurement no longer submits a task of its own kind");
     let closure = &source[at..];
     let ends = closure

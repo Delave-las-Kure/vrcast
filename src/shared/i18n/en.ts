@@ -540,6 +540,20 @@ export const en: Catalogue = {
       theme: { light: "Light", dark: "Dark", system: "Follow the system" },
     },
 
+    batch: {
+      title: "Batch",
+      explain:
+        "Put in as many videos as you like — a whole season. Each is measured, and its set of qualities is built straight from that measurement. You can close the window: which rungs to build is decided inside the application, not on this screen.",
+      pick: "Choose videos",
+      drop: "remove",
+      dropOne: "Remove {film} from the batch",
+      count: "{n} video(s) in the batch",
+      start: "Start the batch",
+      starting: "Starting…",
+      started: "{n} video(s) started. The rest is on the Tasks tab.",
+      noServer: "Choose a server first: there is nowhere to build a set.",
+    },
+
     ladder: {
       columnBuild: "Build",
       buildThisRung: "Build the {mbps} Mbit/s rung",
@@ -934,6 +948,7 @@ export const en: Catalogue = {
       library: "Library",
       convert: "Preparation",
       upload: "Upload",
+      batch: "Batch",
       ladder: "Quality",
       viewers: "Viewers",
       limits: "Limits",
