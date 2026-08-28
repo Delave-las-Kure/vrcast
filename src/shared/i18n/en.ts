@@ -551,7 +551,14 @@ export const en: Catalogue = {
         "The application encodes three short chunks — a light one, a middling one and a heavy one — at several qualities, and looks at what actually comes out.",
       measureTakes: "About {minutes} min: {points} points",
       measureTakesResume: "About {minutes} min: {points} points left of {total}",
-      estimateFromThisMachine: "Estimated from your own earlier measurements ({points} points)",
+      measureStandsOn: "What this estimate stands on",
+      measureChunks: "Measured on three pieces of the film, at minute {starts}. Not consecutive and not from the start: the opening is usually easier than what follows.",
+      measureAnchor: "The top of the grid is {mbps} Mbit/s: that is what the complexity probe asked for on this material.",
+      measureNothingLeft: "The whole grid is measured — there is nothing left to run.",
+      estimateFromThisMachine:
+        "Estimated from your own earlier measurements: {points} points at {seconds} s each — {times} times the modelled speed.",
+      estimateNotAsked:
+        "Your earlier measurements could not be read, so this estimate comes from the model. That is not the same as having none: there may be some, and then this figure is off.",
       estimateFromModel:
         "Estimated from a measurement on the developer's machine — yours may differ. It corrects itself after your very first measured point.",
       measureStart: "Measure",
@@ -591,6 +598,10 @@ export const en: Catalogue = {
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",
       vmafBorrowed: "VMAF {value}, from another file",
+      measuredTitle: "What was measured ({points} points)",
+      measuredColumnVmaf: "VMAF",
+      measuredColumnActual: "Came out at",
+      measuredChosen: "taken into the ladder",
       droppedAbove:
         "Dropped as excessive: {list}. Past the quality target those bits are paid for by every viewer and seen by none.",
 

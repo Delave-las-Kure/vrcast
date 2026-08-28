@@ -44,6 +44,41 @@ fn yes() -> bool {
     true
 }
 
+/// What the estimate of how long a measurement will take is standing on.
+///
+/// **Three states, because there are three situations and they mean different things to the
+/// person deciding.** Having no timings of your own is ordinary and the cost model is a fair
+/// substitute. Not being able to read the timings is a fault, and telling somebody their
+/// estimate comes from the model when it might have come from their own hundred points is a
+/// wrong answer wearing the clothes of a right one.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum MachineSpeed {
+    /// Corrected by this machine's own past runs.
+    Known {
+        /// Hundredths: 100 is "as the model says", 300 is three times slower.
+        factor_x100: u32,
+        /// How many timed points it rests on.
+        points: usize,
+        /// Tenths of a second: what a point has actually been taking here.
+        seconds_per_point_x10: u32,
+    },
+    /// Nothing has been timed on this machine yet, so the cost model stands as it is.
+    NothingTimedYet,
+    /// The store could not be asked — which is not the same as its having nothing in it.
+    NotAsked,
+}
+
+impl MachineSpeed {
+    /// What to multiply the model's estimate by. One, wherever nothing is known.
+    fn factor(self) -> f64 {
+        match self {
+            Self::Known { factor_x100, .. } => f64::from(factor_x100) / 100.0,
+            Self::NothingTimedYet | Self::NotAsked => 1.0,
+        }
+    }
+}
+
 /// What measuring this film will involve, before anything is started.
 #[derive(Debug, Clone, Serialize)]
 pub struct MeasurePreview {
@@ -57,12 +92,8 @@ pub struct MeasurePreview {
     /// without one a person cannot tell whether to start this before dinner or before
     /// bed.
     pub about_seconds: u64,
-    /// How many timed points on this machine the estimate rests on.
-    ///
-    /// Zero means it rests on the cost model this project measured on its own machine,
-    /// which is a different machine. The interface says which, because the difference
-    /// between twenty minutes and two hours is the whole decision.
-    pub estimate_from_points: usize,
+    /// What the estimate above rests on (T423, T424).
+    pub machine: MachineSpeed,
     /// Where the reference chunks fall, in seconds into the film.
     pub chunk_starts: Vec<u64>,
     pub anchor_mbps: u64,
@@ -106,17 +137,35 @@ pub mod api {
             run.chunk_s,
             run.chunk_starts.len(),
         );
-        let (factor, from_points) = measurements::machine_factor(&state.db)
-            .ok()
-            .flatten()
-            .unwrap_or((1.0, 0));
+        // **Three answers, and they used to be two.** `.ok().flatten().unwrap_or((1.0, 0))`
+        // turned a store that could not be read into a store with nothing in it, and the
+        // screen then said the estimate came from the cost model — which it did, but not for
+        // the reason given. Somebody with a hundred timed points would be told their own
+        // timings were not being used, with no hint that anything had gone wrong (T424).
+        let machine = match measurements::machine_factor(&state.db) {
+            Ok(Some(speed)) => MachineSpeed::Known {
+                factor_x100: (speed.factor * 100.0)
+                    .round()
+                    .clamp(1.0, f64::from(u32::MAX)) as u32,
+                points: speed.points,
+                seconds_per_point_x10: (speed.seconds_per_point * 10.0)
+                    .round()
+                    .clamp(0.0, f64::from(u32::MAX)) as u32,
+            },
+            Ok(None) => MachineSpeed::NothingTimedYet,
+            Err(e) => {
+                tracing::warn!(error = %e, "the timings of past points could not be read");
+                MachineSpeed::NotAsked
+            }
+        };
+        let factor = machine.factor();
 
         Ok(MeasurePreview {
             source_key: run.source_key.clone(),
             points,
             already_measured: already,
             about_seconds: (points.saturating_sub(already) as f64 * per_point * factor) as u64,
-            estimate_from_points: from_points,
+            machine,
             chunk_starts: run.chunk_starts.clone(),
             anchor_mbps: run.anchor_mbps,
             encoder,

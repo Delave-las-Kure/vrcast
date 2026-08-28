@@ -970,6 +970,11 @@ export interface LadderPreview {
   /** What the complexity probe found, when it ran. */
   anchor_mbps: number | null;
   verdict: LadderVerdict;
+  /** Which codec these rungs are for. A measurement does not carry between codecs. */
+  codec: string;
+  /** Which measurement these rungs came out of, when they came out of one (T420). Null for
+   *  a ladder from the formula: nothing was measured, and there is nothing to look into. */
+  measurement_key: string | null;
   notices: Detail[];
 }
 
@@ -980,6 +985,26 @@ export interface SourceMeasured {
   worst: { at_s: number; bitrate_bps: number }[];
   seconds: number;
 }
+
+/**
+ * What the estimate of how long a measurement will take is standing on.
+ *
+ * Three states, because there are three situations and they mean different things to
+ * whoever is deciding whether to start. Having no timings of your own is ordinary, and the
+ * cost model is a fair substitute. Not being able to read the timings is a fault, and
+ * saying "from the model" then would be a wrong answer wearing the clothes of a right one.
+ */
+export type MachineSpeed =
+  | {
+      state: "known";
+      /** Hundredths: 100 is "as the model says", 300 is three times slower. */
+      factor_x100: number;
+      points: number;
+      /** Tenths of a second: what a point has actually been taking here. */
+      seconds_per_point_x10: number;
+    }
+  | { state: "nothing_timed_yet" }
+  | { state: "not_asked" };
 
 /** What measuring this film would involve, before anything is started (FR-147). */
 export interface MeasurePreview {
@@ -995,7 +1020,8 @@ export interface MeasurePreview {
    * How many timed points on this machine the estimate rests on. Zero means it rests on
    * the model measured on somebody else's machine, and the interface says so.
    */
-  estimate_from_points: number;
+  /** What the estimate above is standing on (T423, T424). */
+  machine: MachineSpeed;
   notices: Detail[];
 }
 

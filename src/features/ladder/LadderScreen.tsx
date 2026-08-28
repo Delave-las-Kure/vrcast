@@ -19,6 +19,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useSearchParams } from "react-router-dom";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { MeasuredPoints } from "./MeasuredPoints";
 import { RungEditor } from "./RungEditor";
 import { useActiveServer } from "../servers/store";
 import { useLang, useT } from "../../shared/i18n";
@@ -27,6 +28,7 @@ import { ipc, onTaskDone } from "../../shared/ipc";
 import type {
   AppError,
   LadderPreview,
+  MachineSpeed,
   MeasurePreview,
   Detail,
   Rung,
@@ -57,6 +59,19 @@ function Provenance({ preview }: { preview: LadderPreview }) {
 }
 
 /** What measuring would cost, before anybody agrees to it (FR-147). */
+/** Where the estimate came from, said in the language in use. */
+function estimateFrom(
+  machine: MachineSpeed,
+  words: { estimateFromThisMachine: string; estimateFromModel: string; estimateNotAsked: string },
+): string {
+  if (machine.state === "nothing_timed_yet") return words.estimateFromModel;
+  if (machine.state === "not_asked") return words.estimateNotAsked;
+  return words.estimateFromThisMachine
+    .replace("{points}", String(machine.points))
+    .replace("{seconds}", (machine.seconds_per_point_x10 / 10).toFixed(1))
+    .replace("{times}", (machine.factor_x100 / 100).toFixed(1));
+}
+
 function MeasureOffer({
   preview,
   onStart,
@@ -67,35 +82,73 @@ function MeasureOffer({
   running: boolean;
 }) {
   const t = useT();
+  const { lang } = useLang();
   const words = t.ui.ladder;
   const left = Math.max(0, preview.points - preview.already_measured);
+  // **The floor of one minute is for a short job, not for no job** (T425). `Math.max(1, …)`
+  // is right while there is something left to do — "about 0 minutes" reads as a mistake —
+  // and wrong when there is nothing: it offers a minute of work on a grid that is already
+  // measured, and a person who presses the button gets an immediate finish and no idea why.
   const minutes = Math.max(1, Math.round(preview.about_seconds / 60));
+  const nothingLeft = left === 0;
 
   return (
     <section aria-label={words.measureTitle}>
       <h3>{words.measureTitle}</h3>
       <p>{words.measureExplain}</p>
       <p data-testid="how-long">
-        {preview.already_measured > 0
-          ? words.measureTakesResume
-              .replace("{minutes}", String(minutes))
-              .replace("{points}", String(left))
-              .replace("{total}", String(preview.points))
-          : words.measureTakes
-              .replace("{minutes}", String(minutes))
-              .replace("{points}", String(preview.points))}
+        {nothingLeft
+          ? words.measureNothingLeft
+          : preview.already_measured > 0
+            ? words.measureTakesResume
+                .replace("{minutes}", String(minutes))
+                .replace("{points}", String(left))
+                .replace("{total}", String(preview.points))
+            : words.measureTakes
+                .replace("{minutes}", String(minutes))
+                .replace("{points}", String(preview.points))}
       </p>
       {/*
         Whose machine the estimate is from. The difference between twenty minutes and two
         hours is the whole decision, and an estimate taken on somebody else's machine has no
         business pretending otherwise.
+
+        Three answers, not two (T423, T424). "From the model because you have no timings" and
+        "from the model because your timings could not be read" look the same to a person and
+        are not the same thing at all: the second may be wrong by a factor of three, and only
+        saying so gives anybody a reason to doubt the number.
       */}
-      <p data-testid="estimate-from">
-        {preview.estimate_from_points > 0
-          ? words.estimateFromThisMachine.replace("{points}", String(preview.estimate_from_points))
-          : words.estimateFromModel}
-      </p>
-      <button type="button" onClick={onStart} disabled={running}>
+      <p data-testid="estimate-from">{estimateFrom(preview.machine, words)}</p>
+      {/* What the core worked out about this material and had nowhere to say (T422). The
+          probe can fail, or run on a card it was not calibrated for, and either makes the
+          top of the grid a different kind of number — which is worth knowing *before*
+          agreeing to an hour of encoding, not after. `preview.notices` was carried across
+          the boundary and never read. */}
+      {preview.notices.length > 0 && (
+        <ul data-testid="offer-notices">
+          {preview.notices.map((notice, i) => (
+            <li key={i} role="note">
+              {renderDetail(notice, t, lang)}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Folded away: wanted by whoever doubts the estimate, and by nobody else. */}
+      <details data-testid="stands-on">
+        <summary>{words.measureStandsOn}</summary>
+        <p>
+          {fill(
+            words.measureChunks,
+            { starts: preview.chunk_starts.map((at) => Math.round(at / 60)).join(", ") },
+            t,
+            lang,
+          )}
+        </p>
+        <p>{fill(words.measureAnchor, { mbps: preview.anchor_mbps }, t, lang)}</p>
+      </details>
+
+      <button type="button" onClick={onStart} disabled={running || nothingLeft}>
         {words.measureStart}
       </button>
       {running && <p role="status">{words.measureRunning}</p>}
@@ -462,6 +515,12 @@ export function LadderScreen({
       >
         {building ? words.building : words.build}
       </button>
+      {/* The evidence behind the rungs, folded away (T420, T421). Only where there is a
+          measurement to look into: a ladder from the formula measured nothing. */}
+      {preview?.measurement_key && (
+        <MeasuredPoints sourceKey={preview.measurement_key} codec={preview.codec} />
+      )}
+
       {measured.length > 0 && (
         <ul data-testid="measure-notices">
           {measured.map((notice, i) => (

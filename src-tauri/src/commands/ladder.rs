@@ -89,6 +89,16 @@ pub struct LadderPreview {
     /// What the checker says about these rungs, so that an interface has it without asking
     /// again.
     pub verdict: LadderVerdict,
+    /// Which codec these rungs are for. A measurement does not carry between codecs, and a
+    /// screen looking one up has to ask for the same pair the plan was made from.
+    pub codec: String,
+    /// Which measurement these rungs came out of, when they came out of one (T420).
+    ///
+    /// Without it a screen cannot ask `quality_measure_result` what was actually measured —
+    /// which is the only answer there is to "why does the top rung stop at 22 and not 35",
+    /// and it is worked out and stored already. A ladder from the formula has none: nothing
+    /// was measured, and that is what the provenance line says.
+    pub measurement_key: Option<String>,
     pub notices: Vec<Detail>,
 }
 
@@ -181,6 +191,9 @@ pub mod api {
             from: LadderSource::Formula,
             source,
             anchor_mbps: probe.measured_bps.map(|bps| (bps / 1_000_000).max(1)),
+            codec: request.codec.clone(),
+            // Nothing was measured, so there is nothing to look into.
+            measurement_key: None,
             notices,
         })
     }
@@ -354,6 +367,8 @@ fn measured_plan(
         },
         source: *source,
         anchor_mbps: None,
+        codec: request.codec.clone(),
+        measurement_key: Some(key),
         notices,
     }))
 }

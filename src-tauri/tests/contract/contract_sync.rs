@@ -934,7 +934,7 @@ fn the_measure_preview_says_what_it_actually_contains() {
         points: 12,
         already_measured: 0,
         about_seconds: 180,
-        estimate_from_points: 0,
+        machine: vrcast_studio_lib::commands::quality::MachineSpeed::NothingTimedYet,
         chunk_starts: vec![1, 2, 3],
         anchor_mbps: 8,
         // The one that matters: an internally tagged enum is an object, on both variants.
@@ -1140,10 +1140,7 @@ fn interface_sources() -> String {
 /// **The list is the point, not the exception**: a reserved wording nobody has named is a
 /// wording everybody assumes is on screen. Nothing goes in without a task number, and
 /// `no_reserved_wording_is_already_on_a_screen` makes the list shrink on its own.
-const RESERVED: [(&str, &str); 1] = [(
-    "droppedAbove",
-    "T421 — what was left out above the quality target, which no screen draws yet",
-)];
+const RESERVED: [(&str, &str); 0] = [];
 
 /// Blocks whose leaves are named by the **core**, not by any screen, each with the check that
 /// holds them to it.

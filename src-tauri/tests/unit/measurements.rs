@@ -219,11 +219,18 @@ fn the_estimate_learns_what_this_machine_really_does() {
         .unwrap();
     }
 
-    let (factor, from) = machine_factor(&db).unwrap().expect("nothing was learned");
-    assert_eq!(from, 3);
+    let speed = machine_factor(&db).unwrap().expect("nothing was learned");
+    assert_eq!(speed.points, 3);
     assert!(
-        (factor - 2.0).abs() < 0.01,
-        "this machine is twice as slow and the correction says {factor}"
+        (speed.factor - 2.0).abs() < 0.01,
+        "this machine is twice as slow and the correction says {}",
+        speed.factor
+    );
+    // What a point actually took here, which is the half a person can recognise (T423). The
+    // factor alone is not something anybody can check against what they watched happen.
+    assert!(
+        speed.seconds_per_point > 0.0,
+        "the factor was worked out and how long a point took was thrown away"
     );
 }
 
@@ -244,11 +251,17 @@ fn a_lent_point_is_not_counted_as_work_this_machine_did() {
     )
     .unwrap();
 
-    let (_, before) = machine_factor(&db).unwrap().expect("nothing was learned");
+    let before = machine_factor(&db)
+        .unwrap()
+        .expect("nothing was learned")
+        .points;
     let second = a_run("5678:s01e02.mp4", "F:/films/s01e02.mp4");
     lend(&db, &first.source_key, "h264", &second).expect("the episode was refused");
 
-    let (_, after) = machine_factor(&db).unwrap().expect("nothing was learned");
+    let after = machine_factor(&db)
+        .unwrap()
+        .expect("nothing was learned")
+        .points;
     assert_eq!(
         after, before,
         "a borrowed point was counted as time this machine spent"

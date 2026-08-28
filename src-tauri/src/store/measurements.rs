@@ -181,7 +181,7 @@ pub fn points(db: &Db, source_key: &str, codec: &str) -> Result<Vec<Point>, DbEr
 ///
 /// `None` until this machine has timed anything. There is nothing to learn from yet,
 /// and a made-up correction would be worse than none.
-pub fn machine_factor(db: &Db) -> Result<Option<(f64, usize)>, DbError> {
+pub fn machine_factor(db: &Db) -> Result<Option<MachineSpeed>, DbError> {
     db.with_conn(|c| {
         let mut q = c.prepare(
             "SELECT p.took_ms, m.width, m.height, m.fps, m.chunk_s, m.chunk_starts
@@ -191,7 +191,7 @@ pub fn machine_factor(db: &Db) -> Result<Option<(f64, usize)>, DbError> {
              WHERE p.took_ms > 0
              ORDER BY p.measured_at DESC LIMIT ?1",
         )?;
-        let mut factors: Vec<f64> = q
+        let mut seen: Vec<(f64, f64)> = q
             .query_map([RECENT_POINTS], |r| {
                 let took_ms: i64 = r.get(0)?;
                 let width: u32 = r.get(1)?;
@@ -207,16 +207,46 @@ pub fn machine_factor(db: &Db) -> Result<Option<(f64, usize)>, DbError> {
                     chunk_s.max(0) as u64,
                     chunks,
                 ))
-                .map(|expected| (took_ms as f64 / 1000.0) / expected.max(0.001))
+                .map(|expected| {
+                    let took = took_ms as f64 / 1000.0;
+                    (took / expected.max(0.001), took)
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        if factors.is_empty() {
+        if seen.is_empty() {
             return Ok(None);
         }
-        let counted = factors.len();
-        factors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(Some((factors[counted / 2], counted)))
+        let counted = seen.len();
+        // Two middles rather than one, and taken separately on purpose. The factor is what
+        // corrects an estimate for a film of any size; the seconds are what a person
+        // recognises — "my points were running at about forty seconds each". The point
+        // whose ratio is the middle one is not necessarily the point whose duration is.
+        let mut ratios: Vec<f64> = seen.iter().map(|(r, _)| *r).collect();
+        let mut seconds: Vec<f64> = seen.iter().map(|(_, s)| *s).collect();
+        seen.clear();
+        ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        seconds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(Some(MachineSpeed {
+            factor: ratios[counted / 2],
+            points: counted,
+            seconds_per_point: seconds[counted / 2],
+        }))
     })
+}
+
+/// How this machine has actually behaved, and on how much evidence.
+///
+/// Kept together rather than as a pair of loose numbers: they are only meaningful in each
+/// other's company. A factor with no count behind it cannot be told from a guess, and a
+/// count with no factor says nothing about how long anything will take.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MachineSpeed {
+    /// 1.0 means the machine behaves as the cost model says; 3.0, three times slower.
+    pub factor: f64,
+    /// How many timed points it rests on.
+    pub points: usize,
+    /// What a point actually took here, in seconds — the middle value of the same points.
+    pub seconds_per_point: f64,
 }
 
 /// How far back the estimate looks.

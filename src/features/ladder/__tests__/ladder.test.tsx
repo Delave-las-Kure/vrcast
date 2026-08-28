@@ -15,11 +15,13 @@ import type {
   Detail,
   LadderPreview,
   LadderVerdict,
+  MeasurementView,
   MeasurePreview,
   Rung,
   SourceMeasured,
 } from "../../../shared/contract";
 
+const mockMeasureResult = vi.fn<() => Promise<MeasurementView>>();
 const mockLadderPlan = vi.fn<() => Promise<LadderPreview>>();
 const mockLadderMeasure = vi.fn<() => Promise<SourceMeasured>>();
 const mockLadderValidate = vi.fn<() => Promise<LadderVerdict>>();
@@ -41,6 +43,7 @@ vi.mock("../../../shared/ipc", async () => {
     ...actual,
     ipc: {
       ladderPlan: () => mockLadderPlan(),
+      qualityMeasureResult: () => mockMeasureResult(),
       ladderMeasure: () => mockLadderMeasure(),
       ladderValidate: () => mockLadderValidate(),
       qualityMeasurePreview: () => mockMeasurePreview(),
@@ -120,6 +123,89 @@ beforeEach(() => {
   mockMeasureStart.mockResolvedValue("task-1");
   mockBuild.mockResolvedValue("build-1");
   finish = null;
+});
+
+describe("what was actually measured", () => {
+  // T420, T421. The core encodes a grid of bitrate by height, scores each with VMAF, takes
+  // the upper hull and cuts it where the quality stops improving. All of that was worked out
+  // and stored, and none of it reached a screen — so the ladder arrived as an assertion, and
+  // somebody who thought the top was too low had nothing to argue with but the number they
+  // disagreed with.
+
+  function measurement(): MeasurementView {
+    return {
+      run: { source_key: "1:film.mp4", codec: "h264" },
+      points: [
+        { bitrate_mbps: 35, height: 2160, actual_bps: 34_800_000, vmaf: 97.9 },
+        { bitrate_mbps: 22, height: 2160, actual_bps: 21_700_000, vmaf: 96.4 },
+        { bitrate_mbps: 12, height: 1440, actual_bps: 11_900_000, vmaf: 92.0 },
+      ],
+      selection: {
+        rungs: [
+          { bitrate_mbps: 22, height: 2160, vmaf: 96.4 },
+          { bitrate_mbps: 12, height: 1440, vmaf: 92.0 },
+        ],
+        above_target: [{ bitrate_mbps: 35, height: 2160, vmaf: 97.9 }],
+        hull: [],
+      },
+      ladder: null,
+      notices: [],
+    } as unknown as MeasurementView;
+  }
+
+  function measuredPlan() {
+    return {
+      ...preview("measured", MEASURED),
+      codec: "h264",
+      measurement_key: "1:film.mp4",
+    } as unknown as LadderPreview;
+  }
+
+  it("shows every point that was encoded and what it scored", async () => {
+    mockMeasureResult.mockResolvedValue(measurement());
+    mockLadderPlan.mockResolvedValue(measuredPlan());
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    const block = await screen.findByTestId("measured-points");
+    expect(block.querySelectorAll("tbody tr")).toHaveLength(3);
+    // What the encoder was asked for and what it produced, side by side: they differ, and
+    // where they differ a lot is where a rung costs more than its number says.
+    expect(block.textContent).toContain("97.9");
+    expect(block.textContent).toContain("34.8");
+  });
+
+  it("marks the points that became rungs apart from the ones that did not", async () => {
+    mockMeasureResult.mockResolvedValue(measurement());
+    mockLadderPlan.mockResolvedValue(measuredPlan());
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    const block = await screen.findByTestId("measured-points");
+    const rows = [...block.querySelectorAll("tbody tr")];
+    expect(rows.map((r) => r.getAttribute("data-chosen"))).toEqual(["no", "yes", "yes"]);
+  });
+
+  it("says what was dropped above the quality target", async () => {
+    // T421. Otherwise a person hunts for the missing bitrate: the grid was measured up to 35
+    // and the ladder tops out at 22, with nothing saying the rest went on purpose.
+    mockMeasureResult.mockResolvedValue(measurement());
+    mockLadderPlan.mockResolvedValue(measuredPlan());
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    const dropped = await screen.findByTestId("dropped-above");
+    expect(dropped.textContent).toContain("35");
+  });
+
+  it("offers nothing to look into where nothing was measured", async () => {
+    // A ladder from the formula measured nothing, and an empty fold saying so would be a
+    // control that does nothing.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(screen.getByTestId("provenance")).toBeTruthy());
+    expect(screen.queryByTestId("measured-points")).toBeNull();
+  });
 });
 
 describe("why each rung is what it is", () => {
@@ -203,7 +289,7 @@ describe("where the rungs came from", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "ru");
@@ -290,7 +376,7 @@ describe("what a measurement will cost", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
@@ -314,14 +400,128 @@ describe("what a measurement will cost", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 40,
+      machine: { state: "known", factor_x100: 250, points: 40, seconds_per_point_x10: 415 },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
 
     await waitFor(() => expect(screen.getByTestId("how-long")).toHaveTextContent("3 points"));
     expect(screen.getByTestId("how-long")).toHaveTextContent("of 12");
-    expect(screen.getByTestId("estimate-from")).toHaveTextContent("40 points");
+    // T423. "From your own measurements" alone is not something a person can check. The
+    // seconds are: somebody who watched the last run knows whether forty seconds a point is
+    // what they saw, and can disbelieve the estimate when it is not.
+    const from = screen.getByTestId("estimate-from");
+    expect(from).toHaveTextContent("40 points");
+    expect(from).toHaveTextContent("41.5");
+    expect(from).toHaveTextContent("2.5");
+  });
+
+  it("shows what the core noticed about this material before an hour is agreed to", async () => {
+    // T422. `preview.notices` was carried across the boundary and never read. The probe can
+    // fail, or run on a card it was not calibrated for, and either makes the top of the grid
+    // a different kind of number — which is worth knowing before the hour, not after.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 0,
+      about_seconds: 600,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: { kind: "hardware", name: "h264_nvenc" },
+      machine: { state: "nothing_timed_yet" },
+      notices: [{ key: "NOTICE_PROBE_FAILED", params: {} }],
+    } as unknown as MeasurePreview);
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    const said = await screen.findByTestId("offer-notices");
+    expect(said.textContent).toContain(en.details.NOTICE_PROBE_FAILED);
+  });
+
+  it("can be asked what the estimate stands on", async () => {
+    // The chunks and the anchor were both worked out and both dropped. They are the answer
+    // to "why measure at all" and to "why that top and not another".
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 0,
+      about_seconds: 600,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: { kind: "hardware", name: "h264_nvenc" },
+      machine: { state: "nothing_timed_yet" },
+      notices: [],
+    } as unknown as MeasurePreview);
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    const stands = await screen.findByTestId("stands-on");
+    // 233 s, 590 s, 947 s — said in minutes, because that is the scale of a film.
+    expect(stands.textContent).toContain("4, 10, 16");
+    expect(stands.textContent).toContain("8 Mbit/s");
+  });
+
+  it("does not ask for a minute to measure a grid that is already measured", async () => {
+    // T425. `Math.max(1, …)` is right while there is something left — "about 0 minutes"
+    // reads as a mistake — and wrong when there is nothing: it offers a minute of work on a
+    // finished grid, and whoever presses the button gets an instant finish and no idea why.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 12,
+      about_seconds: 0,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: { kind: "hardware", name: "h264_nvenc" },
+      machine: { state: "nothing_timed_yet" },
+      notices: [],
+    } as unknown as MeasurePreview);
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("how-long")).toHaveTextContent(en.ui.ladder.measureNothingLeft),
+    );
+    expect(screen.getByTestId("how-long")).not.toHaveTextContent("1 minute");
+    // And the button goes with it: a control that does nothing teaches people the
+    // application is broken.
+    expect(screen.getByText(en.ui.ladder.measureStart)).toBeDisabled();
+  });
+
+  it("tells an unreadable store apart from an empty one", async () => {
+    // T424. Both used to come out as "estimated from the model". They are not the same: with
+    // an unreadable store there may be a hundred timed points, and the figure may be wrong by
+    // a factor of three with nothing on screen to suggest doubting it.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 0,
+      about_seconds: 600,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: { kind: "hardware", name: "h264_nvenc" },
+      machine: { state: "not_asked" },
+      notices: [],
+    } as unknown as MeasurePreview);
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("estimate-from")).toHaveTextContent(
+        en.ui.ladder.estimateNotAsked,
+      ),
+    );
+    expect(screen.getByTestId("estimate-from")).not.toHaveTextContent(
+      en.ui.ladder.estimateFromModel,
+    );
   });
 
   it("starts the measurement and says the work is not lost by leaving", async () => {
@@ -336,7 +536,7 @@ describe("what a measurement will cost", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
@@ -378,7 +578,7 @@ describe("when the measurement ends", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" />, "en");
@@ -417,7 +617,7 @@ describe("when the measurement ends", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" />, "en");
@@ -468,7 +668,7 @@ describe("when the measurement ends", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" />, "en");
@@ -507,7 +707,7 @@ describe("when the measurement ends", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
@@ -556,7 +756,7 @@ describe("when the measurement ends", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
@@ -586,7 +786,7 @@ describe("when the measurement ends", () => {
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
       encoder: { kind: "hardware", name: "h264_nvenc" },
-      estimate_from_points: 0,
+      machine: { state: "nothing_timed_yet" },
       notices: [],
     });
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
