@@ -6,7 +6,7 @@
 //! bottleneck of a task that ought to be limited by the network.
 
 use super::state::{TaskKind, TaskState};
-use crate::domain::wording::DetailCode;
+use crate::domain::wording::{Detail, DetailCode};
 use crate::error::AppError;
 use crate::store::db::{now_rfc3339, Db, DbError};
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,13 @@ pub struct TaskRecord {
     /// finished a week ago must still explain itself in whatever language is chosen
     /// today. Secrets are already redacted.
     pub error: Option<AppError>,
+    /// What the task had to say that is not a failure (T415).
+    ///
+    /// Variants taken from a previous run, a measurement that stopped short, the graphics
+    /// card that refused. Codes and their numbers, like `error` and for the same reason: a
+    /// task that finished a week ago still explains itself in whatever language is chosen
+    /// today.
+    pub notices: Vec<Detail>,
     /// Place in the queue: lower runs sooner.
     ///
     /// Kept apart from the creation time, because reordering (FR-083) has to change
@@ -53,6 +60,7 @@ impl TaskRecord {
             eta_s: None,
             resume_token: None,
             error: None,
+            notices: Vec::new(),
             queue_order: 0,
             created_at: now.clone(),
             updated_at: now,
@@ -80,6 +88,12 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
         error: row
             .get::<_, Option<String>>("error")?
             .and_then(|s| serde_json::from_str(&s).ok()),
+        // Unreadable notices are dropped rather than fatal: a task's own outcome must not be
+        // lost because an aside about it was written by a newer version.
+        notices: row
+            .get::<_, Option<String>>("notices")?
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
         queue_order: row.get("queue_order")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -92,8 +106,8 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
         c.execute(
             "INSERT INTO tasks
                 (id, kind, server_id, state, progress, stage, speed_bps, eta_s,
-                 resume_token, error, queue_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                 resume_token, error, notices, queue_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT (id) DO UPDATE SET
                 state = excluded.state,
                 progress = excluded.progress,
@@ -102,6 +116,7 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
                 eta_s = excluded.eta_s,
                 resume_token = excluded.resume_token,
                 error = excluded.error,
+                notices = excluded.notices,
                 updated_at = excluded.updated_at",
             rusqlite::params![
                 task.id,
@@ -116,6 +131,7 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
                 task.error
                     .as_ref()
                     .and_then(|e| serde_json::to_string(e).ok()),
+                notices_json(&task.notices),
                 task.queue_order,
                 task.created_at,
                 task.updated_at,
@@ -156,6 +172,54 @@ pub fn save_progress(db: &Db, id: &str, progress: f64) -> Result<(), DbError> {
             "UPDATE tasks SET progress = ?2, updated_at = ?3
              WHERE id = ?1 AND state NOT IN ('completed', 'failed', 'cancelled')",
             rusqlite::params![id, progress.clamp(0.0, 1.0), now_rfc3339()],
+        )?;
+        Ok(())
+    })
+}
+
+/// Write only the stage, leaving the rest alone.
+///
+/// Called on a change of stage and on nothing else — see `TaskContext::note_stage`. Pointed
+/// for the same reason as [`save_resume_token`]: the stage comes from the running task while
+/// the state comes from a pause or a cancel on another thread.
+///
+/// Finished records are left alone. A stage message can arrive a moment late and put "cutting
+/// segments" on a task that is already done, which reads as a task that stopped halfway.
+pub fn save_stage(db: &Db, id: &str, stage: DetailCode) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET stage = ?2, updated_at = ?3
+             WHERE id = ?1 AND state NOT IN ('completed', 'failed', 'cancelled')",
+            rusqlite::params![id, stage.as_str(), now_rfc3339()],
+        )?;
+        Ok(())
+    })
+}
+
+/// The notices as they are stored, or nothing at all when there are none.
+///
+/// `None` rather than `"[]"`: an empty list and never having said anything are the same
+/// thing, and writing two spellings of it means reading two one day.
+fn notices_json(notices: &[Detail]) -> Option<String> {
+    if notices.is_empty() {
+        return None;
+    }
+    serde_json::to_string(notices).ok()
+}
+
+/// Write only what the task had to say, leaving the rest alone.
+///
+/// Written as the task ends, and unlike [`save_progress`] **not** withheld from finished
+/// records: this is the one write that has to land on a task that is already over, because
+/// that is when there is anything to write.
+pub fn save_notices(db: &Db, id: &str, notices: &[Detail]) -> Result<(), DbError> {
+    let Some(json) = notices_json(notices) else {
+        return Ok(());
+    };
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET notices = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, json, now_rfc3339()],
         )?;
         Ok(())
     })

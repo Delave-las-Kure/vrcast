@@ -272,6 +272,7 @@ fn the_task_events_shapes_match_both_ways() {
         id: String::from("t1"),
         state: TaskState::Completed,
         error: None,
+        notices: Vec::new(),
     };
     same_shape(
         &serialized_fields(&done),

@@ -251,7 +251,15 @@ pub mod api {
                     };
                     let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;
                     conn.close().await;
-                    outcome.map(|_| ()).map_err(build_error)
+                    // `outcome.map(|_| ())` used to throw away everything the build had
+                    // worked out about itself: how many variants it took from a previous run
+                    // rather than made, and which it had to re-encode because the source's
+                    // keyframes would not line up (T416).
+                    let built = outcome.map_err(build_error)?;
+                    for notice in &built.notices {
+                        ctx.add_notice(notice.clone());
+                    }
+                    Ok(())
                 },
             )
             .await?;

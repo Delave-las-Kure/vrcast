@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use vrcast_studio_lib::commands::error::{AppError, DetailCode, ErrorCode};
+use vrcast_studio_lib::domain::wording::Detail;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::tasks::engine::{TaskEngine, TaskError, TaskEvent};
 use vrcast_studio_lib::tasks::progress::ProgressThrottle;
@@ -931,4 +932,214 @@ async fn finishing_is_reported_by_an_event() {
         }
     }
     assert!(got_done, "no event about finishing arrived");
+}
+
+// ---------- the stage a task is at (T412, T414) ----------
+//
+// **What was wrong.** `TaskRecord.stage` was written to the database, read back from it and
+// carried in every event — and never once given a value. `TaskRecord::new` set it to `None`
+// and nothing assigned it after. So the stage existed only for as long as the person was
+// looking: leave the tab, come back, and the task that has been cutting segments for twenty
+// minutes says nothing about what it is doing. After a restart, likewise nothing.
+//
+// **And the valve swallowed the change.** Progress is capped at four a second, which is right
+// for a number and wrong for a change of stage: a stage that lasts less than a quarter of a
+// second — every rung already on the server, so the loop only checks and moves on — never
+// reached anybody. The cap was written for the figure, and the stage rode along with it.
+
+#[tokio::test]
+async fn the_stage_a_task_reached_is_written_down() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let e = TaskEngine::new(db.clone());
+    let id = e
+        .submit(TaskKind::Probe, None, |ctx| async move {
+            ctx.report(0.5, DetailCode::StageMeasuringQuality);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    assert!(wait_for_state(&e, &id, TaskState::Completed, Duration::from_secs(5)).await);
+    let rec = store::get(&db, &id)
+        .unwrap()
+        .expect("the task record is gone");
+    assert_eq!(
+        rec.stage,
+        Some(DetailCode::StageMeasuringQuality),
+        "the task said which stage it was at and the database kept none of it — so after a \
+         restart, and on any screen that reads the record rather than the live events, a task \
+         is a bar with no name on it"
+    );
+}
+
+#[tokio::test]
+async fn a_change_of_stage_is_not_swallowed_by_the_rate_cap() {
+    let e = engine();
+    let mut events = e.subscribe();
+    let id = e
+        .submit(TaskKind::Probe, None, |ctx| async move {
+            // Two stages inside one quarter-second: what a run looks like when every variant
+            // is already on the server and the loop only checks.
+            ctx.report(0.10, DetailCode::StageBuildingLadder);
+            ctx.report(0.11, DetailCode::StageCuttingSegments);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    assert!(wait_for_state(&e, &id, TaskState::Completed, Duration::from_secs(5)).await);
+
+    let mut seen: Vec<DetailCode> = Vec::new();
+    while let Ok(ev) = events.try_recv() {
+        if let TaskEvent::Progress {
+            id: which,
+            stage: Some(s),
+            ..
+        } = ev
+        {
+            if which == id {
+                seen.push(s);
+            }
+        }
+    }
+    assert!(
+        seen.contains(&DetailCode::StageBuildingLadder)
+            && seen.contains(&DetailCode::StageCuttingSegments),
+        "a stage that lasted less than the rate cap never reached anybody: {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_same_stage_over_and_over_is_still_capped() {
+    // The other half, and the one that makes the first honest. Letting a change through is
+    // easy; letting *every* report through because it names a stage would turn a set of
+    // ready variants into a flood — and a flood of the same word is the same as silence.
+    let e = engine();
+    let mut events = e.subscribe();
+    let id = e
+        .submit(TaskKind::Probe, None, |ctx| async move {
+            for i in 0..200 {
+                ctx.report(i as f64 / 200.0, DetailCode::StageConverting);
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    assert!(wait_for_state(&e, &id, TaskState::Completed, Duration::from_secs(5)).await);
+
+    let mut named = 0usize;
+    while let Ok(ev) = events.try_recv() {
+        if let TaskEvent::Progress {
+            id: which,
+            stage: Some(_),
+            ..
+        } = ev
+        {
+            if which == id {
+                named += 1;
+            }
+        }
+    }
+    assert!(
+        (1..=3).contains(&named),
+        "two hundred reports of the same stage produced {named} events; the cap is for the \
+         figure and the stage must not lift it"
+    );
+}
+
+// ---------- what a task has to say when it ends (T415) ----------
+//
+// **The hole.** A task can end having done the work and still have something a person needs
+// to know: three variants were taken from a previous run rather than made, the measurement
+// stopped short of the whole grid, the graphics card refused and the processor did it. All
+// three are already worked out and written in both languages — and all three ended in
+// `tracing::info!` or were dropped on the floor by `outcome.map(|_| ())`. A log line is not
+// somewhere a person looks.
+//
+// It goes through the context rather than the task's return value on purpose: every kind of
+// task gets it at once, and a notice can be raised in the middle of the work rather than only
+// at the end.
+
+#[tokio::test]
+async fn what_a_task_had_to_say_reaches_the_end_and_the_record() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let e = TaskEngine::new(db.clone());
+    let mut events = e.subscribe();
+
+    let id = e
+        .submit(TaskKind::BuildLadder, None, |ctx| async move {
+            ctx.add_notice(Detail::new(DetailCode::NoticeVariantsReused).with("count", 3u64));
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    assert!(wait_for_state(&e, &id, TaskState::Completed, Duration::from_secs(5)).await);
+
+    let mut said: Vec<Detail> = Vec::new();
+    while let Ok(ev) = events.try_recv() {
+        if let TaskEvent::Done {
+            id: which, notices, ..
+        } = ev
+        {
+            if which == id {
+                said = notices;
+            }
+        }
+    }
+    assert_eq!(
+        said.iter().map(|n| n.key).collect::<Vec<_>>(),
+        vec![DetailCode::NoticeVariantsReused],
+        "the task said something and the end of it carried nothing"
+    );
+    assert_eq!(
+        said.first().and_then(|n| n.params.get("count")),
+        Some(&serde_json::json!(3)),
+        "the notice arrived without the number that makes it worth reading"
+    );
+
+    let rec = store::get(&db, &id).unwrap().expect("the record is gone");
+    assert_eq!(
+        rec.notices.iter().map(|n| n.key).collect::<Vec<_>>(),
+        vec![DetailCode::NoticeVariantsReused],
+        "the notice lived only as long as the event did — a person who was on another screen \
+         when the task finished never learns of it"
+    );
+}
+
+#[tokio::test]
+async fn a_task_that_had_nothing_to_say_says_nothing() {
+    // Otherwise an empty list would still be a thing on the screen, and a row that always
+    // appears is a row nobody reads.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let e = TaskEngine::new(db.clone());
+    let id = e
+        .submit(TaskKind::Probe, None, |_ctx| async move { Ok(()) })
+        .await
+        .unwrap();
+    assert!(wait_for_state(&e, &id, TaskState::Completed, Duration::from_secs(5)).await);
+    assert!(store::get(&db, &id).unwrap().unwrap().notices.is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_task_still_carries_what_it_managed_to_say() {
+    // The notice and the failure are not alternatives. A build that reused two variants and
+    // then could not reach the server has both to report, and the reuse is what tells a
+    // person how much of the work is still standing.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let e = TaskEngine::new(db.clone());
+    let id = e
+        .submit(TaskKind::BuildLadder, None, |ctx| async move {
+            ctx.add_notice(Detail::new(DetailCode::NoticeVariantsReused).with("count", 2u64));
+            Err(AppError::new(ErrorCode::Internal))
+        })
+        .await
+        .unwrap();
+    assert!(wait_for_state(&e, &id, TaskState::Failed, Duration::from_secs(5)).await);
+    assert_eq!(
+        store::get(&db, &id).unwrap().unwrap().notices.len(),
+        1,
+        "the failure swallowed what the task had already managed to report"
+    );
 }

@@ -108,13 +108,11 @@ pub mod api {
                     other => AppError::new(ErrorCode::Internal).with_cause(other),
                 })?;
 
-                // **Said as a stage, which is the only place a single preparation has.** A
-                // task carries no notices of its own — the core produces them and there is
-                // nowhere to put them (R-41), and that is Phase 30's work. Until then the
-                // stage is what a person can see, and a fallback they are never told about
-                // is an encode that took four times as long for no stated reason.
-                for notice in &said {
-                    ctx.report_important(0.97, notice.key);
+                // A task now has somewhere to put a notice (T415), so this no longer has to
+                // borrow the stage line to say that the graphics card refused. The stage
+                // said the code and nothing else; a notice carries the numbers with it.
+                for notice in said {
+                    ctx.add_notice(notice);
                 }
 
                 // Validation is not optional (FR-027). A broken encode opens fine,

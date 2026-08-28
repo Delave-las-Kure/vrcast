@@ -13,7 +13,7 @@
 use super::progress::ProgressThrottle;
 use super::state::{Lane, LaneLimits, TaskKind, TaskState};
 use super::store::{self, TaskRecord};
-use crate::domain::wording::DetailCode;
+use crate::domain::wording::{Detail, DetailCode};
 use crate::error::AppError;
 use crate::store::db::{Db, DbError};
 use std::collections::HashMap;
@@ -71,6 +71,8 @@ pub enum TaskEvent {
         id: String,
         state: TaskState,
         error: Option<AppError>,
+        /// What the task had to say that is not a failure (T415). Empty for most tasks.
+        notices: Vec<Detail>,
     },
 }
 
@@ -83,6 +85,12 @@ struct LiveTask {
     paused: Arc<Mutex<bool>>,
     resume: Arc<Notify>,
     throttle: Arc<ProgressThrottle>,
+    /// What the running task has said so far.
+    ///
+    /// Held here as well as in the context because `finish` is what ends the task, and by
+    /// then the context has gone with the work. Shared, not copied: the task goes on adding
+    /// to it while it runs.
+    notices: Arc<Mutex<Vec<Detail>>>,
     /// The place in the queue: lower runs sooner (FR-083).
     position: i64,
 }
@@ -103,6 +111,17 @@ pub struct TaskContext {
     /// Not the same one the events use: the events go into memory four times a second,
     /// and writing to disk that often for the sake of a number serves nobody.
     persist_throttle: Arc<ProgressThrottle>,
+    /// The stage last reported, so that a change of it can be told from a repeat.
+    ///
+    /// The difference is the whole of T412 and T414. A change has to get past the rate cap,
+    /// because a stage that lasts less than a quarter of a second is still a stage somebody
+    /// wants to see, and it has to be written down, because a task outlives the screen that
+    /// was watching it. A repeat has to do neither: a task reporting the same stage four
+    /// hundred times would otherwise write to the disk four hundred times and fill the
+    /// interface with one word.
+    last_stage: Arc<Mutex<Option<DetailCode>>>,
+    /// What the task has to say that is not a failure — see `add_notice`.
+    notices: Arc<Mutex<Vec<Detail>>>,
     events: broadcast::Sender<TaskEvent>,
     db: Arc<Db>,
 }
@@ -173,10 +192,47 @@ impl TaskContext {
         self.report_full(progress, None, Some(speed_bps), Some(eta_s), false);
     }
 
+    /// Say something that is not progress and is not a failure.
+    ///
+    /// **Why the context and not the return value.** A task returns `Ok(())` or an error,
+    /// and widening that would mean touching every kind of task for the sake of the three
+    /// that have something to add. Through the context every kind gets it at once, and a
+    /// notice can be raised in the middle of the work rather than only at the end — which
+    /// matters most for the task that then fails: what it managed to do before it stopped
+    /// is exactly what tells a person how much is still standing.
+    pub fn add_notice(&self, notice: Detail) {
+        self.notices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(notice);
+    }
+
     /// A message that must get through regardless of the rate cap: a change of stage, the
     /// end of the work.
     pub fn report_important(&self, progress: f64, stage: DetailCode) {
         self.report_full(progress, Some(stage), None, None, true);
+    }
+
+    /// Take note of the stage, and say whether it is a new one.
+    ///
+    /// The writing to the database happens here, on the change and nowhere else. It is
+    /// swallowed on failure for the same reason `save_progress` swallows its own: a stage is
+    /// a label, and a transfer running for hours must not be brought down by one.
+    fn note_stage(&self, stage: Option<DetailCode>) -> bool {
+        let Some(stage) = stage else {
+            return false;
+        };
+        {
+            let mut last = self.last_stage.lock().unwrap_or_else(|e| e.into_inner());
+            if *last == Some(stage) {
+                return false;
+            }
+            *last = Some(stage);
+        }
+        if let Err(e) = store::save_stage(&self.db, &self.id, stage) {
+            tracing::debug!(id = %self.id, error = %e, "the stage was not written");
+        }
+        true
     }
 
     fn report_full(
@@ -187,7 +243,12 @@ impl TaskContext {
         eta_s: Option<i64>,
         important: bool,
     ) {
-        if !self.throttle.allow(important) {
+        // A change of stage carries itself: the caller does not have to remember to mark it
+        // important, and cannot mark a repeat important by mistake. Reporting a stage is the
+        // ordinary way to report progress — `convert` names its stage on every line ffmpeg
+        // prints — so the decision belongs here rather than at four hundred call sites.
+        let changed = self.note_stage(stage);
+        if !self.throttle.allow(important || changed) {
             return;
         }
         let _ = self.events.send(TaskEvent::Progress {
@@ -389,6 +450,7 @@ impl TaskEngine {
         let paused = Arc::new(Mutex::new(initial == TaskState::Paused));
         let resume = Arc::new(Notify::new());
         let throttle = Arc::new(ProgressThrottle::default());
+        let notices: Arc<Mutex<Vec<Detail>>> = Arc::new(Mutex::new(Vec::new()));
 
         {
             let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
@@ -401,6 +463,7 @@ impl TaskEngine {
                     paused: paused.clone(),
                     resume: resume.clone(),
                     throttle: throttle.clone(),
+                    notices: notices.clone(),
                     position,
                 },
             );
@@ -413,6 +476,8 @@ impl TaskEngine {
             resume,
             throttle,
             persist_throttle: Arc::new(ProgressThrottle::new(PROGRESS_PERSIST_INTERVAL)),
+            last_stage: Arc::new(Mutex::new(None)),
+            notices,
             events: self.events.clone(),
             db: self.db.clone(),
         };
@@ -584,6 +649,9 @@ impl TaskEngine {
                     id: id.to_owned(),
                     state: TaskState::Cancelled,
                     error: None,
+                    // A task cancelled while it was only ever in the database never ran, so
+                    // it never said anything.
+                    notices: Vec::new(),
                 });
                 Ok(())
             }
@@ -708,18 +776,32 @@ impl TaskEngine {
     }
 
     fn finish(&self, id: &str, state: TaskState, error: Option<AppError>) {
-        {
+        let notices = {
             let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(t) = live.get_mut(id) {
                 t.state = state;
             }
+            // Taken before the task leaves the living, which is the last moment anything
+            // knows where to find them.
+            let said = live
+                .get(id)
+                .map(|t| t.notices.lock().unwrap_or_else(|e| e.into_inner()).clone())
+                .unwrap_or_default();
             live.remove(id);
-        }
+            said
+        };
         self.persist_state(id, state, error.clone());
+        // After the state, not before: `save_notices` writes to a record that is already
+        // over, and writing them first would put them on a task the crash-recovery pass
+        // could still take for running.
+        if let Err(e) = store::save_notices(&self.db, id, &notices) {
+            tracing::warn!(id, error = %e, "what the task had to say was not written down");
+        }
         let _ = self.events.send(TaskEvent::Done {
             id: id.to_owned(),
             state,
             error,
+            notices,
         });
     }
 

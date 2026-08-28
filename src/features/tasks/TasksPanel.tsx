@@ -15,7 +15,7 @@ import type { AppError, Task, TaskKind } from "../../shared/contract";
 import type { TaskOnClose } from "../../shared/contract";
 import { ipc, onTaskDone, onTaskProgress, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
-import { fill, renderError, renderStage } from "../../shared/i18n/render";
+import { fill, renderDetail, renderError, renderStage } from "../../shared/i18n/render";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { CloseConsequences } from "./CloseConsequences";
 import { QueueOrder } from "./QueueOrder";
@@ -97,7 +97,11 @@ export function TasksPanel() {
                 ...task,
                 state: e.state,
                 progress: e.progress,
-                stage: e.stage,
+                // An event that says nothing about the stage says nothing about it. Most
+                // do not: `report_transfer` sends how fast and how long left, four times a
+                // second, with no stage at all — and copying that null over would blank the
+                // line under the bar for the rest of the work (T413).
+                stage: e.stage ?? task.stage,
                 speed_bps: e.speed_bps,
                 eta_s: e.eta_s,
               }
@@ -194,6 +198,22 @@ export function TasksPanel() {
 
               {task.error && (
                 <p className="task__error">{renderError(task.error, t, lang).message}</p>
+              )}
+
+              {/* What the task worked out and is not a failure (T416): variants taken from
+                  a previous run rather than made, a measurement that stopped short of the
+                  grid, the graphics card that refused and sent the work to the processor.
+                  All three used to end in a log line — which is to say nowhere. Beside the
+                  failure rather than in place of it: a build can have both, and the notice
+                  is what says how much of the work is still standing. */}
+              {task.notices.length > 0 && (
+                <ul className="task__notices" data-testid="task-notices">
+                  {task.notices.map((notice, i) => (
+                    <li key={i} role="note">
+                      {renderDetail(notice, t, lang)}
+                    </li>
+                  ))}
+                </ul>
               )}
 
               <div className="task__actions">

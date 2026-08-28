@@ -55,7 +55,10 @@ pub fn bridge_task_events(app: AppHandle, engine: &TaskEngine) {
                     if let Err(e) = app.emit(name, &event) {
                         tracing::debug!(error = %e, "event not delivered to the interface");
                     }
-                    if let TaskEvent::Done { id, state, error } = &event {
+                    if let TaskEvent::Done {
+                        id, state, error, ..
+                    } = &event
+                    {
                         notify_if_long(&app, id, *state, error.as_ref());
                     }
                 }

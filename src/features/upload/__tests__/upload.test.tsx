@@ -266,6 +266,7 @@ describe("the queue", () => {
       eta_s: null,
       resume_token: null,
       error: null,
+      notices: [],
       queue_order: order,
       created_at: "2026-08-25T10:00:00Z",
       updated_at: "2026-08-25T10:00:00Z",

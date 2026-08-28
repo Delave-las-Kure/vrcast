@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { en, renderIn, ru } from "../../../test-utils";
 import type {
+  Detail,
   LadderPreview,
   LadderVerdict,
   MeasurePreview,
@@ -26,8 +27,13 @@ const mockMeasurePreview = vi.fn<() => Promise<MeasurePreview>>();
 const mockMeasureStart = vi.fn<() => Promise<string>>();
 const mockBuild = vi.fn<(...a: unknown[]) => Promise<string>>();
 
-/** What the core would send when a task ends. Held so a test can end one when it likes. */
-let finish: ((e: { id: string; state: string; error: unknown }) => void) | null = null;
+/** What the core would send when a task ends. Held so a test can end one when it likes.
+ *
+ * `notices` is optional here and required in the contract: most of these tests are about
+ * something else and say nothing about it, and the one that is about it says it. */
+let finish:
+  | ((e: { id: string; state: string; error: unknown; notices?: Detail[] }) => void)
+  | null = null;
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -336,6 +342,45 @@ describe("when the measurement ends", () => {
       expect(screen.getByTestId("provenance")).toHaveTextContent(en.ui.ladder.fromMeasured),
     );
     expect(screen.getByTestId("build")).toBeEnabled();
+  });
+
+  it("keeps what the measurement said about itself beside the build button", async () => {
+    // T416. A partial measurement is not a failure — the ladder is built from what came
+    // out — but where the points were missing the optimum may never have been found, and
+    // that is an argument against building from it. It used to reach `tracing::info!` and
+    // stop there.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+    mockMeasurePreview.mockResolvedValue({
+      source_key: "1:film.mp4",
+      points: 12,
+      already_measured: 0,
+      about_seconds: 180,
+      chunk_starts: [233, 590, 947],
+      anchor_mbps: 8,
+      encoder: { kind: "hardware", name: "h264_nvenc" },
+      estimate_from_points: 0,
+      notices: [],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" />, "en");
+
+    await waitFor(() => expect(screen.getByText(en.ui.ladder.measureStart)).toBeEnabled());
+    fireEvent.click(screen.getByText(en.ui.ladder.measureStart));
+    await waitFor(() => expect(mockMeasureStart).toHaveBeenCalled());
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    finish?.({
+      id: "task-1",
+      state: "completed",
+      error: null,
+      notices: [{ key: "NOTICE_MEASUREMENT_PARTIAL", params: { measured: 9, total: 12 } }],
+    });
+
+    const said = await screen.findByTestId("measure-notices");
+    expect(said.textContent).toContain("9");
+    expect(said.textContent).toContain("12");
   });
 
   it("fills the rungs in when the core answers a tick later, not in the same microtask", async () => {

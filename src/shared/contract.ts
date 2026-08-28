@@ -446,6 +446,9 @@ export interface Task {
   /** Why it failed. An object, so a task from last week still explains itself in
    *  whatever language is chosen today. */
   error: AppError | null;
+  /** What it had to say that is not a failure: variants taken from a previous run, a
+   *  measurement that stopped short, the graphics card that refused (T415). */
+  notices: Detail[];
   /** Place in the queue: lower runs sooner. Changed by reordering (FR-083). */
   queue_order: number;
   created_at: string;
@@ -1100,6 +1103,8 @@ export interface TaskDoneEvent {
   id: string;
   state: TaskState;
   error: AppError | null;
+  /** What the task had to say that is not a failure (T415). Usually empty. */
+  notices: Detail[];
 }
 
 /**

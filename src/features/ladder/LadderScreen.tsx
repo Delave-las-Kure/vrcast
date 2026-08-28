@@ -28,6 +28,7 @@ import type {
   AppError,
   LadderPreview,
   MeasurePreview,
+  Detail,
   Rung,
   SourceMeasured,
 } from "../../shared/contract";
@@ -211,6 +212,8 @@ export function LadderScreen({
   // were dropped by `if (!alive) return;`. The measurement finished, was written down, and
   // the screen went on showing the guess. Found on 2026-08-28 from an owner's report.
   const measuringId = useRef<string | null>(null);
+  /** What the measurement had to say about itself. Cleared when the file changes. */
+  const [measured, setMeasured] = useState<Detail[]>([]);
   const [measuring, setMeasuring] = useState(false);
   // Tied to the file rather than to what is running: this must go false when the screen is
   // put away or asked about another file, and at no other moment.
@@ -257,6 +260,8 @@ export function LadderScreen({
   useEffect(() => {
     if (!path) return;
     setError(null);
+    // A different file has not been measured, so nothing is known about its measurement.
+    setMeasured([]);
 
     void loadPlan().then((answer) => {
       // The offer to measure is only worth fetching when there is nothing measured yet:
@@ -299,12 +304,22 @@ export function LadderScreen({
         setError(event.error);
         return;
       }
+
       // Asked afresh rather than patched together here: the core decides what the rungs
       // are, and a screen that assembled its own would be a second opinion.
       //
       // "Measuring" stays on screen until the new rungs are actually there. Clearing it
       // first left a gap — sometimes a long one — in which the work was done, the screen
       // said nothing was happening, and the old guess was still on it.
+      // What the measurement itself had to say (T416). A partial measurement — points that
+      // would not encode — is not a failure and does not stop anything, but it is an
+      // argument against building from what came out: where the points were missing, the
+      // optimum may simply not have been found. So it is kept until the file changes and
+      // shown beside the button it argues against, not as a passing message.
+      // Tolerant of an event that carries none: the field is in the contract and the core
+      // always sends it, but an aside going missing must not take the whole screen down
+      // with it.
+      if (alive.current) setMeasured(event.notices ?? []);
       void loadPlan().finally(() => {
         if (alive.current) setMeasuring(false);
       });
@@ -447,6 +462,15 @@ export function LadderScreen({
       >
         {building ? words.building : words.build}
       </button>
+      {measured.length > 0 && (
+        <ul data-testid="measure-notices">
+          {measured.map((notice, i) => (
+            <li key={i} role="note">
+              {renderDetail(notice, t, lang)}
+            </li>
+          ))}
+        </ul>
+      )}
       {blocked && (
         <p role="note" data-testid="build-blocked">
           {blocked.code === "NO_RUNGS" ? words.buildBlockedEmpty : words.buildBlocked}

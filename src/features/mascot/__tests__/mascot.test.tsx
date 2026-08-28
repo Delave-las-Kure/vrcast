@@ -124,7 +124,7 @@ function progress(over: Partial<TaskProgressEvent> = {}): TaskProgressEvent {
 }
 
 function done(over: Partial<TaskDoneEvent> = {}): TaskDoneEvent {
-  return { event: "done", id: "t1", state: "completed", error: null, ...over };
+  return { event: "done", id: "t1", state: "completed", error: null, notices: [], ...over };
 }
 
 function show() {

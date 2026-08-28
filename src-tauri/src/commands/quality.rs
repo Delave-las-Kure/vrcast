@@ -144,6 +144,12 @@ pub mod api {
                 };
                 let outcome = quality_measure::run(&job, &ctx).await.map_err(to_error)?;
                 ctx.report_important(1.0, DetailCode::StageDone);
+                // A partial measurement is an argument against building from it — the
+                // optimum may be outside what was measured — and it used to go no further
+                // than this log line (T416).
+                for notice in &outcome.notices {
+                    ctx.add_notice(notice.clone());
+                }
                 tracing::info!(
                     measured = outcome.measured,
                     total = outcome.total,
