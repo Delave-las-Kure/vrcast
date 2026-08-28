@@ -67,7 +67,20 @@ describe.skipIf(!onLinux)("removing everything, from the window", () => {
 
   afterAll(async () => {
     await harness?.stop();
-    if (scratch) rmSync(scratch, { recursive: true, force: true });
+    // **Tidying up is allowed to lose.** The application is stopped just above, but the
+    // graphics stack keeps writing to its shader cache for a moment afterwards, and removing
+    // the directory out from under it fails with ENOTEMPTY — which failed the whole run once,
+    // after every assertion in it had already passed. This is a directory in /tmp: a few
+    // attempts, and then let the system have it. Failing a check on the cleanup of a check is
+    // reporting a fault that is not there.
+    for (let left = 5; left > 0; left--) {
+      try {
+        if (scratch) rmSync(scratch, { recursive: true, force: true });
+        return;
+      } catch {
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
   });
 
   it("names the directory it actually writes to, and it is ours", async () => {

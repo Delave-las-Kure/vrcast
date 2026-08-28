@@ -18,8 +18,11 @@ fn a_bare_server_carries_nothing_of_ours() {
     // Asked for through the guarded accessor rather than read off the field: that is the way
     // a deployment test will obtain it, and it is what puts the guard on the path.
     let (host, port) = target.address();
-    assert_eq!(host, "127.0.0.1");
-    assert!(port > 0, "no port was published");
+    // Whatever shape the stand is reached by, it has to be one the guard knows: the loopback
+    // with a published port, or the container's own name on a network we joined. Asserting one
+    // of the two was asserting which machine we happened to be standing on.
+    only_the_stand(&host);
+    assert!(port > 0, "no port to reach it on");
 
     // Every one of these is something a deployment step has to create. A step whose work is
     // already done proves nothing about the step, and — worse — the recognition rule would
@@ -163,13 +166,21 @@ fn a_reset_really_returns_to_bare() {
             .expect("could not look inside after the reset"),
         "the reset left what was written before it"
     );
-    // The published port changes with the container, and anything holding the old one has to
-    // read it again. Said here rather than in a comment alone, because a stale port fails as
-    // "connection refused" — which reads as a broken server, not as a stale number.
-    assert_ne!(
-        before, target.port,
-        "the port did not change, so the container was not actually replaced"
-    );
+    // On the machine the published port changes with the container, and anything holding the
+    // old one has to read it again: a stale port fails as "connection refused", which reads as
+    // a broken server rather than as a stale number. Said here rather than in a comment alone.
+    //
+    // On a container network there is no published port to go stale — the server answers on 22
+    // by its own name, before and after — so there is nothing here to check, and checking it
+    // anyway would be inventing a property. What proves the replacement on both paths is the
+    // assertion above: what was written before the reset is gone.
+    let (host, _) = target.address();
+    if host == "127.0.0.1" {
+        assert_ne!(
+            before, target.port,
+            "the port did not change, so the container was not actually replaced"
+        );
+    }
 }
 
 #[test]

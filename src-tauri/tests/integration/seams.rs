@@ -309,7 +309,8 @@ async fn building_a_ladder_runs_from_the_refusal_to_the_verdict() {
     );
 
     let master_url = format!(
-        "http://127.0.0.1:{}/videos/seam/master.m3u8",
+        "http://{}:{}/videos/seam/master.m3u8",
+        server.host(),
         server.http_port
     );
     let encoder = an_encoder();

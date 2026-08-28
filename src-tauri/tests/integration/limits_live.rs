@@ -65,7 +65,8 @@ async fn a_limited_viewer_gets_the_shortened_set_and_everyone_else_the_whole_one
         main_conf: MAIN_CONF,
         serving_prefix: PREFIX,
         check_url: &format!(
-            "http://127.0.0.1:{}/videos/demo/master.m3u8",
+            "http://{}:{}/videos/demo/master.m3u8",
+            server.host(),
             server.http_port
         ),
         owner: "root:root",
@@ -118,7 +119,8 @@ async fn a_limited_viewer_gets_the_shortened_set_and_everyone_else_the_whole_one
     // Everyone else still gets everything. Asked from outside the container's network, which
     // is a different address as far as the serving is concerned.
     let others = reqwest::get(&format!(
-        "http://127.0.0.1:{}/videos/demo/master.m3u8",
+        "http://{}:{}/videos/demo/master.m3u8",
+        server.host(),
         server.http_port
     ))
     .await
@@ -168,7 +170,8 @@ async fn a_rule_the_web_server_refuses_is_rolled_back_and_the_serving_keeps_work
         main_conf: MAIN_CONF,
         serving_prefix: PREFIX,
         check_url: &format!(
-            "http://127.0.0.1:{}/videos/demo/master.m3u8",
+            "http://{}:{}/videos/demo/master.m3u8",
+            server.host(),
             server.http_port
         ),
         owner: "root:root",
@@ -270,7 +273,8 @@ async fn taking_a_limit_off_gives_the_viewer_the_whole_set_again() {
         main_conf: MAIN_CONF,
         serving_prefix: PREFIX,
         check_url: &format!(
-            "http://127.0.0.1:{}/videos/demo/master.m3u8",
+            "http://{}:{}/videos/demo/master.m3u8",
+            server.host(),
             server.http_port
         ),
         owner: "root:root",
@@ -355,7 +359,8 @@ async fn a_cap_under_everything_serves_the_lightest_rather_than_nothing() {
         main_conf: MAIN_CONF,
         serving_prefix: PREFIX,
         check_url: &format!(
-            "http://127.0.0.1:{}/videos/demo/master.m3u8",
+            "http://{}:{}/videos/demo/master.m3u8",
+            server.host(),
             server.http_port
         ),
         owner: "root:root",

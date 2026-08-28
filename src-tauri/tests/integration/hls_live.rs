@@ -133,7 +133,8 @@ async fn a_ladder_is_cut_on_the_server_and_every_variant_of_it_is_served() {
 
     // And now the question a person actually has: is it served?
     let url = format!(
-        "http://127.0.0.1:{}/videos/demo/master.m3u8",
+        "http://{}:{}/videos/demo/master.m3u8",
+        server.host(),
         server.http_port
     );
     let verdict = hls_verify::verify(&url, 2)
@@ -215,7 +216,8 @@ async fn a_variant_taken_away_makes_the_result_incomplete_rather_than_successful
         .expect("the variant would not be removed");
 
     let url = format!(
-        "http://127.0.0.1:{}/videos/gap/master.m3u8",
+        "http://{}:{}/videos/gap/master.m3u8",
+        server.host(),
         server.http_port
     );
     let verdict = hls_verify::verify(&url, 2)
