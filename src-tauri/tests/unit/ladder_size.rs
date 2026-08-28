@@ -29,7 +29,10 @@ fn one_variant_is_its_bitrate_times_its_length_twice_over() {
     // against gigabytes — and upward, which is the direction this whole module is built to
     // err in. Written down rather than rounded away: a number nobody can account for is a
     // number nobody will trust when it refuses an hour of work.
-    assert_eq!(bytes_for_rung(4_000_000, AUDIO_BUDGET_BPS, 100.0), 108_847_201);
+    assert_eq!(
+        bytes_for_rung(4_000_000, AUDIO_BUDGET_BPS, 100.0),
+        108_847_201
+    );
 }
 
 #[test]
@@ -37,7 +40,11 @@ fn a_season_sized_set_lands_where_it_was_reckoned_to() {
     // The number that made this phase exist: eight episodes of forty-five minutes in three
     // rungs. If this comes out a great deal smaller, the estimate has stopped describing
     // what a set does to a disk.
-    let episode = bytes_for_set(&[22_000_000, 10_000_000, 4_000_000], AUDIO_BUDGET_BPS, 45.0 * 60.0);
+    let episode = bytes_for_set(
+        &[22_000_000, 10_000_000, 4_000_000],
+        AUDIO_BUDGET_BPS,
+        45.0 * 60.0,
+    );
     let season = episode * 8;
     assert!(
         (195.0..210.0).contains(&gb(season)),

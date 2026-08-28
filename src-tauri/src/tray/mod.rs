@@ -55,10 +55,7 @@ pub fn close_action(state: TrayState) -> CloseAction {
 /// **Both, and in this order.** Ayatana is the maintained fork and what current Debian,
 /// Ubuntu and Fedora ship; `libappindicator3` is the older name still present on long-term
 /// releases. Trying only the first would report "no tray" on a machine that has one.
-pub const APPINDICATOR: [&str; 2] = [
-    "libayatana-appindicator3.so.1",
-    "libappindicator3.so.1",
-];
+pub const APPINDICATOR: [&str; 2] = ["libayatana-appindicator3.so.1", "libappindicator3.so.1"];
 
 /// Ask a loader whether any of the libraries is there.
 ///

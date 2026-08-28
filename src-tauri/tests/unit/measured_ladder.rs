@@ -497,7 +497,10 @@ fn the_ladder_the_measurement_chooses_has_no_hole_the_checker_objects_to() {
         }
     }
 
-    assert!(swept > 100, "the sweep covered almost nothing: {swept} ladders");
+    assert!(
+        swept > 100,
+        "the sweep covered almost nothing: {swept} ladders"
+    );
     assert!(
         holed.is_empty(),
         "{} of {swept} measured ladders have a hole that could have been closed and was not:\n{}",

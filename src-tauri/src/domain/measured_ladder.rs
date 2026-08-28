@@ -141,7 +141,10 @@ pub fn select(points: &[Point], target_vmaf: f64, vmaf_step: f64) -> Selection {
         for i in 0..rungs.len().saturating_sub(1) {
             let above = rungs[i].bitrate_mbps;
             let below = rungs[i + 1].bitrate_mbps;
-            if super::ladder::step_is_allowable(above * super::ladder::MBIT, below * super::ladder::MBIT) {
+            if super::ladder::step_is_allowable(
+                above * super::ladder::MBIT,
+                below * super::ladder::MBIT,
+            ) {
                 continue;
             }
             // The lightest point that makes the step above it legal: the hole is closed with

@@ -34,8 +34,8 @@ fn source_root() -> PathBuf {
 const THE_ONE_PLACE: &str = "process.rs";
 
 fn rust_files(dir: &Path, into: &mut Vec<PathBuf>) {
-    let entries = std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("could not read {}: {e}", dir.display()));
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("could not read {}: {e}", dir.display()));
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {

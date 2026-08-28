@@ -146,7 +146,9 @@ async fn the_bundled_build_is_examined_once_however_often_it_is_asked_about() {
     };
 
     // Whatever went before, the answer is known by now.
-    let first = ffmpeg::probe_self().await.expect("the build would not answer");
+    let first = ffmpeg::probe_self()
+        .await
+        .expect("the build would not answer");
 
     // What one process start costs on this machine, right now.
     let started = Instant::now();
@@ -158,7 +160,9 @@ async fn the_bundled_build_is_examined_once_however_often_it_is_asked_about() {
     let one_start = started.elapsed();
 
     let started = Instant::now();
-    let second = ffmpeg::probe_self().await.expect("the build would not answer twice");
+    let second = ffmpeg::probe_self()
+        .await
+        .expect("the build would not answer twice");
     let asking_again = started.elapsed();
 
     assert_eq!(first, second, "the same build described two different ways");

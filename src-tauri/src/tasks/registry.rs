@@ -127,7 +127,10 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
         if let Some(owner) = owner_pid {
             if owner != std::process::id() || owner_identity.is_some() {
                 let owner_is_there = process_name(owner).is_some();
-                let same_owner = match (&owner_identity, crate::tasks::process::process_identity(owner)) {
+                let same_owner = match (
+                    &owner_identity,
+                    crate::tasks::process::process_identity(owner),
+                ) {
                     (Some(was), Some(now)) => *was == now,
                     // The mark could not be read on one side or the other. Sparing something
                     // that should have been ended costs an orphan until the next start;

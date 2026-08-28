@@ -668,10 +668,19 @@ fn registered_commands() -> HashSet<String> {
 
     let mut out = HashSet::new();
     for line in body.lines() {
-        let line = line.split("//").next().unwrap_or("").trim().trim_end_matches(',');
+        let line = line
+            .split("//")
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches(',');
         // `commands::ipc::name`, and nothing else has that shape here.
         if let Some(name) = line.rsplit("::").next() {
-            if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            if !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
                 out.insert(name.to_owned());
             }
         }
@@ -710,9 +719,9 @@ fn called_commands() -> HashSet<String> {
     // `call<T>("name", …)` and `call("name", …)` — the one way this file reaches the core.
     for (i, _) in ipc.match_indices("call") {
         let rest = &ipc[i + "call".len()..];
-        let rest = rest.strip_prefix('<').map_or(rest, |r| {
-            r.find('>').map_or(r, |j| &r[j + 1..])
-        });
+        let rest = rest
+            .strip_prefix('<')
+            .map_or(rest, |r| r.find('>').map_or(r, |j| &r[j + 1..]));
         let Some(rest) = rest.strip_prefix('(') else {
             continue;
         };
@@ -740,11 +749,26 @@ fn called_commands() -> HashSet<String> {
 /// added here without a task number beside it, and `the_list_of_unwired_commands_does_not_rot`
 /// below makes the list shrink on its own.
 const NOT_WIRED_YET: [(&str, &str); 5] = [
-    ("quality_measure_reuse", "T431 — lending a measurement to the next episode (FR-146)"),
-    ("quality_measurements", "T431 — the list to choose a lender from"),
-    ("quality_measure_forget", "T433 — a way out of a borrowed measurement"),
-    ("geo_status", "T461 — whether the tables of places are there and current"),
-    ("geo_update", "T461 — fetching them; without it a stale table has no button"),
+    (
+        "quality_measure_reuse",
+        "T431 — lending a measurement to the next episode (FR-146)",
+    ),
+    (
+        "quality_measurements",
+        "T431 — the list to choose a lender from",
+    ),
+    (
+        "quality_measure_forget",
+        "T433 — a way out of a borrowed measurement",
+    ),
+    (
+        "geo_status",
+        "T461 — whether the tables of places are there and current",
+    ),
+    (
+        "geo_update",
+        "T461 — fetching them; without it a stale table has no button",
+    ),
 ];
 
 #[test]

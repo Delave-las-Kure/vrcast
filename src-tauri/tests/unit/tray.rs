@@ -11,7 +11,10 @@ use vrcast_studio_lib::tray::{close_action, probe_appindicator, CloseAction, Tra
 /// A loader that answers for a fixed set of names and records what it was asked.
 fn loader_with(
     present: &[&str],
-) -> (impl Fn(&str) -> bool + 'static, &'static RefCell<Vec<String>>) {
+) -> (
+    impl Fn(&str) -> bool + 'static,
+    &'static RefCell<Vec<String>>,
+) {
     // A leak, on purpose and once per test: the recorder has to outlive the closure, and a
     // test binary that ends in a moment is the one place where that costs nothing.
     let asked: &'static RefCell<Vec<String>> = Box::leak(Box::new(RefCell::new(Vec::new())));
@@ -69,7 +72,11 @@ fn the_search_stops_at_the_first_one_that_loads() {
     // the first. Asking for it after an answer is already in hand is work for nothing.
     let (loads, asked) = loader_with(&["libayatana-appindicator3.so.1"]);
     let _ = probe_appindicator(loads);
-    assert_eq!(asked.borrow().len(), 1, "the search carried on after finding one");
+    assert_eq!(
+        asked.borrow().len(),
+        1,
+        "the search carried on after finding one"
+    );
 }
 
 #[test]
@@ -105,8 +112,8 @@ fn the_tray_code_is_matched_by_the_feature_that_makes_it_work() {
         return; // No tray code, nothing to require.
     }
 
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml"))
-        .expect("Cargo.toml would not read");
+    let manifest =
+        std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml would not read");
     let line = manifest
         .lines()
         .find(|l| l.trim_start().starts_with("tauri = "))
