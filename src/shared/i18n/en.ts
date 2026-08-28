@@ -701,9 +701,6 @@ export const en: Catalogue = {
     appearance: {
       title: "Appearance",
       theme: "Theme",
-      themeLight: "Light",
-      themeDark: "Dark",
-      themeSystem: "As in the system",
       language: "Language",
       mascot: "Mascot",
       mascotOn: "Show the mascot",
@@ -726,7 +723,6 @@ export const en: Catalogue = {
       minutes: "minutes",
       refresh: "Ask again",
       notDetermined: "Could not be determined",
-      nothingYet: "Nothing asked yet.",
       asking: "Asking the server…",
 
       healthTitle: "The state of the server",

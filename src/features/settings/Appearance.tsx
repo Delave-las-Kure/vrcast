@@ -41,7 +41,11 @@ export function Appearance() {
               checked={choice === it}
               onChange={() => setChoice(it)}
             />
-            {words[`theme${it[0].toUpperCase()}${it.slice(1)}` as keyof typeof words] as string}
+            {/* The same three labels as the sidebar's switch, from the same place. They used
+                to be written twice — `appearance.themeLight` beside `common.theme.light` —
+                and two copies of a word are two chances for the two switches to disagree
+                (T463). */}
+            {t.ui.common.theme[it]}
           </label>
         ))}
       </fieldset>

@@ -700,9 +700,6 @@ const ui = {
   appearance: {
     title: "Оформление",
     theme: "Тема",
-    themeLight: "Светлая",
-    themeDark: "Тёмная",
-    themeSystem: "Как в системе",
     language: "Язык",
     mascot: "Маскот",
     mascotOn: "Показывать маскота",
@@ -725,7 +722,6 @@ const ui = {
     minutes: "минут",
     refresh: "Спросить заново",
     notDetermined: "Не удалось определить",
-    nothingYet: "Ещё не спрашивали.",
     asking: "Спрашиваю сервер…",
 
     healthTitle: "Состояние сервера",

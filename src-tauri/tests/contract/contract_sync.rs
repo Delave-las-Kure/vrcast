@@ -1150,30 +1150,103 @@ const RESERVED: [(&str, &str); 2] = [
     ),
 ];
 
-/// Is this block handed over whole and read by key?
+/// Blocks whose leaves are named by the **core**, not by any screen, each with the check that
+/// holds them to it.
 ///
-/// Two forms: indexed straight away — `t.ui.tasks.kinds[task.kind]` — and handed over first,
-/// `const names = t.ui.deploySteps as unknown as Record<string, string>`. Both mention the
-/// block and never its leaves.
+/// One entry, and it earns its place: `deploySteps` is handed to `StepList` as a lookup and
+/// indexed with `step.id`, which is a `StepId` variant. No prefix is written down anywhere,
+/// so nothing in the interface names `Fail2ban` — and the fallback `names[step.id] ?? step.id`
+/// means a missing wording shows the raw variant instead of failing.
 ///
-/// **The blind spot, said out loud**: this excuses a block whole. `ui.appearance` is handed to
-/// the mascot as a lookup, so its `mascot*` wordings really are drawn — and its `themeLight`
-/// and friends, which nothing reads, are excused along with them (T463). Telling those apart
-/// would take a TypeScript parse. What this finds is a wording nobody reads at all.
-fn read_by_key(block: &str, sources: &str) -> bool {
-    sources.contains(&format!("{block}[")) || sources.contains(&format!("{block} as "))
+/// Excusing it here would be worthless on its own. It is excused **because**
+/// `every_deploy_step_has_a_wording` compares the block against the variants themselves,
+/// which is a stricter thing to ask than "some screen mentions this name".
+const NAMED_BY_THE_CORE: [(&str, &str); 1] = [(
+    "deploySteps",
+    "every_deploy_step_has_a_wording holds it to the StepId variants",
+)];
+
+/// The fixed halves of the names the interface builds at run time.
+///
+/// Two of them today, the same shape — a constant, then something from a value:
+///
+/// - `words["mascot" + mood[0].toUpperCase() + mood.slice(1)]` for the mascot's moods
+/// - `words["reading" + about.replace(…)]` for each reading on the health panel
+///
+/// **This is what T463 was about.** Until now a block that was indexed anywhere was excused
+/// *whole*, so a wording nobody reads shared the excuse with its neighbours that are read —
+/// which is how `diag.nothingYet` sat in both catalogues describing a state the diagnostics
+/// screen cannot be in, since it asks on the way in. Harvesting the prefixes instead excuses
+/// `readingSwap` and still asks about `nothingYet`.
+///
+/// Harvested rather than listed, because a hand-written list goes stale the first time
+/// somebody adds a third. Three characters at least: a one-letter prefix would excuse half
+/// the catalogue.
+///
+/// **What it still cannot see.** A dead wording whose name happens to start with a live
+/// prefix — `readingNothing` — is excused with the rest. That is a narrower hole than the
+/// block it replaces, and it is a hole: this finds a wording nobody reads, not every wording
+/// nobody reads.
+fn built_prefixes(sources: &str) -> HashSet<String> {
+    fn identifier(from: &str) -> Option<String> {
+        let name: String = from
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        (name.len() >= 3).then_some(name)
+    }
+
+    let mut out = HashSet::new();
+    // `theme${…}` — a template literal that opens with a constant.
+    for (at, _) in sources.match_indices("${") {
+        let before = &sources[..at];
+        let Some(tick) = before.rfind('`') else {
+            continue;
+        };
+        if let Some(name) = identifier(&before[tick + 1..]) {
+            if tick + 1 + name.len() == at {
+                out.insert(name);
+            }
+        }
+    }
+    // `"mascot" + …` — a plain concatenation.
+    for (at, _) in sources.match_indices("\" + ") {
+        let before = &sources[..at];
+        let Some(quote) = before.rfind('"') else {
+            continue;
+        };
+        if let Some(name) = identifier(&before[quote + 1..]) {
+            if quote + 1 + name.len() == at {
+                out.insert(name);
+            }
+        }
+    }
+    assert!(
+        !out.is_empty(),
+        "no built-up names were found in the interface at all — the harvesting has come \
+         adrift, and every wording assembled at run time is about to be called dead"
+    );
+    out
 }
 
 #[test]
 fn every_wording_is_asked_for_by_some_screen() {
     let sources = interface_sources();
     let reserved: HashSet<&str> = RESERVED.iter().map(|(n, _)| *n).collect();
+    let by_the_core: HashSet<&str> = NAMED_BY_THE_CORE.iter().map(|(b, _)| *b).collect();
+    let prefixes = built_prefixes(&sources);
 
     let mut unseen: Vec<String> = wordings()
         .into_iter()
         .filter(|w| !reserved.contains(w.name.as_str()))
-        .filter(|w| !read_by_key(&w.block, &sources))
+        .filter(|w| !by_the_core.contains(w.block.as_str()))
         .filter(|w| !sources.contains(&w.name))
+        // Assembled at run time out of a constant the interface does write down.
+        .filter(|w| {
+            !prefixes
+                .iter()
+                .any(|p| w.name.len() > p.len() && w.name.starts_with(p))
+        })
         .map(|w| format!("{}.{}", w.block, w.name))
         .collect();
     unseen.sort();
@@ -1185,6 +1258,81 @@ fn every_wording_is_asked_for_by_some_screen() {
          Both languages have them and the types are content; the screens simply never ask. \
          Either wire them up, or put them in RESERVED with the task that will.",
         unseen.join("\n  ")
+    );
+}
+
+#[test]
+fn nothing_is_excused_to_the_core_without_a_check_holding_it() {
+    // The excuse above is only worth having while the check it names exists. If somebody
+    // deletes that check, `deploySteps` quietly stops being examined by anything at all.
+    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file!()))
+        .expect("this check could not read its own source");
+    for (block, holds) in NAMED_BY_THE_CORE {
+        let name = holds.split_whitespace().next().unwrap_or("");
+        assert!(
+            text.contains(&format!("fn {name}(")),
+            "{block} is excused because of `{name}`, and no such check is written here any more"
+        );
+    }
+}
+
+#[test]
+fn every_deploy_step_has_a_wording() {
+    // What goes wrong without this. `StepList` looks a step's name up by its `StepId`, and
+    // falls back to the variant itself when there is none: `names[step.id] ?? step.id`. So a
+    // step added to the core without a wording does not fail, does not warn, and does not
+    // look broken — it shows `Fail2ban` in the middle of a Russian list, which reads as a
+    // technical name somebody meant to leave there.
+    //
+    // Both directions. A wording for a step that no longer exists is dead weight nobody will
+    // ever see, and the wordings guard cannot find it: the block is excused to this check.
+    let core = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/domain/deploy_steps.rs"),
+    )
+    .expect("deploy_steps.rs would not read");
+    let at = core
+        .find("pub enum StepId {")
+        .expect("deploy_steps.rs no longer declares `pub enum StepId`");
+    let body = block_body(&core[at + "pub enum StepId {".len()..]);
+
+    let mut variants: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let code = line.split("//").next().unwrap_or("").trim();
+        let Some(name) = code.strip_suffix(',') else {
+            continue;
+        };
+        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            variants.push(name.to_owned());
+        }
+    }
+    assert!(
+        variants.len() > 8,
+        "only {} deployment steps were parsed out of deploy_steps.rs",
+        variants.len()
+    );
+
+    let written: HashSet<String> = wordings()
+        .into_iter()
+        .filter(|w| w.block == "deploySteps")
+        .map(|w| w.name)
+        .collect();
+    assert!(
+        !written.is_empty(),
+        "ru.ts no longer has a `deploySteps` block"
+    );
+
+    let unnamed: Vec<&String> = variants.iter().filter(|v| !written.contains(*v)).collect();
+    assert!(
+        unnamed.is_empty(),
+        "these deployment steps have no wording, and will show their own variant name to a \
+         person mid-deployment: {unnamed:?}"
+    );
+
+    let mut orphaned: Vec<&String> = written.iter().filter(|w| !variants.contains(w)).collect();
+    orphaned.sort();
+    assert!(
+        orphaned.is_empty(),
+        "these deployment wordings name a step the core no longer has: {orphaned:?}"
     );
 }
 
