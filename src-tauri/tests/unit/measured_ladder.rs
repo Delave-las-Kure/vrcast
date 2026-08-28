@@ -7,7 +7,7 @@
 use vrcast_studio_lib::domain::chunks::{reference_chunks, CHUNK_S};
 use vrcast_studio_lib::domain::ladder::plan;
 use vrcast_studio_lib::domain::ladder::{
-    buildable, from_measurement, NotBuildable, Quality, Reason, SourceFacts,
+    buildable, from_measurement, validate, NotBuildable, Quality, Reason, SourceFacts,
 };
 use vrcast_studio_lib::domain::measure_grid::{
     grid, grid_bitrates_mbps, grid_heights, seconds_per_point, Cell,
@@ -166,7 +166,12 @@ fn the_top_is_cut_by_the_target_rather_than_by_the_size_of_the_gain() {
     ];
     let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
     assert_eq!(chosen(&chose.above_target), vec![(35, 2160)]);
-    assert_eq!(chosen(&chose.rungs), vec![(22, 2160), (8, 1440), (4, 1440)]);
+    // 14 is here because 22 over 8 is 2.75x, and this project's own checker objects to
+    // that: a viewer whose line holds 14 was dropped to 8 for nothing (R-31).
+    assert_eq!(
+        chosen(&chose.rungs),
+        vec![(22, 2160), (14, 2160), (8, 1440), (4, 1440)]
+    );
 }
 
 #[test]
@@ -183,7 +188,12 @@ fn a_thin_gain_below_the_target_does_not_take_the_top_away() {
     let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
     assert!(chose.above_target.is_empty());
     assert_eq!(chose.rungs[0].bitrate_mbps, 22, "the top was given away");
-    assert_eq!(chosen(&chose.rungs), vec![(22, 2160), (8, 1440), (4, 1440)]);
+    // 14 is here because 22 over 8 is 2.75x, and this project's own checker objects to
+    // that: a viewer whose line holds 14 was dropped to 8 for nothing (R-31).
+    assert_eq!(
+        chosen(&chose.rungs),
+        vec![(22, 2160), (14, 2160), (8, 1440), (4, 1440)]
+    );
 }
 
 #[test]
@@ -399,4 +409,168 @@ fn the_cost_model_gives_back_the_readings_it_was_fitted_to() {
 
     // A frame rate of zero is somebody's broken file, not a division by zero.
     assert!(seconds_per_point(1920, 1080, 0, 10, 3) > 0.0);
+}
+
+// ---------- the two halves of the rule have to agree (T383–T385, R-31) ----------
+//
+// **The fault these exist for.** Choosing rungs and judging them were written apart and never
+// introduced: `select` keeps a rung only when it is a visible step down in *quality*
+// (`VMAF_STEP`), and `ladder::validate` objects unless it is a sane step down in *bitrate*
+// (1.5–2.0×). On flat material — animation, and anything else whose quality curve levels off —
+// a fourfold drop in bitrate is worth barely four points of VMAF, so the first rule skips the
+// middle and the second then objects to the hole. The application showed a person a complaint
+// about a ladder it had chosen itself.
+//
+// Neither of the scripts this project was ported from solves it: `measure-ladder.sh` selects
+// on VMAF with no condition on bitrate at all, and `plan-ladder.sh` on bitrate with no
+// condition on quality. Each holds one half. So joining them is composition, not new
+// arithmetic — 96, 4, 1.5 and 2.0 are all untouched (constitution VI).
+
+/// A plausible quality curve: a large gain at the bottom, a small one at the top.
+///
+/// `hardness` moves the whole curve down without changing its shape — easy material
+/// saturates early, dense material keeps asking for bits. Synthetic, and said so out loud:
+/// it stands in for the shapes real measurements have while there is only one real
+/// measurement to hand.
+fn curve(bitrate_mbps: u64, hardness: f64) -> f64 {
+    100.0 - hardness / (bitrate_mbps as f64).powf(0.6)
+}
+
+#[test]
+fn the_ladder_the_measurement_chooses_has_no_hole_the_checker_objects_to() {
+    // The same guarantee `a_ladder_this_code_planned_has_nothing_wrong_with_it` gives the
+    // formula, given to the measurement — which never had it. Swept over every anchor the
+    // probe can produce and over material from easy to dense, because the fault was never
+    // about one film: before the filling, most of this sweep came out holed.
+    //
+    // **Two kinds of hole, and confusing them would ruin the check.** One the hull can
+    // close — that is a fault in the choosing, and it must not happen. One the hull cannot,
+    // because the grid's own multipliers left a pair wider than 2x before any choosing
+    // happened: `grid_bitrates_mbps(8)` is 1, 3, 5, 8, 12, and 3 over 1 is threefold.
+    // Filling that would mean inventing a rung nobody measured. Those are named below
+    // rather than waved through, and the decision about the multipliers is R-32.
+    use vrcast_studio_lib::domain::ladder::Objection;
+
+    let facts = source(1920, 1080, 24, None);
+    let mut holed: Vec<String> = Vec::new();
+    let mut in_the_grid = std::collections::BTreeSet::new();
+    let mut swept = 0usize;
+
+    for anchor in 2u64..=40 {
+        for hardness in [20.0, 40.0, 60.0, 80.0, 100.0] {
+            let measured: Vec<Point> = grid_bitrates_mbps(anchor)
+                .into_iter()
+                .map(|b| point(b, 1080, curve(b, hardness)))
+                .collect();
+            let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
+            if chose.rungs.len() < 2 {
+                continue;
+            }
+            let Ok(plan) = from_measurement(&chose.rungs, &facts, None, false) else {
+                continue;
+            };
+            swept += 1;
+
+            for objection in validate(&plan.rungs, &facts, facts.fps) {
+                let Objection::BadStep { index, times } = objection else {
+                    continue;
+                };
+                let above = plan.rungs[index - 1].bitrate_bps / 1_000_000;
+                let below = plan.rungs[index].bitrate_bps / 1_000_000;
+                // Was there anything measured between the two that would have made the step
+                // from above legal? Asked of the grid itself, in the checker's own terms.
+                let couldve = measured.iter().any(|p| {
+                    p.bitrate_mbps > below
+                        && p.bitrate_mbps < above
+                        && above as f64 <= 2.0 * p.bitrate_mbps as f64 + 0.5
+                        && above as f64 >= 1.5 * p.bitrate_mbps as f64 - 0.5
+                });
+                if couldve {
+                    holed.push(format!(
+                        "anchor {anchor}, hardness {hardness}: {above} over {below} \
+                         ({times:.2}x), and the grid had something to close it with"
+                    ));
+                } else {
+                    in_the_grid.insert(anchor);
+                }
+            }
+        }
+    }
+
+    assert!(swept > 100, "the sweep covered almost nothing: {swept} ladders");
+    assert!(
+        holed.is_empty(),
+        "{} of {swept} measured ladders have a hole that could have been closed and was not:\n{}",
+        holed.len(),
+        holed.iter().take(8).cloned().collect::<Vec<_>>().join("\n")
+    );
+    assert_eq!(
+        in_the_grid.iter().copied().collect::<Vec<u64>>(),
+        vec![8, 13, 19, 25, 36],
+        "the anchors whose own grid leaves a hole have changed — either the multipliers \
+         moved or the filling did, and both are worth knowing about"
+    );
+}
+
+#[test]
+fn the_middle_is_kept_when_the_quality_curve_is_flat() {
+    // Measured on this machine on 2026-08-28: Blue Eye Samurai S01E04, 1080p24, a 4.8 Mbit/s
+    // source. Animation, so the curve is flat — four megabits are worth seven points of VMAF
+    // over one, well under two steps — and the old rule went straight from the top to the
+    // bottom, leaving a fourfold hole. A viewer whose line holds three megabits was dropped
+    // all the way to one, when two looks all but the same as four.
+    let measured = [
+        point(4, 1080, 89.51),
+        point(4, 864, 87.20),
+        point(3, 1080, 88.83),
+        point(3, 864, 86.80),
+        point(2, 1080, 87.44),
+        point(2, 864, 85.91),
+        point(2, 690, 84.00),
+        point(1, 864, 82.57),
+        point(1, 690, 81.46),
+        point(1, 552, 79.13),
+    ];
+    let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
+    assert_eq!(chosen(&chose.rungs), vec![(4, 1080), (2, 1080), (1, 864)]);
+}
+
+#[test]
+fn the_hole_in_the_reference_ladder_is_filled_too() {
+    // mandoup, the ladder this project's own tests have carried since the port: 22 over 8 is
+    // 2.75×, which `validate` objects to. It was never wrong about the top and the bottom —
+    // only about there being nothing between them.
+    let measured = [
+        point(4, 1440, 85.60),
+        point(8, 1440, 90.20),
+        point(14, 2160, 93.80),
+        point(22, 2160, 96.10),
+        point(35, 2160, 97.22),
+    ];
+    let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
+    assert_eq!(chosen(&chose.above_target), vec![(35, 2160)]);
+    assert_eq!(
+        chosen(&chose.rungs),
+        vec![(22, 2160), (14, 2160), (8, 1440), (4, 1440)]
+    );
+}
+
+#[test]
+fn a_ladder_with_no_hole_gains_nothing() {
+    // **The half that stops this from being "add rungs until it looks safe".** The hull out
+    // of `step_is_allowable`'s own doc comment — 15, 8, 4, 3 — has no hole in it: every step
+    // is legal. Filling holes must therefore leave it exactly as the quality rule chose it,
+    // and a rule that walked down taking the largest legal step each time would not: it would
+    // bolt 3 onto the bottom of a ladder that was already right.
+    let measured = [
+        point(3, 1080, 78.0),
+        point(4, 1080, 84.0),
+        point(8, 1440, 91.0),
+        point(15, 2160, 95.0),
+    ];
+    let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
+    assert_eq!(
+        chosen(&chose.rungs),
+        vec![(15, 2160), (8, 1440), (4, 1080), (3, 1080)]
+    );
 }

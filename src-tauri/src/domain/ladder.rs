@@ -40,7 +40,7 @@ const MULTIPLIERS: [f64; 4] = [1.0, 0.55, 0.3, 0.17];
 /// with the grid every VMAF measurement this project owns was taken on. And the collapsing
 /// of duplicates stops happening, because at bit precision two multipliers never meet — so
 /// light material, which the rule says needs one file and no ladder, gets four.
-const MBIT: u64 = 1_000_000;
+pub(crate) const MBIT: u64 = 1_000_000;
 
 /// The bit density below which a rung's resolution is worth lowering.
 ///
@@ -693,7 +693,7 @@ pub enum Objection {
 /// bounds from two contradictory worlds. It let a threefold hole through — 3 against 1,
 /// which is the very failure the rule exists for — and could not fire at all below two and
 /// a half megabits.
-fn step_is_allowable(above_bps: u64, below_bps: u64) -> bool {
+pub(crate) fn step_is_allowable(above_bps: u64, below_bps: u64) -> bool {
     let above = above_bps as f64;
     let below = below_bps as f64;
 

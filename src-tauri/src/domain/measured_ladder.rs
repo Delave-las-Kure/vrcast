@@ -116,6 +116,61 @@ pub fn select(points: &[Point], target_vmaf: f64, vmaf_step: f64) -> Selection {
     }
     rungs.sort_by_key(|c| std::cmp::Reverse(c.bitrate_mbps));
 
+    // --- 4. fill the holes the checker would object to ---------------------------------
+    //
+    // **The two halves of the rule, finally introduced.** Everything above judges a rung by
+    // quality alone; `ladder::validate` judges it by bitrate alone, and refuses a step
+    // outside 1.5–2.0×. On flat material — animation, and anything whose curve levels off —
+    // a fourfold drop in bitrate is worth barely four points of VMAF, so the loop above
+    // skips the middle and the checker then objects to the hole. The application showed a
+    // person a complaint about a ladder it had chosen itself.
+    //
+    // **Filling, not descending.** The obvious alternative — walk down from the top taking
+    // the largest legal step each time — gives the same answer on every ladder that has a
+    // hole, and a worse one on every ladder that has none: it bolts a rung onto the bottom
+    // of `15, 8, 4, 3`, which was already right. This cannot: where the checker is silent
+    // it does nothing at all.
+    //
+    // The point inserted is a real one out of the hull, with a VMAF somebody measured — so
+    // a filled rung is as measured as any other, and `Quality::MeasuredHere` stays true.
+    //
+    // Repeated until nothing changes, because filling one hole can leave a smaller one
+    // beneath it. It terminates: every pass consumes a hull point, and the hull is finite.
+    loop {
+        let mut filled = false;
+        for i in 0..rungs.len().saturating_sub(1) {
+            let above = rungs[i].bitrate_mbps;
+            let below = rungs[i + 1].bitrate_mbps;
+            if super::ladder::step_is_allowable(above * super::ladder::MBIT, below * super::ladder::MBIT) {
+                continue;
+            }
+            // The lightest point that makes the step above it legal: the hole is closed with
+            // as little extra encoding as it can be closed with.
+            let patch = hull
+                .iter()
+                .filter(|c| c.bitrate_mbps > below && c.bitrate_mbps < above)
+                .filter(|c| {
+                    super::ladder::step_is_allowable(
+                        above * super::ladder::MBIT,
+                        c.bitrate_mbps * super::ladder::MBIT,
+                    )
+                })
+                .min_by_key(|c| c.bitrate_mbps)
+                .copied();
+            if let Some(patch) = patch {
+                rungs.insert(i + 1, patch);
+                filled = true;
+                break;
+            }
+            // Nothing in the hull can close it. The hole is in the measurement, not in the
+            // choosing, and inventing a rung nobody measured would be the one lie this
+            // module could tell that a person would believe.
+        }
+        if !filled {
+            break;
+        }
+    }
+
     Selection {
         rungs,
         above_target,
