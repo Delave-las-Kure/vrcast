@@ -38,11 +38,24 @@ pub fn record(db: &Db, pid: u32, program: &str, task_id: Option<&str>) -> Result
     // The identifying mark is taken right now, while the process is certainly alive and
     // certainly the one we mean. Later, anyone at all may stand behind this number.
     let identity = crate::tasks::process::process_identity(pid);
+    // And who started it. A record whose owner is still running belongs to a live instance
+    // and is not a survivor of anything — see `sweep_on_startup` and migration 0010.
+    let owner_pid = std::process::id();
+    let owner_identity = crate::tasks::process::process_identity(owner_pid);
     db.with_conn(|c| {
         c.execute(
-            "INSERT OR REPLACE INTO running_processes (pid, program, task_id, started_at, identity)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![pid, program, task_id, now_rfc3339(), identity],
+            "INSERT OR REPLACE INTO running_processes
+                 (pid, program, task_id, started_at, identity, owner_pid, owner_identity)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                pid,
+                program,
+                task_id,
+                now_rfc3339(),
+                identity,
+                owner_pid,
+                owner_identity
+            ],
         )?;
         Ok(())
     })
@@ -65,6 +78,11 @@ pub struct SweepReport {
     pub reused: Vec<u32>,
     /// Records whose programs had already finished on their own.
     pub already_gone: Vec<u32>,
+    /// Records belonging to an instance that is still running. Not touched, not forgotten.
+    ///
+    /// **Not a kind of cleaning up**, which is why `is_clean` ignores it: nothing survived
+    /// and nothing was left behind. Somebody else is simply still working.
+    pub still_owned: Vec<u32>,
 }
 
 impl SweepReport {
@@ -78,13 +96,18 @@ impl SweepReport {
 /// Called once at start-up, before any new tasks appear. After the sweep the table is
 /// cleared entirely: everything in it belonged to the previous run.
 pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
-    let records: Vec<(u32, String, Option<String>)> = db.with_conn(|c| {
-        let mut stmt = c.prepare("SELECT pid, program, identity FROM running_processes")?;
+    type Record = (u32, String, Option<String>, Option<u32>, Option<String>);
+    let records: Vec<Record> = db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT pid, program, identity, owner_pid, owner_identity FROM running_processes",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, u32>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<u32>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -96,7 +119,34 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
 
     let mut report = SweepReport::default();
 
-    for (pid, program, recorded_identity) in records {
+    for (pid, program, recorded_identity, owner_pid, owner_identity) in records {
+        // **Whose record is this.** An instance that is still running has not left anything
+        // behind, and its work is not this sweep's to end. Checked in the same two steps the
+        // child process is checked in below, and for the same reason: the number alone lies
+        // once it has been handed out again.
+        if let Some(owner) = owner_pid {
+            if owner != std::process::id() || owner_identity.is_some() {
+                let owner_is_there = process_name(owner).is_some();
+                let same_owner = match (&owner_identity, crate::tasks::process::process_identity(owner)) {
+                    (Some(was), Some(now)) => *was == now,
+                    // The mark could not be read on one side or the other. Sparing something
+                    // that should have been ended costs an orphan until the next start;
+                    // ending something that should have been spared costs hours of work.
+                    _ => true,
+                };
+                if owner_is_there && same_owner {
+                    tracing::debug!(
+                        pid,
+                        owner,
+                        program = %program,
+                        "left alone: the instance that started it is still running"
+                    );
+                    report.still_owned.push(pid);
+                    continue;
+                }
+            }
+        }
+
         // On Windows the check and the termination are done through ONE handle: between a
         // separate check and kill the system is free to hand the freed number to another
         // program, and that is the one that would be killed. The sweep runs at the
