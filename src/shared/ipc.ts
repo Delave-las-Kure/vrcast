@@ -51,6 +51,7 @@ import {
   type LadderPreview,
   type LadderVerdict,
   type MeasurePreview,
+  type Leftovers,
   type MeasurementView,
   type Rung,
   type SourceFacts,
@@ -232,6 +233,10 @@ export const ipc = {
     call<MeasurePreview>("quality_measure_preview", { request }),
   qualityMeasureStart: (request: QualityMeasureRequest) =>
     call<string>("quality_measure_start", { request }),
+  /** What is still lying in a working folder — asked about the old one after the path is
+   *  changed (T453). A reading, never an act: nothing is moved and nothing is deleted. */
+  workDirLeftovers: (path: string) => call<Leftovers>("work_dir_leftovers", { path }),
+
   qualityMeasureResult: (sourceKey: string, codec: string) =>
     call<MeasurementView>("quality_measure_result", { sourceKey, codec }),
 

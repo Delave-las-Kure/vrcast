@@ -108,6 +108,7 @@ const SETTINGS: Settings = {
   animations: true,
   language: null,
   theme: null,
+  work_dir: null,
 };
 
 function progress(over: Partial<TaskProgressEvent> = {}): TaskProgressEvent {

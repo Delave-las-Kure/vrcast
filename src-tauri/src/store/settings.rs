@@ -34,6 +34,12 @@ pub struct Settings {
     pub language: Option<String>,
     /// Light or dark. `None` means "the system's".
     pub theme: Option<String>,
+    /// Where a variant is written while it is being made (T450, T451).
+    ///
+    /// `None` means "beside the source" — see `domain::work_dir`, which holds the reasoning
+    /// and the fallback. Stored rather than derived so that somebody with a scratch disk can
+    /// say so once instead of on every build.
+    pub work_dir: Option<String>,
 }
 
 impl Default for Settings {
@@ -46,6 +52,7 @@ impl Default for Settings {
             animations: true,
             language: None,
             theme: None,
+            work_dir: None,
         }
     }
 }
@@ -155,6 +162,7 @@ pub fn save(db: &Db, settings: &Settings) -> Result<Settings, DbError> {
         ("animations", settings.animations.to_string()),
         ("language", settings.language.clone().unwrap_or_default()),
         ("theme", settings.theme.clone().unwrap_or_default()),
+        ("work_dir", settings.work_dir.clone().unwrap_or_default()),
     ];
     db.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
@@ -206,6 +214,9 @@ fn apply(settings: &mut Settings, name: &str, value: &str) {
         // value would make "the system's" indistinguishable from a language named "".
         "language" => settings.language = (!value.is_empty()).then(|| value.to_owned()),
         "theme" => settings.theme = (!value.is_empty()).then(|| value.to_owned()),
+        // Empty means "not chosen" here for the same reason as above, and it matters more:
+        // a blank stored as a real value would put two gigabytes in a folder named nothing.
+        "work_dir" => settings.work_dir = (!value.is_empty()).then(|| value.to_owned()),
         _ => {}
     }
 }

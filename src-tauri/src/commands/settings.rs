@@ -23,6 +23,22 @@ pub mod api {
         state.viewers.set_threshold(saved.activity_threshold());
         Ok(saved)
     }
+
+    /// What is still lying in a working folder (T453).
+    ///
+    /// Asked after the path is changed, about the **old** one. Working files are swept after
+    /// a variant is sent, so this is nothing nearly always — and when it is not, it is one
+    /// and a half to two gigabytes left by a build that was killed, under a path the
+    /// application will never look at again.
+    ///
+    /// A reading, not an act. Moving gigabytes between disks takes minutes and would happen
+    /// inside a click, with nothing to watch and no way to stop it; deleting somebody's files
+    /// because they changed a setting is worse. What is owed here is the fact.
+    pub fn work_dir_leftovers(path: &str) -> Result<crate::domain::work_dir::Leftovers> {
+        Ok(crate::domain::work_dir::leftovers_in(std::path::Path::new(
+            path,
+        )))
+    }
 }
 
 pub mod ipc {
@@ -37,5 +53,10 @@ pub mod ipc {
     #[tauri::command]
     pub async fn settings_set(state: State<'_, AppState>, settings: Settings) -> Result<Settings> {
         api::settings_set(&state, &settings)
+    }
+
+    #[tauri::command]
+    pub async fn work_dir_leftovers(path: String) -> Result<crate::domain::work_dir::Leftovers> {
+        api::work_dir_leftovers(&path)
     }
 }

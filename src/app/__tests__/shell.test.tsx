@@ -34,6 +34,7 @@ const SETTINGS: Settings = {
   animations: true,
   language: null,
   theme: null,
+  work_dir: null,
 };
 
 vi.mock("../../shared/ipc", async () => {

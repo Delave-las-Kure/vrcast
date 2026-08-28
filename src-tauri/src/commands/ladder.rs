@@ -231,10 +231,16 @@ pub mod api {
             &format!("{}/master.m3u8", request.slug),
         )
         .origin;
-        // Somewhere local for a variant while it is being made. Beside the other working
-        // files rather than beside the source: a person's film directory is theirs, and a
-        // half-made variant appearing in it is alarming even when it is swept away after.
-        let work_dir = std::env::temp_dir().join("vrcast-ladder");
+        // Somewhere local for a variant while it is being made. Beside the source unless the
+        // person has said otherwise — `domain::work_dir` holds the whole argument, including
+        // why it no longer goes where the comment that stood here said it should.
+        let chosen = crate::store::settings::load(&state.db)
+            .map(|s| s.work_dir)
+            .unwrap_or_default();
+        let work_dir = crate::domain::work_dir::for_source(
+            chosen.as_deref(),
+            std::path::Path::new(&request.path),
+        );
         let secrets = state.secrets.clone();
 
         let task_id = state

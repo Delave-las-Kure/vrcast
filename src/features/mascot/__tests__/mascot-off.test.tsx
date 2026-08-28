@@ -51,6 +51,7 @@ const OFF: Settings = {
   animations: true,
   language: null,
   theme: null,
+  work_dir: null,
 };
 
 describe("a mascot that was turned off", () => {

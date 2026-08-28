@@ -739,6 +739,16 @@ export const en: Catalogue = {
       title: "Appearance",
       theme: "Theme",
       language: "Language",
+
+      workDir: "Working files",
+      workDirMeans:
+        "While a variant is being made it sits on a disk whole — one and a half to two gigabytes at a time. Beside the source film by default: the disk a film is on certainly fits a film. Change it if you keep a separate disk for scratch work.",
+      workDirDefault: "Beside the source file",
+      workDirPick: "Choose a folder",
+      workDirReset: "Back to the default",
+      workDirLeft:
+        "The old folder still holds {files} file(s), {mb} MB in all. The application will not look there again — remove them yourself if they are not wanted.",
+
       mascot: "Mascot",
       mascotOn: "Show the mascot",
       mascotMeans:

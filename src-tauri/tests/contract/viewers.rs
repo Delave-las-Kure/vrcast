@@ -97,6 +97,7 @@ fn what_is_set_is_what_comes_back() {
         animations: false,
         language: Some(String::from("en")),
         theme: Some(String::from("dark")),
+        work_dir: Some(String::from("E:/scratch")),
     };
 
     let saved = settings_api::settings_set(&state, &wanted).expect("the settings would not save");

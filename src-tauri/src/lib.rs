@@ -137,6 +137,7 @@ pub fn run() {
             commands::viewers::ipc::viewers_history,
             commands::settings::ipc::settings_get,
             commands::settings::ipc::settings_set,
+            commands::settings::ipc::work_dir_leftovers,
             commands::geo::ipc::geo_status,
             commands::geo::ipc::geo_update,
             commands::library::ipc::library_list,

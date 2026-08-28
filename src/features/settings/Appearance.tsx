@@ -12,6 +12,7 @@
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { Forget } from "./Forget";
+import { WorkDir } from "./WorkDir";
 import { useSettings } from "../../app/settings";
 import { useLang, useT, LANGUAGES } from "../../shared/i18n";
 import { useTheme, type ThemeChoice } from "../../app/theme";
@@ -97,6 +98,10 @@ export function Appearance() {
         </label>
         <p className="appearance__means">{words.animationsMeans}</p>
       </fieldset>
+
+      {/* Not about appearance either, and here for the same reason: this is the only
+          settings section there is. */}
+      <WorkDir />
 
       {/* Not about appearance — but this is the only settings section there is, and there is
           nowhere deeper to hide "remove my data": here is where people will look for it. */}

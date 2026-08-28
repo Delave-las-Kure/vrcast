@@ -45,3 +45,4 @@ pub mod swap;
 pub mod transfer;
 pub mod viewers;
 pub mod wording;
+pub mod work_dir;

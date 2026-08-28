@@ -1088,6 +1088,18 @@ export interface ViewersUpdateEvent {
 }
 
 /** What the person may change. */
+/**
+ * What is still lying in a working folder (T453).
+ *
+ * Normally nothing: working files are swept after a variant is sent. When it is not nothing
+ * it is one and a half to two gigabytes left by a build that was killed, under a path the
+ * application will stop looking at the moment the setting changes.
+ */
+export interface Leftovers {
+  files: number;
+  bytes: number;
+}
+
 export interface Settings {
   viewer_activity_threshold_s: number;
   /**
@@ -1102,6 +1114,10 @@ export interface Settings {
   animations: boolean;
   language: string | null;
   theme: string | null;
+  /** Where a variant is written while it is being made (T450). Null means "beside the
+   *  source": the disk a film is on certainly fits a film, which no other default can
+   *  promise. */
+  work_dir: string | null;
 }
 
 export const EVENTS = {
