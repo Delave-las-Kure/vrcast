@@ -181,6 +181,8 @@ jobs:
           merge-multiple: true
 
       - name: Assemble the file installed copies read
+        # `sh` в задании-контейнере не знает `pipefail` — оболочка названа явно.
+        shell: bash
         run: |
           set -euo pipefail
           version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' src-tauri/Cargo.toml | head -1)
@@ -198,6 +200,8 @@ jobs:
           cat latest.json
 
       - name: Publish, with everything owed alongside
+        # `sh` в задании-контейнере не знает `pipefail` — оболочка названа явно.
+        shell: bash
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

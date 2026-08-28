@@ -456,6 +456,12 @@ jobs:
           --features integration --test integration -- --test-threads=1
       - name: Make sure the containers cleaned up after themselves
         if: always()
+        # **Оболочка названа, а не взята по умолчанию.** В задании-контейнере по умолчанию
+        # достаётся `sh`, а `set -o pipefail` в нём не существует: шаг падал на первой же
+        # строке с «Illegal option -o pipefail», и это выглядело как оставшиеся контейнеры.
+        # Так было с самого перехода в контейнер — просто до 2026-08-28 эту ошибку закрывала
+        # неудача самих проверок.
+        shell: bash
         run: |
           set -o pipefail
           # The image tag must match IMAGE in tests/integration/fixture.rs, and the network
