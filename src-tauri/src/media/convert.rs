@@ -15,7 +15,8 @@
 use super::ffmpeg;
 use crate::domain::convert_plan::{AudioAction, ConvertPlan, VideoAction};
 use crate::domain::source::SourceFile;
-use crate::media::encoders::Encoder;
+use crate::domain::wording::Detail;
+use crate::media::encoders::{self, Encoder};
 use crate::tasks::engine::TaskContext;
 use crate::tasks::process::ManagedProcess;
 use std::path::Path;
@@ -288,7 +289,51 @@ fn audio_args(job: &ConvertJob<'_>, args: &mut Vec<String>) {
 /// Progress is reported through `ctx`; cancellation kills the whole process tree
 /// and removes the half-written output, because a leftover file that looks like
 /// a result is worse than no file at all.
-pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<()> {
+pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<Vec<Detail>> {
+    let mut saw_progress = false;
+    match run_once(job, ctx, &mut saw_progress).await {
+        Ok(()) => Ok(Vec::new()),
+        Err(e) => {
+            let Encoder::Hardware { name } = job.encoder else {
+                return Err(e);
+            };
+            // **Only a refusal to start, and only from a hardware encoder** (T464, R-41).
+            //
+            // A graphics card says no for reasons that have nothing to do with the file: a
+            // driver that is not there, and — the one that happens in ordinary use — NVENC's
+            // limit on how many encodes it will run at once, reached on the second or third
+            // task. Until now that ended the work, and the person was told the preparation
+            // failed. It would have gone through on the processor: slower, and done.
+            //
+            // **Told apart by when it failed, not by what it said.** An encoder that will
+            // not open fails in seconds, before a single frame is reported; a source that is
+            // broken fails after progress has been coming for a while. Parsing FFmpeg's
+            // words would tie this to their wording; the clock does not. At worst a few
+            // seconds are spent twice — never hours.
+            if saw_progress || matches!(e, ConvertError::Cancelled) {
+                return Err(e);
+            }
+            tracing::warn!(encoder = %name, error = %e, "the hardware encoder would not start; going to the processor");
+
+            let software = Encoder::Software;
+            let retry = ConvertJob {
+                source: job.source,
+                plan: job.plan,
+                encoder: &software,
+                out_path: job.out_path,
+            };
+            let mut again = false;
+            run_once(&retry, ctx, &mut again).await?;
+            Ok(vec![encoders::fallback_notice(name)])
+        }
+    }
+}
+
+/// One attempt, with the encoder it was given.
+///
+/// `saw_progress` says whether FFmpeg reported a position before it stopped — which is what
+/// tells a refusal to start from a file that fell apart in the middle.
+async fn run_once(job: &ConvertJob<'_>, ctx: &TaskContext, saw_progress: &mut bool) -> Result<()> {
     let program = ffmpeg::locate("ffmpeg")?;
     let args = build_args(job);
 
@@ -347,6 +392,7 @@ pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<()> {
             apply_pause(&mut child, ctx);
 
             if let Some(done_us) = line.as_deref().and_then(progress_position) {
+                *saw_progress = true;
                 let fraction = (done_us as f64 / duration_us).clamp(0.0, 1.0);
                 ctx.report(
                     fraction,

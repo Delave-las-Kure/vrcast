@@ -161,3 +161,6 @@ mod notices;
 
 #[path = "unit/code_language.rs"]
 mod code_language;
+
+#[path = "unit/encoder_fallback.rs"]
+mod encoder_fallback;

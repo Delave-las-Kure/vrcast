@@ -81,10 +81,7 @@ fn enclosing_fn(text: &str, at: usize) -> Option<String> {
 /// **Not a way of quieting the check.** A notice named here is one somebody has looked at and
 /// written a task for; a notice not named here is one the build refuses to accept. The list
 /// can only shrink: `no_reachable_notice_is_still_listed_as_orphaned` sees to that.
-const ORPHANED: [(&str, &str); 1] = [(
-    "NoticeHardwareFailed",
-    "T464 — there is no fallback to the processor at all, so nothing could produce this",
-)];
+const ORPHANED: [(&str, &str); 0] = [];
 
 #[test]
 fn every_notice_has_a_producer_something_calls() {

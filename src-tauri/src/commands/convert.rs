@@ -103,10 +103,19 @@ pub mod api {
                     out_path: &out_path,
                 };
 
-                convert::run(&job, &ctx).await.map_err(|e| match e {
+                let said = convert::run(&job, &ctx).await.map_err(|e| match e {
                     convert::ConvertError::Cancelled => AppError::new(ErrorCode::TaskCancelled),
                     other => AppError::new(ErrorCode::Internal).with_cause(other),
                 })?;
+
+                // **Said as a stage, which is the only place a single preparation has.** A
+                // task carries no notices of its own — the core produces them and there is
+                // nowhere to put them (R-41), and that is Phase 30's work. Until then the
+                // stage is what a person can see, and a fallback they are never told about
+                // is an encode that took four times as long for no stated reason.
+                for notice in &said {
+                    ctx.report_important(0.97, notice.key);
+                }
 
                 // Validation is not optional (FR-027). A broken encode opens fine,
                 // reports the right duration, and falls apart where someone is

@@ -144,7 +144,10 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
             reused += 1;
             continue;
         }
-        prepare_and_send(job, variant, ctx).await?;
+        // What preparing this variant had to say — the graphics card refusing and the work
+        // going to the processor, for instance. Collected rather than dropped: a fallback
+        // nobody is told about is a slower build with no explanation for why (T464).
+        notices.extend(prepare_and_send(job, variant, ctx).await?);
         prepared += 1;
     }
 
@@ -324,7 +327,7 @@ async fn prepare_and_send(
     job: &BuildJob<'_>,
     variant: &VariantWork,
     ctx: &TaskContext,
-) -> Result<(), BuildError> {
+) -> Result<Vec<Detail>, BuildError> {
     let out_path = job.work_dir.join(&variant.file);
     std::fs::create_dir_all(job.work_dir).map_err(|e| BuildError::Prepare(e.to_string()))?;
 
@@ -334,7 +337,7 @@ async fn prepare_and_send(
         encoder: job.encoder,
         out_path: &out_path.to_string_lossy(),
     };
-    crate::media::convert::run(&convert, ctx)
+    let said = crate::media::convert::run(&convert, ctx)
         .await
         .map_err(|e| match e {
             crate::media::convert::ConvertError::Cancelled => BuildError::Cancelled,
@@ -345,7 +348,7 @@ async fn prepare_and_send(
     // The local copy goes whether the sending worked or not: it is gigabytes, and a failed
     // build that quietly fills somebody's disk is a second failure on top of the first.
     let _ = std::fs::remove_file(&out_path);
-    sent
+    sent.map(|()| said)
 }
 
 /// Send a prepared variant to the serving directory.
