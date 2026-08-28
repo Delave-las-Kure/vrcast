@@ -34,6 +34,27 @@ pub struct MeasureRequest {
     /// False when the person asked for the processor on purpose.
     #[serde(default = "yes")]
     pub prefer_hardware: bool,
+    /// Build the set as soon as the measurement is done, without asking again (T438).
+    ///
+    /// **The decision is taken in the core, between choosing the rungs and sending them.**
+    /// Not on a screen: by then the window may be closed or in the tray, and a decision taken
+    /// by a closed window is taken by nobody. That is the whole of what a batch is — put a
+    /// season in, come back to a season on the server.
+    #[serde(default)]
+    pub then_build: Option<ThenBuild>,
+}
+
+/// What the build after a measurement needs that the measurement does not already know.
+///
+/// The rungs are deliberately absent: they are what the measurement is *for*, and carrying a
+/// set of them in would mean building something other than what was measured.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ThenBuild {
+    pub server_id: String,
+    /// The medium's own directory on the server.
+    pub slug: String,
+    #[serde(default)]
+    pub audio_track: usize,
 }
 
 fn h264() -> String {
@@ -181,6 +202,12 @@ pub mod api {
         let (run, encoder, _) = prepare(&request).await?;
         let source = request.path.clone();
         let db = state.db.clone();
+        // What the chain needs, taken here rather than inside: `AppState` is a handful of
+        // `Arc`s, so a clone is cheap and the task owns everything it will need after the
+        // window has gone.
+        let onward = request.then_build.clone();
+        let chained = state.clone();
+        let for_build = request.clone();
 
         let task_id = state
             .tasks
@@ -205,11 +232,82 @@ pub mod api {
                     rungs = outcome.selection.rungs.len(),
                     "quality measured"
                 );
+
+                // **And on to the build, if that is what was asked for** (T438). At the very
+                // end, and after the cancellation check: a person who stopped the measurement
+                // did not ask for hours of encoding to start in its place.
+                if let Some(onward) = onward {
+                    if ctx.is_cancelled() {
+                        // Stopped means stopped. Somebody who broke off a measurement did not
+                        // ask for hours of encoding to begin in its place.
+                        return Ok(());
+                    }
+                    then_build(&chained, &for_build, &onward, &ctx).await?;
+                }
                 Ok(())
             })
             .await?;
 
         Ok(task_id)
+    }
+
+    /// Put the build on the queue, unless the ladder that came out is one to object to.
+    ///
+    /// **The gate is here and not on the button** (T439, and this narrows what that task
+    /// said). The owner asked for "automatic, stopping on an objection", and an objection is
+    /// a trade rather than an impossibility: a step of 2.75× between rungs hurts a viewer
+    /// whose connection falls in the gap, and a person looking at that on screen may know
+    /// their audience and accept it. Taking that away from them would be barring a decision
+    /// they can see and have made. What they cannot see is a ladder chosen while the window
+    /// was shut — so the chain stops, and only the chain.
+    ///
+    /// Stopping is a failure of this task, not a quiet skip. A batch of ten seasons where the
+    /// fourth silently did nothing is a batch nobody can trust; the task must end red and say
+    /// which objection stopped it.
+    async fn then_build(
+        state: &super::super::AppState,
+        measured: &MeasureRequest,
+        onward: &ThenBuild,
+        ctx: &crate::tasks::engine::TaskContext,
+    ) -> Result<()> {
+        // The ladder as the core would offer it — asked for rather than assembled here, so
+        // that what is built is what a person would have been shown.
+        let plan = super::super::ladder::api::ladder_plan(
+            state,
+            &super::super::ladder::LadderRequest {
+                path: measured.path.clone(),
+                codec: measured.codec.clone(),
+                native_height: measured.native_height,
+                prefer_hardware: measured.prefer_hardware,
+                declared_layout: None,
+            },
+        )
+        .await?;
+
+        // The verdict the plan already carries, rather than one worked out again here. What
+        // stops the chain has to be the same judgement a person would have been shown, and two
+        // computations of it are two chances to disagree.
+        if !crate::domain::ladder::may_build_unasked(&plan.verdict.objections) {
+            for objection in &plan.verdict.objections {
+                ctx.add_notice(objection.detail());
+            }
+            return Err(AppError::new(ErrorCode::LadderObjection)
+                .detail(DetailCode::ChainStoppedByObjection));
+        }
+
+        super::super::ladder::api::ladder_build(
+            state,
+            super::super::ladder::BuildRequest {
+                server_id: onward.server_id.clone(),
+                path: measured.path.clone(),
+                slug: onward.slug.clone(),
+                rungs: plan.plan.rungs.clone(),
+                audio_track: onward.audio_track,
+                prefer_hardware: measured.prefer_hardware,
+            },
+        )
+        .await?;
+        Ok(())
     }
 
     /// What a measurement found, and the ladder it chooses.

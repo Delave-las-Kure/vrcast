@@ -287,6 +287,19 @@ detail_codes! {
     /// and was content.
     LadderSpaceUnknown => "LADDER_SPACE_UNKNOWN",
     LadderNoRoomHere => "LADDER_NO_ROOM_HERE",
+
+    // What the checker objects to in a ladder (T444). Codes rather than sentences for the
+    // usual reason — and here for a second one: until now these lived only as phrases on the
+    // ladder screen, so a task that stopped on an objection had nothing to say it with but a
+    // fresh set of words about the same five things. Two sets of phrases about one fact drift,
+    // and the day they disagreed nobody would know which was the rule.
+    ObjectionRungAboveSource => "OBJECTION_RUNG_ABOVE_SOURCE",
+    ObjectionBufsizeTooLarge => "OBJECTION_BUFSIZE_TOO_LARGE",
+    ObjectionLevelExceeded => "OBJECTION_LEVEL_EXCEEDED",
+    ObjectionOutOfOrder => "OBJECTION_OUT_OF_ORDER",
+    ObjectionBadStep => "OBJECTION_BAD_STEP",
+    /// The batch stopped here rather than building something it objects to (T439).
+    ChainStoppedByObjection => "CHAIN_STOPPED_BY_OBJECTION",
     /// `name` — the file that will be replaced.
     NameWillBeReplaced => "NAME_WILL_BE_REPLACED",
     CdnKeepsOldCopy => "CDN_KEEPS_OLD_COPY",

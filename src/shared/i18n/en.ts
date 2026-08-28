@@ -167,6 +167,10 @@ export const en: Catalogue = {
       message: "This build of FFmpeg cannot measure quality",
       hint: "A quality ladder is chosen by measuring the material rather than by formula, and without libvmaf there is nothing to measure with. Reinstall the application — its FFmpeg is built with libvmaf.",
     },
+    LADDER_OBJECTION: {
+      message: "Stopped: there are objections to the ladder that came out",
+      hint: "The measurement finished and the rungs were chosen, and they are ones this application will not send to a server unasked. What is wrong is in the task's notes. Open this file's ladder, change it or accept it yourself, and build. The rest of the queue carries on.",
+    },
     LADDER_NOT_MEASURED: {
       message: "The quality of this material has not been measured yet",
       hint: "Rungs taken from the formula are a guess: on one film it asks for twice what is needed, on another it understates. Run the measurement, or borrow one from the first episode of the same season.",
@@ -443,6 +447,14 @@ export const en: Catalogue = {
       "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
     LADDER_NOT_ENOUGH_SPACE:
       "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
+    OBJECTION_RUNG_ABOVE_SOURCE: "Rung {index}: above the source — those bits add nothing but weight",
+    OBJECTION_BUFSIZE_TOO_LARGE:
+      "Rung {index}: the buffer is larger than the ceiling — real peaks will exceed it and a viewer will stall",
+    OBJECTION_LEVEL_EXCEEDED: "Rung {index}: the variant does not fit the level it declares, {level}",
+    OBJECTION_OUT_OF_ORDER: "Rung {index}: the rungs are not in descending order",
+    OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
+    CHAIN_STOPPED_BY_OBJECTION:
+      "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
     LADDER_NO_ROOM_HERE:
       "This machine has no room for one variant: {needed} bytes are needed, {free} are free, {short_by} short. Writing to {at}. Variants are made one at a time and removed as soon as they are sent, so one is all that is needed — and there is nowhere to put even that. Free some space, or choose another folder in the settings.",
     LADDER_SPACE_UNKNOWN:
@@ -612,14 +624,6 @@ export const en: Catalogue = {
       buildBlockedEmpty: "Nothing to build: there are no rungs",
       building: "Building — this takes a while",
       objections: "Objections",
-      objectionAboveSource: "Rung {index}: above the source — those bits add nothing but weight",
-      objectionBufsize:
-        "Rung {index}: the buffer is larger than the ceiling — real peaks will exceed it and a viewer will stall",
-      objectionLevel: "Rung {index}: the variant does not fit the level it declares, {level}",
-      objectionOrder: "Rung {index}: the rungs are not in descending order",
-      objectionStep: "Rung {index}: {times} times the one below — too far {tooMuch}",
-      stepTooBig: "apart",
-      stepTooSmall: "together",
     },
 
     serverState: {

@@ -114,6 +114,12 @@ error_codes! {
     /// The ladder for this material has not been measured, and a ladder is not built
     /// from a formula (R-21).
     LadderNotMeasured => "LADDER_NOT_MEASURED",
+    /// A batch stopped rather than build a ladder the checker objects to (T439).
+    ///
+    /// Its own code and not `InvalidInput`: nothing about the input was wrong. The work
+    /// was done, the answer came out, and the answer is one this application will not
+    /// send to a server unasked.
+    LadderObjection => "LADDER_OBJECTION",
     MeasurementNotFound => "MEASUREMENT_NOT_FOUND",
     /// The measurement asked for was taken on material of another kind entirely.
     MeasurementDifferentMaterial => "MEASUREMENT_DIFFERENT_MATERIAL",

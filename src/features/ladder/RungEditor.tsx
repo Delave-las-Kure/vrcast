@@ -20,9 +20,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { useT } from "../../shared/i18n";
+import { useLang, useT } from "../../shared/i18n";
+import { renderDetail } from "../../shared/i18n/render";
 import { ipc } from "../../shared/ipc";
 import type {
+  Detail,
   LadderVerdict,
   Objection,
   Quality,
@@ -85,43 +87,46 @@ function reasonText(
     .replace("{times}", times.toFixed(1));
 }
 
-/** The wordings an objection needs, named rather than taken as any string at all: the
- *  ladder's catalogue now holds a nested block too, and `Record<string, string>` would be a
- *  lie about it. */
-interface ObjectionWords {
-  objectionAboveSource: string;
-  objectionBufsize: string;
-  objectionLevel: string;
-  objectionOrder: string;
-  objectionStep: string;
-  stepTooBig: string;
-  stepTooSmall: string;
-}
-
-/** An objection in words. The core sends a code and numbers; the sentence is made here. */
-function objectionText(objection: Objection, words: ObjectionWords): string {
+/**
+ * An objection as a code and its numbers.
+ *
+ * **The words live under that code, in the same place a task's notes read them from** (T444).
+ * They used to be five phrases in `ui.ladder`, reachable only from this screen — so when the
+ * batch chain needed to say why it had stopped, the tempting thing was a second set of
+ * sentences about the same five rules. Two descriptions of one rule drift, and on the day
+ * they disagreed nobody could say which was the rule. There is one set, keyed by the code the
+ * core sends, and this screen and the tasks screen both read it.
+ */
+function objectionDetail(objection: Objection): Detail {
   if ("RungAboveSource" in objection) {
-    return words.objectionAboveSource.replace(
-      "{index}",
-      String(objection.RungAboveSource.index + 1),
-    );
+    return {
+      key: "OBJECTION_RUNG_ABOVE_SOURCE",
+      params: { index: objection.RungAboveSource.index + 1 },
+    };
   }
   if ("BufsizeTooLarge" in objection) {
-    return words.objectionBufsize.replace("{index}", String(objection.BufsizeTooLarge.index + 1));
+    return {
+      key: "OBJECTION_BUFSIZE_TOO_LARGE",
+      params: { index: objection.BufsizeTooLarge.index + 1 },
+    };
   }
   if ("LevelExceeded" in objection) {
-    return words.objectionLevel
-      .replace("{index}", String(objection.LevelExceeded.index + 1))
-      .replace("{level}", objection.LevelExceeded.level);
+    return {
+      key: "OBJECTION_LEVEL_EXCEEDED",
+      params: {
+        index: objection.LevelExceeded.index + 1,
+        level: objection.LevelExceeded.level,
+      },
+    };
   }
   if ("OutOfOrder" in objection) {
-    return words.objectionOrder.replace("{index}", String(objection.OutOfOrder.index + 1));
+    return { key: "OBJECTION_OUT_OF_ORDER", params: { index: objection.OutOfOrder.index + 1 } };
   }
   const step = objection.BadStep;
-  return words.objectionStep
-    .replace("{index}", String(step.index + 1))
-    .replace("{times}", step.times.toFixed(1))
-    .replace("{tooMuch}", step.times > 2 ? words.stepTooBig : words.stepTooSmall);
+  return {
+    key: "OBJECTION_BAD_STEP",
+    params: { index: step.index + 1, times: step.times.toFixed(1) },
+  };
 }
 
 export function RungEditor({
@@ -139,6 +144,7 @@ export function RungEditor({
   onToggle?: (index: number) => void;
 }) {
   const t = useT();
+  const { lang } = useLang();
   const words = t.ui.ladder;
   const [verdict, setVerdict] = useState<LadderVerdict | null>(null);
 
@@ -265,7 +271,7 @@ export function RungEditor({
           <h4>{words.objections}</h4>
           <ul>
             {verdict.objections.map((objection, i) => (
-              <li key={i}>{objectionText(objection, words)}</li>
+              <li key={i}>{renderDetail(objectionDetail(objection), t, lang)}</li>
             ))}
           </ul>
         </div>
@@ -274,4 +280,4 @@ export function RungEditor({
   );
 }
 
-export { objectionText, qualityText, reasonText };
+export { objectionDetail, qualityText, reasonText };

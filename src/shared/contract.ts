@@ -58,6 +58,7 @@ export type ErrorCode =
   | "NO_LADDER_FOR_MEDIA"
   | "VMAF_UNAVAILABLE"
   | "LADDER_NOT_MEASURED"
+  | "LADDER_OBJECTION"
   | "MEASUREMENT_NOT_FOUND"
   | "MEASUREMENT_DIFFERENT_MATERIAL"
   // web server configuration
@@ -238,7 +239,13 @@ export type DetailCode =
   | "DOMAIN_SERVER_HAS_NO_IPV6"
   | "NOT_ENOUGH_SPACE"
   | "LADDER_NOT_ENOUGH_SPACE"
+  | "CHAIN_STOPPED_BY_OBJECTION"
   | "LADDER_NO_ROOM_HERE"
+  | "OBJECTION_BAD_STEP"
+  | "OBJECTION_BUFSIZE_TOO_LARGE"
+  | "OBJECTION_LEVEL_EXCEEDED"
+  | "OBJECTION_OUT_OF_ORDER"
+  | "OBJECTION_RUNG_ABOVE_SOURCE"
   | "LADDER_SPACE_UNKNOWN"
   | "NAME_WILL_BE_REPLACED"
   | "CDN_KEEPS_OLD_COPY"
@@ -924,6 +931,23 @@ export interface QualityMeasureRequest {
   codec?: string;
   native_height?: number | null;
   prefer_hardware?: boolean;
+  /** Build the set as soon as the measurement is done, without asking again (T438).
+   *
+   *  The decision is taken in the core, between choosing the rungs and sending them — not on
+   *  a screen. By then the window may be shut or in the tray, and a decision taken by a
+   *  closed window is taken by nobody. That is the whole of what a batch is. */
+  then_build?: ThenBuild | null;
+}
+
+/** What the build after a measurement needs that the measurement does not already know.
+ *
+ *  The rungs are deliberately absent: they are what the measurement is *for*, and carrying a
+ *  set of them in would mean building something other than what was measured. */
+export interface ThenBuild {
+  server_id: string;
+  /** The medium's own directory on the server. */
+  slug: string;
+  audio_track?: number;
 }
 
 /** Cap one viewer on one medium. */

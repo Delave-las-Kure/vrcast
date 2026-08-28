@@ -626,6 +626,7 @@ fn nothing_the_screens_send_is_quietly_dropped() {
             codec: String::new(),
             native_height: None,
             prefer_hardware: true,
+            then_build: None,
         },
     );
     nothing_sent_is_dropped(

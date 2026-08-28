@@ -20,6 +20,7 @@ fn measuring(path: &str) -> MeasureRequest {
         codec: String::from("h264"),
         native_height: None,
         prefer_hardware: true,
+        then_build: None,
     }
 }
 

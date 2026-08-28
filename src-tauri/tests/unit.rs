@@ -123,6 +123,9 @@ mod validate;
 #[path = "unit/vmaf.rs"]
 mod vmaf;
 
+#[path = "unit/batch.rs"]
+mod batch;
+
 #[path = "unit/work_dir.rs"]
 mod work_dir;
 

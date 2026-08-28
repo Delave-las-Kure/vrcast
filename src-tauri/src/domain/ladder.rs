@@ -676,6 +676,59 @@ pub enum Objection {
     BadStep { index: usize, times: f64 },
 }
 
+impl Objection {
+    /// The objection as a code and its numbers, for anything that has to report it.
+    ///
+    /// **The one place these turn into something showable.** They used to turn into words on
+    /// the ladder screen and nowhere else, so a task that stopped on one had no way to say
+    /// which — and writing it a second set of phrases would have been two descriptions of one
+    /// rule, drifting apart from the day they were written (T444).
+    ///
+    /// The index is one-based here, as it is on screen: a person counting rungs starts at one.
+    pub fn detail(&self) -> super::wording::Detail {
+        use super::wording::{Detail, DetailCode};
+        match self {
+            Self::RungAboveSource { index, source_bps } => {
+                Detail::new(DetailCode::ObjectionRungAboveSource)
+                    .with("index", (*index as u64) + 1)
+                    .with("source_bps", *source_bps)
+            }
+            Self::BufsizeTooLarge { index, maxrate_bps } => {
+                Detail::new(DetailCode::ObjectionBufsizeTooLarge)
+                    .with("index", (*index as u64) + 1)
+                    .with("maxrate_bps", *maxrate_bps)
+            }
+            Self::LevelExceeded { index, level, .. } => {
+                Detail::new(DetailCode::ObjectionLevelExceeded)
+                    .with("index", (*index as u64) + 1)
+                    .with("level", level.clone())
+            }
+            Self::OutOfOrder { index } => {
+                Detail::new(DetailCode::ObjectionOutOfOrder).with("index", (*index as u64) + 1)
+            }
+            Self::BadStep { index, times } => Detail::new(DetailCode::ObjectionBadStep)
+                .with("index", (*index as u64) + 1)
+                .with("times", format!("{times:.1}")),
+        }
+    }
+}
+
+/// Whether a batch may send this ladder to a server without asking anybody (T439).
+///
+/// **The gate is on the chain and not on the button, and that narrows what the task asked
+/// for.** The owner's decision was "automatic, stopping on an objection". An objection is a
+/// trade rather than an impossibility: a step of 2.75× between two rungs hurts a viewer whose
+/// connection falls in the gap, and somebody looking at that on screen may know their
+/// audience and accept it. Barring the button would take away a decision they can see and
+/// have made. What they cannot see is a ladder chosen while the window was shut — so this
+/// stops the chain, and only the chain.
+///
+/// A pure function, and separate from the task that uses it, so that what stops a batch can
+/// be checked without a film, an encoder or a server.
+pub fn may_build_unasked(objections: &[Objection]) -> bool {
+    objections.is_empty()
+}
+
 /// Whether two neighbouring rungs are acceptably far apart.
 ///
 /// **The grid has to be allowed for, or this objects to ladders the project's own script
