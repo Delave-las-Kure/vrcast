@@ -950,3 +950,84 @@ fn the_measure_preview_says_what_it_actually_contains() {
     };
     same_kinds(&preview, "MeasurePreview");
 }
+
+// ---------- why a rung is what it is, said the same on both sides (T378) ----------
+
+/// The variants of an enum, read out of the source rather than listed here.
+///
+/// **A hand-written list beside the check is the hole the check exists to close.** The same
+/// reasoning that gave `ErrorCode` and `DetailCode` their macro-built `ALL`: a list somebody
+/// has to remember to update is a list that falls behind, and the compiler cannot see it
+/// fall. `Reason` has no such list, so its variants are taken from the file that declares
+/// them.
+fn variants_of(source_rel: &str, enum_name: &str) -> HashSet<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(source_rel);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+    let marker = format!("pub enum {enum_name} {{");
+    let at = text
+        .find(&marker)
+        .unwrap_or_else(|| panic!("{source_rel} no longer declares `enum {enum_name}`"));
+    let body = block_body(&text[at + marker.len()..]);
+
+    let mut out = HashSet::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        let name = line.trim_end_matches(',').trim();
+        // Plain unit variants only. A variant with fields would need its own comparison and
+        // must not be silently skipped, so it is caught below instead.
+        if !name.is_empty() && name.chars().next().is_some_and(char::is_uppercase) {
+            assert!(
+                !name.contains('{') && !name.contains('('),
+                "`{enum_name}::{name}` carries fields; this comparison only understands plain \
+                 variants and would quietly ignore it"
+            );
+            out.insert(snake_case(name));
+        }
+    }
+    assert!(
+        out.len() > 2,
+        "only {} variants were parsed out of `{enum_name}` — the parsing has come adrift",
+        out.len()
+    );
+    out
+}
+
+/// `ProbedAnchor` to `probed_anchor`, the way `#[serde(rename_all = "snake_case")]` does it.
+fn snake_case(name: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in name.char_indices() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[test]
+fn the_reasons_a_rung_gives_match_both_ways() {
+    // Every one of these is produced by the core and none of them is drawn by anything yet
+    // (R-42, T412). That is a fault of its own; this one guards against the next fault, which
+    // is a reason added on one side and never given words on the other — because then the
+    // column that finally draws them will have a blank in it and nobody will know why.
+    let rust = variants_of("src/domain/ladder.rs", "Reason");
+    let ts = declared_strings(&contract_ts(), "export type RungReason =");
+    assert_same_sets("rung reasons", rust, ts);
+}
+
+#[test]
+fn the_variant_parser_knows_a_camel_hump_from_a_word() {
+    // The comparison above rests entirely on this conversion, and a fault in it would make
+    // the whole thing agree with itself and with nothing else.
+    assert_eq!(snake_case("ProbedAnchor"), "probed_anchor");
+    assert_eq!(snake_case("SingleRungOnly"), "single_rung_only");
+    assert_eq!(snake_case("A"), "a");
+}
