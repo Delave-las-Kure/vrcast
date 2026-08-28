@@ -401,3 +401,158 @@ fn rung(
         quality: Quality::MeasuredHere { vmaf_x100: 9500 },
     }
 }
+
+// ---------- a set that will not fit stops before the first byte (T410) ----------
+
+/// A source described rather than made.
+///
+/// **No film is encoded here on purpose.** The guard reads two things — how long the source
+/// is and what the rungs ask for — and both are numbers. Encoding a real film to hand it a
+/// number would make the check slower and no more truthful, and it would hide what the check
+/// is actually about behind twenty seconds of ffmpeg.
+fn source_of_length(seconds: f64) -> vrcast_studio_lib::domain::source::SourceFile {
+    vrcast_studio_lib::domain::source::SourceFile {
+        path: String::from("/nowhere/film.mp4"),
+        size_bytes: 1,
+        duration_s: seconds,
+        width: 1920,
+        height: 1080,
+        fps: 24,
+        bitrate_bps: 8_000_000,
+        peak_bps: None,
+        video_codec: String::from("h264"),
+        pix_fmt: String::from("yuv420p"),
+        color_transfer: Some(String::from("bt709")),
+        audio_tracks: vec![vrcast_studio_lib::domain::source::AudioTrack {
+            index: 0,
+            codec: String::from("aac"),
+            channels: 2,
+            bitrate_bps: Some(256_000),
+            language: None,
+            title: None,
+            is_default: true,
+        }],
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_set_that_will_not_fit_is_refused_against_a_real_disk() {
+    // The room is read off a real server with a real `df`, because that is the half of this
+    // that cannot be checked with arithmetic: the command, its output, the parsing of it, and
+    // the margin the check keeps. The arithmetic is checked separately and without a server
+    // (`tests/unit/ladder_size.rs`).
+    let server = TestServer::start().expect("the container would not come up");
+    let conn = connect(&server).await;
+    let work_dir = Workspace::new("space").path("prepared");
+    let encoder = an_encoder();
+
+    let ask = |source: &vrcast_studio_lib::domain::source::SourceFile| {
+        let rungs: Vec<Rung> = vec![
+            rung(0, 2_000_000, source.height, source.width, source),
+            rung(1, 1_000_000, source.height, source.width, source),
+        ];
+        (rungs, source.clone())
+    };
+
+    // 1. An ordinary film fits, and the check says so rather than shrugging.
+    {
+        let (rungs, source) = ask(&source_of_length(60.0));
+        let work =
+            vrcast_studio_lib::domain::ladder_build::work_for("fits", &rungs, &source, 0, None, 4);
+        let job = vrcast_studio_lib::tasks::ladder_build::BuildJob {
+            conn: &conn,
+            video_dir: VIDEO_DIR,
+            owner: "root:root",
+            slug: "fits",
+            source: &source,
+            rungs: &rungs,
+            encoder: &encoder,
+            audio_track: 0,
+            master_url: "http://example.invalid/master.m3u8",
+            work_dir: &work_dir,
+        };
+        let verdict = vrcast_studio_lib::tasks::ladder_build::room_for_the_set(&job, &work).await;
+        assert!(
+            matches!(verdict, Ok(None)),
+            "a minute of film was said not to fit on a fresh container: {verdict:?}"
+        );
+    }
+
+    // 2. A film long enough that its set cannot fit **on this disk**. The length is worked
+    //    out from what the server actually reports free, not chosen by eye: the container
+    //    sees the host's filesystem, and a number that overflows a small laptop passes
+    //    unnoticed on a machine with a terabyte spare. The first draft of this said a hundred
+    //    and forty hours and was not refused at all.
+    //
+    //    **The refusal has to name the numbers**: a bar that says only "no" leaves a person
+    //    with nothing to act on, and the count of rungs is the thing they can change.
+    {
+        let disk = vrcast_studio_lib::server::disk::usage(&conn, VIDEO_DIR)
+            .await
+            .expect("the server would not say how much room there is");
+        // Two rungs and their audio, doubled for the copy that stays beside the segments.
+        let per_second = (2_000_000.0 + 256_000.0 + 1_000_000.0 + 256_000.0) / 8.0 * 2.046;
+        let too_long = (disk.free_bytes as f64 / per_second) * 2.0;
+        let (rungs, source) = ask(&source_of_length(too_long));
+        let work =
+            vrcast_studio_lib::domain::ladder_build::work_for("huge", &rungs, &source, 0, None, 4);
+        let job = vrcast_studio_lib::tasks::ladder_build::BuildJob {
+            conn: &conn,
+            video_dir: VIDEO_DIR,
+            owner: "root:root",
+            slug: "huge",
+            source: &source,
+            rungs: &rungs,
+            encoder: &encoder,
+            audio_track: 0,
+            master_url: "http://example.invalid/master.m3u8",
+            work_dir: &work_dir,
+        };
+        match vrcast_studio_lib::tasks::ladder_build::room_for_the_set(&job, &work).await {
+            Err(vrcast_studio_lib::tasks::ladder_build::BuildError::NotEnoughSpace {
+                needed,
+                free,
+                short_by,
+                rungs: how_many,
+            }) => {
+                assert_eq!(how_many, 2, "the refusal miscounted the rungs");
+                assert!(
+                    needed > free,
+                    "the refusal says less is needed than is free"
+                );
+                assert!(short_by > 0, "the refusal is short by nothing");
+            }
+            other => panic!("a set of some hundreds of gigabytes was not refused: {other:?}"),
+        }
+    }
+
+    // 3. A source whose length is unknown. The check cannot run, and must say so rather than
+    //    pass quietly — a check that could not run must not look like one that ran and was
+    //    content.
+    {
+        let (rungs, source) = ask(&source_of_length(0.0));
+        let work = vrcast_studio_lib::domain::ladder_build::work_for(
+            "unknown", &rungs, &source, 0, None, 4,
+        );
+        let job = vrcast_studio_lib::tasks::ladder_build::BuildJob {
+            conn: &conn,
+            video_dir: VIDEO_DIR,
+            owner: "root:root",
+            slug: "unknown",
+            source: &source,
+            rungs: &rungs,
+            encoder: &encoder,
+            audio_track: 0,
+            master_url: "http://example.invalid/master.m3u8",
+            work_dir: &work_dir,
+        };
+        let verdict = vrcast_studio_lib::tasks::ladder_build::room_for_the_set(&job, &work).await;
+        match verdict {
+            Ok(Some(notice)) => assert_eq!(
+                notice.key,
+                vrcast_studio_lib::domain::wording::DetailCode::LadderSpaceUnknown
+            ),
+            other => panic!("a source of unknown length passed the check in silence: {other:?}"),
+        }
+    }
+}
