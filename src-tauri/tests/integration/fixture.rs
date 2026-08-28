@@ -283,8 +283,6 @@ pub fn sweep_abandoned_networks() {
         if !name.starts_with("vrcast-test-net-") && !name.starts_with("vrcast-deploy-target-") {
             continue;
         }
-        // Only the empty ones. A network another test is using right now is not abandoned,
-        // and taking it away would break a run that is going perfectly well.
         let attached = docker(&[
             "network",
             "inspect",
@@ -294,9 +292,47 @@ pub fn sweep_abandoned_networks() {
         ])
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
         .unwrap_or_default();
+
         if attached.is_empty() {
             let _ = docker(&["network", "rm", name]);
+            continue;
         }
+
+        // **Attached to something that is no longer there.** This is what kept a build red
+        // for three runs on 2026-08-28. The sweep skipped every network that had anything
+        // attached, which is right while the thing attached exists — and this one was held
+        // by an endpoint whose container had been force-removed long before. Nothing was
+        // ever going to release it, no later run met the name again (the name carries the
+        // process id that made it), and the guard at the end of every job since reported it
+        // as that job's leak, including a job whose tests had not compiled.
+        //
+        // A container that merely *stopped* is left alone: it may belong to a run standing
+        // between two of its own steps. Only one that Docker no longer knows at all counts
+        // as gone.
+        let holders: Vec<&str> = attached.split_whitespace().collect();
+        let all_gone = holders
+            .iter()
+            // `container inspect` rather than plain `inspect`: the latter answers about
+            // images and volumes too, and would call a network held by nothing "still in
+            // use" because something else shares the name.
+            .all(
+                |holder| !matches!(docker(&["container", "inspect", holder]), Ok(o) if o.status.success()),
+            );
+        if !all_gone {
+            continue;
+        }
+        for holder in &holders {
+            let _ = docker(&["network", "disconnect", "-f", name, holder]);
+        }
+        let removed = matches!(docker(&["network", "rm", name]), Ok(o) if o.status.success());
+        // Said out loud either way. A sweep that quietly tidies up after a fault nobody was
+        // told about is how the fault gets to happen again with nothing to go on.
+        note_leak(&format!(
+            "the network {name} was held by {} — no such container any more. Forced off and \
+             {}",
+            holders.join(", "),
+            if removed { "removed" } else { "STILL THERE" }
+        ));
     }
 }
 
