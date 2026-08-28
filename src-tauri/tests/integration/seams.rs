@@ -205,11 +205,17 @@ async fn measuring_quality_runs_whole_and_picks_up_where_it_stopped() {
             "a point came back with a nonsensical score: {point:?}"
         );
     }
-    let (factor, counted) = measurements::machine_factor(&db)
+    let speed = measurements::machine_factor(&db)
         .expect("the correction would not read")
         .expect("nothing was learned from a run that just happened");
-    assert_eq!(counted, points.len());
-    assert!(factor > 0.0);
+    assert_eq!(speed.points, points.len());
+    assert!(speed.factor > 0.0);
+    // What a point really took, on a real encode. This is the half the estimate is checked
+    // against by the person who watched it happen (T423).
+    assert!(
+        speed.seconds_per_point > 0.0,
+        "a point was timed at no time at all"
+    );
 
     // **And now the join that had never been walked.** Running it again must add nothing:
     // the points are already there, and each one costs minutes.

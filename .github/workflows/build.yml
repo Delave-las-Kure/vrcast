@@ -507,6 +507,17 @@ jobs:
           if [ -n "$nets" ]; then
             echo "dangling networks were left:" >&2
             echo "$nets" >&2
+            # And what the fixture had to say about them. It writes here because cargo keeps
+            # a test's output to itself unless the test *fails* — and a leak left by a test
+            # that passed is exactly the case this guard exists for. Two red builds on
+            # 2026-08-28 reported a network name and nothing else, and both times the
+            # explanation had been written and thrown away.
+            if [ -f "${TMPDIR:-/tmp}/vrcast-leaks.log" ]; then
+              echo "what the tests said about them:" >&2
+              cat "${TMPDIR:-/tmp}/vrcast-leaks.log" >&2
+            else
+              echo "the tests said nothing: nothing even tried to remove them." >&2
+            fi
             exit 1
           fi
           echo "no networks left"

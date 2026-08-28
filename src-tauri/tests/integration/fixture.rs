@@ -176,9 +176,15 @@ pub struct TestServer {
 /// finite, and once it runs out no container starts at all — with a message that says
 /// nothing whatever about this place.
 pub fn remove_network(network: &str) {
+    let mut refusal = String::new();
     for attempt in 0..25 {
-        if matches!(docker(&["network", "rm", network]), Ok(o) if o.status.success()) {
-            return;
+        match docker(&["network", "rm", network]) {
+            Ok(o) if o.status.success() => return,
+            // **Docker says why it will not, and that used to be thrown away.** "has active
+            // endpoints" and "not found" are different faults with different fixes, and
+            // without the sentence a leak is a name with no explanation attached to it.
+            Ok(o) => refusal = String::from_utf8_lossy(&o.stderr).trim().to_owned(),
+            Err(e) => refusal = e.to_string(),
         }
         // The first few refusals are the ordinary race, and waiting is the whole answer.
         // After that something is genuinely holding on, and it is named and removed.
@@ -202,9 +208,6 @@ pub fn remove_network(network: &str) {
     // seconds; when they run out, the network is still there and the run carries on as
     // though it had been removed. The guard at the end of the job then reports a dangling
     // network with nothing to say about which test left it or what was holding it.
-    //
-    // So the giving up is said out loud, here, beside the test that caused it — and with
-    // whatever is still attached, which is the one fact needed to work out why.
     let holders = docker(&[
         "network",
         "inspect",
@@ -214,14 +217,52 @@ pub fn remove_network(network: &str) {
     ])
     .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
     .unwrap_or_default();
-    eprintln!(
-        "LEAK: the network {network} would not go after five seconds. Still attached: {}",
+    note_leak(&format!(
+        "the network {network} would not go after five seconds. Still attached: {}. \
+         Docker refused with: {}",
         if holders.is_empty() {
             "nothing"
         } else {
-            &holders
-        }
-    );
+            holders.as_str()
+        },
+        if refusal.is_empty() {
+            "nothing said"
+        } else {
+            refusal.as_str()
+        },
+    ));
+}
+
+/// Where a note about a leak is left, so that the job that finds the leak can read it.
+///
+/// Overridable so that a test of the noting can point it somewhere of its own.
+fn leak_log() -> std::path::PathBuf {
+    match std::env::var_os("VRCAST_LEAK_LOG") {
+        Some(path) => std::path::PathBuf::from(path),
+        None => std::env::temp_dir().join("vrcast-leaks.log"),
+    }
+}
+
+/// Say that something leaked, somewhere it will actually be read.
+///
+/// **This is the fault the last red build was made of.** The note used to be an `eprintln!`,
+/// and cargo keeps a test's output to itself unless the test *fails* — so a note about a
+/// leak left by a test that passed went nowhere at all. The build then failed at the guard
+/// step with one network name and no explanation, twice, and the explanation had been
+/// written both times.
+///
+/// So it goes to stderr **and** to a file the job reads back beside the list of what leaked.
+/// A failure to write is swallowed: a note about a leak must not become a second fault.
+pub fn note_leak(what: &str) {
+    eprintln!("LEAK: {what}");
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(leak_log())
+    {
+        let _ = writeln!(f, "LEAK: {what}");
+    }
 }
 
 /// Remove every network these tests make that nothing is attached to any more.
@@ -644,5 +685,42 @@ pub fn logging_if_requested() {
 pub fn canary(secret: &str) {
     if std::env::var_os("VRCAST_LOG").is_some() {
         tracing::trace!(probe = %secret, "a probe for secret redaction");
+    }
+}
+
+#[cfg(test)]
+mod noting {
+    /// **The check for the thing that actually failed.** Not for the leak — for the note
+    /// about it. Two red builds reported a network name and nothing else while the
+    /// explanation sat in a stream cargo throws away for a test that passed, and a
+    /// diagnostic that cannot be read is the same as no diagnostic.
+    ///
+    /// Needs no Docker: what broke was the writing, not the removing.
+    #[test]
+    fn a_note_about_a_leak_lands_somewhere_it_can_be_read() {
+        let path = std::env::temp_dir().join(format!(
+            "vrcast-leak-note-{}.log",
+            uuid::Uuid::new_v4().simple()
+        ));
+        // SAFETY: single-threaded by the harness's own `--test-threads=1`, which these
+        // tests require for their containers.
+        unsafe { std::env::set_var("VRCAST_LEAK_LOG", &path) };
+
+        super::note_leak("the network vrcast-deploy-target-1-0-net would not go");
+        super::note_leak("and a second one, so that one note does not overwrite the other");
+
+        let written = std::fs::read_to_string(&path).expect("nothing was written down at all");
+        assert!(
+            written.contains("vrcast-deploy-target-1-0-net"),
+            "the note went nowhere a later step could read it: {written:?}"
+        );
+        assert_eq!(
+            written.lines().count(),
+            2,
+            "the second note replaced the first — a run that leaks twice would explain once"
+        );
+
+        unsafe { std::env::remove_var("VRCAST_LEAK_LOG") };
+        let _ = std::fs::remove_file(&path);
     }
 }
