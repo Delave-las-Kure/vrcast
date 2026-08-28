@@ -122,6 +122,31 @@ beforeEach(() => {
   mockLadderValidate.mockResolvedValue({ objections: [], not_buildable: null });
   mockMeasureStart.mockResolvedValue("task-1");
   mockBuild.mockResolvedValue("build-1");
+  // **Every stub gets an answer here, not only the ones a given test reads.**
+  // `clearAllMocks` takes the implementation away, so a stub left without one returns
+  // `undefined`, and whatever calls it does `.then` on nothing. Which caller, and when,
+  // depends on when React gets round to an effect — sometimes one belonging to a test that
+  // has already ended — so it passes on one machine and fails on another. It did: green
+  // here, red in CI on 2026-08-28. Two stubs were short; the answer is that none is.
+  mockMeasurePreview.mockResolvedValue({
+    source_key: "1:film.mp4",
+    points: 12,
+    already_measured: 0,
+    about_seconds: 600,
+    chunk_starts: [233, 590, 947],
+    anchor_mbps: 8,
+    encoder: { kind: "hardware", name: "h264_nvenc" },
+    machine: { state: "nothing_timed_yet" },
+    notices: [],
+  } as unknown as MeasurePreview);
+  mockMeasureResult.mockResolvedValue({
+    run: { source_key: "1:film.mp4", codec: "h264" },
+    points: [],
+    selection: null,
+    ladder: null,
+    notices: [],
+  } as unknown as MeasurementView);
+  mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
   finish = null;
 });
 
