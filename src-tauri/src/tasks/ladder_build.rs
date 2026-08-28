@@ -45,6 +45,24 @@ pub enum BuildError {
         rungs: usize,
     },
 
+    /// The **local** disk cannot hold one variant (T452).
+    ///
+    /// Kept apart from the one above, and not merged with a "which disk" field: the two are
+    /// answered differently. A full server is emptied by removing media through this
+    /// application; a full local disk is the person's own housekeeping, and telling them to
+    /// go and free space on the wrong machine is worse than saying nothing.
+    ///
+    /// One variant, not the set: they are made and sent one at a time and removed once away,
+    /// so only ever one is here. Asking for the set would refuse a build that had room all
+    /// along, on every small scratch disk.
+    #[error("one variant needs {needed} bytes locally and {free} are free, short by {short_by}")]
+    NoRoomHere {
+        needed: u64,
+        free: u64,
+        short_by: u64,
+        at: String,
+    },
+
     #[error("the build was cancelled")]
     Cancelled,
 
@@ -117,6 +135,11 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     // rungs being served, the next one half written, and a person with no idea which is
     // which.
     if let Some(unknown) = room_for_the_set(job, &work).await? {
+        notices.push(unknown);
+    }
+    // And the disk this machine is about to write to, which had never been asked (T452). It
+    // is the one that fills first: a variant is written whole before a byte of it is sent.
+    if let Some(unknown) = room_here(job, &work)? {
         notices.push(unknown);
     }
 
@@ -228,6 +251,58 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
 /// Takes its parts rather than the whole job so that it can be checked against a real
 /// server on its own: what is uncertain here is how the shell behaves when the file is not
 /// there, and that is not something to reason about.
+/// Refuse a build the local disk cannot hold, before any of it is made (T452).
+///
+/// **The same arithmetic as the server's**, through `free_space::check` — the margin, the
+/// floor under it, the naming of what is short. Two answers to the same question would drift,
+/// and the day they disagreed nobody would know which to believe.
+///
+/// **The heaviest variant, not the set and not the first.** Only one is on this disk at a
+/// time, so the set would refuse builds that had room all along; the first is not always the
+/// largest once a rung has been left out, and being wrong in that direction is being wrong in
+/// the one direction this check exists to avoid.
+///
+/// `Ok(None)` — it fits. `Ok(Some(notice))` — could not be worked out, and the notice says so
+/// rather than passing for a check that ran. `Err` — it will not fit.
+pub fn room_here(job: &BuildJob<'_>, work: &[VariantWork]) -> Result<Option<Detail>, BuildError> {
+    let audio_bps = job
+        .source
+        .audio_tracks
+        .get(job.audio_track)
+        .and_then(|t| t.bitrate_bps)
+        .unwrap_or(ladder_size::AUDIO_BUDGET_BPS)
+        .max(ladder_size::AUDIO_BUDGET_BPS);
+
+    let heaviest = work.iter().map(|w| w.rung.bitrate_bps).max().unwrap_or(0);
+    let needed = ladder_size::bytes_for_rung(heaviest, audio_bps, job.source.duration_s);
+    if needed == 0 {
+        return Ok(Some(Detail::new(DetailCode::LadderSpaceUnknown)));
+    }
+
+    let at = std::path::Path::new(job.work_dir);
+    let Some(disk) = crate::media::local_disk::usage(at) else {
+        // Said out loud. A check that could not run must not look like one that ran and was
+        // content — and it must not refuse either: hours of work stopped because a question
+        // could not be asked is the worst of the three.
+        tracing::warn!(at = %at.display(), "could not read the free space on this machine");
+        return Ok(Some(Detail::new(DetailCode::LadderSpaceUnknown)));
+    };
+
+    match crate::server::free_space::check(&disk, needed, 0) {
+        crate::server::free_space::SpaceVerdict::Fits => Ok(None),
+        crate::server::free_space::SpaceVerdict::NotEnough {
+            needed,
+            free,
+            short_by,
+        } => Err(BuildError::NoRoomHere {
+            needed,
+            free,
+            short_by,
+            at: at.display().to_string(),
+        }),
+    }
+}
+
 /// Refuse a set that will not fit, before any of it is made.
 ///
 /// **A bar, not a warning**: room does not appear out of consent. The upload path keeps the

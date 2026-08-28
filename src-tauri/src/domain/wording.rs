@@ -286,6 +286,7 @@ detail_codes! {
     /// Said rather than swallowed: a check that cannot run must not look like one that ran
     /// and was content.
     LadderSpaceUnknown => "LADDER_SPACE_UNKNOWN",
+    LadderNoRoomHere => "LADDER_NO_ROOM_HERE",
     /// `name` — the file that will be replaced.
     NameWillBeReplaced => "NAME_WILL_BE_REPLACED",
     CdnKeepsOldCopy => "CDN_KEEPS_OLD_COPY",

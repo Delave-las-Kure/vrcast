@@ -106,10 +106,17 @@ tauri-plugin-updater = "2.10.1"
 # так на Windows не тянется код Secret Service, а на Linux — код Credential Manager.
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "4.1.6", features = ["windows-native-keyring-store"] }
+# Сколько места на локальном диске (T452). Своей функции в std нет, а собранная зависимость
+# ради одного вызова — плохой обмен: обе уже стоят в дереве, объявляются лишь напрямую.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # zbus, а не dbus: чистый Rust, не требует libdbus-1-dev на машине сборки и в CI.
 keyring = { version = "4.1.6", features = ["zbus-secret-service-keyring-store"] }
+# `statvfs` для T452. Через крейт, а не своим `extern`: раскладка структуры разнится по
+# архитектурам, и ошибка в ней не падает, а тихо врёт — а Linux-код с машины владельца не
+# собирается вовсе, так что проверить было бы нечем.
+libc = "0.2"
 
 # macOS не собирается (отложена), но объявление оставлено, чтобы её добавление
 # не требовало переделки — FR-111 запрещает создавать препятствия.

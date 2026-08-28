@@ -403,6 +403,20 @@ fn build_error(e: crate::tasks::ladder_build::BuildError) -> AppError {
                     .with("rungs", rungs as u64),
             )
             .with_cause(format!("short_by={short_by}")),
+        E::NoRoomHere {
+            needed,
+            free,
+            short_by,
+            at,
+        } => AppError::new(ErrorCode::InvalidInput)
+            .with_detail(
+                Detail::new(DetailCode::LadderNoRoomHere)
+                    .with("short_by", short_by)
+                    .with("needed", needed)
+                    .with("free", free)
+                    .with("at", at.clone()),
+            )
+            .with_cause(format!("short_by={short_by} at={at}")),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }

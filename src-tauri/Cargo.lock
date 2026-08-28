@@ -6490,6 +6490,7 @@ dependencies = [
  "hex",
  "hickory-resolver",
  "keyring",
+ "libc",
  "maxminddb",
  "minisign-verify",
  "rand 0.10.2",
@@ -6513,6 +6514,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

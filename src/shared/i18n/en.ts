@@ -443,6 +443,8 @@ export const en: Catalogue = {
       "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
     LADDER_NOT_ENOUGH_SPACE:
       "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
+    LADDER_NO_ROOM_HERE:
+      "This machine has no room for one variant: {needed} bytes are needed, {free} are free, {short_by} short. Writing to {at}. Variants are made one at a time and removed as soon as they are sent, so one is all that is needed — and there is nowhere to put even that. Free some space, or choose another folder in the settings.",
     LADDER_SPACE_UNKNOWN:
       "How much room the set would take could not be worked out, so the build is going ahead without that check.",
     NOT_ENOUGH_SPACE:
