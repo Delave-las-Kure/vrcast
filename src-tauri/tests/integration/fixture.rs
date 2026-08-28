@@ -164,6 +164,41 @@ pub struct TestServer {
     joined: Option<String>,
 }
 
+/// Take a network away, and do not give up at the first refusal.
+///
+/// **Why this is more than one call.** Docker refuses to remove a network anything is still
+/// attached to, and a container run with `--rm` is not detached the instant it is killed:
+/// for a second or two it is still there, holding the network. A run on 2026-08-28 left two
+/// networks out of some two dozen — the same race, lost twice.
+///
+/// So: try, and if it will not go, ask who is still holding it and take them off by force.
+/// A leaked network is not harmless. The pool of addresses they are handed out from is
+/// finite, and once it runs out no container starts at all — with a message that says
+/// nothing whatever about this place.
+pub fn remove_network(network: &str) {
+    for attempt in 0..25 {
+        if matches!(docker(&["network", "rm", network]), Ok(o) if o.status.success()) {
+            return;
+        }
+        // The first few refusals are the ordinary race, and waiting is the whole answer.
+        // After that something is genuinely holding on, and it is named and removed.
+        if attempt == 5 {
+            if let Ok(out) = docker(&[
+                "network",
+                "inspect",
+                "-f",
+                "{{range .Containers}}{{.Name}} {{end}}",
+                network,
+            ]) {
+                for holder in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+                    let _ = docker(&["network", "disconnect", "-f", network, holder]);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 /// The container this test process is running in, when there is one and this daemon knows it.
 ///
 /// **Why it is asked at all.** These tests bring servers up through the machine's Docker
@@ -510,22 +545,12 @@ impl Drop for TestServer {
         // The container is run with self-removal, but it is stopped explicitly: otherwise
         // after a failed test it would hang about until the end of the session.
         let _ = docker(&["kill", &self.id]);
-        // Ourselves off the network first, or removing it below fails ten times over and
-        // leaks it: Docker will not remove a network with anything still attached.
+        // Ourselves off the network first, or removing it is refused for as long as we hold
+        // it: Docker will not remove a network with anything still attached.
         if let Some(id) = &self.joined {
             let _ = docker(&["network", "disconnect", "-f", &self.network, id]);
         }
-        // And the network after it. Docker refuses to remove one that still has something
-        // attached, and self-removal of the container is not instant, so this is given a
-        // few attempts rather than one. A leaked network is not harmless: the pool of
-        // addresses they are handed out from is finite, and once it runs out no container
-        // will start at all — with a message that says nothing about this place.
-        for _ in 0..10 {
-            if matches!(docker(&["network", "rm", &self.network]), Ok(o) if o.status.success()) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        remove_network(&self.network);
     }
 }
 

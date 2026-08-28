@@ -372,7 +372,7 @@ impl Drop for DeployTarget {
             if let Some(id) = &self.joined {
                 let _ = docker(&["network", "disconnect", "-f", network, id]);
             }
-            let _ = docker(&["network", "rm", network]);
+            super::fixture::remove_network(network);
         }
     }
 }

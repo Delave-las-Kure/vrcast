@@ -496,8 +496,11 @@ jobs:
           # leaked network is not harmless: the pool of addresses they are handed out from
           # is finite, and once it runs out no container starts at all — with a message
           # that says nothing about this place.
+          # Оба вида: сети стенда проверок (`vrcast-test-net-…`) и сети стенда развёртывания
+          # (`vrcast-deploy-target-…-net`). Второй вид завёлся 2026-08-28 вместе с переходом
+          # на сеть контейнеров, и без него утечка там осталась бы невидимой.
           for _ in $(seq 1 15); do
-            nets="$(docker network ls --filter name=vrcast-test-net --format '{{.Name}}')"
+            nets="$(docker network ls --format '{{.Name}}'               | grep -E '^vrcast-(test-net|deploy-target)-' || true)"
             [ -z "$nets" ] && break
             sleep 1
           done
