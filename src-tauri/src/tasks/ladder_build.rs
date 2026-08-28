@@ -116,7 +116,9 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     // and tens of gigabytes; running into the end of the disk halfway leaves the first
     // rungs being served, the next one half written, and a person with no idea which is
     // which.
-    room_for_the_set(job, &work, &mut notices).await?;
+    if let Some(unknown) = room_for_the_set(job, &work).await? {
+        notices.push(unknown);
+    }
 
     let mut prepared = 0usize;
     let mut reused = 0usize;
@@ -232,11 +234,16 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
 /// rather than a round trip per variant. Without that, rebuilding a set to change one rung
 /// would be judged as though the whole set had to be made again, and refused on a disk that
 /// had room for it all along.
-async fn room_for_the_set(
+/// Public so that the guard can be asked directly — by a check, and one day by a screen that
+/// wants to say "this will not fit" before a person presses anything. A refusal reachable
+/// only from inside an hours-long task is a refusal that can be checked only by running one.
+///
+/// `Ok(None)` — it fits. `Ok(Some(notice))` — it could not be worked out, and the notice says
+/// so. `Err` — it will not fit.
+pub async fn room_for_the_set(
     job: &BuildJob<'_>,
     work: &[VariantWork],
-    notices: &mut Vec<Detail>,
-) -> Result<(), BuildError> {
+) -> Result<Option<Detail>, BuildError> {
     // What the audio will weigh. A re-encoded track is held to the budget; a copied one is
     // whatever the source carries, and a multichannel track carries far more. Where the
     // source does not say, the budget is the floor rather than the answer — guessing low
@@ -254,8 +261,7 @@ async fn room_for_the_set(
     if needed == 0 {
         // The source's length is unknown, so there is nothing to reckon with. Said out loud:
         // a check that could not run must not look like one that ran and was content.
-        notices.push(Detail::new(DetailCode::LadderSpaceUnknown));
-        return Ok(());
+        return Ok(Some(Detail::new(DetailCode::LadderSpaceUnknown)));
     }
 
     let disk = match crate::server::disk::usage(job.conn, job.video_dir).await {
@@ -264,8 +270,7 @@ async fn room_for_the_set(
             // The server would not say. That is not a reason to refuse hours of work —
             // it is a reason to say the check did not happen.
             tracing::warn!(error = %e, "could not read the free space before building a set");
-            notices.push(Detail::new(DetailCode::LadderSpaceUnknown));
-            return Ok(());
+            return Ok(Some(Detail::new(DetailCode::LadderSpaceUnknown)));
         }
     };
 
@@ -281,7 +286,7 @@ async fn room_for_the_set(
     };
 
     match crate::server::free_space::check(&disk, needed, already) {
-        crate::server::free_space::SpaceVerdict::Fits => Ok(()),
+        crate::server::free_space::SpaceVerdict::Fits => Ok(None),
         crate::server::free_space::SpaceVerdict::NotEnough {
             needed,
             free,

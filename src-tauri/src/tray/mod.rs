@@ -95,9 +95,13 @@ pub fn probe() -> TrayState {
     })
 }
 
-/// Declared by hand rather than pulled in with a crate, the way `tasks::process` declares
-/// the signal calls it needs: two symbols do not justify a dependency, and since glibc 2.34
-/// they live in the C library itself.
+// Declared by hand rather than pulled in with a crate, the way `tasks::process` declares the
+// signal calls it needs: two symbols do not justify a dependency, and since glibc 2.34 they
+// live in the C library itself.
+//
+// A plain comment, not a doc comment: rustdoc generates nothing for an extern block, so `///`
+// here is an error under `-D warnings`. Invisible from Windows — the whole block is behind
+// `cfg(target_os = "linux")`, so nothing local compiles it at all.
 #[cfg(target_os = "linux")]
 extern "C" {
     fn dlopen(filename: *const std::os::raw::c_char, flag: i32) -> *mut std::os::raw::c_void;
