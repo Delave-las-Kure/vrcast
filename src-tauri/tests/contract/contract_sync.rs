@@ -1031,3 +1031,199 @@ fn the_variant_parser_knows_a_camel_hump_from_a_word() {
     assert_eq!(snake_case("SingleRungOnly"), "single_rung_only");
     assert_eq!(snake_case("A"), "a");
 }
+
+// ---------- wordings written and shown by nothing (T380) ----------
+//
+// **The fault this exists for.** A wording written into both catalogues and drawn by nothing
+// is a promise the application does not keep: `columnWhy` heads a column that has no column,
+// and `droppedAbove` explains a decision nobody is shown. Both were written the day the
+// feature was planned, wired to nothing, and the task that promised them is marked done
+// (R-42).
+//
+// Nothing else catches it. The compiler is content — both catalogues have the key and the
+// types agree. The screens are content — they never ask.
+//
+// **It lives here rather than beside the catalogues** because reading files needs Node's own
+// types, which this project does not carry, and adding a dependency for a check is a poor
+// trade. Rust reads the same files with no such question.
+
+/// A wording in the catalogue: the block it sits in and its own name.
+struct Word {
+    block: String,
+    name: String,
+}
+
+/// Every leaf of the `ui` object in the Russian catalogue, which types the English one.
+fn wordings() -> Vec<Word> {
+    let path = frontend_file("src/shared/i18n/ru.ts");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+    let at = text
+        .find("const ui = {")
+        .expect("ru.ts no longer declares `const ui`");
+    let body = block_body(&text[at + "const ui = {".len()..]);
+
+    let mut out = Vec::new();
+    let mut block = String::new();
+    let mut depth = 0usize;
+    for line in body.lines() {
+        let code = line.split("//").next().unwrap_or("").trim();
+        // A block opens: `common: {`.
+        if let Some(name) = code.strip_suffix(": {") {
+            if depth == 0 {
+                block = name.trim().to_owned();
+            }
+            depth += 1;
+            continue;
+        }
+        if code.starts_with('}') {
+            depth = depth.saturating_sub(1);
+            continue;
+        }
+        if depth != 1 {
+            continue; // Nested deeper, or outside a block: not a plain wording.
+        }
+        let Some((left, _)) = code.split_once(':') else {
+            continue;
+        };
+        let name = left.trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        out.push(Word {
+            block: block.clone(),
+            name: name.to_owned(),
+        });
+    }
+    assert!(
+        out.len() > 100,
+        "only {} wordings were parsed out of ru.ts — the parsing has come adrift from the file",
+        out.len()
+    );
+    out
+}
+
+/// Everything the interface is written in, minus the catalogues themselves.
+///
+/// The catalogues are left out because every name appears in them by definition. **The
+/// renderer is not a catalogue** and must stay in: it is what reads whole blocks by key.
+fn interface_sources() -> String {
+    fn walk(dir: &Path, into: &mut String) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                if name != "__tests__" {
+                    walk(&path, into);
+                }
+            } else if (name.ends_with(".ts") || name.ends_with(".tsx"))
+                && !matches!(
+                    name.as_str(),
+                    "ru.ts" | "en.ts" | "catalogue.ts" | "types.ts"
+                )
+            {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    into.push_str(&text);
+                    into.push('\n');
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(&frontend_file("src"), &mut out);
+    assert!(
+        out.len() > 50_000,
+        "the interface's sources were not found where they were expected"
+    );
+    out
+}
+
+/// Written down, drawn by nothing, and known to be so — each with the task that will settle
+/// it.
+///
+/// **The list is the point, not the exception**: a reserved wording nobody has named is a
+/// wording everybody assumes is on screen. Nothing goes in without a task number, and
+/// `no_reserved_wording_is_already_on_a_screen` makes the list shrink on its own.
+const RESERVED: [(&str, &str); 6] = [
+    (
+        "columnWhy",
+        "T412 — the column of reasons, which no screen draws yet (R-42)",
+    ),
+    (
+        "droppedAbove",
+        "T412 — what was left out above the quality target",
+    ),
+    (
+        "retry",
+        "T462 — written for a button nobody added; wire it or take it out",
+    ),
+    (
+        "noLadder",
+        "T462 — the limits screen has no such state; wire it or take it out",
+    ),
+    (
+        "sourceIs",
+        "T462 — the source's own numbers, written for the ladder screen and never put there",
+    ),
+    (
+        "stepStatus",
+        "T462 — a label for a connection step nothing labels",
+    ),
+];
+
+/// Is this block handed over whole and read by key?
+///
+/// Two forms: indexed straight away — `t.ui.tasks.kinds[task.kind]` — and handed over first,
+/// `const names = t.ui.deploySteps as unknown as Record<string, string>`. Both mention the
+/// block and never its leaves.
+///
+/// **The blind spot, said out loud**: this excuses a block whole. `ui.appearance` is handed to
+/// the mascot as a lookup, so its `mascot*` wordings really are drawn — and its `themeLight`
+/// and friends, which nothing reads, are excused along with them (T463). Telling those apart
+/// would take a TypeScript parse. What this finds is a wording nobody reads at all.
+fn read_by_key(block: &str, sources: &str) -> bool {
+    sources.contains(&format!("{block}[")) || sources.contains(&format!("{block} as "))
+}
+
+#[test]
+fn every_wording_is_asked_for_by_some_screen() {
+    let sources = interface_sources();
+    let reserved: HashSet<&str> = RESERVED.iter().map(|(n, _)| *n).collect();
+
+    let mut unseen: Vec<String> = wordings()
+        .into_iter()
+        .filter(|w| !reserved.contains(w.name.as_str()))
+        .filter(|w| !read_by_key(&w.block, &sources))
+        .filter(|w| !sources.contains(&w.name))
+        .map(|w| format!("{}.{}", w.block, w.name))
+        .collect();
+    unseen.sort();
+    unseen.dedup();
+
+    assert!(
+        unseen.is_empty(),
+        "these wordings are in both catalogues and drawn by nothing:\n  {}\n\n\
+         Both languages have them and the types are content; the screens simply never ask. \
+         Either wire them up, or put them in RESERVED with the task that will.",
+        unseen.join("\n  ")
+    );
+}
+
+#[test]
+fn no_reserved_wording_is_already_on_a_screen() {
+    // Otherwise the list only grows, and a wording excused long ago goes on being excused
+    // after somebody quietly wired it up.
+    let sources = interface_sources();
+    let stale: Vec<&str> = RESERVED
+        .iter()
+        .filter(|(name, _)| sources.contains(name))
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these are drawn by a screen now and no longer belong in RESERVED: {stale:?}"
+    );
+}

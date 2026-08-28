@@ -172,6 +172,20 @@ impl DeployTarget {
         if self.network.is_none() {
             if let Some(id) = super::fixture::own_container() {
                 let network = format!("{}-net", self.name);
+                // **A leftover of a run that was killed rather than finished.** The name is
+                // the same every time, so one abandoned network blocks these tests for good:
+                // `network create` refuses, and nothing here ever gets as far as the cleanup
+                // that would have removed it. A cancelled job leaves exactly this — and a job
+                // is cancelled every time a push supersedes one still running, which is not
+                // rare. Caught on 2026-08-28 by two of this session's own pushes.
+                //
+                // Asked about before being removed: `remove_network` waits between attempts
+                // for the ordinary race, and spending that wait on a network that was never
+                // there would cost every deployment test the same seconds for nothing.
+                if matches!(docker(&["network", "inspect", &network]), Ok(o) if o.status.success())
+                {
+                    super::fixture::remove_network(&network);
+                }
                 let out = docker(&["network", "create", &network])
                     .map_err(|e| format!("could not create the network: {e}"))?;
                 if !out.status.success() {
