@@ -122,6 +122,63 @@ beforeEach(() => {
   finish = null;
 });
 
+describe("why each rung is what it is", () => {
+  // T418, and the reason T199 was unticked. The core has been producing a list of reasons
+  // per rung since milestone C; nothing drew them, and neither catalogue had a word for
+  // any of them. A ladder built on a probe that failed looked exactly like one built on a
+  // probe that worked.
+
+  it("draws every reason a rung was given, not the first of them", async () => {
+    const two = rung(1, 12, 1440, 92.0);
+    two.reasons = ["step_down", "measured_optimum"];
+    mockLadderPlan.mockResolvedValue(preview("measured", [rung(0, 22, 2160, 96.1), two]));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "ru");
+
+    const why = await screen.findByTestId("why-1");
+    // A rung is usually the result of more than one decision; showing one of them is
+    // choosing which half of the answer to withhold.
+    expect(why.querySelectorAll("li")).toHaveLength(2);
+  });
+
+  it("says how far down the step went, not merely that there was one", async () => {
+    // A bare "a step down" is true of every rung but the top and explains none of them.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "ru");
+
+    const why = await screen.findByTestId("why-1");
+    expect(why.textContent).toContain("12");
+  });
+
+  it("puts the numbers of its own rung into the reason, not the ladder's", async () => {
+    // The one way a column like this fails while looking right: every row saying the same
+    // thing, because the numbers came from somewhere other than the row.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "ru");
+
+    const first = await screen.findByTestId("why-0");
+    const third = await screen.findByTestId("why-2");
+    expect(first.textContent).not.toBe(third.textContent);
+    expect(third.textContent).toContain("1080");
+  });
+
+  it("marks a borrowed measurement in the rung's own row", async () => {
+    // T419, FR-145. Saying it once at the top of the set is not enough: a rung measured
+    // here beside one lent from a neighbouring episode is exactly the case where the
+    // difference matters, and a heading cannot say which is which.
+    const lent = rung(1, 12, 1440, 92.0);
+    lent.quality = { state: "borrowed", vmaf_x100: 9200 };
+    mockLadderPlan.mockResolvedValue(preview("measured", [rung(0, 22, 2160, 96.1), lent]));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "ru");
+
+    await screen.findByTestId("rung-1");
+    const mine = screen.getByTestId("rung-0").querySelector("[data-measured]");
+    const theirs = screen.getByTestId("rung-1").querySelector("[data-measured]");
+    expect(mine?.getAttribute("data-borrowed")).toBe("no");
+    expect(theirs?.getAttribute("data-borrowed")).toBe("yes");
+    expect(theirs?.textContent).not.toBe(mine?.textContent);
+  });
+});
+
 describe("where the rungs came from", () => {
   it("says plainly when they were measured on this material", async () => {
     mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));

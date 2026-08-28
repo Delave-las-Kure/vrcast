@@ -22,28 +22,84 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useT } from "../../shared/i18n";
 import { ipc } from "../../shared/ipc";
-import type { LadderVerdict, Objection, Quality, Rung, SourceFacts } from "../../shared/contract";
+import type {
+  LadderVerdict,
+  Objection,
+  Quality,
+  Rung,
+  RungReason,
+  SourceFacts,
+} from "../../shared/contract";
 
 /** Megabits, as everything in this project is counted. */
 function mbps(bps: number): string {
   return `${Math.round(bps / 1_000_000)} Mbit/s`;
 }
 
+/**
+ * What is known about this rung, and how it came to be known.
+ *
+ * **Three states, not two** (T419, FR-145). "Measured here" and "borrowed from another
+ * file" used to collapse into one sentence and one `data-measured="yes"`, so a set that was
+ * partly measured and partly lent looked uniform, and the only mark of the borrowing was a
+ * line at the top of the whole set. But the borrowing is not a property of the set: a rung
+ * measured here sitting next to one lent from a neighbouring episode is exactly the case
+ * where the difference matters, and the heading cannot say it.
+ */
 function qualityText(
   quality: Quality,
-  words: { notMeasured: string; vmafIs: string },
-): { text: string; measured: boolean } {
+  words: { notMeasured: string; vmafIs: string; vmafBorrowed: string },
+): { text: string; measured: boolean; borrowed: boolean } {
   if (quality.state === "not_measured") {
-    return { text: words.notMeasured, measured: false };
+    return { text: words.notMeasured, measured: false, borrowed: false };
   }
+  const borrowed = quality.state === "borrowed";
+  const wording = borrowed ? words.vmafBorrowed : words.vmafIs;
   return {
-    text: words.vmafIs.replace("{value}", (quality.vmaf_x100 / 100).toFixed(2)),
+    text: wording.replace("{value}", (quality.vmaf_x100 / 100).toFixed(2)),
     measured: true,
+    borrowed,
   };
 }
 
+/**
+ * Why a rung looks the way it does, in words and with the numbers it is about (T418).
+ *
+ * **The numbers come from the rung, not from the reason.** The core sends a bare list of
+ * codes; what a code is *about* — how far down, to what height, how much was cut — is in the
+ * rung itself and, for a step, in the one above it. Assembling the sentence here rather than
+ * in the core is the same rule as everywhere else: the core emits codes, the wordings live
+ * in the catalogues (FR-105).
+ */
+function reasonText(
+  reason: RungReason,
+  rung: Rung,
+  above: Rung | undefined,
+  words: Record<RungReason, string>,
+): string {
+  const times = above ? above.bitrate_bps / Math.max(1, rung.bitrate_bps) : 1;
+  return words[reason]
+    .replace("{mbps}", String(Math.round(rung.bitrate_bps / 1_000_000)))
+    .replace("{height}", String(rung.height))
+    .replace("{width}", String(rung.width))
+    .replace("{times}", times.toFixed(1));
+}
+
+/** The wordings an objection needs, named rather than taken as any string at all: the
+ *  ladder's catalogue now holds a nested block too, and `Record<string, string>` would be a
+ *  lie about it. */
+interface ObjectionWords {
+  objectionAboveSource: string;
+  objectionBufsize: string;
+  objectionLevel: string;
+  objectionOrder: string;
+  objectionStep: string;
+  stepTooBig: string;
+  stepTooSmall: string;
+}
+
 /** An objection in words. The core sends a code and numbers; the sentence is made here. */
-function objectionText(objection: Objection, words: Record<string, string>): string {
+function objectionText(objection: Objection, words: ObjectionWords): string {
   if ("RungAboveSource" in objection) {
     return words.objectionAboveSource.replace(
       "{index}",
@@ -138,6 +194,7 @@ export function RungEditor({
             <th>{words.columnBitrate}</th>
             <th>{words.columnSize}</th>
             <th>{words.columnQuality}</th>
+            <th>{words.columnWhy}</th>
           </tr>
         </thead>
         <tbody>
@@ -179,7 +236,24 @@ export function RungEditor({
                 <td>
                   {rung.width}×{rung.height}
                 </td>
-                <td data-measured={quality.measured ? "yes" : "no"}>{quality.text}</td>
+                <td
+                  data-measured={quality.measured ? "yes" : "no"}
+                  data-borrowed={quality.borrowed ? "yes" : "no"}
+                >
+                  {quality.text}
+                </td>
+                {/* Every reason the core gave, not the first of them: a rung is usually
+                    the result of more than one decision, and showing one of them would be
+                    picking which half of the answer to withhold. */}
+                <td data-testid={`why-${rung.index}`}>
+                  <ul>
+                    {rung.reasons.map((reason) => (
+                      <li key={reason}>
+                        {reasonText(reason, rung, rungs[index - 1], words.reasons)}
+                      </li>
+                    ))}
+                  </ul>
+                </td>
               </tr>
             );
           })}
@@ -200,4 +274,4 @@ export function RungEditor({
   );
 }
 
-export { objectionText, qualityText };
+export { objectionText, qualityText, reasonText };

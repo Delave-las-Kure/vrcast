@@ -563,8 +563,34 @@ export const en: Catalogue = {
       columnSize: "Frame",
       columnQuality: "Quality",
       columnWhy: "Why",
+
+      // Why a rung looks the way it does (T418). The keys are the core's `Reason` variants,
+      // and `every_reason_a_rung_can_give_has_words` holds them to it. Each wording carries
+      // the number it is about: a bare "a step down" is true of every rung but the top and
+      // explains none of them.
+      reasons: {
+        probed_anchor:
+          "The top of the ladder: at {mbps} Mbit/s the material stops asking for more, and further bits go into what nobody can see.",
+        capped_by_source:
+          "The top was cut to {mbps} Mbit/s — that is all there is in the source. There is nothing above it to encode.",
+        capped_by_upscale:
+          "The top was cut to {mbps} Mbit/s: above it the picture is upscaled, and the extra bits go into stretched pixels.",
+        step_down: "A step down from the one above: {mbps} Mbit/s, {times} times less.",
+        fallback_constant:
+          "The material could not be measured, so {mbps} Mbit/s comes from the old constant. The constant knows nothing about this material.",
+        lowered_for_density:
+          "The height was lowered to {height}: at {mbps} Mbit/s and the full frame there would be too few bits per pixel, and the picture would break into squares.",
+        full_resolution:
+          "The frame was left whole — {width}×{height}: at {mbps} Mbit/s the density holds.",
+        single_rung_only:
+          "The material is too light for a ladder: one rung, {mbps} Mbit/s. A second would differ from the first by less than anyone can see.",
+        measured_optimum:
+          "The height {height} was chosen by the measurement, not by the formula: at {mbps} Mbit/s it scored the best VMAF of those tried.",
+        borrowed_measurement: "The measurement behind this rung was taken on another file.",
+      },
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",
+      vmafBorrowed: "VMAF {value}, from another file",
       droppedAbove:
         "Dropped as excessive: {list}. Past the quality target those bits are paid for by every viewer and seen by none.",
 

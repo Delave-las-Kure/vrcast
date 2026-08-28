@@ -17,7 +17,7 @@
 //! The Rust-side lists come from the `ALL` constants, born of the same macro as the enums
 //! themselves — there is no hand-written list left that could fall behind.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
@@ -1140,16 +1140,10 @@ fn interface_sources() -> String {
 /// **The list is the point, not the exception**: a reserved wording nobody has named is a
 /// wording everybody assumes is on screen. Nothing goes in without a task number, and
 /// `no_reserved_wording_is_already_on_a_screen` makes the list shrink on its own.
-const RESERVED: [(&str, &str); 2] = [
-    (
-        "columnWhy",
-        "T412 — the column of reasons, which no screen draws yet (R-42)",
-    ),
-    (
-        "droppedAbove",
-        "T412 — what was left out above the quality target",
-    ),
-];
+const RESERVED: [(&str, &str); 1] = [(
+    "droppedAbove",
+    "T421 — what was left out above the quality target, which no screen draws yet",
+)];
 
 /// Blocks whose leaves are named by the **core**, not by any screen, each with the check that
 /// holds them to it.
@@ -1350,5 +1344,109 @@ fn no_reserved_wording_is_already_on_a_screen() {
     assert!(
         stale.is_empty(),
         "these are drawn by a screen now and no longer belong in RESERVED: {stale:?}"
+    );
+}
+
+// ---------- why a rung looks the way it does (T418) ----------
+
+/// The names and the wordings of a nested block of the Russian catalogue.
+///
+/// `ui.ladder.reasons` and its like sit one level deeper than the wordings guard looks, and
+/// they are keyed by a code from the core rather than named by a screen — so they need a
+/// comparison of their own, against the enum that produces the codes.
+fn nested_block(path_in_ui: &str) -> Vec<(String, String)> {
+    let text = std::fs::read_to_string(frontend_file("src/shared/i18n/ru.ts"))
+        .expect("ru.ts would not read");
+    let mut rest = text.as_str();
+    for step in path_in_ui.split('.') {
+        let marker = format!("{step}: {{");
+        let at = rest
+            .find(&marker)
+            .unwrap_or_else(|| panic!("ru.ts has no `{path_in_ui}` — stopped at `{step}`"));
+        rest = block_body(&rest[at + marker.len()..]);
+    }
+
+    let lines: Vec<&str> = rest.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let code = line.split("//").next().unwrap_or("").trim();
+        let Some((left, right)) = code.split_once(':') else {
+            continue;
+        };
+        let name = left.trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        // A long wording is wrapped onto the following lines, and reading only the first
+        // would find nothing after the colon — which reads exactly like a wording that says
+        // nothing. That is a check failing for the wrong reason, and nobody can act on one.
+        let mut value = right.trim().to_owned();
+        let mut at = i;
+        while !value.ends_with(',') && at + 1 < lines.len() {
+            at += 1;
+            value.push_str(lines[at].trim());
+        }
+        out.push((name.to_owned(), value));
+    }
+    out
+}
+
+/// The one reason with no number of its own, and why.
+///
+/// `borrowed_measurement` says where the measurement came from, not what was decided or by
+/// how much. Its number — which file — is not the rung's to give: it belongs to the whole
+/// set and is said once, in `Provenance`.
+const NO_NUMBER_OF_ITS_OWN: [&str; 1] = ["borrowed_measurement"];
+
+#[test]
+fn every_reason_a_rung_can_give_has_words() {
+    // Ten reasons were produced by the core and drawn by nothing, with no wordings on either
+    // side, while the task promising them was marked done (R-42, T199). This is what keeps
+    // the eleventh from going the same way.
+    let rust = variants_of("src/domain/ladder.rs", "Reason");
+    let written: HashSet<String> = nested_block("ladder.reasons")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_same_sets("rung reasons and their wordings", rust, written);
+}
+
+#[test]
+fn a_reason_says_by_how_much_and_not_merely_that() {
+    // **What a bare wording costs.** "A step down" is true of every rung below the top and
+    // explains none of them; "a step down from the one above: 8 Mbit/s, 1.9 times less" is
+    // an answer. A check that only asked for a non-empty string would pass the first, and a
+    // column of bare labels is worse than no column — it looks like an explanation.
+    let mut bare: Vec<String> = Vec::new();
+    for (name, wording) in nested_block("ladder.reasons") {
+        if NO_NUMBER_OF_ITS_OWN.contains(&name.as_str()) {
+            continue;
+        }
+        if !wording.contains('{') {
+            bare.push(name);
+        }
+    }
+    assert!(
+        bare.is_empty(),
+        "these reasons name themselves and say nothing about the rung they are on: {bare:?}\n\n\
+         A reason has to carry the number it is about — how far down, to what height, how \
+         much was cut off. Without one it is a label, and a column of labels reads as an \
+         explanation while explaining nothing."
+    );
+}
+
+#[test]
+fn nothing_is_excused_the_number_after_it_has_one() {
+    // The same self-shrinking rule as everywhere else here: the day `borrowed_measurement`
+    // learns to say which file, this asks for the excuse back.
+    let words: HashMap<String, String> = nested_block("ladder.reasons").into_iter().collect();
+    let stale: Vec<&str> = NO_NUMBER_OF_ITS_OWN
+        .iter()
+        .filter(|name| words.get(**name).is_some_and(|w| w.contains('{')))
+        .copied()
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "these carry a number now and no longer need excusing: {stale:?}"
     );
 }
