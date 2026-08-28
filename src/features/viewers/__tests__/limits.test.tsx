@@ -124,10 +124,15 @@ describe("putting the cap on", () => {
 
     await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1));
     expect(mockSet.mock.calls[0][1]).toBe(true);
+    // snake_case, because that is what the core reads. This said `serverId` until
+    // 2026-08-28 and agreed with the screen, and the two of them agreed on a shape the
+    // core refuses outright — `missing field server_id`. Capping a viewer never once
+    // worked, and this test was green throughout.
     expect(mockSet.mock.calls[0][0]).toMatchObject({
-      serverId: "s1",
+      server_id: "s1",
       ip: "203.0.113.10",
       slug: "demo",
+      cap_bps: 6_000_000,
     });
   });
 

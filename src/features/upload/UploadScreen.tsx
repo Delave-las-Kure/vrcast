@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useSearchParams } from "react-router-dom";
 import type { AppError, LibraryView, UploadRequest } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue } from "../../shared/i18n";
@@ -92,15 +93,15 @@ export function UploadScreen() {
 
   const media = useMemo(() => library?.media ?? [], [library]);
 
-  const pick = async () => {
-    const chosen = await open({
-      multiple: false,
-      directory: false,
-      title: u.pickTitle,
-      filters: [{ name: u.pickFilter, extensions: ["mp4", "mkv", "mov", "webm", "m4v"] }],
-    });
-    if (typeof chosen !== "string") return;
+  const [params] = useSearchParams();
 
+  /**
+   * Take a file, however it arrived — chosen here or handed over by the preparation screen.
+   *
+   * One function for both, so the two cannot come to differ: filling the name in from the
+   * file name is the sort of thing that gets done on one path and forgotten on the other.
+   */
+  const take = (chosen: string) => {
     setLocalPath(chosen);
     // The name in service is filled in from the file name: that is usually the one
     // wanted, and the field stays open for editing.
@@ -108,6 +109,26 @@ export function UploadScreen() {
     setPreflight(null);
     setStartedTask(null);
   };
+
+  const pick = async () => {
+    const chosen = await open({
+      multiple: false,
+      directory: false,
+      title: u.pickTitle,
+      filters: [{ name: u.pickFilter, extensions: ["mp4", "mkv", "mov", "webm", "m4v"] }],
+    });
+    if (typeof chosen === "string") take(chosen);
+  };
+
+  // What the preparation screen handed over, taken once. Not on every render: a person who
+  // then chooses a different file must not have this one put back under them.
+  const handed = params.get("file");
+  useEffect(() => {
+    if (handed && localPath === null) take(handed);
+    // `take` is rebuilt every render and `localPath` is what this is guarding against;
+    // both in the list would put the handed file back the moment it was replaced.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handed]);
 
   const send = async (confirmed: boolean) => {
     if (!active || !localPath) return;

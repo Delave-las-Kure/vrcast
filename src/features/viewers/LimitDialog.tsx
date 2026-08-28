@@ -53,7 +53,7 @@ export function LimitDialog({
     let alive = true;
     setError(null);
     ipc
-      .limitPreview({ serverId, ip, slug, capBps: capMbps * 1_000_000 })
+      .limitPreview({ server_id: serverId, ip, slug, cap_bps: capMbps * 1_000_000 })
       .then((answer) => {
         if (alive) setPreview(answer);
       })
@@ -127,7 +127,7 @@ export function LimitDialog({
         onClick={() => {
           setApplying(true);
           ipc
-            .limitSet({ serverId, ip, slug, capBps: capMbps * 1_000_000 }, true)
+            .limitSet({ server_id: serverId, ip, slug, cap_bps: capMbps * 1_000_000 }, true)
             .then(() => onDone?.())
             .catch((e: AppError) => setError(e))
             .finally(() => setApplying(false));

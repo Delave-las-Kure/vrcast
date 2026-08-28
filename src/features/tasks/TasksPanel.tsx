@@ -134,11 +134,21 @@ export function TasksPanel() {
     [tasks],
   );
 
+  // What is happening right now, in two numbers.
+  //
+  // A paused task is counted as running rather than waiting: it is holding a place on the
+  // machine and its half-made file, and calling it "waiting" would say the opposite of what
+  // it is. Cancelled and finished ones are counted as neither.
+  const running = tasks.filter((task) => task.state === "running" || task.state === "paused").length;
+
   if (loading) return <div className="panel">{t.ui.tasks.reading}</div>;
 
   return (
     <div className="panel">
       <h1>{t.ui.tasks.heading}</h1>
+      <p className="muted" data-testid="task-counts">
+        {fill(t.ui.tasks.counts, { running, queued: queued.length }, t, lang)}
+      </p>
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
       <CloseConsequences items={onClose} />

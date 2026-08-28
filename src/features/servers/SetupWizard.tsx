@@ -17,6 +17,8 @@
  */
 
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { homeDir, join } from "@tauri-apps/api/path";
 import type { AppError, ImportSuggestion, ServerInput, TestStep } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
@@ -128,6 +130,28 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   const finish = async () => {
     if (serverId) await useServers.getState().setActive(serverId);
     onClose();
+  };
+
+  /**
+   * Find the private key in the file browser.
+   *
+   * **No filters.** A private key has no extension, and a filter is built from extensions
+   * on both platforms this application runs on — `*.pem` on Windows, `*.pem` through GTK on
+   * Linux — so any filter at all would hide `id_ed25519` from the person looking for it.
+   *
+   * The dialogue opens in `~/.ssh` where the keys are. If that directory is not there the
+   * dialogue opens at home rather than refusing, which is the right answer for somebody who
+   * keeps their keys elsewhere.
+   */
+  const pickKey = async () => {
+    let start: string | undefined;
+    try {
+      start = await join(await homeDir(), ".ssh");
+    } catch {
+      start = undefined;
+    }
+    const chosen = await open({ multiple: false, directory: false, defaultPath: start });
+    if (typeof chosen === "string") field("key_path", chosen);
   };
 
   return (
@@ -252,15 +276,27 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             </div>
 
             {input.auth_kind === "key" && (
-              <label>
-                <span>{w.fieldKeyPath}</span>
-                <input
-                  value={input.key_path ?? ""}
-                  onChange={(e) => field("key_path", e.target.value || null)}
-                  placeholder="C:\Users\...\.ssh\id_ed25519"
-                  required
-                />
-              </label>
+              <div className="form__inline">
+                {/*
+                  The field stays, and stays editable: a path is as often pasted from
+                  somewhere as it is found by hand. The button sits **outside** the label
+                  on purpose — a button is a labelable element, so inside it would become
+                  the label's control and "Path to the private key" would point at the
+                  button instead of the field, for a screen reader and for every test that
+                  finds the field by its label.
+                */}
+                <label>
+                  <span>{w.fieldKeyPath}</span>
+                  <input
+                    value={input.key_path ?? ""}
+                    onChange={(e) => field("key_path", e.target.value || null)}
+                    required
+                  />
+                </label>
+                <button type="button" onClick={() => void pickKey()}>
+                  {w.pickKey}
+                </button>
+              </div>
             )}
 
             <div className="field">

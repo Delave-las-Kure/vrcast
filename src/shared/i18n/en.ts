@@ -524,10 +524,16 @@ export const en: Catalogue = {
     },
 
     ladder: {
+      columnBuild: "Build",
+      buildThisRung: "Build the {mbps} Mbit/s rung",
+      handedFrom: "The file from the preparation: {path}",
+      pickAnother: "Choose another",
       explain:
         "A quality set is several versions of one film. A viewer's player takes whichever their connection can hold.",
       pickFile: "Choose a source",
-      measuring: "Measuring the source…",
+      working: "Working out the rungs — looking at what this material is…",
+    noServer: "No server is chosen, so there is nowhere to build the set. Pick one under Servers.",
+    measuring: "Measuring the source…",
       sourceIs: "Source: {width}×{height}, {fps} frames a second, {bitrate}",
       peakIs: "Peak: {peak} — a viewer's connection has to hold this, not the average",
 
@@ -880,6 +886,7 @@ export const en: Catalogue = {
     },
 
     sidebar: {
+      step: "{n}. {name}",
       sections: "Sections",
       version: "version {version}",
       aboutTitle: "About and licence",
@@ -910,7 +917,8 @@ export const en: Catalogue = {
       fieldAuth: "Sign-in",
       authKey: "By key",
       authPassword: "By password",
-      fieldKeyPath: "Path to the private key",
+      pickKey: "Browse\u2026",
+    fieldKeyPath: "Path to the private key",
       fieldPassphrase: "Key passphrase",
       fieldPassword: "Password",
       secretHint:
@@ -980,11 +988,6 @@ export const en: Catalogue = {
 
     convert: {
       heading: "Preparation",
-      bitrateSource: "as in the source",
-      bitrate9: "9 Mbit/s — safe on a weak connection",
-      bitrate14: "14 Mbit/s",
-      bitrate22: "22 Mbit/s — good for 1080p",
-      bitrate35: "35 Mbit/s",
       trackFallback: "Track {n}",
       mono: "mono",
       stereo: "stereo",
@@ -999,9 +1002,6 @@ export const en: Catalogue = {
       sourceFacts: "{width}×{height}, {fps} fps, {duration}, {size}, {codec}",
       fieldTrack: "Audio track",
       noTracks: "The file has no audio track at all — check that this is the right file.",
-      fieldBitrate: "Target bitrate",
-      bitrateHint:
-        "Setting a bitrate means re-encoding, even if the file would do as it is: otherwise the request would go unmet.",
       fieldOutput: "Where to put it",
       pick: "Choose…",
       lossless:
@@ -1017,6 +1017,12 @@ export const en: Catalogue = {
         "Follow it in the Tasks section. At the end the file is checked for playback: one that fails the check is not offered for upload.",
       computing: "Working it out…",
       start: "Prepare",
+      nextTitle: "The file is ready. What next",
+      nextHint:
+        "The usual way is to cut it into qualities: the viewer's player then takes whichever one their connection carries. Sending it as one file is simpler, but then every viewer gets the same weight.",
+      nextLadder: "Cut into qualities",
+      nextUpload: "Send as one file",
+      nextFailed: "The preparation failed, so there is nothing to go on with. The task says what happened.",
     },
 
     library: {
@@ -1126,7 +1132,8 @@ export const en: Catalogue = {
         failed: "failed",
         cancelled: "cancelled",
       },
-      heading: "Tasks",
+      counts: "Running: {running}. Waiting: {queued}.",
+    heading: "Tasks",
       reading: "Reading the task list…",
       empty: "No tasks yet. They will appear when you start preparing or uploading video.",
       speed: "{mbit} Mbit/s",

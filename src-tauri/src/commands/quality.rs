@@ -21,7 +21,7 @@ use crate::tasks::quality_measure::{self, MeasureJob};
 use crate::tasks::state::TaskKind;
 
 /// What the interface sends to have a film measured.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeasureRequest {
     pub path: String,
     /// The codec the ladder is being measured **for**. A measurement does not carry from

@@ -21,7 +21,7 @@ use crate::store::measurements;
 use crate::tasks::state::TaskKind;
 
 /// What the interface sends to have a ladder worked out.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LadderRequest {
     pub path: String,
     /// The codec the ladder is for. A measurement does not carry between them.
@@ -44,7 +44,7 @@ fn yes() -> bool {
 }
 
 /// What the interface sends to build a quality set.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildRequest {
     pub server_id: String,
     /// The source on this machine that the variants are made from.

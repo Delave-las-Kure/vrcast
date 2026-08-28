@@ -39,6 +39,10 @@ import {
   type SourceFile,
   type Validation,
   type TestStep,
+  type LadderPlanRequest,
+  type LadderBuildRequest,
+  type QualityMeasureRequest,
+  type LimitRequest,
   type UploadRequest,
   type Versions,
   type Viewer,
@@ -214,12 +218,7 @@ export const ipc = {
    * The ladder for this film: the measured one when it has been measured, and the
    * formula's preview when it has not. The answer says which, every time.
    */
-  ladderPlan: (request: {
-    path: string;
-    codec?: string;
-    nativeHeight?: number | null;
-    preferHardware?: boolean;
-  }) => call<LadderPreview>("ladder_plan", { request }),
+  ladderPlan: (request: LadderPlanRequest) => call<LadderPreview>("ladder_plan", { request }),
   /**
    * Check rungs a person has edited. Called on **every** edit (FR-044): a pure function
    * in the core, so it costs nothing and never waits on a file or a server.
@@ -228,12 +227,9 @@ export const ipc = {
     call<LadderVerdict>("ladder_validate", { check: { rungs, source } }),
 
   // --- measuring quality ---
-  qualityMeasurePreview: (request: {
-    path: string;
-    codec?: string;
-    nativeHeight?: number | null;
-  }) => call<MeasurePreview>("quality_measure_preview", { request }),
-  qualityMeasureStart: (request: { path: string; codec?: string; nativeHeight?: number | null }) =>
+  qualityMeasurePreview: (request: QualityMeasureRequest) =>
+    call<MeasurePreview>("quality_measure_preview", { request }),
+  qualityMeasureStart: (request: QualityMeasureRequest) =>
     call<string>("quality_measure_start", { request }),
   qualityMeasureResult: (sourceKey: string, codec: string) =>
     call<MeasurementView>("quality_measure_result", { sourceKey, codec }),
@@ -244,30 +240,20 @@ export const ipc = {
    * Refuses before any task exists when the rungs were not measured — the core does that,
    * not the screen, so a way in that forgot to check cannot get past it either.
    */
-  ladderBuild: (request: {
-    serverId: string;
-    path: string;
-    slug: string;
-    rungs: Rung[];
-    audioTrack?: number;
-    preferHardware?: boolean;
-  }) => call<string>("ladder_build", { request }),
+  ladderBuild: (request: LadderBuildRequest) => call<string>("ladder_build", { request }),
   /** Ask the serving for every variant of a set (FR-047). */
   ladderVerify: (serverId: string, slug: string) =>
     call<LadderServedVerdict>("ladder_verify", { serverId, slug }),
 
   // --- quality limits ---
   /** What capping this viewer would do. Nothing is changed (FR-066). */
-  limitPreview: (request: { serverId: string; ip: string; slug: string; capBps: number }) =>
-    call<LimitPreview>("limit_preview", { request }),
+  limitPreview: (request: LimitRequest) => call<LimitPreview>("limit_preview", { request }),
   /**
    * Put the cap on. Refuses unless `confirmed`: what is being edited is the
    * configuration of the thing serving somebody's film at that moment.
    */
-  limitSet: (
-    request: { serverId: string; ip: string; slug: string; capBps: number },
-    confirmed: boolean,
-  ) => call<void>("limit_set", { request, confirmed }),
+  limitSet: (request: LimitRequest, confirmed: boolean) =>
+    call<void>("limit_set", { request, confirmed }),
   limitClear: (serverId: string, ip: string, slug: string) =>
     call<void>("limit_clear", { serverId, ip, slug }),
   /** What is in force, read from the server rather than from a note here (FR-064). */

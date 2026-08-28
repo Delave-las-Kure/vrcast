@@ -27,7 +27,7 @@ const LIMITS_CONF: &str = "/etc/caddy/vrcast-limits.conf";
 const MAIN_CONF: &str = "/etc/caddy/Caddyfile";
 
 /// What the interface sends to cap somebody.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LimitRequest {
     pub server_id: String,
     /// The viewer's address **as the serving sees it**.

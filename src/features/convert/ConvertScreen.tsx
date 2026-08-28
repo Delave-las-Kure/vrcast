@@ -1,5 +1,5 @@
 /**
- * T122 — the file preparation screen (FR-020, FR-021, FR-025, FR-026).
+ * T122 — the file preparation screen (FR-020, FR-021, FR-026).
  *
  * Pick a source, see what is actually in it, choose the audio track, and start.
  *
@@ -7,30 +7,28 @@
  * re-encoding takes hours, and the difference is invisible from the outside —
  * both look like "prepare the file". Saying which one is about to happen, and
  * why, is the whole reason this is not just a button.
+ *
+ * **There is no target bitrate here any more** (owner, 2026-08-28). Asking a person for a
+ * number before anybody has looked at the material is asking them to guess; the ladder
+ * measures this film and proposes rungs, and choosing among measured rungs is a different
+ * act from typing a number into a box. What this screen makes is the master the ladder is
+ * cut from. The core keeps the ceiling — it is what every rung is held to — and nothing
+ * reaches it from here.
+ *
+ * **And it says what to do next.** Preparing was the end of the road: the path to the
+ * finished file lived in this component and died with it, so the next screen asked for the
+ * file again from scratch.
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { AppError, ConvertPreview, ConvertStart, SourceFile } from "../../shared/contract";
-import { ipc, toAppError } from "../../shared/ipc";
+import { ipc, onTaskDone, toAppError } from "../../shared/ipc";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
 import { formatBytes, formatDuration } from "../../shared/i18n/format";
 import { fill, renderDetail } from "../../shared/i18n/render";
-
-/**
- * Bitrate choices, in kilobits — the unit the core expects.
- *
- * The value is fixed and the label is a catalogue key: the numbers mean the same in
- * every language, the words around them do not.
- */
-const BITRATES: Array<{ key: keyof Catalogue["ui"]["convert"]; value: number | null }> = [
-  { key: "bitrateSource", value: null },
-  { key: "bitrate9", value: 9_000 },
-  { key: "bitrate14", value: 14_000 },
-  { key: "bitrate22", value: 22_000 },
-  { key: "bitrate35", value: 35_000 },
-];
 
 /** Name a track the way a person can choose between two of them. */
 function trackLabel(track: SourceFile["audio_tracks"][number], t: Catalogue, lang: Lang): string {
@@ -62,8 +60,13 @@ export function ConvertScreen() {
   const [sourcePath, setSourcePath] = useState<string | null>(null);
   const [source, setSource] = useState<SourceFile | null>(null);
   const [track, setTrack] = useState(0);
-  const [targetKbps, setTargetKbps] = useState<number | null>(null);
   const [outPath, setOutPath] = useState("");
+  // Where the finished file will be, remembered at the moment the work was ordered.
+  //
+  // Not read off `outPath` when the task ends: the field stays editable afterwards, and a
+  // link that offered the next step on a path nobody made would be worse than no link.
+  const [finishedPath, setFinishedPath] = useState<string | null>(null);
+  const [done, setDone] = useState<"ok" | "failed" | null>(null);
 
   const [preview, setPreview] = useState<ConvertPreview | null>(null);
   const [error, setError] = useState<AppError | null>(null);
@@ -80,12 +83,13 @@ export function ConvertScreen() {
         : {
             path: sourcePath,
             audio_track: track,
-            target_kbps: targetKbps,
+            // Nothing is asked for here. See the note at the top of the file.
+            target_kbps: null,
             height: null,
             out_path: outPath,
             prefer_hardware: true,
           },
-    [sourcePath, track, targetKbps, outPath],
+    [sourcePath, track, outPath],
   );
 
   // The preview is recomputed whenever the answer would change. It touches no
@@ -115,6 +119,22 @@ export function ConvertScreen() {
     };
   }, [request, source]);
 
+  // **When the preparation ends.** Without this the screen says "started" forever, and the
+  // only way to learn it finished is the task list — which is where a person then has to
+  // work out for themselves what to do with the result.
+  useEffect(() => {
+    if (!startedTask) return;
+    let live = true;
+    const unlisten = onTaskDone((event) => {
+      if (!live || event.id !== startedTask) return;
+      setDone(event.error ? "failed" : "ok");
+    });
+    return () => {
+      live = false;
+      void unlisten.then((off) => off());
+    };
+  }, [startedTask]);
+
   const pickSource = async () => {
     const chosen = await open({
       multiple: false,
@@ -131,6 +151,8 @@ export function ConvertScreen() {
 
     setBusy(true);
     setStartedTask(null);
+    setDone(null);
+    setFinishedPath(null);
     try {
       const probed = await ipc.sourceProbe(chosen);
       setSourcePath(chosen);
@@ -164,6 +186,10 @@ export function ConvertScreen() {
     setError(null);
     try {
       setStartedTask(await ipc.convertStart(request));
+      // Held from here on: the field below stays editable, and the offer of a next step
+      // has to name the file that was actually ordered.
+      setFinishedPath(request.out_path);
+      setDone(null);
     } catch (e) {
       setError(toAppError(e));
     } finally {
@@ -228,24 +254,6 @@ export function ConvertScreen() {
             </div>
 
             <div className="form__row">
-              <label htmlFor="convert-bitrate">{c.fieldBitrate}</label>
-              <select
-                id="convert-bitrate"
-                value={targetKbps === null ? "" : String(targetKbps)}
-                onChange={(e) =>
-                  setTargetKbps(e.target.value === "" ? null : Number(e.target.value))
-                }
-              >
-                {BITRATES.map((b) => (
-                  <option key={b.key} value={b.value === null ? "" : String(b.value)}>
-                    {c[b.key] as string}
-                  </option>
-                ))}
-              </select>
-              <p className="form__hint">{c.bitrateHint}</p>
-            </div>
-
-            <div className="form__row">
               <label htmlFor="convert-out">{c.fieldOutput}</label>
               <div className="form__inline">
                 <button id="convert-out" onClick={() => void pickOutput()} disabled={busy}>
@@ -296,11 +304,41 @@ export function ConvertScreen() {
         </section>
       )}
 
-      {startedTask && (
+      {startedTask && done === null && (
         <div className="notice notice--ok" role="status">
           <div className="notice__body">
             <strong className="notice__message">{c.started}</strong>
             <p className="notice__hint">{c.startedHint}</p>
+          </div>
+        </div>
+      )}
+
+      {/*
+        Where to go with the file that was just made. The path travels in the address, the
+        way the servers section already hands a server to the deployment screen — no store,
+        no core change, and a person who came back to this screen later still sees it.
+      */}
+      {done === "ok" && finishedPath && (
+        <section className="notice notice--ok" role="status" data-testid="what-next">
+          <div className="notice__body">
+            <strong className="notice__message">{c.nextTitle}</strong>
+            <p className="notice__hint">{c.nextHint}</p>
+            <p className="notice__list">
+              <Link className="button-link" to={`/ladder?file=${encodeURIComponent(finishedPath)}`}>
+                {c.nextLadder}
+              </Link>{" "}
+              <Link className="button-link" to={`/upload?file=${encodeURIComponent(finishedPath)}`}>
+                {c.nextUpload}
+              </Link>
+            </p>
+          </div>
+        </section>
+      )}
+
+      {done === "failed" && (
+        <div className="notice notice--warning" role="status" data-testid="what-next-failed">
+          <div className="notice__body">
+            <strong className="notice__message">{c.nextFailed}</strong>
           </div>
         </div>
       )}

@@ -872,6 +872,64 @@ export interface LadderPlan {
   anchor_bps: number;
 }
 
+/**
+ * What the screens **send**, as against everything else here, which is what the core answers
+ * with.
+ *
+ * These live in the contract for one reason, learned the hard way on 2026-08-28: written on
+ * the spot in `ipc.ts` they were written in the interface's own habit, `serverId`, while the
+ * core reads plain serde and expects `server_id`. Tauri renames the arguments of a command
+ * itself, so `call("x", { serverId })` reaches a parameter named `server_id` — but it renames
+ * nothing **inside** a nested object. Three commands were therefore refused before their
+ * first line ran, from the day they were written: building a quality set, and both halves of
+ * capping a viewer. Nothing caught it, because every screen test throws the argument away and
+ * the contract comparison only ever looked at answers.
+ *
+ * The field names are the core's, exactly. `contract_sync` now builds the payload out of what
+ * is declared here and hands it to the very type each command takes.
+ */
+
+/** Have a ladder worked out for one file. */
+export interface LadderPlanRequest {
+  path: string;
+  /** The codec the ladder is for. A measurement does not carry between them. */
+  codec?: string;
+  /** The height the material really has, when it was upscaled. Told by the person. */
+  native_height?: number | null;
+  prefer_hardware?: boolean;
+}
+
+/** Build the quality set on a server. */
+export interface LadderBuildRequest {
+  server_id: string;
+  /** The source on this machine the variants are made from. */
+  path: string;
+  /** The medium's own directory on the server. */
+  slug: string;
+  /** The rungs as the person has them on screen — measured or edited. */
+  rungs: Rung[];
+  audio_track?: number;
+  prefer_hardware?: boolean;
+}
+
+/** Measure what the rungs are worth on this material. */
+export interface QualityMeasureRequest {
+  path: string;
+  codec?: string;
+  native_height?: number | null;
+  prefer_hardware?: boolean;
+}
+
+/** Cap one viewer on one medium. */
+export interface LimitRequest {
+  server_id: string;
+  /** The viewer's address **as the serving sees it**, out of the access log and nowhere else. */
+  ip: string;
+  /** The medium's own directory. */
+  slug: string;
+  cap_bps: number;
+}
+
 /** What the checker says about a ladder's soundness. */
 export type Objection =
   | { RungAboveSource: { index: number; source_bps: number } }

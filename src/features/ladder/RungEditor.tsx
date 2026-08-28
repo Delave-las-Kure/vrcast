@@ -9,9 +9,16 @@
  * **A rung says whether anybody has measured it** (FR-145). A number from the formula shown
  * the way a measured one is shown would be worse than no number at all: it is a guess
  * wearing the clothes of a fact.
+ *
+ * **And a rung can be left out.** The application works the ladder out and offers it; which
+ * of the rungs are actually made is the person's to say (owner, 2026-08-28). Every rung is
+ * hours of encoding and a copy on the server, so "all of them or edit the numbers by hand"
+ * was not a real choice. What is checked — and what is built — is what is left in: leaving
+ * out a middle rung widens the gap over its neighbour, and the core objects to that while
+ * the person is still looking at it, not after they have agreed to the work.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useT } from "../../shared/i18n";
 import { ipc } from "../../shared/ipc";
@@ -65,21 +72,34 @@ export function RungEditor({
   rungs,
   source,
   onChange,
+  left_out,
+  onToggle,
 }: {
   rungs: Rung[];
   source: SourceFacts;
   onChange?: (rungs: Rung[]) => void;
+  /** The rungs, by their own index, that are not to be built. */
+  left_out?: ReadonlySet<number>;
+  onToggle?: (index: number) => void;
 }) {
   const t = useT();
   const words = t.ui.ladder;
   const [verdict, setVerdict] = useState<LadderVerdict | null>(null);
+
+  // What will actually be built. The check has to be about these and not about the whole
+  // list: leaving a rung out is what widens a gap, and a check that looked at the rungs
+  // nobody asked for would stay quiet about it.
+  const building = useMemo(
+    () => rungs.filter((rung) => !left_out?.has(rung.index)),
+    [rungs, left_out],
+  );
 
   // Checked on every change of the rungs, including the first time they arrive. The core's
   // check touches neither a file nor a server, so this cannot fall behind the typing.
   useEffect(() => {
     let alive = true;
     ipc
-      .ladderValidate(rungs, source)
+      .ladderValidate(building, source)
       .then((answer) => {
         if (alive) setVerdict(answer);
       })
@@ -89,7 +109,7 @@ export function RungEditor({
     return () => {
       alive = false;
     };
-  }, [rungs, source]);
+  }, [building, source]);
 
   function edit(index: number, bitrateMbps: number) {
     if (!onChange) return;
@@ -114,6 +134,7 @@ export function RungEditor({
       <table>
         <thead>
           <tr>
+            {onToggle && <th>{words.columnBuild}</th>}
             <th>{words.columnBitrate}</th>
             <th>{words.columnSize}</th>
             <th>{words.columnQuality}</th>
@@ -122,8 +143,26 @@ export function RungEditor({
         <tbody>
           {rungs.map((rung, index) => {
             const quality = qualityText(rung.quality, words);
+            const out = left_out?.has(rung.index) ?? false;
             return (
-              <tr key={rung.index} data-testid={`rung-${rung.index}`}>
+              <tr
+                key={rung.index}
+                data-testid={`rung-${rung.index}`}
+                data-left-out={out ? "yes" : "no"}
+              >
+                {onToggle && (
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={!out}
+                      aria-label={words.buildThisRung.replace(
+                        "{mbps}",
+                        String(Math.round(rung.bitrate_bps / 1_000_000)),
+                      )}
+                      onChange={() => onToggle(rung.index)}
+                    />
+                  </td>
+                )}
                 <td>
                   {onChange ? (
                     <input

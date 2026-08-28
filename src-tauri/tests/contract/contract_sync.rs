@@ -366,3 +366,274 @@ fn the_declaration_parser_does_not_take_a_comment_for_a_field() {
         "the question mark was not dropped"
     );
 }
+
+// ---------- the shapes the interface SENDS (T367) ----------
+//
+// Everything above compares what the core **answers** with. Nothing compared what the
+// interface **asks** with — and that is where three commands were broken from the day they
+// were written.
+//
+// Tauri renames the arguments of a command itself: `{ serverId }` reaches a parameter named
+// `server_id`. It does **not** rename anything inside a nested object — that is plain serde,
+// and there is no `rename_all` anywhere in `src-tauri/src/commands`. So `call("ladder_build",
+// { request: { serverId, .. } })` hands serde an object with no `server_id` in it, and
+// `BuildRequest::server_id` has neither `Option` nor a default: the call fails before a
+// single line of the command runs. "Build the set" never worked. Neither did capping a
+// viewer. Found on 2026-08-28, from an owner's report that the quality set "did not work".
+//
+// It stayed invisible because every screen test mocks the whole of `ipc` and throws the
+// argument away (`ladderBuild: (...a) => mockBuild(...a)`), and the contract comparison only
+// ever looked at answers.
+//
+// So the payload is built here out of what `ipc.ts` itself declares it sends, and handed to
+// the very type the command takes. Not a list written by hand beside the code it checks —
+// the two descriptions are read from the two files and made to meet.
+
+fn ipc_ts() -> String {
+    let path = frontend_file("src/shared/ipc.ts");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()))
+}
+
+/// One field of a request, as the interface declares it.
+struct Sent {
+    name: String,
+    optional: bool,
+    ts_type: String,
+}
+
+/// The body of a braced block, from just after the opening brace.
+fn block_body(after_brace: &str) -> &str {
+    let mut depth = 1usize;
+    for (i, c) in after_brace.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &after_brace[..i];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("a block was opened and never closed");
+}
+
+/// The fields declared in a block of `name: type;` lines.
+fn fields_in(body: &str) -> Vec<Sent> {
+    // A field ends at a semicolon or at a line break, and both have to be honoured: the
+    // requests written on the spot put the whole object on one line, and splitting by lines
+    // alone read `path: string; codec?: string` as a single field named `path` whose type
+    // "contains null". It still failed, but for the wrong reason — and a check that is red
+    // for the wrong reason is one nobody can act on.
+    let mut clean = String::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+            continue;
+        }
+        clean.push_str(line.split("//").next().unwrap_or(""));
+        clean.push(';');
+    }
+
+    let mut out = Vec::new();
+    for line in clean.split(';') {
+        let line = line.trim();
+        let Some((left, right)) = line.split_once(':') else {
+            continue;
+        };
+        let optional = left.trim().ends_with('?');
+        let name = left.trim().trim_end_matches('?').trim().to_owned();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        out.push(Sent {
+            name,
+            optional,
+            ts_type: right.trim().trim_end_matches(',').trim().to_owned(),
+        });
+    }
+    assert!(!out.is_empty(), "a request turned out to have no fields");
+    out
+}
+
+/// What one `ipc.ts` method declares it puts in its `request` object.
+///
+/// Both shapes are understood on purpose: a named type out of `contract.ts` — which is what
+/// these ought to be — and an object literal written on the spot, which is what they drifted
+/// into. Refusing to read the second would mean this check could not see the fault it exists
+/// for.
+fn sent_fields(method: &str) -> Vec<Sent> {
+    let ipc = ipc_ts();
+    let marker = format!("\n  {method}: (request: ");
+    let start = ipc
+        .find(&marker)
+        .unwrap_or_else(|| panic!("ipc.ts has no method \"{method}\" that takes a request"));
+    let rest = &ipc[start + marker.len()..];
+
+    match rest.strip_prefix('{') {
+        Some(inline) => fields_in(block_body(inline)),
+        None => {
+            let named: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let ts = contract_ts();
+            let marker = format!("export interface {named} {{");
+            let at = ts.find(&marker).unwrap_or_else(|| {
+                panic!("{method} asks for a type \"{named}\" that contract.ts does not declare")
+            });
+            fields_in(block_body(&ts[at + marker.len()..]))
+        }
+    }
+}
+
+/// A value of the shape the interface says it sends.
+fn sample(ts_type: &str) -> serde_json::Value {
+    let t = ts_type.trim();
+    // A type that admits null is given null: that is the case the core has to survive, and
+    // an `Option` that has only ever been shown a value is an `Option` nobody has tried.
+    if t.contains("null") {
+        return serde_json::Value::Null;
+    }
+    if t.ends_with("[]") {
+        return serde_json::json!([]);
+    }
+    match t {
+        "string" => serde_json::json!(""),
+        "number" => serde_json::json!(0),
+        "boolean" => serde_json::json!(true),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Build the payload and hand it to the type the command takes.
+///
+/// Twice: once with only the fields the interface always sends, and once with the optional
+/// ones too. The first is what a screen sends on a plain path — and it is the one that was
+/// broken. The second catches a field that is only sent sometimes and is misspelt.
+fn payload_is_readable<T: serde::de::DeserializeOwned>(method: &str) {
+    let fields = sent_fields(method);
+
+    for (what, all) in [
+        ("without the optional fields", false),
+        ("with every field", true),
+    ] {
+        let mut object = serde_json::Map::new();
+        for f in &fields {
+            if f.optional && !all {
+                continue;
+            }
+            object.insert(f.name.clone(), sample(&f.ts_type));
+        }
+        let json = serde_json::Value::Object(object);
+        serde_json::from_value::<T>(json.clone()).unwrap_or_else(|e| {
+            panic!(
+                "ipc.{method} sends something the core cannot read, {what}: {e}\n\
+                 What the interface says it sends: {json}\n\
+                 Nothing catches this at build time: the types check on both sides, because \
+                 neither side has ever been shown the other's. It fails at a person's \
+                 machine, on the button, every time."
+            )
+        });
+    }
+}
+
+/// And nothing the interface sends is quietly thrown away.
+///
+/// Serde ignores a field it does not know by default, so a misspelt name is not an error —
+/// it is a setting a person chose that never arrives. That is worse than a refusal: the
+/// screen goes on showing the choice as made.
+fn nothing_sent_is_dropped<T: serde::Serialize>(method: &str, empty: &T) {
+    let known = serialized_fields(empty);
+    let dropped: Vec<String> = sent_fields(method)
+        .into_iter()
+        .map(|f| f.name)
+        .filter(|n| !known.contains(n))
+        .collect();
+    assert!(
+        dropped.is_empty(),
+        "ipc.{method} sends {dropped:?}, and the core has no such fields. Serde drops what it \
+         does not know without a word, so the choice a person made on screen never arrives, \
+         and the screen goes on showing it as made"
+    );
+}
+
+#[test]
+fn the_ladder_build_payload_can_be_read() {
+    payload_is_readable::<vrcast_studio_lib::commands::ladder::BuildRequest>("ladderBuild");
+}
+
+#[test]
+fn the_ladder_plan_payload_can_be_read() {
+    payload_is_readable::<vrcast_studio_lib::commands::ladder::LadderRequest>("ladderPlan");
+}
+
+#[test]
+fn the_measure_payloads_can_be_read() {
+    payload_is_readable::<vrcast_studio_lib::commands::quality::MeasureRequest>(
+        "qualityMeasurePreview",
+    );
+    payload_is_readable::<vrcast_studio_lib::commands::quality::MeasureRequest>(
+        "qualityMeasureStart",
+    );
+}
+
+#[test]
+fn the_limit_payloads_can_be_read() {
+    payload_is_readable::<vrcast_studio_lib::commands::limits::LimitRequest>("limitPreview");
+    payload_is_readable::<vrcast_studio_lib::commands::limits::LimitRequest>("limitSet");
+}
+
+#[test]
+fn the_upload_payload_can_be_read() {
+    // The one that was always right, kept as the control: without it a fault in the parsing
+    // above would turn every check here red at once and be read as a fault in the code.
+    payload_is_readable::<vrcast_studio_lib::commands::upload::UploadRequest>("uploadStart");
+}
+
+#[test]
+fn nothing_the_screens_send_is_quietly_dropped() {
+    use vrcast_studio_lib::commands::{ladder, limits, quality};
+
+    nothing_sent_is_dropped(
+        "ladderPlan",
+        &ladder::LadderRequest {
+            path: String::new(),
+            codec: String::new(),
+            native_height: None,
+            declared_layout: None,
+            prefer_hardware: true,
+        },
+    );
+    nothing_sent_is_dropped(
+        "ladderBuild",
+        &ladder::BuildRequest {
+            server_id: String::new(),
+            path: String::new(),
+            slug: String::new(),
+            rungs: Vec::new(),
+            audio_track: 0,
+            prefer_hardware: true,
+        },
+    );
+    nothing_sent_is_dropped(
+        "qualityMeasureStart",
+        &quality::MeasureRequest {
+            path: String::new(),
+            codec: String::new(),
+            native_height: None,
+            prefer_hardware: true,
+        },
+    );
+    nothing_sent_is_dropped(
+        "limitSet",
+        &limits::LimitRequest {
+            server_id: String::new(),
+            ip: String::new(),
+            slug: String::new(),
+            cap_bps: 0,
+        },
+    );
+}

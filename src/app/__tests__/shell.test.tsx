@@ -120,8 +120,27 @@ describe("the shell", () => {
     // heading, and a search across the page would find two matches.
     const nav = await screen.findByRole("navigation", { name: ru.ui.sidebar.sections });
     for (const label of Object.values(ru.ui.sections)) {
-      expect(within(nav).getByText(label)).toBeInTheDocument();
+      // Not an exact match any more: the three that are one job done in order carry their
+      // number in front of the name.
+      expect(within(nav).getByText(label, { exact: false })).toBeInTheDocument();
     }
+  });
+
+  it("numbers the three steps of one job in the order the work happens", async () => {
+    // Preparation, then cutting into qualities, then sending. The menu used to list sending
+    // before cutting, so somebody following it down the page was led the wrong way round.
+    renderIn(<App />);
+    const nav = await screen.findByRole("navigation", { name: ru.ui.sidebar.sections });
+    const numbered = within(nav)
+      .getAllByRole("link")
+      .map((link) => link.textContent?.trim() ?? "")
+      .filter((text) => /^\d\./.test(text));
+
+    expect(numbered).toEqual([
+      `1. ${ru.ui.sections.convert}`,
+      `2. ${ru.ui.sections.ladder}`,
+      `3. ${ru.ui.sections.upload}`,
+    ]);
   });
 
   it("shows the application version when the core returned one", async () => {

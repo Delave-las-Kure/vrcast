@@ -14,13 +14,15 @@
  * teaches people that the application is broken.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useSearchParams } from "react-router-dom";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { RungEditor } from "./RungEditor";
 import { useActiveServer } from "../servers/store";
-import { useT } from "../../shared/i18n";
+import { useLang, useT } from "../../shared/i18n";
+import { renderDetail } from "../../shared/i18n/render";
 import { ipc, onTaskDone } from "../../shared/ipc";
 import type {
   AppError,
@@ -123,7 +125,14 @@ function slugOf(path: string): string {
 export function LadderPage() {
   const t = useT();
   const words = t.ui.ladder;
-  const [path, setPath] = useState<string | null>(null);
+  // The file the preparation screen just made, if that is where this came from. In the
+  // address rather than in a store, the way the servers section already hands a server to
+  // the deployment screen: it survives a reload, it can be linked to, and it needs no state
+  // shared between two screens that otherwise know nothing about each other.
+  const [params] = useSearchParams();
+  const handed = params.get("file");
+  const [picked, setPicked] = useState<string | null>(null);
+  const path = picked ?? handed;
   const server = useActiveServer();
 
   const pick = async () => {
@@ -137,7 +146,7 @@ export function LadderPage() {
         },
       ],
     });
-    if (typeof chosen === "string") setPath(chosen);
+    if (typeof chosen === "string") setPicked(chosen);
   };
 
   if (!path) {
@@ -151,7 +160,19 @@ export function LadderPage() {
       </div>
     );
   }
-  return <LadderScreen path={path} serverId={server?.id ?? null} slug={slugOf(path)} />;
+  return (
+    <div>
+      {handed && !picked && (
+        <p className="muted" data-testid="handed-from">
+          {words.handedFrom.replace("{path}", handed)}{" "}
+          <button type="button" className="button-link" onClick={() => void pick()}>
+            {words.pickAnother}
+          </button>
+        </p>
+      )}
+      <LadderScreen path={path} serverId={server?.id ?? null} slug={slugOf(path)} />
+    </div>
+  );
 }
 
 export function LadderScreen({
@@ -168,94 +189,130 @@ export function LadderScreen({
   const t = useT();
   const words = t.ui.ladder;
 
+  const { lang } = useLang();
   const [source, setSource] = useState<SourceMeasured | null>(null);
   const [preview, setPreview] = useState<LadderPreview | null>(null);
   const [offer, setOffer] = useState<MeasurePreview | null>(null);
   const [rungs, setRungs] = useState<Rung[]>([]);
+  // Whether the core is being asked for a ladder right now.
+  //
+  // `ladder_plan` runs the complexity probe — three encodes — and reads the database. On a
+  // feature film that is seconds, and the screen used to spend them showing a heading and
+  // nothing else, which reads as broken (FR-145 says where the rungs came from must always
+  // be plain; saying nothing at all is not plain).
+  const [working, setWorking] = useState(true);
   // Which measurement is running, if any.
   //
-  // Kept rather than a bare flag, because the screen has to know **which** task ended:
-  // a person may have a preparation and a transfer running beside this, and reloading
-  // the rungs when somebody else's task finished would be at best a flicker and at
-  // worst a set that appears out of nowhere.
-  const [measuring, setMeasuring] = useState<string | null>(null);
+  // **In a ref, not in state, and that is the whole of the fix.** The screen has to know
+  // *which* task ended — a person may have a preparation and a transfer running beside
+  // this. It used to be state, and the `task:done` handler cleared it first thing; that is
+  // the listening effect's own dependency, so React tore the effect down, its cleanup set
+  // the local `alive` flag to false, and the measured rungs the core sent a moment later
+  // were dropped by `if (!alive) return;`. The measurement finished, was written down, and
+  // the screen went on showing the guess. Found on 2026-08-28 from an owner's report.
+  const measuringId = useRef<string | null>(null);
+  const [measuring, setMeasuring] = useState(false);
+  // Tied to the file rather than to what is running: this must go false when the screen is
+  // put away or asked about another file, and at no other moment.
+  const alive = useRef(true);
   const [name, setName] = useState(slug ?? "");
+  // Which rungs the person has left out. By the rung's own index rather than by position,
+  // so that editing a bitrate — which rebuilds the array — does not silently move the
+  // choice onto a different rung.
+  const [leftOut, setLeftOut] = useState<ReadonlySet<number>>(new Set());
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
 
   useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, [path]);
+
+  /**
+   * Ask the core for the ladder and put its answer on screen.
+   *
+   * One function for both the first load and the reload after a measurement. It used to be
+   * written out twice, in two effects, and the two could drift — one of them already had a
+   * line the other did not.
+   */
+  const loadPlan = useCallback(async (): Promise<LadderPreview | null> => {
+    setWorking(true);
+    try {
+      const answer = await ipc.ladderPlan({ path });
+      if (!alive.current) return null;
+      setPreview(answer);
+      setRungs(answer.plan.rungs);
+      if (answer.from !== "formula") setOffer(null);
+      return answer;
+    } catch (e) {
+      if (alive.current) setError(e as AppError);
+      return null;
+    } finally {
+      if (alive.current) setWorking(false);
+    }
+  }, [path]);
+
+  useEffect(() => {
     if (!path) return;
-    let alive = true;
     setError(null);
 
-    ipc
-      .ladderPlan({ path })
-      .then((answer) => {
-        if (!alive) return;
-        setPreview(answer);
-        setRungs(answer.plan.rungs);
-        // The offer to measure is only worth fetching when there is nothing measured yet:
-        // it runs the complexity probe, and running that on a screen that already has an
-        // answer would cost seconds for nothing.
-        if (answer.from === "formula") {
-          ipc
-            .qualityMeasurePreview({ path })
-            .then((o) => {
-              if (alive) setOffer(o);
-            })
-            .catch(() => undefined);
-        }
-      })
-      .catch((e: AppError) => {
-        if (alive) setError(e);
-      });
+    void loadPlan().then((answer) => {
+      // The offer to measure is only worth fetching when there is nothing measured yet:
+      // it runs the complexity probe, and running that on a screen that already has an
+      // answer would cost seconds for nothing.
+      if (!alive.current || answer?.from !== "formula") return;
+      ipc
+        .qualityMeasurePreview({ path })
+        .then((o) => {
+          if (alive.current) setOffer(o);
+        })
+        .catch(() => undefined);
+    });
 
     // The source's own numbers, separately: measuring the peaks reads every packet and is
     // slower than planning, and there is no reason to make the rungs wait for it.
     ipc
       .ladderMeasure(path)
       .then((m) => {
-        if (alive) setSource(m);
+        if (alive.current) setSource(m);
       })
       .catch(() => undefined);
+  }, [path, loadPlan]);
 
-    return () => {
-      alive = false;
-    };
-  }, [path]);
-
-  // **The end of the measurement reaches the screen.** Without this the task runs to
-  // its end, the rungs it chose sit in the store, and this screen goes on saying
-  // "measuring" until somebody thinks to close it and open it again.
+  // **The end of the measurement reaches the screen.** Without this the task runs to its
+  // end, the rungs it chose sit in the store, and this screen goes on saying "measuring"
+  // until somebody thinks to close it and open it again.
+  //
+  // It listens for as long as the file is on screen, and reads which task is its own from
+  // a ref. The subscription must not depend on what is running: the handler's first act is
+  // to change that, and an effect that tears itself down mid-handler loses the answer it
+  // was waiting for.
   useEffect(() => {
-    if (!measuring) return;
-    let alive = true;
+    if (!path) return;
     const unlisten = onTaskDone((event) => {
-      if (!alive || event.id !== measuring) return;
-      setMeasuring(null);
+      if (event.id !== measuringId.current) return;
+      measuringId.current = null;
       if (event.error) {
+        setMeasuring(false);
         setError(event.error);
         return;
       }
-      // Asked afresh rather than patched together here: the core decides what the
-      // rungs are, and a screen that assembled its own would be a second opinion.
-      ipc
-        .ladderPlan({ path })
-        .then((answer) => {
-          if (!alive) return;
-          setPreview(answer);
-          setRungs(answer.plan.rungs);
-          if (answer.from !== "formula") setOffer(null);
-        })
-        .catch((e: AppError) => {
-          if (alive) setError(e);
-        });
+      // Asked afresh rather than patched together here: the core decides what the rungs
+      // are, and a screen that assembled its own would be a second opinion.
+      //
+      // "Measuring" stays on screen until the new rungs are actually there. Clearing it
+      // first left a gap — sometimes a long one — in which the work was done, the screen
+      // said nothing was happening, and the old guess was still on it.
+      void loadPlan().finally(() => {
+        if (alive.current) setMeasuring(false);
+      });
     });
     return () => {
-      alive = false;
       void unlisten.then((off) => off());
     };
-  }, [measuring, path]);
+  }, [path, loadPlan]);
 
   const blocked = preview?.verdict.not_buildable ?? null;
 
@@ -270,25 +327,65 @@ export function LadderScreen({
         <p data-testid="source-facts">{words.peakIs.replace("{peak}", bitrate(source.peak_bps))}</p>
       )}
 
+      {working && (
+        <p role="status" data-testid="working">
+          {words.working}
+        </p>
+      )}
+
       {preview && <Provenance preview={preview} />}
+
+      {/*
+        What the core wanted to say and had nowhere to say it. `NoticeProbeFailed`,
+        `NoticeNoHardwareFound`, `NoticeProbeUncalibrated` and `NoticeMeasurementBorrowed`
+        were all being produced and all being dropped on the floor here — so a ladder built
+        on a probe that failed looked exactly like one built on a probe that worked.
+      */}
+      {preview && preview.notices.length > 0 && (
+        <ul data-testid="notices">
+          {preview.notices.map((notice, i) => (
+            <li key={i} role="note">
+              {renderDetail(notice, t, lang)}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {offer && (
         <MeasureOffer
           preview={offer}
-          running={measuring !== null}
+          running={measuring}
           onStart={() => {
+            setMeasuring(true);
             ipc
               .qualityMeasureStart({ path })
-              .then(setMeasuring)
+              .then((id) => {
+                measuringId.current = id;
+              })
               .catch((e: AppError) => {
                 setError(e);
-                setMeasuring(null);
+                measuringId.current = null;
+                setMeasuring(false);
               });
           }}
         />
       )}
 
-      {preview && <RungEditor rungs={rungs} source={preview.source} onChange={setRungs} />}
+      {preview && (
+        <RungEditor
+          rungs={rungs}
+          source={preview.source}
+          onChange={setRungs}
+          left_out={leftOut}
+          onToggle={(index) =>
+            setLeftOut((was) => {
+              const next = new Set(was);
+              if (!next.delete(index)) next.add(index);
+              return next;
+            })
+          }
+        />
+      )}
 
       {/*
         What the set will be called on the server. Offered rather than decided: the
@@ -308,13 +405,21 @@ export function LadderScreen({
 
       <button
         type="button"
-        disabled={blocked !== null || building}
+        disabled={blocked !== null || building || !serverId || rungs.length === leftOut.size}
         data-testid="build"
         onClick={() => {
           if (!preview || !serverId) return;
           setBuilding(true);
           ipc
-            .ladderBuild({ serverId, path, slug: name.trim() || slugOf(path), rungs })
+            .ladderBuild({
+              server_id: serverId,
+              path,
+              slug: name.trim() || slugOf(path),
+              // Only what was asked for. The core names each variant by its own megabits
+              // (`film_22.mp4`), not by its place in the list, so a gap in the numbering
+              // costs nothing.
+              rungs: rungs.filter((rung) => !leftOut.has(rung.index)),
+            })
             .catch((e: AppError) => setError(e))
             .finally(() => setBuilding(false));
         }}
@@ -324,6 +429,16 @@ export function LadderScreen({
       {blocked && (
         <p role="note" data-testid="build-blocked">
           {blocked.code === "NO_RUNGS" ? words.buildBlockedEmpty : words.buildBlocked}
+        </p>
+      )}
+      {/*
+        A button that does nothing teaches people the application is broken. This one used
+        to return on the spot when no server was chosen — no refusal, no explanation, and
+        no way to tell it apart from a set that failed to build.
+      */}
+      {!serverId && (
+        <p role="note" data-testid="build-no-server">
+          {words.noServer}
         </p>
       )}
     </div>

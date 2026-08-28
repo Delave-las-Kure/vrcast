@@ -8,14 +8,23 @@
  */
 
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConvertPreview, SourceFile, Validation } from "../../../shared/contract";
+import type {
+  ConvertPreview,
+  ConvertStart,
+  SourceFile,
+  Validation,
+} from "../../../shared/contract";
 import { en, renderIn, ru } from "../../../test-utils";
 import { fill } from "../../../shared/i18n/render";
 
 const mockSourceProbe = vi.fn<() => Promise<SourceFile>>();
 const mockConvertPreview = vi.fn<() => Promise<ConvertPreview>>();
-const mockConvertStart = vi.fn<() => Promise<string>>();
+const mockConvertStart = vi.fn<(request: ConvertStart) => Promise<string>>();
+
+/** What the core would send when the preparation ends. Held so a test can end one. */
+let finish: ((e: { id: string; state: string; error: unknown }) => void) | null = null;
 const mockOpen = vi.fn<() => Promise<string | null>>();
 const mockSave = vi.fn<() => Promise<string | null>>();
 
@@ -31,8 +40,14 @@ vi.mock("../../../shared/ipc", async () => {
     ipc: {
       sourceProbe: () => mockSourceProbe(),
       convertPreview: () => mockConvertPreview(),
-      convertStart: () => mockConvertStart(),
+      convertStart: (request: ConvertStart) => mockConvertStart(request),
       convertValidate: vi.fn(),
+    },
+    onTaskDone: async (handler: (e: unknown) => void) => {
+      finish = handler as typeof finish;
+      return () => {
+        finish = null;
+      };
     },
   };
 });
@@ -109,7 +124,7 @@ async function pickSource() {
 describe("preparation screen", () => {
   it("shows what is actually in the file", async () => {
     // FR-020. Choosing a bitrate without knowing what the source is means guessing.
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
     // One line, matched whole: "hevc" also appears in the preview's explanation,
     // and matching it alone would find either and prove neither.
@@ -129,7 +144,7 @@ describe("preparation screen", () => {
   it("says plainly that re-encoding is about to happen, and why", async () => {
     // The whole reason this screen is not just a button: copying takes minutes,
     // re-encoding takes hours, and from the outside both look the same.
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
 
     expect(await screen.findByText(ru.ui.convert.lossy)).toBeInTheDocument();
@@ -150,7 +165,7 @@ describe("preparation screen", () => {
         plan: { ...preview().plan, video: { kind: "copy" }, audio: { kind: "copy" } },
       }),
     );
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
 
     expect(await screen.findByText(ru.ui.convert.lossless)).toBeInTheDocument();
@@ -165,7 +180,7 @@ describe("preparation screen", () => {
         encoder_notice: { key: "NOTICE_NO_HARDWARE_FOUND" },
       }),
     );
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
 
     expect(await screen.findByText(ru.details.NOTICE_NO_HARDWARE_FOUND)).toBeInTheDocument();
@@ -182,7 +197,7 @@ describe("preparation screen", () => {
         },
       }),
     );
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
 
     // Asked of the catalogue rather than copied out of it: what matters is that the
@@ -196,7 +211,7 @@ describe("preparation screen", () => {
   });
 
   it("explains the same preparation in English when English is chosen", async () => {
-    renderIn(<ConvertScreen />, "en");
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>, "en");
     fireEvent.click(await screen.findByText(en.ui.convert.pickFile));
     await screen.findByText(/1920×1080/);
 
@@ -231,7 +246,7 @@ describe("preparation screen", () => {
         ],
       }),
     );
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
 
     expect(screen.getByText(/Дорожка 1, стерео/)).toBeInTheDocument();
@@ -240,28 +255,83 @@ describe("preparation screen", () => {
 
   it("does not let a file without sound be prepared silently", async () => {
     mockSourceProbe.mockResolvedValue(source({ audio_tracks: [] }));
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
 
     expect(screen.getByText(ru.ui.convert.noTracks)).toBeInTheDocument();
   });
 
   it("cannot be started before a source is chosen", async () => {
-    renderIn(<ConvertScreen />);
+    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     expect(await screen.findByText(ru.ui.convert.start)).toBeDisabled();
   });
 
-  it("hands the core the track and bitrate that were chosen", async () => {
-    renderIn(<ConvertScreen />);
+  it("offers the next step, with the file it just made, once the work has ended", async () => {
+    // Preparing used to be the end of the road: the path to the result lived in this
+    // component and died with it, so the next screen asked for the file from scratch. And
+    // there was nothing on screen to say the work had finished at all — "started" stayed up
+    // for as long as the screen did.
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
+    await pickSource();
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
+    await waitFor(() => expect(mockConvertStart).toHaveBeenCalled());
+
+    // Nothing is offered while it is still running: a link to a file that is half written
+    // is worse than no link.
+    expect(screen.queryByTestId("what-next")).toBeNull();
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    const made = mockConvertStart.mock.calls[0][0].out_path;
+    finish?.({ id: await mockConvertStart.mock.results[0].value, state: "completed", error: null });
+
+    const onward = await screen.findByText(ru.ui.convert.nextLadder);
+    expect(onward.getAttribute("href")).toBe(`/ladder?file=${encodeURIComponent(made)}`);
+    expect(screen.getByText(ru.ui.convert.nextUpload).getAttribute("href")).toBe(
+      `/upload?file=${encodeURIComponent(made)}`,
+    );
+  });
+
+  it("offers nothing onward when the preparation failed", async () => {
+    // FR-027. A file that did not finish being written must not be offered to viewers, and
+    // a link that says "send this" is an offer.
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
+    await pickSource();
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    finish?.({
+      id: await mockConvertStart.mock.results[0].value,
+      state: "failed",
+      error: { code: "CONVERT_FAILED", details: [] },
+    });
+
+    expect(await screen.findByTestId("what-next-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("what-next")).toBeNull();
+  });
+
+  it("asks for no target bitrate — this screen makes a master, the ladder picks the rungs", async () => {
+    // The field is gone (owner, 2026-08-28): asking for a number before anybody has looked
+    // at the material is asking for a guess. What must not happen quietly is the screen
+    // going on sending some number of its own.
+    const { container } = renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
     await pickSource();
 
-    fireEvent.change(screen.getByLabelText(ru.ui.convert.fieldBitrate), {
-      target: { value: "22000" },
-    });
-    fireEvent.click(screen.getByText(ru.ui.convert.start));
+    // The screen really did draw its form — otherwise the next assertion would pass
+    // because nothing was rendered at all.
+    expect(screen.getByLabelText(ru.ui.convert.fieldTrack)).toBeInTheDocument();
+    expect(container.querySelector("#convert-bitrate")).toBeNull();
 
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
     await waitFor(() => expect(mockConvertStart).toHaveBeenCalled());
-    expect(await screen.findByText(ru.ui.convert.started)).toBeInTheDocument();
+    expect(mockConvertStart.mock.calls[0][0]).toMatchObject({ target_kbps: null });
   });
 });
 

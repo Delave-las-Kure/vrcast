@@ -12,6 +12,7 @@
  */
 
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
 import { fill } from "../../../shared/i18n/render";
@@ -97,21 +98,35 @@ async function chooseAFile() {
 }
 
 describe("the upload screen", () => {
+  it("takes the file the preparation screen handed over", async () => {
+    // The receiving half of the same handoff. Without it the address is a promise the next
+    // screen does not keep, and a person who followed the link is asked for the file again.
+    renderIn(
+      <MemoryRouter initialEntries={["/upload?file=" + encodeURIComponent("F:/video/ready.mp4")]}>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("ready.mp4"),
+    );
+  });
+
   it("takes the served name from the name of the file chosen", async () => {
     // It is what is wanted most of the time. Making a person retype it is extra work and
     // one more chance to mistype.
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     await chooseAFile();
     expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("фильм 22.mp4");
   });
 
   it("will not upload until a file has been chosen", async () => {
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     expect(await screen.findByText(ru.ui.upload.start)).toBeDisabled();
   });
 
   it("hands the core the path, the name and the speed limit", async () => {
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     await chooseAFile();
 
     fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldLimit), {
@@ -134,7 +149,7 @@ describe("the upload screen", () => {
   it("says the upload carries on after the application is closed", async () => {
     // FR-086. A person is not obliged to know that "in the background" here means
     // "outlives the closing": it has to be said plainly.
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -143,7 +158,7 @@ describe("the upload screen", () => {
 
   it("does not reach a server whose fingerprint was never confirmed", async () => {
     mockServersList.mockResolvedValue([profile({ host_fingerprint: null })]);
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     expect(
       await screen.findByText(fill(ru.ui.upload.notReady, { name: "Боевой" }, ru, "ru")),
     ).toBeInTheDocument();
@@ -179,7 +194,7 @@ describe("what is said before it starts", () => {
 
   it("a name already taken is a question, and agreeing settles it", async () => {
     mockUploadStart.mockRejectedValueOnce(nameTaken);
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -197,7 +212,7 @@ describe("what is said before it starts", () => {
     // This difference is the whole reason the component exists. An "upload anyway" button
     // here would be a deceit: the transfer runs into the end of the disk halfway.
     mockUploadStart.mockRejectedValue(noRoom);
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -219,7 +234,7 @@ describe("what is said before it starts", () => {
     // No task should have been made: learning about a taken name after an hour of
     // transferring is the same as not being warned at all.
     mockUploadStart.mockRejectedValue(nameTaken);
-    renderIn(<UploadScreen />);
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -229,7 +244,7 @@ describe("what is said before it starts", () => {
 
   it("says there is not enough room in English when English is chosen", async () => {
     mockUploadStart.mockRejectedValue(noRoom);
-    renderIn(<UploadScreen />, "en");
+    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>, "en");
     fireEvent.click(await screen.findByText(en.ui.upload.pickFile));
     await screen.findByDisplayValue("фильм 22.mp4");
     fireEvent.click(screen.getByText(en.ui.upload.start));
