@@ -408,8 +408,18 @@ export function TestSteps({ steps }: { steps: TestStep[] | null }) {
     <ol className="steps">
       {steps.map((step) => (
         <li key={step.id} className={`step step--${step.status}`}>
+          {/*
+            The mark says the status in a glyph, and the glyph was hidden from a screen
+            reader with nothing put in its place — so somebody listening was told which
+            steps there were and never which of them passed. The words existed in both
+            catalogues and were shown nowhere.
+          */}
           <span className="step__mark" aria-hidden="true">
             {step.status === "ok" ? "✓" : step.status === "failed" ? "✕" : "·"}
+          </span>
+          <span className="visually-hidden">
+            {t.ui.servers.stepStatus[step.status as keyof typeof t.ui.servers.stepStatus] ??
+              step.status}
           </span>
           <div className="step__body">
             <span className="step__title">

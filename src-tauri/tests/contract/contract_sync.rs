@@ -1139,7 +1139,7 @@ fn interface_sources() -> String {
 /// **The list is the point, not the exception**: a reserved wording nobody has named is a
 /// wording everybody assumes is on screen. Nothing goes in without a task number, and
 /// `no_reserved_wording_is_already_on_a_screen` makes the list shrink on its own.
-const RESERVED: [(&str, &str); 6] = [
+const RESERVED: [(&str, &str); 2] = [
     (
         "columnWhy",
         "T412 — the column of reasons, which no screen draws yet (R-42)",
@@ -1147,22 +1147,6 @@ const RESERVED: [(&str, &str); 6] = [
     (
         "droppedAbove",
         "T412 — what was left out above the quality target",
-    ),
-    (
-        "retry",
-        "T462 — written for a button nobody added; wire it or take it out",
-    ),
-    (
-        "noLadder",
-        "T462 — the limits screen has no such state; wire it or take it out",
-    ),
-    (
-        "sourceIs",
-        "T462 — the source's own numbers, written for the ladder screen and never put there",
-    ),
-    (
-        "stepStatus",
-        "T462 — a label for a connection step nothing labels",
     ),
 ];
 

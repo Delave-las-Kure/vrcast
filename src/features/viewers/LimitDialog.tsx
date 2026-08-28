@@ -98,14 +98,26 @@ export function LimitDialog({
 
       {preview && (
         <>
-          <p>{words.willGet}</p>
-          <ul data-testid="kept">
-            {preview.kept.map((v) => (
-              <li key={v.path}>
-                {mbps(v.bandwidth)} Mbit/s — {v.width}×{v.height}
-              </li>
-            ))}
-          </ul>
+          {/*
+            Nothing kept and nothing below the lightest either means there were no rungs at
+            all: this medium has no quality set, so there is nothing a cap could take away.
+            Shown instead of an empty list under a heading promising one — an empty list
+            reads as "loading", or as a fault.
+          */}
+          {preview.kept.length === 0 ? (
+            <p data-testid="no-ladder">{words.noLadder}</p>
+          ) : (
+            <>
+              <p>{words.willGet}</p>
+              <ul data-testid="kept">
+                {preview.kept.map((v) => (
+                  <li key={v.path}>
+                    {mbps(v.bandwidth)} Mbit/s — {v.width}×{v.height}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
 
           {/*
             Every warning, before the button rather than after it. A warning shown

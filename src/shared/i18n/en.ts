@@ -520,7 +520,6 @@ export const en: Catalogue = {
       cancel: "Cancel",
       close: "Close",
       refresh: "Refresh",
-      retry: "Try again",
       loading: "Loading…",
       nothing: "—",
       language: "Language",

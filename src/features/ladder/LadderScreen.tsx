@@ -22,7 +22,7 @@ import { ErrorNotice } from "../shared/ErrorNotice";
 import { RungEditor } from "./RungEditor";
 import { useActiveServer } from "../servers/store";
 import { useLang, useT } from "../../shared/i18n";
-import { renderDetail } from "../../shared/i18n/render";
+import { fill, renderDetail } from "../../shared/i18n/render";
 import { ipc, onTaskDone } from "../../shared/ipc";
 import type {
   AppError,
@@ -322,6 +322,27 @@ export function LadderScreen({
       <p>{words.explain}</p>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+
+      {/*
+        What the source is, and then what its peak is. The peak alone was on screen and the
+        rest was written and shown nowhere — and without the frame and the rate, a peak in
+        megabits is a number with nothing to compare it to.
+      */}
+      {preview && (
+        <p data-testid="source-is">
+          {fill(
+            words.sourceIs,
+            {
+              width: preview.source.width,
+              height: preview.source.height,
+              fps: preview.source.fps,
+              bitrate: preview.source.bitrate_bps,
+            },
+            t,
+            lang,
+          )}
+        </p>
+      )}
 
       {source && (
         <p data-testid="source-facts">{words.peakIs.replace("{peak}", bitrate(source.peak_bps))}</p>

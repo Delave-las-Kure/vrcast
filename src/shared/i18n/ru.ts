@@ -521,7 +521,6 @@ const ui = {
     cancel: "Отмена",
     close: "Закрыть",
     refresh: "Обновить",
-    retry: "Повторить",
     loading: "Загружаем…",
     nothing: "—",
     language: "Язык",
