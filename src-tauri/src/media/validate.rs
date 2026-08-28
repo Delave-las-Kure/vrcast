@@ -29,6 +29,22 @@
 //!
 //! So the output is classified by who is complaining rather than whether anything
 //! complained at all.
+//!
+//! ## The second family, found the same way
+//!
+//! ```text
+//! [in#0 @ 0x...] Referenced QT chapter track not found
+//! ```
+//!
+//! The container reader, about a track reference — not the decoder, about data. FFmpeg
+//! prints it and exits **0**. This project made those files itself: chapters were copied
+//! into the MP4 while the chapter track was not (fixed in `convert.rs`), and then this
+//! module called the result broken. The cause is gone; the rule stays for the files already
+//! made, which hold hours of work and play perfectly.
+//!
+//! **Both rules are shaped the same way and neither is a wildcard**: a known component
+//! saying a known thing. Anything else still counts against the file — an unrecognised
+//! complaint is a complaint (`unknown_complaints_are_treated_as_problems`).
 
 use super::ffmpeg;
 use crate::tasks::process::ManagedProcess;
@@ -94,9 +110,26 @@ pub async fn validate(path: &Path) -> Result<Validation> {
         let mut reader = tokio::io::BufReader::new(err);
         let _ = reader.read_to_string(&mut complaints).await;
     }
-    let _ = child.wait().await;
+    let status = child.wait().await;
 
-    Ok(classify(&complaints))
+    let mut verdict = classify(&complaints);
+
+    // **FFmpeg's own verdict, which used to be thrown away on the line above.** It can only
+    // condemn here, never excuse: a zero exit is what a file full of real decoder complaints
+    // gives too, because the decoder reports the damage and carries on to the end. Letting a
+    // zero acquit would undo the whole of `classify`. A non-zero one is the other way round
+    // — the decode did not finish — and until now a refusal that printed nothing at
+    // `-v error` passed for a clean file.
+    if let Ok(status) = &status {
+        if !status.success() {
+            verdict.problems.push(format!(
+                "the decoder stopped before the end of the file ({status})"
+            ));
+            verdict.ok = false;
+        }
+    }
+
+    Ok(verdict)
 }
 
 /// Sort decoder complaints from muxer noise.
@@ -112,7 +145,7 @@ pub fn classify(stderr: &str) -> Validation {
         if line.is_empty() {
             continue;
         }
-        if is_muxer_timestamp_noise(line) {
+        if is_muxer_timestamp_noise(line) || is_container_note(line) {
             ignored.push(line.to_owned());
         } else {
             problems.push(line.to_owned());
@@ -124,6 +157,20 @@ pub fn classify(stderr: &str) -> Validation {
         problems,
         ignored,
     }
+}
+
+/// Is this the container reader noting a reference it could not follow?
+///
+/// Held to the same two-part shape as the rule below, and for the same reason: the wording
+/// alone would excuse a decoder saying something similar, and the component alone would
+/// excuse everything the container reader ever says — including the complaints that do mean
+/// a file is unusable.
+fn is_container_note(line: &str) -> bool {
+    // `[in#0 @ ...]` when the file is an input, `[mov,mp4,m4a,3gp,3g2,mj2 @ ...]` when it is
+    // being examined. Both were seen on 2026-08-28 from the same file.
+    let from_the_container = line.starts_with("[in#") || line.starts_with("[mov,");
+    let about_a_chapter_reference = line.contains("Referenced QT chapter track not found");
+    from_the_container && about_a_chapter_reference
 }
 
 /// Is this the muxer complaining about timestamps rather than the decoder about data?

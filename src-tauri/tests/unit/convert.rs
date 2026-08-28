@@ -164,6 +164,31 @@ fn streams_are_chosen_explicitly() {
 }
 
 #[test]
+fn chapters_are_not_carried_over() {
+    // **A file this project made was reported broken by this project.** The source is a rip
+    // with chapters; `-map_metadata -1` drops metadata but chapters are separate in FFmpeg
+    // and are copied by default. The chapter *track* is not copied, because only one video
+    // and one audio stream are mapped — so the finished MP4 holds a reference to a track
+    // that is not in it, and every reader says so:
+    //
+    //   [in#0 @ ...] Referenced QT chapter track not found
+    //
+    // Reproduced on 2026-08-28 from `Blue.Eye.Samurai.S01E04` with these very arguments, and
+    // it went away with this flag and nothing else. FFmpeg still exits 0 — the picture and
+    // the sound are untouched — but the playback check read the complaint and condemned the
+    // file. Every file prepared here from a chaptered source carries it.
+    let source = compatible();
+    let request = as_is();
+    let args = args_for(&source, &request, &Encoder::Software);
+
+    assert!(
+        has_pair(&args, "-map_chapters", "-1"),
+        "chapters are still carried into the output. The chapter track itself is not, so \
+         the finished file references a track that is not there: {args:?}"
+    );
+}
+
+#[test]
 fn stdin_is_never_read() {
     // Without this FFmpeg grabs the terminal's input, and a background job can
     // wait forever for a keypress nobody will make.

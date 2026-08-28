@@ -88,6 +88,41 @@ fn similar_wording_from_a_decoder_is_not_excused() {
 }
 
 #[test]
+fn a_dangling_chapter_reference_does_not_condemn_a_file() {
+    // The complaint that cost an owner a two-hour preparation on 2026-08-28. It comes from
+    // the container reader about a track reference, says nothing whatever about the picture
+    // or the sound, and FFmpeg exits 0 after printing it — the file plays.
+    //
+    // The cause is fixed where it belongs, in the arguments (`chapters_are_not_carried_over`),
+    // so files made from now on will not carry it. This rule is for the ones already made:
+    // there are hours of work in them and they are not broken.
+    let stderr = "[in#0 @ 0000023717f6fa80] Referenced QT chapter track not found";
+
+    let v = validate::classify(stderr);
+    assert!(
+        v.ok,
+        "a playable file was condemned over a note about a chapter reference: {:?}",
+        v.problems
+    );
+    assert_eq!(
+        v.ignored.len(),
+        1,
+        "the complaint was swallowed instead of being shown as forgiven"
+    );
+}
+
+#[test]
+fn the_same_words_from_a_decoder_are_not_excused() {
+    // The forgiveness above is by wording, so it has to be held to the same rule as the
+    // muxer one: a decoder saying it would mean something is wrong with the data.
+    let v = validate::classify("[h264 @ 000001d4] Referenced QT chapter track not found");
+    assert!(
+        !v.ok,
+        "a decoder complaint was excused as a note about the container"
+    );
+}
+
+#[test]
 fn unknown_complaints_are_treated_as_problems() {
     // Anything not recognised as harmless counts against the file. The opposite
     // default would mean every message FFmpeg invents in a future release is

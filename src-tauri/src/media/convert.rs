@@ -98,6 +98,16 @@ pub fn build_args(job: &ConvertJob<'_>) -> Vec<String> {
     // video and audio, and an unexpected stream can make the muxer refuse.
     push(a, "-map_metadata");
     push(a, "-1");
+    // **And the chapters, which are not metadata.** FFmpeg keeps them apart and copies them
+    // by default, so `-map_metadata -1` above does not touch them. The chapter *track* is
+    // not copied, because only the two streams above are mapped — and the result is an MP4
+    // that references a track it does not contain. Every reader of it then says
+    // "Referenced QT chapter track not found", FFmpeg exits 0 because the picture and the
+    // sound are perfectly fine, and this project's own playback check read the complaint and
+    // condemned the file. Two hours of work thrown away over a note about a table of
+    // contents nobody asked for. Found on 2026-08-28; every rip with chapters did it.
+    push(a, "-map_chapters");
+    push(a, "-1");
 
     if let Some(filter) = video_filter(job) {
         push(a, "-vf");
