@@ -14,6 +14,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { PlacesTables } from "./PlacesTables";
 import { useActiveServer, useServers } from "../servers/store";
 import { useT } from "../../shared/i18n";
 import { ipc, onViewersUpdate } from "../../shared/ipc";
@@ -111,6 +112,12 @@ export function ViewersScreen() {
       <p className="hint">{words.explain}</p>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+
+      {/*
+        The tables the countries and cities on this screen come from. Silent while they are
+        there and current, which is most of the time.
+      */}
+      <PlacesTables />
 
       {viewers === null && !error && <p className="hint">{words.starting}</p>}
 

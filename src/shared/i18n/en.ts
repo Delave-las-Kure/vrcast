@@ -846,6 +846,11 @@ export const en: Catalogue = {
     },
 
     viewers: {
+    placesMissing: "The tables of places have not been downloaded, so no country or city is shown for a viewer.",
+    placesStale: "The tables of places are from {month}; a newer set is out, so places may be off.",
+    placesFetch: "Download",
+    placesFetching: "Downloading…",
+    placesFailed: "The download did not go through — try again later.",
       explain:
         "Who is pulling from your server right now. The list keeps itself up to date while this screen is open.",
       noServer: "Choose a server first — there is nobody to watch yet.",

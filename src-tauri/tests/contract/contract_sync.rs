@@ -748,7 +748,7 @@ fn called_commands() -> HashSet<String> {
 /// work with an owner; unnamed, they are a feature everyone believes exists. Nothing may be
 /// added here without a task number beside it, and `the_list_of_unwired_commands_does_not_rot`
 /// below makes the list shrink on its own.
-const NOT_WIRED_YET: [(&str, &str); 5] = [
+const NOT_WIRED_YET: [(&str, &str); 3] = [
     (
         "quality_measure_reuse",
         "T431 — lending a measurement to the next episode (FR-146)",
@@ -760,14 +760,6 @@ const NOT_WIRED_YET: [(&str, &str); 5] = [
     (
         "quality_measure_forget",
         "T433 — a way out of a borrowed measurement",
-    ),
-    (
-        "geo_status",
-        "T461 — whether the tables of places are there and current",
-    ),
-    (
-        "geo_update",
-        "T461 — fetching them; without it a stale table has no button",
     ),
 ];
 

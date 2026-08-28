@@ -6,11 +6,16 @@
  * is marked with the reason, and leaving the screen lets the server's channels go.
  */
 
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { en, renderIn, ru } from "../../../test-utils";
-import type { ServerProfile, Viewer, ViewersUpdateEvent } from "../../../shared/contract";
+import type {
+  GeoStatus,
+  ServerProfile,
+  Viewer,
+  ViewersUpdateEvent,
+} from "../../../shared/contract";
 
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockWatchStart = vi.fn(async () => undefined);
@@ -20,6 +25,15 @@ const mockLibraryList = vi.fn();
 /** What the core would send. Held so a test can push an update whenever it likes. */
 let send: ((update: ViewersUpdateEvent) => void) | null = null;
 const unlisten = vi.fn();
+
+/** The tables of places. Ready and current by default: that is the ordinary state, and the
+ *  screen must then say nothing about them at all. */
+const mockGeoStatus = vi.fn<() => Promise<GeoStatus>>(() =>
+  Promise.resolve({ month: "2026-08", ready: true, stale: false }),
+);
+const mockGeoUpdate = vi.fn<() => Promise<GeoStatus>>(() =>
+  Promise.resolve({ month: "2026-08", ready: true, stale: false }),
+);
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -32,6 +46,8 @@ vi.mock("../../../shared/ipc", async () => {
       viewersWatchStart: (...a: unknown[]) => mockWatchStart(...(a as [])),
       viewersWatchStop: () => mockWatchStop(),
       viewersHistory: vi.fn(),
+      geoStatus: () => mockGeoStatus(),
+      geoUpdate: () => mockGeoUpdate(),
     },
     onLibraryChanged: vi.fn(async () => () => {}),
     onViewersUpdate: vi.fn(async (handler: (u: ViewersUpdateEvent) => void) => {
@@ -188,5 +204,29 @@ describe("the viewers screen", () => {
       expect(screen.getByText(en.ui.viewers.problems.stalls)).toBeInTheDocument(),
     );
     expect(screen.queryByText(ru.ui.viewers.problems.stalls)).not.toBeInTheDocument();
+  });
+});
+
+describe("the tables of places", () => {
+  it("says nothing while they are there and current", async () => {
+    // The ordinary state. A line reporting it on every visit is noise, and noise in a corner
+    // of the screen teaches people to skip that corner — including the times it matters.
+    renderIn(<ViewersScreen />);
+    await waitFor(() => expect(screen.getByText(ru.ui.viewers.explain)).toBeTruthy());
+    expect(screen.queryByTestId("places-tables")).toBeNull();
+  });
+
+  it("offers to fetch them when there are none, because otherwise no place is shown at all", async () => {
+    // The gap this closes: the commands existed, were registered and described, and nothing
+    // called them. With the tables missing, every viewer showed no country and there was
+    // nothing on screen to press.
+    mockGeoStatus.mockResolvedValueOnce({ month: null, ready: false, stale: true });
+    renderIn(<ViewersScreen />);
+
+    const line = await screen.findByTestId("places-tables");
+    expect(line.textContent).toContain(ru.ui.viewers.placesMissing);
+
+    fireEvent.click(screen.getByText(ru.ui.viewers.placesFetch));
+    await waitFor(() => expect(mockGeoUpdate).toHaveBeenCalled());
   });
 });

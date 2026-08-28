@@ -1124,6 +1124,19 @@ export interface LibraryChangedEvent {
 // ---------- upload ----------
 
 /** A request to upload (FR-030 to FR-039). */
+/**
+ * Whether the tables that turn an address into a place are in hand.
+ *
+ * `month` is which month's tables are there — absent when none are.
+ */
+export interface GeoStatus {
+  month: string | null;
+  /** Whether anything can be answered at all. */
+  ready: boolean;
+  /** Whether a newer month is out. */
+  stale: boolean;
+}
+
 export interface UploadRequest {
   server_id: string;
   /** The path to the prepared file on this computer. */

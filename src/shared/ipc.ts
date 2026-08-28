@@ -43,6 +43,7 @@ import {
   type LadderBuildRequest,
   type QualityMeasureRequest,
   type LimitRequest,
+  type GeoStatus,
   type UploadRequest,
   type Versions,
   type Viewer,
@@ -256,6 +257,16 @@ export const ipc = {
     call<void>("limit_set", { request, confirmed }),
   limitClear: (serverId: string, ip: string, slug: string) =>
     call<void>("limit_clear", { serverId, ip, slug }),
+  // --- the tables of places ---
+  /**
+   * Whether the tables that turn an address into a place are there and current.
+   *
+   * Touches no server: the tables live on this machine.
+   */
+  geoStatus: () => call<GeoStatus>("geo_status"),
+  /** Fetch this month's tables and put them to work without a restart. */
+  geoUpdate: () => call<GeoStatus>("geo_update"),
+
   /** What is in force, read from the server rather than from a note here (FR-064). */
   limitsList: (serverId: string) => call<QualityLimit[]>("limits_list", { serverId }),
 
