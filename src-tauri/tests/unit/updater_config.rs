@@ -13,8 +13,13 @@
 //! **And the two things around it that fail quietly rather than loudly:**
 //!
 //! - `createUpdaterArtifacts` — without it the bundler makes installers and no `.sig` files.
-//!   Nothing fails; the release simply cannot be assembled, and the reason is a boolean four
-//!   hundred lines away from the error.
+//!   Nothing fails; the release simply cannot be assembled, and the reason is a boolean a long
+//!   way from the complaint. **It lives in a release-only overlay, not in the settings
+//!   proper**, and that is also checked here: in the settings proper it would mean every build
+//!   on a working machine ends with "a public key has been found, but no private key" — and
+//!   the private key is not supposed to be on a working machine. Under Linux it did worse than
+//!   complain: it stopped the bundler after the `.deb`, before the AppImage. Caught by the
+//!   owner on 2026-08-28.
 //! - `https` on the endpoints — the plugin refuses a plain-http endpoint in release builds and
 //!   only warns in debug ones. So a development run would look perfectly healthy and the
 //!   released application would refuse to check for updates at all.
@@ -23,6 +28,10 @@ use serde_json::Value;
 
 /// The very file the bundler and the application read.
 const CONF: &str = include_str!("../../tauri.conf.json");
+/// What the release adds on top of it, and nothing else does.
+const RELEASE_OVERLAY: &str = include_str!("../../tauri.release.conf.json");
+/// The workflow that is supposed to pass that overlay.
+const RELEASE_WORKFLOW: &str = include_str!("../../../.github/workflows/release.yml");
 
 fn config() -> Value {
     serde_json::from_str(CONF).expect("tauri.conf.json is not valid JSON")
@@ -68,13 +77,43 @@ fn the_endpoints_are_all_https() {
 }
 
 #[test]
-fn the_signatures_are_asked_for() {
-    let conf = config();
+fn the_release_asks_for_signatures() {
+    let overlay: Value =
+        serde_json::from_str(RELEASE_OVERLAY).expect("tauri.release.conf.json is not valid JSON");
     assert_eq!(
-        conf.pointer("/bundle/createUpdaterArtifacts"),
+        overlay.pointer("/bundle/createUpdaterArtifacts"),
         Some(&Value::Bool(true)),
         "without this the bundler makes the installers and no .sig files beside them. Nothing \
          fails at the time; the release simply cannot be put together, and the cause is a \
          boolean a long way from the complaint"
+    );
+}
+
+#[test]
+fn an_ordinary_build_does_not_ask_for_signatures() {
+    // The private key lives in the CI secrets and nowhere else, which is the whole point of
+    // where it lives. Asking every build to sign therefore means every build on a working
+    // machine ends in an error — after producing the installer, which is the worst shape a
+    // failure can take: it trains people to read a red line and carry on.
+    assert_eq!(
+        config().pointer("/bundle/createUpdaterArtifacts"),
+        None,
+        "the signing flag is back in the settings proper. There it breaks every local build, \
+         and under Linux it stops the bundler after the .deb without reaching the AppImage"
+    );
+}
+
+#[test]
+fn the_release_workflow_passes_the_overlay() {
+    // The link between the two, and the one that can break in silence: drop the flag from the
+    // workflow and the release builds cleanly, produces no signatures, and only falls over
+    // later — when `latest-json.py` refuses to assemble a release without them.
+    // The path is from the package root, not from `src-tauri` — that is where the CLI runs
+    // from. The short name is read as missing, and the release falls over on "failed to read
+    // configuration file": a fault with nowhere to be caught except the release itself.
+    assert!(
+        RELEASE_WORKFLOW.contains("--config src-tauri/tauri.release.conf.json"),
+        "the release workflow no longer passes tauri.release.conf.json, so the release would \
+         be built without asking for signatures"
     );
 }

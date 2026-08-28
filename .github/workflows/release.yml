@@ -163,7 +163,14 @@ jobs:
           # Set even when empty: the signer reads the variable, and an unset one and an empty
           # one are different things to it.
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build
+        # **Подписи просит только выпуск.** `createUpdaterArtifacts` в общих настройках означал
+        # бы, что всякая местная сборка заканчивается отказом «есть открытый ключ, нет
+        # закрытого» — а закрытого на рабочей машине и не должно быть. Под Linux это к тому же
+        # обрывало сборку после `deb`, не дав дойти до AppImage. Поймано владельцем 2026-08-28.
+        # Путь от корня пакета, а не от `src-tauri`: оттуда CLI и запускается. С коротким
+        # именем выпуск упал бы на «failed to read configuration file» — и поймать это
+        # было бы негде, кроме самого выпуска. Проверено на этой машине 2026-08-28.
+        run: npm run tauri build -- --config src-tauri/tauri.release.conf.json
 
       # **Brought into the workspace first, then uploaded from there.** The build directory
       # lives outside the checkout on purpose — it is what survives between runs on a machine
