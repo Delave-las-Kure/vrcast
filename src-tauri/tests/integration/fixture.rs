@@ -197,6 +197,66 @@ pub fn remove_network(network: &str) {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+
+    // **Giving up quietly is how a leak becomes a mystery.** Twenty-five attempts is five
+    // seconds; when they run out, the network is still there and the run carries on as
+    // though it had been removed. The guard at the end of the job then reports a dangling
+    // network with nothing to say about which test left it or what was holding it.
+    //
+    // So the giving up is said out loud, here, beside the test that caused it — and with
+    // whatever is still attached, which is the one fact needed to work out why.
+    let holders = docker(&[
+        "network",
+        "inspect",
+        "-f",
+        "{{range .Containers}}{{.Name}} {{end}}",
+        network,
+    ])
+    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    .unwrap_or_default();
+    eprintln!(
+        "LEAK: the network {network} would not go after five seconds. Still attached: {}",
+        if holders.is_empty() {
+            "nothing"
+        } else {
+            &holders
+        }
+    );
+}
+
+/// Remove every network these tests make that nothing is attached to any more.
+///
+/// **For the ones no run will ever claim again.** The names carry the process id that made
+/// them — `vrcast-deploy-target-931-1-net` — so a network left by a run that was killed is
+/// never met by a later run under its own name, and sits there for good. They are not
+/// harmless: the pool of addresses is finite, and when it runs out nothing starts at all,
+/// with a message that says nothing about this place.
+///
+/// A job is killed whenever a push supersedes one still running, which is not rare.
+pub fn sweep_abandoned_networks() {
+    let Ok(out) = docker(&["network", "ls", "--format", "{{.Name}}"]) else {
+        return;
+    };
+    for name in String::from_utf8_lossy(&out.stdout).lines() {
+        let name = name.trim();
+        if !name.starts_with("vrcast-test-net-") && !name.starts_with("vrcast-deploy-target-") {
+            continue;
+        }
+        // Only the empty ones. A network another test is using right now is not abandoned,
+        // and taking it away would break a run that is going perfectly well.
+        let attached = docker(&[
+            "network",
+            "inspect",
+            "-f",
+            "{{range .Containers}}{{.Name}} {{end}}",
+            name,
+        ])
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default();
+        if attached.is_empty() {
+            let _ = docker(&["network", "rm", name]);
+        }
+    }
 }
 
 /// The container this test process is running in, when there is one and this daemon knows it.

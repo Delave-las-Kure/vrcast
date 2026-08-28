@@ -182,10 +182,11 @@ impl DeployTarget {
                 // Asked about before being removed: `remove_network` waits between attempts
                 // for the ordinary race, and spending that wait on a network that was never
                 // there would cost every deployment test the same seconds for nothing.
-                if matches!(docker(&["network", "inspect", &network]), Ok(o) if o.status.success())
-                {
-                    super::fixture::remove_network(&network);
-                }
+                // Everything left by a run that was killed rather than finished — not only
+                // a network of this very name. The name carries the process id that made it,
+                // so an abandoned one is never met again under its own name and would sit
+                // there for good.
+                super::fixture::sweep_abandoned_networks();
                 let out = docker(&["network", "create", &network])
                     .map_err(|e| format!("could not create the network: {e}"))?;
                 if !out.status.success() {
