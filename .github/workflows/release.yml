@@ -80,6 +80,35 @@ jobs:
       - name: The FFmpeg source addresses still answer
         run: bash scripts/check-source-links.sh
 
+      # **Проверяется без ключа — глазами того, кому отдали копию.**
+      #
+      # Экран «О программе» говорит: исходный код *этой самой версии* доступен по адресу
+      # `.../tree/v{версия}`. Для закрытого хранилища этот адрес отвечает 404 всем, кроме
+      # владельца, — и обязательство GPL не выполнено ровно в тот момент, когда оно
+      # возникает. Проверено 2026-08-28: хранилище закрыто, и оба адреса отвечают 404
+      # постороннему.
+      #
+      # `curl` здесь без всякого разрешения намеренно: с ключом ответ был бы про нас, а
+      # вопрос — про постороннего.
+      - name: The source of this build is reachable by whoever gets it
+        shell: bash
+        run: |
+          set -euo pipefail
+          address="https://github.com/$GITHUB_REPOSITORY/tree/$GITHUB_REF_NAME"
+          if curl -fsSIL --max-time 20 -o /dev/null "$address"; then
+            echo "answers to anybody: $address"
+          else
+            echo "The source address the application shows does not answer: $address" >&2
+            echo "" >&2
+            echo "Whoever is handed this build is told the source of this very version is" >&2
+            echo "there. If the repository is private, that is a 404 for every one of them," >&2
+            echo "and the licence obligation is broken at the moment it arises." >&2
+            echo "" >&2
+            echo "Either the repository goes public, or the source goes somewhere that" >&2
+            echo "answers and About points there instead." >&2
+            exit 1
+          fi
+
   bundle:
     name: Installers — ${{ matrix.os }}
     timeout-minutes: 90
@@ -217,3 +246,28 @@ jobs:
             --notes "$notes" \
             --token "$TOKEN" \
             "${installers[@]}" latest.json LICENSE THIRD-PARTY.md
+
+      # **Последняя проверка — та, которую делает установленная копия.**
+      #
+      # Она читает `latest.json` по этому адресу без всякого разрешения. Всё, что стоит
+      # выше, могло пройти, а адрес — не отвечать: имя файла, закрытое хранилище, выпуск,
+      # оставшийся черновиком. Узнать об этом от человека, у которого обновления «просто
+      # не приходят», — худший способ.
+      - name: The address installed copies will read answers
+        shell: bash
+        run: |
+          set -euo pipefail
+          address="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json"
+          got=$(curl -fsSL --max-time 30 "$address") || {
+            echo "The address the application reads does not answer: $address" >&2
+            echo "Every installed copy will report that it cannot check for updates, and" >&2
+            echo "there will be nothing on its screen to say why." >&2
+            exit 1
+          }
+          # And it has to be the file this run made, not one left from a release before it.
+          version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' src-tauri/Cargo.toml | head -1)
+          # Одной строкой намеренно: многострочный Python внутри YAML получает отступ
+          # самого YAML, а Python отступ значим — вышла бы синтаксическая ошибка на
+          # единственном шаге, который никем заранее не запускается.
+          echo "$got" >latest-served.json
+          python3 -c "import json,sys; d=json.load(open('latest-served.json',encoding='utf-8')); v=d.get('version'); w=sys.argv[1]; sys.exit('the address serves version %s, and this release is %s' % (v, w)) if v != w else print('the address serves this very release, %d platforms' % len(d.get('platforms', {})))" "$version" 

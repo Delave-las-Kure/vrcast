@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "nsis",
       "deb",
@@ -61,6 +62,14 @@
         "displayLanguageSelector": true,
         "installerHooks": "uninstall.nsh"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUzRDM4NTY0NEY2RUFERTEKUldUaHJXNVBaSVhUNDR4aTMrOS9MaXFxY3NhZGdyZUhHRnBtbGlSWjg0a09tRnZIdnk0aEpmMXkK",
+      "endpoints": [
+        "https://github.com/Delave-las-Kure/vrcast/releases/latest/download/latest.json"
+      ]
     }
   }
 }

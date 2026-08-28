@@ -79,6 +79,17 @@ mod pseudonym;
 
 /// T353 — a database from an earlier build opens, migrates and keeps its rows. Here rather
 /// than among the integration tests: it needs no container, and that set is off by default.
+/// T354 — a forged update is refused: the shipped public key, the real plugin, and a
+/// payload signed by a key that is not ours.
+#[path = "unit/forged_update.rs"]
+mod forged_update;
+
+/// T351 — the update settings parse the way the plugin will parse them at startup: a
+/// section it cannot read is not an application without updates, it is one that will not
+/// open.
+#[path = "unit/updater_config.rs"]
+mod updater_config;
+
 #[path = "unit/upgrade_keeps_state.rs"]
 mod upgrade_keeps_state;
 

@@ -81,7 +81,7 @@ libvmaf — разработка Netflix, распространяется по 
 **Rive тоже не появился** (T323): маскот нарисован в коде, и ни пакета, ни бинарного
 файла со стороны для него не потребовалось.
 
-## Ядро (Rust) — 692
+## Ядро (Rust) — 693
 
 | Пакет | Версия | Лицензия | Источник |
 |---|---|---|---|
@@ -115,6 +115,7 @@ libvmaf — разработка Netflix, распространяется по 
 | `base16ct` | 1.0.0 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/formats) |
 | `base64` | 0.21.7 | MIT OR Apache-2.0 | [источник](https://github.com/marshallpierce/rust-base64) |
 | `base64` | 0.22.1 | MIT OR Apache-2.0 | [источник](https://github.com/marshallpierce/rust-base64) |
+| `base64` | 0.23.1 | MIT OR Apache-2.0 | [источник](https://github.com/marshallpierce/rust-base64) |
 | `base64ct` | 1.8.3 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/formats) |
 | `bcrypt-pbkdf` | 0.11.0 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/password-hashes) |
 | `bit-set` | 0.8.0 | Apache-2.0 OR MIT | [источник](https://github.com/contain-rs/bit-set) |
@@ -795,7 +796,7 @@ libvmaf — разработка Netflix, распространяется по 
 | `set-cookie-parser` | 2.7.2 | MIT | [источник](nfriedly/set-cookie-parser) |
 | `zustand` | 5.0.15 | MIT | [источник](https://github.com/pmndrs/zustand) |
 
-## Тексты лицензий — 350
+## Тексты лицензий — 351
 
 Одинаковые тексты сведены вместе: у многих пакетов лицензия дословно совпадает.
 
@@ -1942,7 +1943,7 @@ DEALINGS IN THE SOFTWARE.
 
 </details>
 
-<details><summary>arbitrary 1.4.2, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0 и ещё 136</summary>
+<details><summary>arbitrary 1.4.2, async-channel 2.5.0, async-executor 1.14.0, async-io 2.6.0, async-lock 3.4.2, async-process 2.5.0 и ещё 137</summary>
 
 ```
 Apache License
@@ -2588,6 +2589,34 @@ DEALINGS IN THE SOFTWARE.
 The MIT License (MIT)
 
 Copyright (c) 2015 Alice Maz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+</details>
+
+<details><summary>base64 0.23.1</summary>
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2025 Alice Maz, Marshall Pierce
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
