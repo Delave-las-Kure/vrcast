@@ -159,6 +159,43 @@ pub struct TestServer {
     /// The container's own network. The viewer helpers are attached to it so that each
     /// arrives from an address of its own — see `integration/viewer.rs`.
     network: String,
+    /// Our own container, when these tests are themselves running in one and we attached it
+    /// to the network above. Kept so it can be detached again on the way out.
+    joined: Option<String>,
+}
+
+/// The container this test process is running in, when there is one and this daemon knows it.
+///
+/// **Why it is asked at all.** These tests bring servers up through the machine's Docker
+/// daemon and then talk to them. From the machine itself, published ports on `127.0.0.1` are
+/// exactly right. From inside another container — which is where continuous integration runs
+/// them — that loopback is the container's own, and there is nobody on it: every test failed
+/// with `Connection refused` on 2026-08-28.
+///
+/// Naming the machine instead does not work either. The ports are published to the host's
+/// loopback on purpose — a container with a root password on it has no business listening on
+/// anything else — and a loopback-bound port is not reachable from another container whatever
+/// name is used for the host.
+///
+/// So neither address is asked for: our container joins the network the server is on, and the
+/// server answers to its own name there. Nothing is published, nothing is exposed, and the
+/// viewer helpers keep the separate addresses milestone C rests on.
+pub fn own_container() -> Option<String> {
+    // Both halves are needed. The file says "in a container"; the inspect says "and this
+    // daemon is the one that made it" — a container talking to some other daemon over a
+    // mounted socket would otherwise try to attach an id that daemon has never heard of.
+    if !std::path::Path::new("/.dockerenv").exists() {
+        return None;
+    }
+    let id = std::fs::read_to_string("/etc/hostname")
+        .ok()?
+        .trim()
+        .to_owned();
+    if id.is_empty() {
+        return None;
+    }
+    let out = docker(&["inspect", "-f", "{{.Id}}", &id]).ok()?;
+    out.status.success().then_some(id)
 }
 
 /// Makes the name of a network unique within a run.
@@ -200,9 +237,24 @@ impl TestServer {
             ));
         }
 
+        // If we are in a container ourselves, we join this network and reach the server by
+        // its name on it. Then nothing needs publishing at all — see `own_container`.
+        let joined = own_container();
+        if let Some(id) = &joined {
+            let out = docker(&["network", "connect", &network, id])
+                .map_err(|e| format!("could not join the network: {e}"))?;
+            if !out.status.success() {
+                let _ = docker(&["network", "rm", &network]);
+                return Err(format!(
+                    "this container would not join the network:\n{}",
+                    String::from_utf8_lossy(&out.stderr)
+                ));
+            }
+        }
+
         // The system picks the ports: the tests may run alongside anything at all, and
         // taking ports known in advance will not do.
-        let out = docker(&[
+        let mut args: Vec<&str> = vec![
             "run",
             "-d",
             "--rm",
@@ -210,16 +262,18 @@ impl TestServer {
             &network,
             "--network-alias",
             SERVER_ALIAS,
-            "-p",
-            "127.0.0.1::22",
-            "-p",
-            "127.0.0.1::80",
-            IMAGE,
-        ])
-        .map_err(|e| format!("could not start the container: {e}"))?;
+        ];
+        if joined.is_none() {
+            args.extend_from_slice(&["-p", "127.0.0.1::22", "-p", "127.0.0.1::80"]);
+        }
+        args.push(IMAGE);
+        let out = docker(&args).map_err(|e| format!("could not start the container: {e}"))?;
         if !out.status.success() {
             // The network is removed here and not left to `Drop`: there is no value to drop
             // yet, and a leftover network would outlive the run.
+            if let Some(id) = &joined {
+                let _ = docker(&["network", "disconnect", "-f", &network, id]);
+            }
             let _ = docker(&["network", "rm", &network]);
             return Err(format!(
                 "the container would not start:\n{}",
@@ -236,9 +290,17 @@ impl TestServer {
             port: 0,
             http_port: 0,
             network,
+            joined,
         };
-        server.port = server.discover_port("22/tcp")?;
-        server.http_port = server.discover_port("80/tcp")?;
+        if server.joined.is_some() {
+            // Reached on the network itself: the ports are the container's own, not a pair
+            // the machine happened to have free.
+            server.port = 22;
+            server.http_port = 80;
+        } else {
+            server.port = server.discover_port("22/tcp")?;
+            server.http_port = server.discover_port("80/tcp")?;
+        }
         server.wait_until_ready()?;
         Ok(server)
     }
@@ -289,9 +351,18 @@ impl TestServer {
     /// accepts; a web server is asked something and has to answer.
     fn wait_until_answers(&self, port: u16, what: &str, speaks: Speaks) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(30);
-        let address: std::net::SocketAddr = format!("127.0.0.1:{port}")
-            .parse()
-            .map_err(|e| format!("a bad address: {e}"))?;
+        // Through `host`, not through the loopback written out here. That was the whole of
+        // the 2026-08-28 failure: the address handed to the tests had been fixed, and the
+        // readiness probe went on knocking at a loopback with nobody behind it.
+        let address = std::net::ToSocketAddrs::to_socket_addrs(&(self.host(), port))
+            .map_err(|e| {
+                format!(
+                    "the address {}:{port} could not be resolved: {e}",
+                    self.host()
+                )
+            })?
+            .next()
+            .ok_or_else(|| format!("the address {}:{port} resolved to nothing", self.host()))?;
 
         let mut last = String::from("nothing accepted the connection at all");
         while Instant::now() < deadline {
@@ -326,20 +397,16 @@ impl TestServer {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// Where the server answers **for whoever is asking**.
+    ///
+    /// From the machine, that is the loopback the ports are published on. From inside another
+    /// container it is the server's own name on the network we joined — see `own_container`
+    /// for why neither the loopback nor the machine's name will do there.
     pub fn host(&self) -> &'static str {
-        // **Где отвечают опубликованные порты, а это не всегда петля.**
-        //
-        // Контейнер публикует порты на машине, где работает демон. С самой машины `127.0.0.1`
-        // верен и всегда был верен. А изнутри **другого** контейнера — а там теперь идут
-        // проверки — петля своя, и на ней никого нет.
-        //
-        // Поэтому адрес можно назвать, а по умолчанию он прежний. Другой путь — отдать
-        // заданию сеть машины — закрыт: исполнитель ведёт для задания-контейнера свою сеть и
-        // при `--network host` не создаёт контейнер вовсе («Value cannot be null. (Parameter
-        // 'ContainerId')», 2026-08-27).
-        match option_env!("VRCAST_TEST_HOST") {
-            Some(host) if !host.is_empty() => host,
-            _ => "127.0.0.1",
+        if self.joined.is_some() {
+            SERVER_ALIAS
+        } else {
+            "127.0.0.1"
         }
     }
 
@@ -443,6 +510,11 @@ impl Drop for TestServer {
         // The container is run with self-removal, but it is stopped explicitly: otherwise
         // after a failed test it would hang about until the end of the session.
         let _ = docker(&["kill", &self.id]);
+        // Ourselves off the network first, or removing it below fails ten times over and
+        // leaks it: Docker will not remove a network with anything still attached.
+        if let Some(id) = &self.joined {
+            let _ = docker(&["network", "disconnect", "-f", &self.network, id]);
+        }
         // And the network after it. Docker refuses to remove one that still has something
         // attached, and self-removal of the container is not instant, so this is given a
         // few attempts rather than one. A leaked network is not harmless: the pool of

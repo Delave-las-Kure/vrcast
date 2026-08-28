@@ -92,21 +92,26 @@ fn ensure_image(flavour: Flavour) -> Result<(), String> {
 
 /// **The guard.** Refuse any address that is not the throwaway stand.
 ///
-/// Called by everything in this module that hands an address out, so a deployment test
-/// cannot be written against another server without deliberately going around it. Loopback
-/// only: the containers publish their ports on 127.0.0.1, and the dedicated test VPS is
-/// reached by hand from the quickstart, never from here.
+/// Called by everything in this module that hands an address out, so a deployment test cannot
+/// be written against another server without deliberately going around it.
 ///
-/// It panics rather than returning an error on purpose. An error can be swallowed by a `?`
-/// in a helper somebody writes later; a panic stops the test.
+/// Two shapes of address pass, and only two. The loopback, which is where the containers
+/// publish their ports when these tests run on the machine itself. And a name this module made
+/// for a container of its own — `NAME_PREFIX-…` — which is how the server is reached when the
+/// tests are themselves inside a container and joined its network. Nothing outside this file
+/// hands out either, and no real server is called that.
+///
+/// It panics rather than returning an error on purpose. An error can be swallowed by a `?` in
+/// a helper somebody writes later; a panic stops the test.
 pub fn only_the_stand(host: &str) {
-    let stand = matches!(host, "127.0.0.1" | "::1" | "localhost");
+    let stand = matches!(host, "127.0.0.1" | "::1" | "localhost")
+        || host.starts_with(&format!("{NAME_PREFIX}-"));
     assert!(
         stand,
-        "проверки развёртывания идут только на одноразовый стенд, а адрес — {host}. \
-         Развёртывание переписывает настройки входа, выключает вход по паролю и включает \
-         сетевой фильтр: на работающем сервере это не испорченный файл, а лежащая раздача \
-         и запертый владелец"
+        "the deployment checks run against the throwaway stand only, and the address is \
+         {host}. Deploying rewrites the login settings, turns password logins off and puts a \
+         network filter up: on a working server that is not a spoilt file, it is serving down \
+         and its owner locked out"
     );
 }
 
@@ -121,6 +126,12 @@ pub struct DeployTarget {
     name: String,
     /// The port the way in over SSH is published on. Changes after `reset`.
     pub port: u16,
+    /// A network of this target's own, made only when these tests are themselves running in a
+    /// container: then our container joins it and the target answers to its own name there.
+    /// See `fixture::own_container` for why neither loopback nor the machine's name will do.
+    network: Option<String>,
+    /// Our own container, while it is attached to that network.
+    joined: Option<String>,
 }
 
 impl DeployTarget {
@@ -143,6 +154,8 @@ impl DeployTarget {
             flavour,
             name,
             port: 0,
+            network: None,
+            joined: None,
         };
         target.run_container()?;
         Ok(target)
@@ -154,7 +167,35 @@ impl DeployTarget {
         // own, and /run is a tmpfs. What this buys and what it does not is written out in
         // the clean image's Dockerfile — services, sshd and the network filter work here;
         // swap, the global kernel keys and udev do not, anywhere.
-        let out = docker(&[
+        // Made once and kept across a `reset`: the container is thrown away and started
+        // again, the network it answers on is not.
+        if self.network.is_none() {
+            if let Some(id) = super::fixture::own_container() {
+                let network = format!("{}-net", self.name);
+                let out = docker(&["network", "create", &network])
+                    .map_err(|e| format!("could not create the network: {e}"))?;
+                if !out.status.success() {
+                    return Err(format!(
+                        "the network would not be created:\n{}",
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+                let out = docker(&["network", "connect", &network, &id])
+                    .map_err(|e| format!("could not join the network: {e}"))?;
+                if !out.status.success() {
+                    let _ = docker(&["network", "rm", &network]);
+                    return Err(format!(
+                        "this container would not join the network:\n{}",
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+                self.network = Some(network);
+                self.joined = Some(id);
+            }
+        }
+
+        let image = self.flavour.image();
+        let mut args: Vec<&str> = vec![
             "run",
             "-d",
             "--rm",
@@ -166,11 +207,15 @@ impl DeployTarget {
             "/run",
             "--tmpfs",
             "/run/lock",
-            "-p",
-            "127.0.0.1::22",
-            self.flavour.image(),
-        ])
-        .map_err(|e| format!("could not start the container: {e}"))?;
+        ];
+        match &self.network {
+            Some(network) => {
+                args.extend_from_slice(&["--network", network, "--network-alias", &self.name])
+            }
+            None => args.extend_from_slice(&["-p", "127.0.0.1::22"]),
+        }
+        args.push(image);
+        let out = docker(&args).map_err(|e| format!("could not start the container: {e}"))?;
         if !out.status.success() {
             return Err(format!(
                 "the container would not start:\n{}",
@@ -178,7 +223,13 @@ impl DeployTarget {
             ));
         }
 
-        self.port = self.discover_port()?;
+        // On the network the port is the container's own; published, it is whatever the
+        // machine had free.
+        self.port = if self.network.is_some() {
+            22
+        } else {
+            self.discover_port()?
+        };
         self.wait_until_ssh_answers()?;
         Ok(())
     }
@@ -220,9 +271,13 @@ impl DeployTarget {
     fn wait_until_ssh_answers(&self) -> Result<(), String> {
         use std::io::Read;
 
-        let address: std::net::SocketAddr = format!("127.0.0.1:{}", self.port)
-            .parse()
-            .map_err(|e| format!("a bad address: {e}"))?;
+        // Through the address the tests are given, not through a loopback written out here:
+        // a readiness probe that knocks somewhere else answers about somewhere else.
+        let (host, port) = self.address();
+        let address = std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port))
+            .map_err(|e| format!("the address {host}:{port} could not be resolved: {e}"))?
+            .next()
+            .ok_or_else(|| format!("the address {host}:{port} resolved to nothing"))?;
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut last = String::from("nothing accepted the connection at all");
 
@@ -265,7 +320,12 @@ impl DeployTarget {
     /// The address to reach the container at — and the only way to obtain it, so the guard
     /// is unavoidable.
     pub fn address(&self) -> (String, u16) {
-        let host = String::from("127.0.0.1");
+        let host = match &self.network {
+            // Its own name on the network we joined. The guard knows this shape, and knows it
+            // because this module is the only thing that makes it.
+            Some(_) => self.name.clone(),
+            None => String::from("127.0.0.1"),
+        };
         only_the_stand(&host);
         (host, self.port)
     }
@@ -304,5 +364,15 @@ impl Drop for DeployTarget {
     fn drop(&mut self) {
         // Forced: systemd shuts down politely and there is nothing here worth waiting for.
         let _ = docker(&["rm", "-f", &self.name]);
+        // Ourselves off the network, then the network. In that order: Docker will not remove
+        // one with anything still attached, and a leaked network eats from a finite pool of
+        // addresses — when it runs out, nothing starts at all, with a message that says
+        // nothing about this place.
+        if let Some(network) = &self.network {
+            if let Some(id) = &self.joined {
+                let _ = docker(&["network", "disconnect", "-f", network, id]);
+            }
+            let _ = docker(&["network", "rm", network]);
+        }
     }
 }

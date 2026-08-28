@@ -212,7 +212,7 @@ fn a_bare_server_still_lets_a_password_in() {
 }
 
 #[test]
-#[should_panic(expected = "только на одноразовый стенд")]
+#[should_panic(expected = "the throwaway stand only")]
 fn the_guard_refuses_an_address_that_is_not_the_stand() {
     // T249. Deployment is the one thing the application does that can take a working server
     // down and lock its owner out, so the address is checked rather than trusted. A test
@@ -227,4 +227,8 @@ fn the_guard_lets_the_stand_through() {
     // check above and quietly make every deployment test impossible to write.
     only_the_stand("127.0.0.1");
     only_the_stand("localhost");
+    // And the other shape the stand is reached by: a container this module named itself, on a
+    // network it made. Left out, the guard would refuse every deployment test the moment they
+    // run inside a container — which is where they run in continuous integration.
+    only_the_stand("vrcast-deploy-target-931-2");
 }

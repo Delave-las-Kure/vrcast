@@ -446,11 +446,11 @@ jobs:
 
       # Running on one thread is not optional: each test brings up a container of its own,
       # and a dozen at once only slows things down.
+      # Адрес заданию больше не называется. Фикстура сама узнаёт, что работает в контейнере,
+      # подключает его к сети стенда и ходит к серверу по имени — ни петля машины, ни
+      # `host.docker.internal` для этого не годятся: порты публикуются на петлю нарочно, а
+      # петлю одного контейнера из другого не достать. Проверено 2026-08-28.
       - name: Tests against a real OpenSSH
-        env:
-          # Изнутри контейнера петля своя; опубликованные порты живут на машине, и Docker
-          # Desktop заводит для неё это имя.
-          VRCAST_TEST_HOST: host.docker.internal
         run: >
           cargo test --manifest-path src-tauri/Cargo.toml
           --features integration --test integration -- --test-threads=1
