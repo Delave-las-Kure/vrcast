@@ -116,6 +116,7 @@ pub fn run() {
             commands::ipc::tasks_list,
             commands::ipc::task_get,
             commands::ipc::task_cancel,
+            commands::ipc::tasks_cancel_batch,
             commands::ipc::task_pause,
             commands::ipc::task_resume,
             commands::ipc::tasks_reorder,

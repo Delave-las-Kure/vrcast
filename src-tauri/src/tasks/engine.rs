@@ -345,6 +345,28 @@ impl TaskEngine {
         self.events.subscribe()
     }
 
+    /// Stop every task of one batch that has not finished (T445).
+    ///
+    /// **Reads the database rather than the living.** A batch's later tasks are queued, not
+    /// running, and a cancel that only reached what was running would stop the film in hand
+    /// and let the next nine start — which is the opposite of what the button says.
+    ///
+    /// Returns how many were stopped. Cancelling one that has already finished is quiet, so a
+    /// batch half over is stopped without a fuss (constitution, principle V).
+    pub fn cancel_batch(&self, batch_id: &str) -> Result<usize> {
+        let ids = store::unfinished_in_batch(&self.db, batch_id)?;
+        let mut stopped = 0usize;
+        for id in ids {
+            // One that finished between the listing and here is not a failure of this: the
+            // listing on any screen lags, and so does this one.
+            match self.cancel(&id) {
+                Ok(()) => stopped += 1,
+                Err(e) => tracing::debug!(id, error = %e, "a task of the batch would not stop"),
+            }
+        }
+        Ok(stopped)
+    }
+
     /// Sort out the state after the application starts (T017).
     pub fn recover_after_start(&self) -> Result<store::RecoveryReport> {
         Ok(store::recover_after_start(&self.db)?)
@@ -378,8 +400,28 @@ impl TaskEngine {
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
+        self.submit_in_batch(kind, server_id, None, work).await
+    }
+
+    /// The same, and say which batch it belongs to (T445).
+    ///
+    /// A separate way in rather than a fourth argument on `submit`: every task in the
+    /// application goes through that one, and almost none of them is part of a batch. Making
+    /// them all name it would be forty call sites saying `None`.
+    pub async fn submit_in_batch<F, Fut>(
+        &self,
+        kind: TaskKind,
+        server_id: Option<String>,
+        batch: Option<store::Batch>,
+        work: F,
+    ) -> Result<String>
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
+    {
         let id = uuid::Uuid::new_v4().to_string();
         let mut record = TaskRecord::new(id.clone(), kind, server_id);
+        record.batch = batch;
         record.queue_order = self
             .next_position
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

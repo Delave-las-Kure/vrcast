@@ -11,6 +11,18 @@ use crate::error::AppError;
 use crate::store::db::{now_rfc3339, Db, DbError};
 use serde::{Deserialize, Serialize};
 
+/// The batch a task belongs to.
+///
+/// The label sits beside each task rather than in a table of its own: a task outlives the
+/// screen that made it, and may outlive the name the file goes by in the library. A label
+/// that has to be looked up elsewhere is a label that one day is not there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Batch {
+    pub id: String,
+    /// What to call this one on screen — the film, as a person would name it.
+    pub label: String,
+}
+
 /// A task in the form it is stored and shown in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
@@ -37,6 +49,12 @@ pub struct TaskRecord {
     /// task that finished a week ago still explains itself in whatever language is chosen
     /// today.
     pub notices: Vec<Detail>,
+    /// Which batch this task belongs to, and what to call it (T445).
+    ///
+    /// `None` for anything a person started on its own. A batch of ten films makes thirty
+    /// tasks, and without this the list is thirty rows that do not say which film they are
+    /// about — so watching a batch means watching a wall, and stopping one is a guess.
+    pub batch: Option<Batch>,
     /// Place in the queue: lower runs sooner.
     ///
     /// Kept apart from the creation time, because reordering (FR-083) has to change
@@ -61,6 +79,7 @@ impl TaskRecord {
             resume_token: None,
             error: None,
             notices: Vec::new(),
+            batch: None,
             queue_order: 0,
             created_at: now.clone(),
             updated_at: now,
@@ -94,6 +113,16 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
             .get::<_, Option<String>>("notices")?
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        batch: row.get::<_, Option<String>>("batch_id")?.map(|id| Batch {
+            id,
+            // A batch with no label reads as one with an empty name rather than as none
+            // at all: the grouping is what matters, and it is there.
+            label: row
+                .get::<_, Option<String>>("batch_label")
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        }),
         queue_order: row.get("queue_order")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -106,8 +135,9 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
         c.execute(
             "INSERT INTO tasks
                 (id, kind, server_id, state, progress, stage, speed_bps, eta_s,
-                 resume_token, error, notices, queue_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 resume_token, error, notices, batch_id, batch_label,
+                 queue_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT (id) DO UPDATE SET
                 state = excluded.state,
                 progress = excluded.progress,
@@ -132,6 +162,8 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
                     .as_ref()
                     .and_then(|e| serde_json::to_string(e).ok()),
                 notices_json(&task.notices),
+                task.batch.as_ref().map(|b| b.id.clone()),
+                task.batch.as_ref().map(|b| b.label.clone()),
                 task.queue_order,
                 task.created_at,
                 task.updated_at,
@@ -251,6 +283,24 @@ pub fn save_state(
             ],
         )?;
         Ok(changed > 0)
+    })
+}
+
+/// Every task of one batch that has not finished (T445).
+///
+/// Read in the store rather than worked out from a full listing: a batch cancel has to reach
+/// tasks that are only in the database — queued, or raised after a restart — and a listing of
+/// the living would miss exactly those.
+pub fn unfinished_in_batch(db: &Db, batch_id: &str) -> Result<Vec<String>, DbError> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id FROM tasks
+             WHERE batch_id = ?1 AND state NOT IN ('completed', 'failed', 'cancelled')",
+        )?;
+        let rows = stmt
+            .query_map([batch_id], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
     })
 }
 

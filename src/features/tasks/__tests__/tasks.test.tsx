@@ -19,11 +19,12 @@
  * The core is stubbed. What is checked here is what a person is left looking at.
  */
 
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Task } from "../../../shared/contract";
 import { renderIn, ru } from "../../../test-utils";
 
+const cancelBatch = vi.fn<() => Promise<number>>();
 let list: Task[] = [];
 let progress: ((e: unknown) => void) | null = null;
 let done: ((e: unknown) => void) | null = null;
@@ -39,6 +40,7 @@ vi.mock("../../../shared/ipc", async () => {
       taskPause: vi.fn(),
       taskResume: vi.fn(),
       taskCancel: vi.fn(),
+      tasksCancelBatch: () => cancelBatch(),
     },
     // Only its own handler is dropped on cleanup: a component unmounting from an earlier
     // test would otherwise wipe out the subscription this one has just made.
@@ -72,6 +74,7 @@ function task(over: Partial<Task> = {}): Task {
     resume_token: null,
     error: null,
     notices: [],
+    batch: null,
     queue_order: 1,
     created_at: "2026-08-28T10:00:00Z",
     updated_at: "2026-08-28T10:00:00Z",
@@ -80,6 +83,8 @@ function task(over: Partial<Task> = {}): Task {
 }
 
 beforeEach(() => {
+  // Every stub gets an answer, not only the ones a given test reads.
+  cancelBatch.mockResolvedValue(0);
   list = [];
   progress = null;
   done = null;
@@ -155,4 +160,50 @@ it("says nothing where a task had nothing to say", async () => {
   renderIn(<TasksPanel />);
   await screen.findByText(ru.ui.tasks.states.completed);
   expect(screen.queryByTestId("task-notices")).toBeNull();
+});
+
+it("names the film each row belongs to, and offers one button for the batch", async () => {
+  // T445. Ten films make thirty tasks. Thirty rows saying "measuring quality" are a wall:
+  // watching a batch means watching nothing, and "stop this one" is a guess.
+  list = [
+    task({ id: "a", batch: { id: "s1", label: "Blue Eye Samurai S01E01" } }),
+    task({ id: "b", kind: "build_ladder", batch: { id: "s1", label: "Blue Eye Samurai S01E01" } }),
+    task({ id: "c", batch: { id: "s1", label: "Blue Eye Samurai S01E02" } }),
+  ];
+  renderIn(<TasksPanel />);
+  // Each row says which film it is about.
+  await screen.findByText("Blue Eye Samurai S01E02");
+  expect(screen.getByText("Blue Eye Samurai S01E02")).toBeTruthy();
+
+  // One button for the batch, not one per film and not one per task: stopping ten films by
+  // hand means thirty presses, and the tenth starts while somebody is still pressing.
+  expect(screen.getAllByText(ru.ui.tasks.batchStop)).toHaveLength(1);
+
+  // And the heading counts the batch rather than borrowing one film's name for all of it —
+  // two films, three tasks.
+  const heading = screen.getByTestId("batch-s1");
+  expect(heading.textContent).toContain("2");
+  expect(heading.textContent).toContain("3");
+});
+
+it("offers nothing to stop where the batch is already over", async () => {
+  // A control that does nothing teaches people the application is broken.
+  list = [
+    task({ id: "a", state: "completed", progress: 1, batch: { id: "s1", label: "Done" } }),
+    task({ id: "b", state: "failed", batch: { id: "s1", label: "Done" } }),
+  ];
+  renderIn(<TasksPanel />);
+  await screen.findByText(ru.ui.tasks.states.completed);
+  expect(screen.queryByText(ru.ui.tasks.batchStop)).toBeNull();
+});
+
+it("says how many it stopped rather than asserting that something happened", async () => {
+  list = [task({ id: "a", batch: { id: "s1", label: "Season" } })];
+  cancelBatch.mockResolvedValue(7);
+  renderIn(<TasksPanel />);
+  await screen.findByText(ru.ui.tasks.batchStop);
+
+  fireEvent.click(screen.getByText(ru.ui.tasks.batchStop));
+  const said = await screen.findByTestId("batch-stopped");
+  expect(said.textContent).toContain("7");
 });

@@ -439,6 +439,16 @@ export type TaskKind =
 
 export type TaskState = "queued" | "running" | "paused" | "completed" | "failed" | "cancelled";
 
+/** The batch a task belongs to.
+ *
+ *  The label sits on each task rather than in a list of its own: a task outlives the screen
+ *  that made it, and may outlive the name its file goes by in the library. */
+export interface Batch {
+  id: string;
+  /** What to call this one on screen — the film, as a person would name it. */
+  label: string;
+}
+
 export interface Task {
   id: string;
   kind: TaskKind;
@@ -457,6 +467,9 @@ export interface Task {
   /** What it had to say that is not a failure: variants taken from a previous run, a
    *  measurement that stopped short, the graphics card that refused (T415). */
   notices: Detail[];
+  /** Which batch this belongs to and what to call it (T445). Null for anything a person
+   *  started on its own. */
+  batch: Batch | null;
   /** Place in the queue: lower runs sooner. Changed by reordering (FR-083). */
   queue_order: number;
   created_at: string;

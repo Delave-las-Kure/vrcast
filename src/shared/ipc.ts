@@ -237,6 +237,10 @@ export const ipc = {
    *  changed (T453). A reading, never an act: nothing is moved and nothing is deleted. */
   workDirLeftovers: (path: string) => call<Leftovers>("work_dir_leftovers", { path }),
 
+  /** Stop a whole batch, waiting tasks included (T445). Returns how many were stopped, so
+   *  the screen can say what happened rather than assert that something did. */
+  tasksCancelBatch: (batchId: string) => call<number>("tasks_cancel_batch", { batchId }),
+
   qualityMeasureResult: (sourceKey: string, codec: string) =>
     call<MeasurementView>("quality_measure_result", { sourceKey, codec }),
 

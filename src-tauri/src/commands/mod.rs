@@ -234,6 +234,15 @@ pub mod api {
         Ok(state.tasks.cancel(id)?)
     }
 
+    /// Stop a whole batch (T445).
+    ///
+    /// Returns how many tasks were stopped, so the interface can say what it did rather than
+    /// assert that something happened. A batch that was already over stops nought, and that
+    /// is not an error.
+    pub fn tasks_cancel_batch(state: &AppState, batch_id: &str) -> Result<usize> {
+        Ok(state.tasks.cancel_batch(batch_id)?)
+    }
+
     pub fn task_pause(state: &AppState, id: &str) -> Result<()> {
         Ok(state.tasks.pause(id)?)
     }
@@ -384,6 +393,11 @@ pub mod ipc {
     #[tauri::command]
     pub fn task_cancel(state: State<'_, AppState>, id: String) -> Result<()> {
         api::task_cancel(&state, &id)
+    }
+
+    #[tauri::command]
+    pub fn tasks_cancel_batch(state: State<'_, AppState>, batch_id: String) -> Result<usize> {
+        api::tasks_cancel_batch(&state, &batch_id)
     }
 
     #[tauri::command]

@@ -43,12 +43,16 @@ function formatEta(seconds: number | null, t: Catalogue, lang: Lang): string | n
   return t.ui.tasks.etaSoon;
 }
 
+/** The states a task does not come back from. */
+const FINISHED = new Set(["completed", "failed", "cancelled"]);
+
 export function TasksPanel() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [onClose, setOnClose] = useState<TaskOnClose[]>([]);
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [stoppedCount, setStoppedCount] = useState<number | null>(null);
   const t = useT();
   const { lang } = useLang();
 
@@ -145,6 +149,31 @@ export function TasksPanel() {
   // it is. Cancelled and finished ones are counted as neither.
   const running = tasks.filter((task) => task.state === "running" || task.state === "paused").length;
 
+  /**
+   * The batches with something still to stop.
+   *
+   * **Counted, not named after one of its films.** The label belongs to the task — it is the
+   * film — while the identifier belongs to the batch. The first shape of this took one film's
+   * label as the whole batch's heading, so a season of ten was headed by whichever episode
+   * happened to come first in the list. The films are named on their own rows; the heading
+   * says how big the batch is and what is left of it.
+   *
+   * A batch that is over gets no heading: a button that does nothing teaches people the
+   * application is broken.
+   */
+  const batches = [
+    ...tasks
+      .filter((task) => task.batch && !FINISHED.has(task.state))
+      .reduce((seen, task) => {
+        const at = seen.get(task.batch!.id) ?? { id: task.batch!.id, films: new Set(), left: 0 };
+        at.films.add(task.batch!.label);
+        at.left += 1;
+        seen.set(at.id, at);
+        return seen;
+      }, new Map<string, { id: string; films: Set<string>; left: number }>())
+      .values(),
+  ];
+
   if (loading) return <div className="panel">{t.ui.tasks.reading}</div>;
 
   return (
@@ -156,6 +185,32 @@ export function TasksPanel() {
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
       <CloseConsequences items={onClose} />
+
+      {/* One button for a whole batch. Without it, stopping ten films means thirty presses —
+          and the tenth would start while somebody was still pressing. */}
+      {batches.map((batch) => (
+        <p key={batch.id} className="hint" data-testid={`batch-${batch.id}`}>
+          {fill(t.ui.tasks.batchIs, { films: batch.films.size, left: batch.left }, t, lang)}{" "}
+          <button
+            type="button"
+            className="button-link"
+            disabled={busy}
+            onClick={() =>
+              void act(async () => {
+                const stopped = await ipc.tasksCancelBatch(batch.id);
+                setStoppedCount(stopped);
+              })
+            }
+          >
+            {t.ui.tasks.batchStop}
+          </button>
+        </p>
+      ))}
+      {stoppedCount !== null && (
+        <p role="status" data-testid="batch-stopped">
+          {fill(t.ui.tasks.batchStopped, { n: stoppedCount }, t, lang)}
+        </p>
+      )}
 
       <QueueOrder
         queued={queued}
@@ -170,6 +225,11 @@ export function TasksPanel() {
           {tasks.map((task) => (
             <li key={task.id} className={`task task--${task.state}`}>
               <div className="task__head">
+                {/* Which film this is (T445). Thirty rows saying "measuring quality" are a
+                    wall, and "stop this one" is then a guess. The label rides on the task
+                    itself, so it is still right after a restart and after the file has been
+                    renamed in the library. */}
+                {task.batch && <span className="task__batch">{task.batch.label}</span>}
                 <span className="task__kind">
                   {t.ui.tasks.kinds[task.kind as TaskKind] ?? task.kind}
                 </span>

@@ -13,10 +13,12 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
 use vrcast_studio_lib::domain::ladder::{may_build_unasked, Objection};
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::tasks::engine::TaskEngine;
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
+use vrcast_studio_lib::tasks::store::Batch;
 
 // ---------- the gate (T439, T442) ----------
 
@@ -170,4 +172,146 @@ fn the_chain_is_in_the_core_and_not_on_a_screen() {
          instead, a batch stops the moment the window is closed — which is exactly when a \
          batch is left to run."
     );
+}
+
+// ---------- stopping a whole batch (T445) ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_a_batch_reaches_the_ones_that_have_not_started() {
+    // **The fault this is written against.** A batch of ten films has one task running and
+    // the rest waiting. A cancel that only reached what was running would stop the film in
+    // hand and let the next nine begin — which is the opposite of what the button says, and
+    // the person watching would see the list carry on and conclude nothing had happened.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let engine = TaskEngine::new(db.clone());
+    let ours = Batch {
+        id: String::from("season-1"),
+        label: String::from("Blue Eye Samurai"),
+    };
+
+    let mut mine = Vec::new();
+    for _ in 0..3 {
+        mine.push(
+            engine
+                .submit_in_batch(
+                    TaskKind::Convert,
+                    None,
+                    Some(ours.clone()),
+                    |ctx| async move {
+                        // Long enough that they are still waiting when the batch is stopped.
+                        for _ in 0..100 {
+                            ctx.bail_if_cancelled()
+                                .map_err(|_| AppError::new(ErrorCode::Internal))?;
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                        Ok(())
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    // Somebody else's task, of the same kind, which must be left entirely alone.
+    let stranger = engine
+        .submit(TaskKind::Convert, None, |ctx| async move {
+            for _ in 0..100 {
+                ctx.bail_if_cancelled()
+                    .map_err(|_| AppError::new(ErrorCode::Internal))?;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let stopped = engine
+        .cancel_batch(&ours.id)
+        .expect("the batch would not stop");
+    assert_eq!(stopped, 3, "the waiting ones were not reached");
+
+    for id in &mine {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if engine
+                .get(id)
+                .ok()
+                .flatten()
+                .is_some_and(|t| t.state.is_final())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            engine.get(id).unwrap().unwrap().state,
+            TaskState::Cancelled,
+            "a task of the batch went on after the batch was stopped"
+        );
+    }
+    assert_ne!(
+        engine.get(&stranger).unwrap().unwrap().state,
+        TaskState::Cancelled,
+        "stopping one batch stopped somebody else's work"
+    );
+    let _ = engine.cancel(&stranger);
+}
+
+#[tokio::test]
+async fn a_task_says_which_film_it_belongs_to() {
+    // Thirty rows saying "measuring quality" are a wall. The label sits on the task itself,
+    // so it is still there after a restart and after the file has been renamed in the library.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let engine = TaskEngine::new(db.clone());
+    let id = engine
+        .submit_in_batch(
+            TaskKind::Probe,
+            None,
+            Some(Batch {
+                id: String::from("season-1"),
+                label: String::from("Blue Eye Samurai S01E04"),
+            }),
+            |_ctx| async move { Ok(()) },
+        )
+        .await
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if engine
+            .get(&id)
+            .ok()
+            .flatten()
+            .is_some_and(|t| t.state.is_final())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Read back out of the store, not out of memory: this has to survive the application.
+    let rec = vrcast_studio_lib::tasks::store::get(&db, &id)
+        .unwrap()
+        .expect("the record is gone");
+    let batch = rec
+        .batch
+        .expect("the task forgot which batch it was part of");
+    assert_eq!(batch.id, "season-1");
+    assert_eq!(batch.label, "Blue Eye Samurai S01E04");
+}
+
+#[tokio::test]
+async fn a_task_nobody_batched_belongs_to_no_batch() {
+    // Otherwise every single-file job would draw a batch heading of its own, and a heading
+    // that is always there is a heading nobody reads.
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let engine = TaskEngine::new(db.clone());
+    let id = engine
+        .submit(TaskKind::Probe, None, |_ctx| async move { Ok(()) })
+        .await
+        .unwrap();
+    assert!(vrcast_studio_lib::tasks::store::get(&db, &id)
+        .unwrap()
+        .unwrap()
+        .batch
+        .is_none());
 }
