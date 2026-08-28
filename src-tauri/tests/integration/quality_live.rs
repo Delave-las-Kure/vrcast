@@ -28,6 +28,14 @@ mod env {
     pub const SOURCE: &str = "VRCAST_MEASURE_SOURCE";
     pub const POINTS: &str = "VRCAST_MEASURE_POINTS";
     pub const NATIVE_HEIGHT: &str = "VRCAST_MEASURE_NATIVE_HEIGHT";
+    /// Chunk starts in seconds, comma-separated, instead of the ones the weights choose.
+    ///
+    /// **For telling two things apart that otherwise mix.** The three chunks are picked by
+    /// weight, not by position, so they can land within one minute of each other in a
+    /// forty-minute episode — and then the measurement describes that minute. Comparing two
+    /// films measured on different minutes mixes "these films differ" with "these minutes
+    /// differ". Pinning the chunks holds one of the two still.
+    pub const CHUNKS: &str = "VRCAST_MEASURE_CHUNKS";
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -67,7 +75,13 @@ async fn how_long_a_point_takes() {
         .await
         .expect("the packets would not read");
     let reading_took = started.elapsed();
-    let chunk_starts = chunks::reference_chunks(&seconds, chunks::CHUNK_S);
+    let chunk_starts = match std::env::var(env::CHUNKS) {
+        Ok(given) => given
+            .split(',')
+            .filter_map(|s| s.trim().parse::<u64>().ok())
+            .collect(),
+        Err(_) => chunks::reference_chunks(&seconds, chunks::CHUNK_S),
+    };
 
     let started = Instant::now();
     let probed = probe_complexity::probe(path, probe.duration_s, &encoder).await;

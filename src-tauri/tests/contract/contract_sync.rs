@@ -637,3 +637,186 @@ fn nothing_the_screens_send_is_quietly_dropped() {
         },
     );
 }
+
+// ---------- every registered command is reachable, and nothing else is called (T377) ----------
+//
+// **The class of fault this exists for**: a capability written, registered, documented — and
+// wired to nothing. It cannot be seen from the outside, because from the outside there is
+// simply no button; and it cannot be seen from a test, because every screen test stands in
+// for the whole of `ipc`.
+//
+// Found on 2026-08-28, three at once: `quality_measure_reuse`, `quality_measurements` and
+// `quality_measure_forget` are registered in `lib.rs`, described in `contracts/ipc-commands.md`,
+// carry an error code and wordings in both languages — and have no wrapper in `ipc.ts` at all.
+// So lending a measurement to the next episode of a season, which FR-146 requires, exists only
+// in the core. The task that promised it is marked done.
+//
+// The other direction matters just as much and is cheaper to get wrong: a wrapper calling a
+// name the core no longer registers fails at the moment a person presses the button, with
+// "command not found" and nothing on the screen to say what happened.
+
+/// Every command name the core registers, out of `generate_handler!`.
+fn registered_commands() -> HashSet<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+
+    let start = text
+        .find("generate_handler![")
+        .expect("lib.rs no longer registers commands with generate_handler!");
+    let body = block_body_square(&text[start + "generate_handler![".len()..]);
+
+    let mut out = HashSet::new();
+    for line in body.lines() {
+        let line = line.split("//").next().unwrap_or("").trim().trim_end_matches(',');
+        // `commands::ipc::name`, and nothing else has that shape here.
+        if let Some(name) = line.rsplit("::").next() {
+            if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+                out.insert(name.to_owned());
+            }
+        }
+    }
+    assert!(
+        out.len() > 50,
+        "only {} commands were parsed out of generate_handler! — the parsing has come adrift \
+         from the file, and a check that finds nothing agrees with everything",
+        out.len()
+    );
+    out
+}
+
+/// The body of a `[ … ]` block, from just after the opening bracket.
+fn block_body_square(after: &str) -> &str {
+    let mut depth = 1usize;
+    for (i, c) in after.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &after[..i];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("generate_handler! was opened and never closed");
+}
+
+/// Every command name the interface actually calls.
+fn called_commands() -> HashSet<String> {
+    let ipc = ipc_ts();
+    let mut out = HashSet::new();
+    // `call<T>("name", …)` and `call("name", …)` — the one way this file reaches the core.
+    for (i, _) in ipc.match_indices("call") {
+        let rest = &ipc[i + "call".len()..];
+        let rest = rest.strip_prefix('<').map_or(rest, |r| {
+            r.find('>').map_or(r, |j| &r[j + 1..])
+        });
+        let Some(rest) = rest.strip_prefix('(') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('"') else {
+            continue;
+        };
+        if let Some(end) = rest.find('"') {
+            out.insert(rest[..end].to_owned());
+        }
+    }
+    assert!(
+        out.len() > 50,
+        "only {} calls were parsed out of ipc.ts — the parsing has come adrift from the file",
+        out.len()
+    );
+    out
+}
+
+/// Registered, and knowingly not offered yet — each with the task that removes it from here.
+///
+/// **The list is the point, not the exception.** Five capabilities were found unwired on
+/// 2026-08-28, and the reason they stayed unwired is that nothing named them. Named, they are
+/// work with an owner; unnamed, they are a feature everyone believes exists. Nothing may be
+/// added here without a task number beside it, and `the_list_of_unwired_commands_does_not_rot`
+/// below makes the list shrink on its own.
+const NOT_WIRED_YET: [(&str, &str); 5] = [
+    ("quality_measure_reuse", "T431 — lending a measurement to the next episode (FR-146)"),
+    ("quality_measurements", "T431 — the list to choose a lender from"),
+    ("quality_measure_forget", "T433 — a way out of a borrowed measurement"),
+    ("geo_status", "T461 — whether the tables of places are there and current"),
+    ("geo_update", "T461 — fetching them; without it a stale table has no button"),
+];
+
+#[test]
+fn every_registered_command_is_reachable_from_the_interface() {
+    let registered = registered_commands();
+    let called = called_commands();
+    let known: HashSet<String> = NOT_WIRED_YET.iter().map(|(n, _)| (*n).to_owned()).collect();
+
+    let unreachable: Vec<String> = {
+        let mut v: Vec<String> = registered
+            .difference(&called)
+            .filter(|n| !known.contains(*n))
+            .cloned()
+            .collect();
+        v.sort();
+        v
+    };
+
+    assert!(
+        unreachable.is_empty(),
+        "these commands are registered in the core and called from nowhere: {unreachable:?}\n\n\
+         A capability with no way in is not a capability. It cannot be found by using the \
+         application, because there is no button; and it cannot be found by the screen tests, \
+         because they stand in for the whole of `ipc`. If one of these is deliberately not \
+         offered yet, it does not belong in `generate_handler!` until it is."
+    );
+}
+
+#[test]
+fn the_interface_calls_nothing_the_core_does_not_register() {
+    let registered = registered_commands();
+    let called = called_commands();
+
+    let missing: Vec<String> = {
+        let mut v: Vec<String> = called.difference(&registered).cloned().collect();
+        v.sort();
+        v
+    };
+
+    assert!(
+        missing.is_empty(),
+        "the interface calls commands the core does not register: {missing:?}\n\n\
+         Nothing catches this at build time — the types check on both sides. It fails at a \
+         person's machine, on the button, with \"command not found\"."
+    );
+}
+
+#[test]
+fn the_list_of_unwired_commands_does_not_rot() {
+    // A list of exceptions that is never checked becomes a list of things nobody looks at.
+    // The day one of these is wired up, this fails and the line comes out — so the list can
+    // only ever shrink.
+    let called = called_commands();
+    let registered = registered_commands();
+
+    let wired: Vec<&str> = NOT_WIRED_YET
+        .iter()
+        .filter(|(n, _)| called.contains(*n))
+        .map(|(n, _)| *n)
+        .collect();
+    assert!(
+        wired.is_empty(),
+        "these are called from the interface now and no longer belong in NOT_WIRED_YET:          {wired:?}"
+    );
+
+    let gone: Vec<&str> = NOT_WIRED_YET
+        .iter()
+        .filter(|(n, _)| !registered.contains(*n))
+        .map(|(n, _)| *n)
+        .collect();
+    assert!(
+        gone.is_empty(),
+        "these are in NOT_WIRED_YET and the core no longer registers them: {gone:?}.          The exception outlived the thing it excused"
+    );
+}
