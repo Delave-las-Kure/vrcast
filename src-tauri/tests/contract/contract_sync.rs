@@ -844,3 +844,109 @@ fn the_list_of_unwired_commands_does_not_rot() {
         "these are in NOT_WIRED_YET and the core no longer registers them: {gone:?}.          The exception outlived the thing it excused"
     );
 }
+
+// ---------- the shapes match by TYPE, not only by name (T379) ----------
+//
+// **Where the name-only comparison is blind.** Everything above checks that both sides know
+// the same fields. It says nothing about what is in them, and that is where the drift found
+// on 2026-08-28 was hiding: `MeasurePreview.encoder` is an internally tagged enum in the core
+// — `{"kind":"software"}`, always an object — and `string` in `contract.ts`. Both sides agree
+// there is a field called `encoder`; they disagree about everything else.
+//
+// It has not bitten yet only because nothing draws it. The day something does, it draws
+// `[object Object]` — or nothing, quietly.
+
+/// What kind of JSON a value actually is.
+fn json_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// What kind of JSON a TypeScript type says to expect, when it says anything simple enough
+/// to be sure about.
+///
+/// `None` for anything with a union, a generic or a name of its own: those are for a person
+/// to read, and guessing at them would make this check argue with correct declarations.
+fn ts_kind(ts_type: &str) -> Option<&'static str> {
+    let t = ts_type.trim();
+    if t.contains('|') || t.contains('<') {
+        return None;
+    }
+    if t.ends_with("[]") {
+        return Some("array");
+    }
+    match t {
+        "string" => Some("string"),
+        "number" => Some("number"),
+        "boolean" => Some("boolean"),
+        _ => None,
+    }
+}
+
+/// Compare a serialised value against a declared interface, field by field, by kind.
+fn same_kinds<T: serde::Serialize>(value: &T, interface: &str) {
+    let json = serde_json::to_value(value).expect("the value will not serialise");
+    let object = json.as_object().expect("an object was expected");
+
+    let ts = contract_ts();
+    let marker = format!("export interface {interface} {{");
+    let at = ts
+        .find(&marker)
+        .unwrap_or_else(|| panic!("contract.ts has no interface \"{interface}\""));
+    let declared = fields_in(block_body(&ts[at + marker.len()..]));
+
+    let mut wrong: Vec<String> = Vec::new();
+    for field in &declared {
+        let Some(want) = ts_kind(&field.ts_type) else {
+            continue;
+        };
+        let Some(got) = object.get(&field.name) else {
+            continue; // The name comparison is somebody else's job.
+        };
+        // A field the core left empty says nothing about its type.
+        if got.is_null() {
+            continue;
+        }
+        let is = json_kind(got);
+        if is != want {
+            wrong.push(format!(
+                "{}.{}: contract.ts says {}, the core sends {}",
+                interface, field.name, field.ts_type, is
+            ));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "the contract and the core disagree about what is in these fields:\n  {}\n\n\
+         Both sides know the field exists, so nothing above catches it. It reaches the screen \
+         as an empty space or as [object Object].",
+        wrong.join("\n  ")
+    );
+}
+
+#[test]
+fn the_measure_preview_says_what_it_actually_contains() {
+    use vrcast_studio_lib::commands::quality::MeasurePreview;
+    use vrcast_studio_lib::media::encoders::Encoder;
+
+    let preview = MeasurePreview {
+        source_key: String::from("1:film.mp4"),
+        points: 12,
+        already_measured: 0,
+        about_seconds: 180,
+        estimate_from_points: 0,
+        chunk_starts: vec![1, 2, 3],
+        anchor_mbps: 8,
+        // The one that matters: an internally tagged enum is an object, on both variants.
+        encoder: Encoder::Software,
+        notices: Vec::new(),
+    };
+    same_kinds(&preview, "MeasurePreview");
+}

@@ -986,7 +986,8 @@ export interface MeasurePreview {
   about_seconds: number;
   chunk_starts: number[];
   anchor_mbps: number;
-  encoder: string;
+  /** Which encoder the reckoning was made with. An object on both variants. */
+  encoder: Encoder;
   /**
    * How many timed points on this machine the estimate rests on. Zero means it rests on
    * the model measured on somebody else's machine, and the interface says so.

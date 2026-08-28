@@ -139,7 +139,7 @@ describe("where the rungs came from", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
@@ -226,7 +226,7 @@ describe("what a measurement will cost", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
@@ -250,7 +250,7 @@ describe("what a measurement will cost", () => {
       about_seconds: 60,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 40,
       notices: [],
     });
@@ -272,7 +272,7 @@ describe("what a measurement will cost", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
@@ -314,7 +314,7 @@ describe("when the measurement ends", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
@@ -365,7 +365,7 @@ describe("when the measurement ends", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
@@ -404,7 +404,7 @@ describe("when the measurement ends", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
@@ -453,7 +453,7 @@ describe("when the measurement ends", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
@@ -483,7 +483,7 @@ describe("when the measurement ends", () => {
       about_seconds: 180,
       chunk_starts: [233, 590, 947],
       anchor_mbps: 8,
-      encoder: "h264_nvenc",
+      encoder: { kind: "hardware", name: "h264_nvenc" },
       estimate_from_points: 0,
       notices: [],
     });
