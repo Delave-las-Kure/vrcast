@@ -340,6 +340,18 @@ pub fn sweep_abandoned_networks() {
                 |holder| !matches!(docker(&["container", "inspect", holder]), Ok(o) if o.status.success()),
             );
         if !all_gone {
+            // **Silent until now, and that silence cost a day.** Three networks were reported
+            // by the guard for four runs while this line quietly skipped them — rightly, as
+            // it turns out: the containers holding them were still *running*, left by runs
+            // the concurrency group had cancelled. Skipping a live holder is correct;
+            // saying nothing about it is not, because the guard next door then reports the
+            // network with no hint that a container is the reason.
+            note_leak(&format!(
+                "the network {name} is held by {} — still there, so it was left alone. If \
+                 that container is from a run that was cancelled, it is the leak, and the \
+                 network is only what it is holding.",
+                holders.join(", ")
+            ));
             continue;
         }
         for holder in &holders {
@@ -742,6 +754,50 @@ pub fn logging_if_requested() {
 pub fn canary(secret: &str) {
     if std::env::var_os("VRCAST_LOG").is_some() {
         tracing::trace!(probe = %secret, "a probe for secret redaction");
+    }
+}
+
+/// Remove the deployment containers left by runs that were killed rather than finished.
+///
+/// **The leak itself, found on 2026-08-28.** `DeployTarget::drop` removes its container, and a
+/// cancelled job never runs a `Drop`. The workflow cancels the previous run on every push
+/// (`cancel-in-progress: true`), so this is not a rare event — three of them were found
+/// running, one for four hours. They hold their networks, which is why the network guard kept
+/// reporting networks that nothing could remove, and why the containers themselves went
+/// unmentioned: the guard for those could not see them (its two filters ANDed).
+///
+/// **Not our own.** The name carries the process id that made it, so a container from another
+/// process is from another run — and with `cancel-in-progress: true` there is never a second
+/// live run of this workflow on the same branch to take one from. This deliberately does not
+/// try to work out whether that process is still alive: these tests run inside a container of
+/// their own, so a process id from a previous run means nothing in this one's numbering, and
+/// a liveness check across that boundary would answer confidently and wrongly.
+pub fn sweep_abandoned_targets(own_prefix: &str) {
+    let Ok(out) = docker(&[
+        "ps",
+        "-a",
+        "--filter",
+        "name=vrcast-deploy-target",
+        "--format",
+        "{{.Names}}",
+    ]) else {
+        note_leak("the deployment containers could not be listed at all");
+        return;
+    };
+    for name in String::from_utf8_lossy(&out.stdout).lines() {
+        let name = name.trim();
+        if name.is_empty() || name.starts_with(own_prefix) {
+            continue;
+        }
+        let removed = matches!(docker(&["rm", "-f", name]), Ok(o) if o.status.success());
+        note_leak(&format!(
+            "the container {name} was left by a run that did not finish. {}",
+            if removed {
+                "Removed."
+            } else {
+                "IT WOULD NOT GO."
+            }
+        ));
     }
 }
 

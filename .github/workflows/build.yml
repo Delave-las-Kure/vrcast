@@ -493,11 +493,27 @@ jobs:
           # A flickering guard is worse than none: it teaches people to re-run a build
           # without reading it — and one day they will re-run a real leak the same way.
           for _ in $(seq 1 15); do
-            # Three sources now (T248). The serving container is looked for by its image;
-            # the two deployment ones by their NAME prefix instead — they are rebuilt and
-            # re-tagged more often than the serving one, and a guard keyed to a tag stops
-            # watching the moment the tag moves, silently and while still going green.
-            left="$(docker ps -a --filter ancestor=vrcast-test-sshd:5 --filter name=vrcast-deploy-target --format '{{.ID}} {{.Status}}')"
+            # Three sources (T248). The serving container is looked for by its image; the two
+            # deployment ones by their NAME prefix instead — they are rebuilt and re-tagged
+            # more often than the serving one, and a guard keyed to a tag stops watching the
+            # moment the tag moves, silently and while still going green.
+            #
+            # **Two queries, and that is the whole point of this shape.** Written as
+            # `--filter ancestor=… --filter name=…` it read as "either", and Docker means
+            # "both": filters of different kinds are ANDed. A deployment container is named
+            # `vrcast-deploy-target-…` and built from `vrcast-test-clean`, never from
+            # `vrcast-test-sshd`, so it matched neither half of an AND and the guard could
+            # not see one at all. It never could. Three of them sat running for hours while
+            # this step printed "no containers left", and it was the network guard next door
+            # that finally said something — about the networks those containers were holding.
+            # Proved on 2026-08-28 against a machine that had all three: the old line found
+            # nothing, these two found them.
+            left="$(
+              {
+                docker ps -a --filter ancestor=vrcast-test-sshd:5 --format '{{.Names}} {{.Status}}'
+                docker ps -a --filter name=vrcast-deploy-target --format '{{.Names}} {{.Status}}'
+              } | sort -u
+            )"
             [ -z "$left" ] && break
             sleep 1
           done

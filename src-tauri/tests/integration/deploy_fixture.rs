@@ -169,6 +169,15 @@ impl DeployTarget {
         // swap, the global kernel keys and udev do not, anywhere.
         // Made once and kept across a `reset`: the container is thrown away and started
         // again, the network it answers on is not.
+        // **The containers first, and outside the branch below.** A network whose holder is
+        // still running cannot be removed, and until 2026-08-28 only the networks were swept
+        // — so neither ever went, and the guard reported the network while the container
+        // that was holding it went unmentioned. Outside the branch because a container is
+        // made whether or not these tests are themselves in one: a local run broken off by
+        // hand leaves exactly the same litter, and three of them were found on the owner's
+        // machine, one running for four hours.
+        super::fixture::sweep_abandoned_targets(&format!("{NAME_PREFIX}-{}-", std::process::id()));
+
         if self.network.is_none() {
             if let Some(id) = super::fixture::own_container() {
                 let network = format!("{}-net", self.name);
