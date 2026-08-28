@@ -23,6 +23,7 @@ pub mod hls_master;
 pub mod hls_package;
 pub mod ladder;
 pub mod ladder_build;
+pub mod ladder_size;
 pub mod limits_conf;
 pub mod links;
 pub mod log_digest;

@@ -152,3 +152,6 @@ mod spawn_hygiene;
 
 #[path = "unit/tray.rs"]
 mod tray;
+
+#[path = "unit/ladder_size.rs"]
+mod ladder_size;
