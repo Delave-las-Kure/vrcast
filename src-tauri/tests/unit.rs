@@ -155,3 +155,6 @@ mod tray;
 
 #[path = "unit/ladder_size.rs"]
 mod ladder_size;
+
+#[path = "unit/notices.rs"]
+mod notices;
