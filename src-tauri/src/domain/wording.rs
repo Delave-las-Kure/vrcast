@@ -304,6 +304,8 @@ detail_codes! {
     // Why one film's measurement cannot be lent to another (T431). Which field it was, so
     // that a person is not left comparing two files by eye against a list of eight things
     // this application looked at.
+    NoticeVariantsStranded => "NOTICE_VARIANTS_STRANDED",
+
     LendFrameDiffers => "LEND_FRAME_DIFFERS",
     LendFpsDiffers => "LEND_FPS_DIFFERS",
     LendNativeHeightDiffers => "LEND_NATIVE_HEIGHT_DIFFERS",

@@ -214,6 +214,17 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         job.video_dir.trim_end_matches('/'),
         job.slug
     );
+    // **What this rebuild stops serving** (T468). Asked before the master is written, because
+    // after it the answer is already the new one. On 2026-08-29 a set on the production server
+    // was rebuilt without one of its rungs and that quality vanished for viewers; the shell
+    // script loses it by deleting the directory, and this loses it by no longer naming it —
+    // quieter, and so worse. The set is not widened to put it back: somebody who built 7/2/1
+    // may have meant to drop 4, and quietly restoring it would overrule that. What is owed is
+    // the fact, said out loud.
+    if let Some(said) = left_behind(job, &work).await {
+        notices.push(said);
+    }
+
     write_master(job.conn, &master_path, &hls_master::build(&variants)).await?;
     cutting.tidy_up().await?;
 
@@ -251,6 +262,32 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
 /// Takes its parts rather than the whole job so that it can be checked against a real
 /// server on its own: what is uncertain here is how the shell behaves when the file is not
 /// there, and that is not something to reason about.
+/// What is on the server, was being served, and this build is about to stop mentioning.
+///
+/// `None` when nothing is — which is the ordinary case, and a notice on every build would be
+/// one nobody reads. `None` too when the server will not say: being unable to look is not a
+/// reason to fail a build that has already done its work, and this is an aside to it.
+async fn left_behind(job: &BuildJob<'_>, work: &[VariantWork]) -> Option<Detail> {
+    let show = format!("{}/{}", job.video_dir.trim_end_matches('/'), job.slug);
+    let entries = match crate::server::listing::list(job.conn, &show).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not read what is already in the show's directory");
+            return None;
+        }
+    };
+    let on_server: Vec<(String, bool)> = entries.into_iter().map(|e| (e.name, e.is_dir)).collect();
+    let stranded = ladder_build::stranded(&on_server, work);
+    if stranded.is_empty() {
+        return None;
+    }
+    Some(
+        Detail::new(DetailCode::NoticeVariantsStranded)
+            .with("count", stranded.len() as u64)
+            .with("names", stranded.join(", ")),
+    )
+}
+
 /// Refuse a build the local disk cannot hold, before any of it is made (T452).
 ///
 /// **The same arithmetic as the server's**, through `free_space::check` — the margin, the

@@ -455,6 +455,8 @@ export const en: Catalogue = {
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
       "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
+    NOTICE_VARIANTS_STRANDED:
+      "{count} variant(s) are still on the server but outside this set ({names}). Their files and segments are intact, but the set no longer names them — viewers will not get those qualities, and the disk is still holding them. If that was not the intention, build the set with them; if it was, remove them from the server so they stop taking up room.",
     LEND_FRAME_DIFFERS:
       "A different frame size. A measurement is tied to heights, and the heights are tied to the source's frame.",
     LEND_FPS_DIFFERS:

@@ -3,7 +3,7 @@
 use vrcast_studio_lib::domain::convert_plan::VideoAction;
 use vrcast_studio_lib::domain::ladder::{Quality, Rung};
 use vrcast_studio_lib::domain::ladder_build::{
-    file_name, keyframes_line_up, shared_gop, sub_name, work_for,
+    file_name, keyframes_line_up, shared_gop, stranded, sub_name, work_for,
 };
 use vrcast_studio_lib::domain::source::{AudioTrack, SourceFile};
 use vrcast_studio_lib::domain::wording::DetailCode;
@@ -198,5 +198,101 @@ fn a_lower_rung_is_re_encoded_because_its_quality_really_does_change() {
     assert!(
         work[0].notices.is_empty(),
         "a rung re-encoded for its quality was blamed on the keyframes"
+    );
+}
+
+// ---------- a rung that stops being served (T467, T469) ----------
+//
+// From a real loss on the production server, 2026-08-29: a set was rebuilt without one of its
+// rungs and that quality vanished for viewers. The shell script loses it by deleting the
+// directory; this application loses it by no longer mentioning it in the master, which is
+// quieter and therefore worse — the file and the segments are still there, taking up the
+// disk, serving nobody, and nothing says so.
+
+fn on_server(names: &[(&str, bool)]) -> Vec<(String, bool)> {
+    names.iter().map(|(n, d)| ((*n).to_owned(), *d)).collect()
+}
+
+#[test]
+fn a_variant_left_out_of_the_rebuild_is_named() {
+    // Exactly what happened: 7/4/2/1 on the server, 7/2/1 rebuilt over it.
+    let src = source(3840, 2160, 24, 60_000_000, "h264");
+    let wanted = work_for(
+        "film",
+        &[
+            rung(0, 7_000_000, 2160),
+            rung(1, 2_000_000, 1080),
+            rung(2, 1_000_000, 720),
+        ],
+        &src,
+        0,
+        None,
+        4,
+    );
+    let there = on_server(&[
+        ("v7", true),
+        ("v4", true),
+        ("v2", true),
+        ("v1", true),
+        ("master.m3u8", false),
+    ]);
+    assert_eq!(
+        stranded(&there, &wanted),
+        vec![String::from("v4")],
+        "the rung that stops being served was not named"
+    );
+}
+
+#[test]
+fn a_rebuild_of_the_same_set_strands_nothing() {
+    // The negative control, and it earns its place: "name everything on the server" would
+    // pass the test above and turn every ordinary rebuild into a complaint about itself.
+    let src = source(3840, 2160, 24, 60_000_000, "h264");
+    let wanted = work_for(
+        "film",
+        &[rung(0, 7_000_000, 2160), rung(1, 2_000_000, 1080)],
+        &src,
+        0,
+        None,
+        4,
+    );
+    let there = on_server(&[("v7", true), ("v2", true), ("master.m3u8", false)]);
+    assert!(stranded(&there, &wanted).is_empty());
+}
+
+#[test]
+fn the_prepared_file_beside_a_variant_is_not_a_variant() {
+    // `film_4.mp4` is what a variant is made *from*; it is never served, and naming it would
+    // report a loss on every build that ever ran.
+    let src = source(3840, 2160, 24, 60_000_000, "h264");
+    let wanted = work_for("film", &[rung(0, 7_000_000, 2160)], &src, 0, None, 4);
+    let there = on_server(&[("v7", true), ("film_4.mp4", false), ("film_7.mp4", false)]);
+    assert!(stranded(&there, &wanted).is_empty());
+}
+
+#[test]
+fn somebody_elses_directory_is_not_ours_to_complain_about() {
+    // A show's directory may hold things this application did not put there. Only `v` and
+    // digits is a variant of ours.
+    let src = source(3840, 2160, 24, 60_000_000, "h264");
+    let wanted = work_for("film", &[rung(0, 7_000_000, 2160)], &src, 0, None, 4);
+    let there = on_server(&[
+        ("v7", true),
+        ("subtitles", true),
+        ("v", true),
+        ("vold", true),
+    ]);
+    assert!(stranded(&there, &wanted).is_empty());
+}
+
+#[test]
+fn several_stranded_variants_are_all_named_and_in_order() {
+    // A person who dropped three rungs needs all three, and in an order they can read.
+    let src = source(3840, 2160, 24, 60_000_000, "h264");
+    let wanted = work_for("film", &[rung(0, 7_000_000, 2160)], &src, 0, None, 4);
+    let there = on_server(&[("v7", true), ("v4", true), ("v2", true), ("v1", true)]);
+    assert_eq!(
+        stranded(&there, &wanted),
+        vec![String::from("v1"), String::from("v2"), String::from("v4")]
     );
 }

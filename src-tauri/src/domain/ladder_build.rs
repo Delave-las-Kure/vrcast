@@ -181,3 +181,39 @@ fn fallback_plan(source: &SourceFile, request: &ConvertRequest) -> ConvertPlan {
         faststart: true,
     }
 }
+
+/// The variants a rebuild is about to stop serving, out of what is on the server already.
+///
+/// **What this is for, and the day it was written.** On 2026-08-29 a set on the production
+/// server was rebuilt without one of its rungs, and that rung stopped being served. The shell
+/// script this application replaces loses it by deleting the directory outright; this
+/// application loses it more quietly, and the quiet way was found by looking for the loud one:
+/// the master is written from the rungs of *this* build, so a variant already on the server
+/// and not in the set simply stops being mentioned. Its file and its segments stay on the
+/// disk. Nobody is told, and a viewer on that quality finds it gone.
+///
+/// **The set is not widened behind the person's back.** Somebody who built 7/2/1 may have
+/// meant to drop 4. Quietly putting it back would overrule a decision, which is the same
+/// fault in the other direction. What is owed is the fact: this is still on the disk, and it
+/// is no longer served.
+///
+/// `on_server` is the show's own directory, `wanted` the variants this build is making.
+/// Only directories are considered — the prepared `.mp4` beside them is the source of a
+/// variant, not a variant, and it is never served directly.
+pub fn stranded(on_server: &[(String, bool)], wanted: &[VariantWork]) -> Vec<String> {
+    let mut out: Vec<String> = on_server
+        .iter()
+        .filter(|(_, is_dir)| *is_dir)
+        .map(|(name, _)| name.clone())
+        // A variant's directory is named `v` and its whole megabits, and nothing else in a
+        // show's directory is. Anything else there belongs to somebody else and is not ours
+        // to have an opinion about.
+        .filter(|name| {
+            name.strip_prefix('v')
+                .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+        })
+        .filter(|name| !wanted.iter().any(|w| &w.sub == name))
+        .collect();
+    out.sort();
+    out
+}
