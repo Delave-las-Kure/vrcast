@@ -13,5 +13,6 @@ pub mod local_disk;
 pub mod measure;
 pub mod probe;
 pub mod probe_complexity;
+pub mod split;
 pub mod validate;
 pub mod vmaf;

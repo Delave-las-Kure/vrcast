@@ -126,6 +126,15 @@ mod vmaf;
 #[path = "unit/batch.rs"]
 mod batch;
 
+#[path = "unit/scene_cut.rs"]
+mod scene_cut;
+
+#[path = "unit/split.rs"]
+mod split;
+
+#[path = "unit/split_roundtrip.rs"]
+mod split_roundtrip;
+
 #[path = "unit/work_dir.rs"]
 mod work_dir;
 

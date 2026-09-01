@@ -36,6 +36,7 @@ pub mod progress_estimate;
 pub mod pseudonym;
 pub mod rate_limit;
 pub mod remote_name;
+pub mod scene_cut;
 pub mod server_profile;
 pub mod server_state;
 pub mod slow_master;
