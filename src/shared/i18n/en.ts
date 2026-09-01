@@ -650,6 +650,8 @@ export const en: Catalogue = {
         measured_optimum:
           "The height {height} was chosen by the measurement, not by the formula: at {mbps} Mbit/s it scored the best VMAF of those tried.",
         borrowed_measurement: "The measurement behind this rung was taken on another file.",
+      filled_a_gap:
+        "This rung is here to break the fall: the step from the one above to the next one down was too big, and a player cannot make that jump. Its {mbps} Mbit/s is a real measured point, but it was picked for the ladder rather than for the picture.",
       },
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",

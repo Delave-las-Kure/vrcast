@@ -38,6 +38,19 @@ pub struct Chosen {
     pub bitrate_mbps: u64,
     pub height: u32,
     pub vmaf: f64,
+    /// Put in to close a gap the chosen rungs left, rather than chosen on its own merits
+    /// (T389).
+    ///
+    /// **Worth saying because it is a different kind of rung.** The others are where the
+    /// measurement said the quality was worth the bitrate; this one is where the step down to
+    /// the next was too big for a player to make, so the nearest measured point between them
+    /// was put in to break the fall. Its VMAF is real — it came off the same grid — but
+    /// nobody picked it for what it scores, and a person deciding which rungs to build should
+    /// know which of them is there for the ladder rather than for the picture.
+    ///
+    /// Defaulted so that a selection stored before this existed still reads.
+    #[serde(default)]
+    pub filled_a_gap: bool,
 }
 
 /// What the measurement decided, and what it decided against.
@@ -77,6 +90,9 @@ pub fn select(points: &[Point], target_vmaf: f64, vmaf_step: f64) -> Selection {
                     bitrate_mbps: p.bitrate_mbps,
                     height: p.height,
                     vmaf: p.vmaf,
+                    // Chosen on its own merits. The patching below marks the ones that are
+                    // not.
+                    filled_a_gap: false,
                 })
         })
         .collect();
@@ -160,7 +176,8 @@ pub fn select(points: &[Point], target_vmaf: f64, vmaf_step: f64) -> Selection {
                 })
                 .min_by_key(|c| c.bitrate_mbps)
                 .copied();
-            if let Some(patch) = patch {
+            if let Some(mut patch) = patch {
+                patch.filled_a_gap = true;
                 rungs.insert(i + 1, patch);
                 filled = true;
                 break;

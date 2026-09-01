@@ -587,6 +587,7 @@ fn a_rung(bitrate_mbps: u64, height: u32, vmaf: f64) -> Chosen {
         bitrate_mbps,
         height,
         vmaf,
+        filled_a_gap: false,
     }
 }
 
@@ -679,5 +680,94 @@ fn a_loan_with_nothing_the_borrower_can_hold_is_refused_rather_than_emptied() {
     assert!(
         plan.is_err() || plan.as_ref().is_ok_and(|p| !p.rungs.is_empty()),
         "a loan came back as an empty ladder"
+    );
+}
+
+#[test]
+fn a_rung_put_in_to_close_a_gap_says_so() {
+    // T389. A patched rung is a different kind of rung: the others are where the measurement
+    // said the quality was worth the bitrate, and this one is where the drop to the next was
+    // too steep for a player to make. Its score is real — it came off the same grid — but
+    // nobody picked it for what it scores, and somebody deciding which rungs to build should
+    // know which is there for the ladder rather than for the picture.
+    //
+    // **Driven over the sweep rather than over one hull**, because whether a given hull needs
+    // patching is the selection's business, and a hand-picked one that turns out not to need
+    // it makes a test that checks nothing. The first shape of this test did exactly that: it
+    // passed with the marking disabled.
+    let facts = source(1920, 1080, 24, None);
+    let mut ever_patched = false;
+
+    for anchor in 2u64..=40 {
+        for hardness in [20.0, 40.0, 60.0, 80.0, 100.0] {
+            let measured: Vec<Point> = grid_bitrates_mbps(anchor)
+                .into_iter()
+                .map(|b| point(b, 1080, curve(b, hardness)))
+                .collect();
+            let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
+            if chose.rungs.iter().any(|r| r.filled_a_gap) {
+                ever_patched = true;
+            }
+            let Ok(plan) = from_measurement(&chose.rungs, &facts, None, false) else {
+                continue;
+            };
+            for (rung, chosen) in plan.rungs.iter().zip(chose.rungs.iter()) {
+                assert_eq!(
+                    rung.reasons.contains(&Reason::FilledAGap),
+                    chosen.filled_a_gap,
+                    "the mark and the reason disagree on {} Mbit/s (anchor {anchor},                      hardness {hardness})",
+                    chosen.bitrate_mbps
+                );
+            }
+        }
+    }
+
+    assert!(
+        ever_patched,
+        "not one ladder in the whole sweep was patched, so this checked nothing at all —          either the filling stopped happening or the sweep stopped reaching it"
+    );
+}
+
+#[test]
+fn a_hole_the_grid_itself_left_is_still_shown() {
+    // FR-152, written into the spec today (T391). A residual hole is not a fault in the
+    // choosing: the grid's own multipliers leave a pair wider than twofold before any choosing
+    // happens — `grid_bitrates_mbps(8)` is 1, 3, 5, 8, 12, and three over one is threefold.
+    // Nothing can be put between them, because nothing between them was measured, and
+    // inventing a rung would mean claiming a quality nobody looked at.
+    //
+    // **So it has to be visible.** A viewer whose connection falls in that gap gets a rung
+    // markedly worse than the one they could hold, and saying nothing about it would leave
+    // that as a mystery. The objection is what says it, and this is the check that the
+    // objection survives — the patching must not swallow the one it cannot fix.
+    use vrcast_studio_lib::domain::ladder::Objection;
+
+    let facts = source(1920, 1080, 24, None);
+    let mut ever_objected = false;
+
+    for anchor in [8u64, 13, 19, 25, 36] {
+        for hardness in [20.0, 40.0, 60.0, 80.0, 100.0] {
+            let measured: Vec<Point> = grid_bitrates_mbps(anchor)
+                .into_iter()
+                .map(|b| point(b, 1080, curve(b, hardness)))
+                .collect();
+            let chose = select(&measured, TARGET_VMAF, VMAF_STEP);
+            let Ok(plan) = from_measurement(&chose.rungs, &facts, None, false) else {
+                continue;
+            };
+            if validate(&plan.rungs, &facts, facts.fps)
+                .iter()
+                .any(|o| matches!(o, Objection::BadStep { .. }))
+            {
+                ever_objected = true;
+            }
+        }
+    }
+
+    assert!(
+        ever_objected,
+        "not one of the anchors the grid cannot fix produced an objection, so either the \
+         grid stopped leaving holes — in which case FR-152 and R-32 are settled and this \
+         should say so — or the objection stopped being raised and the hole is now silent"
     );
 }

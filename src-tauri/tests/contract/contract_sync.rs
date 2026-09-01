@@ -1437,3 +1437,109 @@ fn nothing_is_excused_the_number_after_it_has_one() {
         "these carry a number now and no longer need excusing: {stale:?}"
     );
 }
+
+// ---------- the kinds of task the database will actually accept (T382) ----------
+
+/// Every value a `CHECK (kind IN (…))` allows, out of the migration that declares it last.
+///
+/// Read from the migrations rather than from a list here: the constraint is rebuilt whenever
+/// the table is, and the one that counts is the newest.
+fn kinds_the_database_allows() -> HashSet<String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("the migrations would not list")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "sql"))
+        .collect();
+    files.sort();
+
+    let mut latest: Option<String> = None;
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let Some(at) = text.find("CHECK (kind IN (") else {
+            continue;
+        };
+        let after = &text[at + "CHECK (kind IN (".len()..];
+        let Some(end) = after.find("))") else {
+            continue;
+        };
+        latest = Some(after[..end].to_owned());
+    }
+    let body = latest.expect("no migration declares which kinds of task are allowed");
+
+    body.split(',')
+        .map(|part| {
+            part.trim()
+                .trim_matches('\'')
+                .trim()
+                .trim_matches('\'')
+                .to_owned()
+        })
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+/// Every `TaskKind`, by the name it is stored under.
+fn kinds_the_core_has() -> HashSet<String> {
+    use vrcast_studio_lib::tasks::state::TaskKind;
+    TaskKind::ALL
+        .iter()
+        .map(|k| k.as_str().to_owned())
+        .collect()
+}
+
+#[test]
+fn every_kind_of_task_is_one_the_database_will_take() {
+    // **What goes wrong without this.** A kind added to the enum and not to the constraint
+    // does not fail to compile, does not fail a test that never submits one, and does not
+    // fail until somebody actually starts a task of it — at which point the insert is refused
+    // by the database and the task simply never appears. The person pressed a button and
+    // nothing happened.
+    //
+    // The other way round is smaller and still worth naming: a value the constraint allows
+    // and the core cannot produce is a kind that was removed and left behind, and the next
+    // person to read the constraint will believe it exists.
+    // Its own wording rather than `assert_same_sets`: that one names contract.ts, which is
+    // not where this drift is. A failure that points at the wrong file is one nobody can act
+    // on — the same fault as a check that is red for the wrong reason.
+    let core = kinds_the_core_has();
+    let allowed = kinds_the_database_allows();
+
+    let mut refused: Vec<&String> = core.difference(&allowed).collect();
+    let mut orphaned: Vec<&String> = allowed.difference(&core).collect();
+    refused.sort();
+    orphaned.sort();
+
+    assert!(
+        refused.is_empty(),
+        "these kinds of task would be refused by the database the moment one is started:          {refused:?}
+
+         `TaskKind` has them and the newest `CHECK (kind IN …)` does not. Nothing fails to          compile, nothing fails here, and nothing fails until somebody presses the button —          at which point the insert is refused and the task never appears."
+    );
+    assert!(
+        orphaned.is_empty(),
+        "the database allows these and the core cannot produce them: {orphaned:?}
+
+         A kind that was removed and left in the constraint reads as one that exists."
+    );
+}
+
+#[test]
+fn the_constraint_is_read_from_the_migration_rather_than_assumed() {
+    // The comparison above rests entirely on this parsing, and a parser that found nothing
+    // would make the test agree with an empty set — passing while checking nothing. It has
+    // happened in this file before, to the parser of the wordings.
+    let allowed = kinds_the_database_allows();
+    assert!(
+        allowed.len() >= 8,
+        "only {} kinds were parsed out of the migrations: {allowed:?}",
+        allowed.len()
+    );
+    assert!(
+        allowed.contains("measure_quality"),
+        "the newest constraint was not the one read: {allowed:?}"
+    );
+}

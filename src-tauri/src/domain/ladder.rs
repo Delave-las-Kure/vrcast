@@ -177,6 +177,8 @@ pub enum Reason {
     MeasuredOptimum,
     /// The measurement behind this rung was taken on another file (FR-146).
     BorrowedMeasurement,
+    /// Put in to break a fall the other rungs left too steep (T389).
+    FilledAGap,
 }
 
 /// What is known about how good this rung actually looks.
@@ -590,6 +592,12 @@ pub fn from_measurement(
             }
             if borrowed {
                 reasons.push(Reason::BorrowedMeasurement);
+            }
+            // Said before the others, because it is why this rung exists at all: the rest
+            // answer "what is this bitrate worth", and this one answers "what stops the drop
+            // from being too far".
+            if rung.filled_a_gap {
+                reasons.insert(0, Reason::FilledAGap);
             }
             build_rung(
                 index,

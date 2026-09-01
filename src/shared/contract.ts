@@ -884,7 +884,8 @@ export type RungReason =
   | "full_resolution"
   | "single_rung_only"
   | "measured_optimum"
-  | "borrowed_measurement";
+  | "borrowed_measurement"
+  | "filled_a_gap";
 
 export interface Rung {
   index: number;
@@ -1135,7 +1136,14 @@ export interface MeasurementView {
   };
   points: MeasuredPoint[];
   selection: {
-    rungs: { bitrate_mbps: number; height: number; vmaf: number }[];
+    rungs: {
+      bitrate_mbps: number;
+      height: number;
+      vmaf: number;
+      /** Put in to close a gap the chosen rungs left, rather than chosen on its own
+       *  merits (T389). */
+      filled_a_gap?: boolean;
+    }[];
     above_target: { bitrate_mbps: number; height: number; vmaf: number }[];
     hull: { bitrate_mbps: number; height: number; vmaf: number }[];
   } | null;
