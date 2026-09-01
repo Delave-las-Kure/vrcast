@@ -53,6 +53,7 @@ import {
   type MeasurePreview,
   type Leftovers,
   type MeasurementView,
+  type StoredMeasurement,
   type Rung,
   type SourceFacts,
   type SourceMeasured,
@@ -240,6 +241,24 @@ export const ipc = {
   /** Stop a whole batch, waiting tasks included (T445). Returns how many were stopped, so
    *  the screen can say what happened rather than assert that something did. */
   tasksCancelBatch: (batchId: string) => call<number>("tasks_cancel_batch", { batchId }),
+
+  /**
+   * Every measurement already taken, so one can be offered to a film that has none (T427).
+   *
+   * All three of these were registered in the core, written into the contract, and called
+   * from nowhere — found by the command comparison on 2026-08-28. The core could lend a
+   * measurement from the first episode of a season to the second, and there was no way to
+   * ask it to.
+   */
+  qualityMeasurements: () => call<StoredMeasurement[]>("quality_measurements", {}),
+
+  /** Take another film's measurement for this one. Marked as borrowed on every rung. */
+  qualityMeasureReuse: (fromKey: string, request: QualityMeasureRequest) =>
+    call<MeasurementView>("quality_measure_reuse", { fromKey, request }),
+
+  /** Throw a measurement away, so it can be taken again — the way out of a loan (T428). */
+  qualityMeasureForget: (sourceKey: string, codec: string) =>
+    call<void>("quality_measure_forget", { sourceKey, codec }),
 
   qualityMeasureResult: (sourceKey: string, codec: string) =>
     call<MeasurementView>("quality_measure_result", { sourceKey, codec }),

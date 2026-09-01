@@ -1024,6 +1024,8 @@ export interface LadderPreview {
   verdict: LadderVerdict;
   /** Which codec these rungs are for. A measurement does not carry between codecs. */
   codec: string;
+  /** Which file the measurement really came from, when it was not made here (T427). */
+  borrowed_from: string | null;
   /** Which measurement these rungs came out of, when they came out of one (T420). Null for
    *  a ladder from the formula: nothing was measured, and there is nothing to look into. */
   measurement_key: string | null;
@@ -1082,6 +1084,39 @@ export interface MeasuredPoint {
   height: number;
   actual_bps: number;
   vmaf: number;
+}
+
+/**
+ * A measurement already taken, as the list of possible donors shows it (T427).
+ *
+ * Mirrors `store::measurements::Run`. `borrowed_from` is an absolute local path and goes
+ * through redaction before it leaves the core; what a screen gets is already safe to draw.
+ */
+export interface StoredMeasurement {
+  source_key: string;
+  codec: string;
+  source_path: string;
+  width: number;
+  height: number;
+  fps: number;
+  source_bitrate_bps: number;
+  heavier_codec: boolean;
+  native_height: number | null;
+  anchor_mbps: number;
+  chunk_starts: number[];
+  chunk_s: number;
+  /** Which file the points really came from, when they were not made here. */
+  borrowed_from: string | null;
+  /** The donor's own anchor, kept beside this film's rather than in place of it (T429). */
+  donor_anchor_mbps: number | null;
+  /** What the material is — null on a row written before it was kept (T434). */
+  material: {
+    codec: string;
+    pix_fmt: string;
+    color_transfer: string | null;
+    duration_s: number;
+    peak_bps: number | null;
+  } | null;
 }
 
 export interface MeasurementView {

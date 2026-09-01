@@ -44,6 +44,12 @@ vi.mock("../../../shared/ipc", async () => {
     ipc: {
       ladderPlan: () => mockLadderPlan(),
       qualityMeasureResult: () => mockMeasureResult(),
+      // Borrow lives on this screen now (T427). A stub the screen calls and this object
+      // does not have throws inside an effect and takes the whole render with it — the
+      // third time this trap has caught me, and the reason T470 exists.
+      qualityMeasurements: () => Promise.resolve([]),
+      qualityMeasureReuse: vi.fn(),
+      qualityMeasureForget: vi.fn(),
       ladderMeasure: () => mockLadderMeasure(),
       ladderValidate: () => mockLadderValidate(),
       qualityMeasurePreview: () => mockMeasurePreview(),

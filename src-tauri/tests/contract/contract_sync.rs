@@ -752,20 +752,7 @@ fn called_commands() -> HashSet<String> {
 /// work with an owner; unnamed, they are a feature everyone believes exists. Nothing may be
 /// added here without a task number beside it, and `the_list_of_unwired_commands_does_not_rot`
 /// below makes the list shrink on its own.
-const NOT_WIRED_YET: [(&str, &str); 3] = [
-    (
-        "quality_measure_reuse",
-        "T431 — lending a measurement to the next episode (FR-146)",
-    ),
-    (
-        "quality_measurements",
-        "T431 — the list to choose a lender from",
-    ),
-    (
-        "quality_measure_forget",
-        "T433 — a way out of a borrowed measurement",
-    ),
-];
+const NOT_WIRED_YET: [(&str, &str); 0] = [];
 
 #[test]
 fn every_registered_command_is_reachable_from_the_interface() {

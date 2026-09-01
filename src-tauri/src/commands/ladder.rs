@@ -95,6 +95,11 @@ pub struct LadderPreview {
     /// Which codec these rungs are for. A measurement does not carry between codecs, and a
     /// screen looking one up has to ask for the same pair the plan was made from.
     pub codec: String,
+    /// Which file the measurement really came from, when it was not made here (T427).
+    ///
+    /// A local path, and it stays local: this goes to the screen on this machine. What
+    /// travels to a server passes through `redact` first (T433).
+    pub borrowed_from: Option<String>,
     /// Which measurement these rungs came out of, when they came out of one (T420).
     ///
     /// Without it a screen cannot ask `quality_measure_result` what was actually measured —
@@ -195,6 +200,7 @@ pub mod api {
             source,
             anchor_mbps: probe.measured_bps.map(|bps| (bps / 1_000_000).max(1)),
             codec: request.codec.clone(),
+            borrowed_from: None,
             // Nothing was measured, so there is nothing to look into.
             measurement_key: None,
             notices,
@@ -378,6 +384,7 @@ fn measured_plan(
         source: *source,
         anchor_mbps: None,
         codec: request.codec.clone(),
+        borrowed_from: run.borrowed_from.clone(),
         measurement_key: Some(key),
         notices,
     }))

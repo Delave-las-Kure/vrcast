@@ -19,6 +19,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useSearchParams } from "react-router-dom";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { Borrow } from "./Borrow";
 import { MeasuredPoints } from "./MeasuredPoints";
 import { slugOf } from "../shared/names";
 import { RungEditor } from "./RungEditor";
@@ -502,6 +503,20 @@ export function LadderScreen({
       >
         {building ? words.building : words.build}
       </button>
+      {/* Taking another film's measurement, and getting back out of it (T427, T428). Above
+          the evidence rather than below: somebody with no measurement at all is choosing
+          whether to spend half an hour, and that choice comes before the numbers do. */}
+      {preview && (
+        <Borrow
+          path={path}
+          borrowedFrom={preview.borrowed_from}
+          measuredHere={preview.from === "measured"}
+          sourceKey={preview.measurement_key}
+          codec={preview.codec}
+          onChanged={() => void loadPlan()}
+        />
+      )}
+
       {/* The evidence behind the rungs, folded away (T420, T421). Only where there is a
           measurement to look into: a ladder from the formula measured nothing. */}
       {preview?.measurement_key && (

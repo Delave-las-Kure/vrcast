@@ -592,6 +592,16 @@ export const en: Catalogue = {
       formulaExplain:
         "The formula knows nothing about the material: on animation it asks for three times what is needed, on dense action it understates. Until it has been measured, the set cannot be built.",
 
+      borrowTitle: "Another file's measurement",
+      borrowExplain:
+        "This file has no measurement. The next episode of a season is usually answered by the first one's: the same source, the same upscale, the same encoder settings. The core refuses by itself when the material is not the same, and says which part of it differs.",
+      borrowNothingToTake: "There are no measurements to take yet.",
+      borrowDonorFacts: "{width}×{height}, {fps} fps, anchor {anchor} Mbit/s",
+      borrowTake: "take this one",
+      borrowFromFilm: "Take the measurement of {film}",
+      borrowedFromFile: "The rungs stand on the measurement of {film}, not of this file.",
+      forgetBorrowed: "Forget the borrowed one and measure this file",
+      forgetMeasured: "Forget it and measure again",
       measureTitle: "Measuring quality",
       measureExplain:
         "The application encodes three short chunks — a light one, a middling one and a heavy one — at several qualities, and looks at what actually comes out.",
