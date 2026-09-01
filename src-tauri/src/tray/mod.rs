@@ -107,3 +107,90 @@ extern "C" {
     fn dlopen(filename: *const std::os::raw::c_char, flag: i32) -> *mut std::os::raw::c_void;
     fn dlclose(handle: *mut std::os::raw::c_void) -> i32;
 }
+
+// ---------- putting the icon there (T395) ----------
+
+/// The labels the tray menu shows, handed in by the interface.
+///
+/// **The tray is the one place in the core that puts words on a screen**, and it must not
+/// write any of its own (`the_tray_puts_no_words_of_its_own_on_the_screen`). A menu entry has
+/// to say something, and the nearest string is right there — which is exactly why the rule is
+/// checked rather than trusted. These arrive from `src/shared/i18n`, in whatever language the
+/// person chose, and change when they change it.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Labels {
+    pub show: String,
+    pub quit: String,
+}
+
+/// What the menu items are called internally. Not shown to anybody; matched on a click.
+pub const SHOW: &str = "show";
+pub const QUIT: &str = "quit";
+
+#[cfg(desktop)]
+mod desktop {
+    use super::{Labels, QUIT, SHOW};
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+    use tauri::{AppHandle, Manager, Runtime};
+
+    /// Build the icon, or replace the one already there.
+    ///
+    /// **A menu is not optional.** On Linux an AppIndicator with no menu may not be drawn at
+    /// all — the icon exists, nothing appears, and the window has been hidden behind it. The
+    /// menu is also the only way back on a desktop where clicking the icon does nothing:
+    /// `TrayIconEvent` is documented as unsupported there (R-35), so a click cannot be relied
+    /// on and "Show" has to be a menu entry.
+    ///
+    /// The icon is the window's own, from `default_window_icon`. Where there is none there is
+    /// nothing to show and this does nothing rather than putting up a blank square.
+    pub fn install<R: Runtime>(app: &AppHandle<R>, labels: &Labels) -> tauri::Result<()> {
+        let show = MenuItem::with_id(app, SHOW, &labels.show, true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, QUIT, &labels.quit, true, None::<&str>)?;
+        let menu = Menu::with_items(app, &[&show, &quit])?;
+
+        // Already there: only the words changed, and rebuilding the icon would make it
+        // flicker out of the panel and back in on every change of language.
+        if let Some(existing) = app.tray_by_id(super::ID) {
+            existing.set_menu(Some(menu))?;
+            return Ok(());
+        }
+
+        let Some(icon) = app.default_window_icon().cloned() else {
+            return Ok(());
+        };
+
+        TrayIconBuilder::with_id(super::ID)
+            .icon(icon)
+            .menu(&menu)
+            // The menu on a left click as well: on Windows the left button is what people
+            // try first, and a menu that only answers the right one reads as a dead icon.
+            .show_menu_on_left_click(true)
+            .on_menu_event(|app, event| match event.id.as_ref() {
+                SHOW => show_the_window(app),
+                QUIT => app.exit(0),
+                _ => {}
+            })
+            .build(app)?;
+        Ok(())
+    }
+
+    /// Bring the window back and put it in front.
+    ///
+    /// Unhiding is not enough on either platform: a window hidden while another application
+    /// was in front comes back behind it, and a person who pressed "Show" and saw nothing
+    /// presses it again.
+    pub fn show_the_window<R: Runtime>(app: &AppHandle<R>) {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
+}
+
+#[cfg(desktop)]
+pub use desktop::{install, show_the_window};
+
+/// The identifier the icon is found by when its labels change.
+pub const ID: &str = "vrcast-main";

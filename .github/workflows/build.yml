@@ -114,6 +114,14 @@ jobs:
           dpkg -s libappindicator3-dev >/dev/null 2>&1 \
             || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
             || missing="$missing libayatana-appindicator3-dev"
+          # **Библиотека времени выполнения, а не только сборочная** (T403). `-dev` даёт
+          # заголовки и линковку; значок в области уведомлений грузится на **запущенной**
+          # машине через `dlopen`, и там нужен `.so.1` из другого пакета. Проверялся только
+          # сборочный — то есть сборка шла зелёной, а трея у человека не было, и приложение
+          # об этом молчало: `dlopen` вернул бы NULL, а мы бы просто не показали значок.
+          dpkg -s libayatana-appindicator3-1 >/dev/null 2>&1 \
+            || dpkg -s libappindicator3-1 >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-1"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
@@ -263,6 +271,14 @@ jobs:
           dpkg -s libappindicator3-dev >/dev/null 2>&1 \
             || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
             || missing="$missing libayatana-appindicator3-dev"
+          # **Библиотека времени выполнения, а не только сборочная** (T403). `-dev` даёт
+          # заголовки и линковку; значок в области уведомлений грузится на **запущенной**
+          # машине через `dlopen`, и там нужен `.so.1` из другого пакета. Проверялся только
+          # сборочный — то есть сборка шла зелёной, а трея у человека не было, и приложение
+          # об этом молчало: `dlopen` вернул бы NULL, а мы бы просто не показали значок.
+          dpkg -s libayatana-appindicator3-1 >/dev/null 2>&1 \
+            || dpkg -s libappindicator3-1 >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-1"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
@@ -420,6 +436,14 @@ jobs:
           dpkg -s libappindicator3-dev >/dev/null 2>&1 \
             || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
             || missing="$missing libayatana-appindicator3-dev"
+          # **Библиотека времени выполнения, а не только сборочная** (T403). `-dev` даёт
+          # заголовки и линковку; значок в области уведомлений грузится на **запущенной**
+          # машине через `dlopen`, и там нужен `.so.1` из другого пакета. Проверялся только
+          # сборочный — то есть сборка шла зелёной, а трея у человека не было, и приложение
+          # об этом молчало: `dlopen` вернул бы NULL, а мы бы просто не показали значок.
+          dpkg -s libayatana-appindicator3-1 >/dev/null 2>&1 \
+            || dpkg -s libappindicator3-1 >/dev/null 2>&1 \
+            || missing="$missing libayatana-appindicator3-1"
           if [ -n "$missing" ]; then
             echo "На машине исполнителя не хватает:$missing" >&2
             echo "Поставить один раз:  sudo apt-get install -y$missing" >&2

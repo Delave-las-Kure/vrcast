@@ -54,6 +54,8 @@ import {
   type Leftovers,
   type MeasurementView,
   type StoredMeasurement,
+  type TrayLabels,
+  type TrayState,
   type Rung,
   type SourceFacts,
   type SourceMeasured,
@@ -96,6 +98,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 // ---------- commands ----------
 
 export const ipc = {
+  // --- the tray (T395) ---
+
+  /** Whether there is anywhere to minimise to. `unavailable` is an answer, not a failure. */
+  trayState: () => call<TrayState>("tray_state", {}),
+
+  /** Put the icon up, and say what its menu reads. Called again on a change of language. */
+  trayLabels: (labels: TrayLabels) => call<void>("tray_labels", { labels }),
+
   /** The versions side by side (FR-128). With no server: the application alone, and no connection. */
   appVersions: (serverId?: string) =>
     call<Versions>("app_versions", { serverId: serverId ?? null }),

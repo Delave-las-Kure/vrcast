@@ -49,6 +49,18 @@ function AppShell() {
       .catch(() => setVersion(null));
   }, []);
 
+  // The tray menu is worded here for the same reason as the notifications below (T395):
+  // the core writes no words of its own, and the tray is the one place in it that puts text
+  // on a screen. Handed over again on every change of language — a menu still reading
+  // Russian after somebody switched to English is a menu that ignored them.
+  useEffect(() => {
+    void ipc
+      .trayLabels({ show: t.ui.tray.show, quit: t.ui.tray.quit })
+      // No tray on this desktop is an ordinary state, not a fault: the core has already
+      // said so through `trayState`, and the close button behaves accordingly.
+      .catch(() => undefined);
+  }, [t]);
+
   // System notifications are worded here, not in the core: the core decides *whether*
   // to notify (only it knows the window is out of sight), the interface decides *what
   // it says*, in the language in use.

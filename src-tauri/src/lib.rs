@@ -78,6 +78,20 @@ pub fn run() {
         // A notification when a long task ends and the window is out of sight (FR-084).
         .plugin(tauri_plugin_notification::init())
         .manage(state)
+        // **The close button asks the tray whether there is anywhere to go** (T394, T400).
+        // Hiding a window on a desktop with no tray leaves the application running, holding
+        // encodes, with nothing on screen to say so and no way back — the worst outcome
+        // available. Where there is nowhere to minimise to, the button closes as it always
+        // did.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if crate::tray::close_action(crate::tray::probe()) == crate::tray::CloseAction::Hide
+                {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
             commands::events::bridge_task_events(app.handle().clone(), &engine);
             let state: tauri::State<'_, commands::AppState> = app.state();
@@ -112,6 +126,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::tray::ipc::tray_state,
+            commands::tray::ipc::tray_labels,
             commands::ipc::app_versions,
             commands::ipc::tasks_list,
             commands::ipc::task_get,

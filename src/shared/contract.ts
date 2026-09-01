@@ -1195,6 +1195,27 @@ export interface Leftovers {
   bytes: number;
 }
 
+/**
+ * Whether this machine can show a tray icon (T393, T395).
+ *
+ * `unavailable` is a real answer, not a failure: on a Linux session with no AppIndicator
+ * there is nowhere to minimise to, and hiding the window would leave the application running
+ * with nothing on screen to say so.
+ */
+export type TrayState = "installed" | "unavailable";
+
+/**
+ * What the tray menu says (T395).
+ *
+ * Handed over by the interface because the core writes no words of its own — the tray is the
+ * one place in it that puts text on a screen, and that is the one place the rule could be
+ * broken while looking reasonable.
+ */
+export interface TrayLabels {
+  show: string;
+  quit: string;
+}
+
 export interface Settings {
   viewer_activity_threshold_s: number;
   /**

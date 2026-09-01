@@ -795,6 +795,12 @@ export const en: Catalogue = {
       theme: "Theme",
       language: "Language",
 
+      closeTitle: "The close button",
+      closeHides:
+        "The window goes to the notification area and the work carries on: tasks keep running, and the icon shows the application is there. To leave altogether, use Quit on the menu of that icon.",
+      closeExits:
+        "The window closes and the application quits: there is nowhere to minimise to, because this desktop has no notification area. A hidden window would mean an application still running with nothing on screen to say so.",
+      closeUnknown: "Whether there is anywhere to minimise to could not be determined.",
       workDir: "Working files",
       workDirMeans:
         "While a variant is being made it sits on a disk whole — one and a half to two gigabytes at a time. Beside the source film by default: the disk a film is on certainly fits a film. Change it if you keep a separate disk for scratch work.",
@@ -992,6 +998,11 @@ export const en: Catalogue = {
       diagnostics: "Diagnostics",
       appearance: "Appearance",
       tasks: "Tasks",
+    },
+
+    tray: {
+      show: "Show the window",
+      quit: "Quit",
     },
 
     sidebar: {

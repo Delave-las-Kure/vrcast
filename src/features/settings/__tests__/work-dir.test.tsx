@@ -15,6 +15,8 @@ import type { Settings } from "../../../shared/contract";
 import { renderIn, ru } from "../../../test-utils";
 
 let stored: Settings;
+/** What the core answers about the tray. `null` stands for "would not say". */
+let trayState: "installed" | "unavailable" | null = "installed";
 const mockOpen = vi.fn<() => Promise<string | null>>();
 const mockLeftovers = vi.fn<() => Promise<{ files: number; bytes: number }>>();
 
@@ -34,6 +36,8 @@ vi.mock("../../../shared/ipc", async () => {
         return Promise.resolve(s);
       },
       workDirLeftovers: () => mockLeftovers(),
+      trayState: () =>
+        trayState === null ? Promise.reject(new Error("no answer")) : Promise.resolve(trayState),
       forgetEverything: vi.fn(),
     }),
   };
@@ -67,6 +71,7 @@ beforeEach(() => {
   // and red in CI on 2026-08-28.
   mockOpen.mockResolvedValue(null);
   mockLeftovers.mockResolvedValue({ files: 0, bytes: 0 });
+  trayState = "installed";
 });
 
 it("says the default is beside the source rather than naming a path", async () => {
@@ -123,4 +128,35 @@ it("says nothing where the old path is empty", async () => {
 
   await waitFor(() => expect(screen.getByTestId("work-dir")).toHaveTextContent("D:/elsewhere"));
   expect(screen.queryByTestId("work-dir-left")).toBeNull();
+});
+
+// ---------- what the close button will do (T395, T400) ----------
+
+it("says the window will be hidden where there is a tray", async () => {
+  // The button does two different things depending on the desktop, and the difference costs
+  // an afternoon of encoding in one direction or an application running unnoticed in the
+  // other. Said before it is pressed rather than discovered by pressing it.
+  const { CloseButton } = await import("../CloseButton");
+  trayState = "installed";
+  renderIn(<CloseButton />);
+  const said = await screen.findByTestId("close-behaviour");
+  expect(said.textContent).toBe(ru.ui.appearance.closeHides);
+});
+
+it("says the application will quit where there is not", async () => {
+  const { CloseButton } = await import("../CloseButton");
+  trayState = "unavailable";
+  renderIn(<CloseButton />);
+  const said = await screen.findByTestId("close-behaviour");
+  expect(said.textContent).toBe(ru.ui.appearance.closeExits);
+});
+
+it("says it does not know rather than guessing at one of the two", async () => {
+  // Not knowing is its own answer. Passing it off as either real one would be a promise
+  // about what the button does, made without asking.
+  const { CloseButton } = await import("../CloseButton");
+  trayState = null;
+  renderIn(<CloseButton />);
+  const said = await screen.findByTestId("close-behaviour");
+  expect(said.textContent).toBe(ru.ui.appearance.closeUnknown);
 });
