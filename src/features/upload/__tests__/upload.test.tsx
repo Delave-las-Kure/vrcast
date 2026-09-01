@@ -34,16 +34,19 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       serversList: () => mockServersList(),
       serverSetActive: vi.fn(),
       libraryList: () => mockLibraryList(),
       uploadStart: (request: unknown) => mockUploadStart(request),
       uploadResume: vi.fn(),
       tasksReorder: (ids: string[]) => mockTasksReorder(ids),
-    },
+    }),
   };
 });
 
@@ -115,18 +118,30 @@ describe("the upload screen", () => {
   it("takes the served name from the name of the file chosen", async () => {
     // It is what is wanted most of the time. Making a person retype it is extra work and
     // one more chance to mistype.
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     await chooseAFile();
     expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("фильм 22.mp4");
   });
 
   it("will not upload until a file has been chosen", async () => {
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     expect(await screen.findByText(ru.ui.upload.start)).toBeDisabled();
   });
 
   it("hands the core the path, the name and the speed limit", async () => {
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     await chooseAFile();
 
     fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldLimit), {
@@ -149,7 +164,11 @@ describe("the upload screen", () => {
   it("says the upload carries on after the application is closed", async () => {
     // FR-086. A person is not obliged to know that "in the background" here means
     // "outlives the closing": it has to be said plainly.
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -158,7 +177,11 @@ describe("the upload screen", () => {
 
   it("does not reach a server whose fingerprint was never confirmed", async () => {
     mockServersList.mockResolvedValue([profile({ host_fingerprint: null })]);
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     expect(
       await screen.findByText(fill(ru.ui.upload.notReady, { name: "Боевой" }, ru, "ru")),
     ).toBeInTheDocument();
@@ -194,7 +217,11 @@ describe("what is said before it starts", () => {
 
   it("a name already taken is a question, and agreeing settles it", async () => {
     mockUploadStart.mockRejectedValueOnce(nameTaken);
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -212,7 +239,11 @@ describe("what is said before it starts", () => {
     // This difference is the whole reason the component exists. An "upload anyway" button
     // here would be a deceit: the transfer runs into the end of the disk halfway.
     mockUploadStart.mockRejectedValue(noRoom);
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -234,7 +265,11 @@ describe("what is said before it starts", () => {
     // No task should have been made: learning about a taken name after an hour of
     // transferring is the same as not being warned at all.
     mockUploadStart.mockRejectedValue(nameTaken);
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
     await chooseAFile();
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
@@ -244,7 +279,12 @@ describe("what is said before it starts", () => {
 
   it("says there is not enough room in English when English is chosen", async () => {
     mockUploadStart.mockRejectedValue(noRoom);
-    renderIn(<MemoryRouter><UploadScreen /></MemoryRouter>, "en");
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+      "en",
+    );
     fireEvent.click(await screen.findByText(en.ui.upload.pickFile));
     await screen.findByDisplayValue("фильм 22.mp4");
     fireEvent.click(screen.getByText(en.ui.upload.start));

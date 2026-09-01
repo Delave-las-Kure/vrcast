@@ -20,9 +20,12 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       qualityMeasureStart: (request: QualityMeasureRequest) => {
         if (refuseFrom !== null && started.length >= refuseFrom) {
           return Promise.reject({ code: "INTERNAL", details: [] });
@@ -30,7 +33,7 @@ vi.mock("../../../shared/ipc", async () => {
         started.push(request);
         return Promise.resolve(`task-${started.length}`);
       },
-    },
+    }),
   };
 });
 

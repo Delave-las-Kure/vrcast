@@ -20,13 +20,16 @@ const mockRun = vi.fn<(...a: unknown[]) => Promise<string>>();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       dnsCheck: () => mockDnsCheck(),
       deployPlan: () => mockPlan(),
       deployRun: (...a: unknown[]) => mockRun(...a),
-    },
+    }),
     onDeployProgress: () => Promise.resolve(() => {}),
     onTaskDone: () => Promise.resolve(() => {}),
   };

@@ -147,7 +147,9 @@ export function TasksPanel() {
   // A paused task is counted as running rather than waiting: it is holding a place on the
   // machine and its half-made file, and calling it "waiting" would say the opposite of what
   // it is. Cancelled and finished ones are counted as neither.
-  const running = tasks.filter((task) => task.state === "running" || task.state === "paused").length;
+  const running = tasks.filter(
+    (task) => task.state === "running" || task.state === "paused",
+  ).length;
 
   /**
    * The batches with something still to stop.

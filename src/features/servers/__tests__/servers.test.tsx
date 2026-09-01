@@ -32,9 +32,12 @@ const mockImportSuggestion = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       serversList: () => mockServersList(),
       serverAdd: (...a: unknown[]) => mockServerAdd(...a),
       serverUpdate: vi.fn(),
@@ -47,7 +50,7 @@ vi.mock("../../../shared/ipc", async () => {
       // Since T294 the server card asks what kind of server this is. Here it does not answer
       // — and that state is a real one: a silent server must not bring the list down.
       serverDetect: () => mockServerDetect(),
-    },
+    }),
   };
 });
 

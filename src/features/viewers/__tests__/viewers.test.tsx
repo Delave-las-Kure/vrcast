@@ -37,9 +37,12 @@ const mockGeoUpdate = vi.fn<() => Promise<GeoStatus>>(() =>
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       serversList: () => mockServersList(),
       serverSetActive: vi.fn(),
       libraryList: () => mockLibraryList(),
@@ -48,7 +51,7 @@ vi.mock("../../../shared/ipc", async () => {
       viewersHistory: vi.fn(),
       geoStatus: () => mockGeoStatus(),
       geoUpdate: () => mockGeoUpdate(),
-    },
+    }),
     onLibraryChanged: vi.fn(async () => () => {}),
     onViewersUpdate: vi.fn(async (handler: (u: ViewersUpdateEvent) => void) => {
       send = handler;

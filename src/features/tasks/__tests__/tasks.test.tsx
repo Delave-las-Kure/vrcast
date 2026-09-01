@@ -31,9 +31,12 @@ let done: ((e: unknown) => void) | null = null;
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       tasksList: () => Promise.resolve(list),
       tasksOnClose: () => Promise.resolve([]),
       tasksReorder: vi.fn(),
@@ -41,7 +44,7 @@ vi.mock("../../../shared/ipc", async () => {
       taskResume: vi.fn(),
       taskCancel: vi.fn(),
       tasksCancelBatch: () => cancelBatch(),
-    },
+    }),
     // Only its own handler is dropped on cleanup: a component unmounting from an earlier
     // test would otherwise wipe out the subscription this one has just made.
     onTaskProgress: async (handler: (e: unknown) => void) => {

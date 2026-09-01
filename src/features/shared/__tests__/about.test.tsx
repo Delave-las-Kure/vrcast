@@ -15,15 +15,18 @@ const mockAppVersions = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       appVersions: () => mockAppVersions(),
       // The update section sits on this screen, next to the version it is about. It asks
       // nothing of the network here: a build with no update settings is the quiet case.
       updateStanding: () =>
         Promise.resolve({ current: "0.1.0", installed_as: "unpackaged", configured: false }),
-    },
+    }),
   };
 });
 

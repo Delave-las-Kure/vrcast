@@ -33,9 +33,12 @@ const mockMediaRename = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       serversList: () => mockServersList(),
       serverSetActive: vi.fn(),
       libraryList: (...a: unknown[]) => mockLibraryList(...(a as [])),
@@ -45,7 +48,7 @@ vi.mock("../../../shared/ipc", async () => {
       fileMove: (...a: unknown[]) => mockFileMove(...a),
       fileDelete: (...a: unknown[]) => mockFileDelete(...a),
       linksFor: vi.fn(),
-    },
+    }),
     onLibraryChanged: vi.fn(async () => () => {}),
     // The card counts its viewers off the same stream (T176). Without this the real
     // listener runs and reaches for the shell, which is not there in a test.

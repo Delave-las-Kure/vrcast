@@ -34,28 +34,29 @@ const mockBuild = vi.fn<(...a: unknown[]) => Promise<string>>();
  * `notices` is optional here and required in the contract: most of these tests are about
  * something else and say nothing about it, and the one that is about it says it. */
 let finish:
-  | ((e: { id: string; state: string; error: unknown; notices?: Detail[] }) => void)
-  | null = null;
+  ((e: { id: string; state: string; error: unknown; notices?: Detail[] }) => void) | null = null;
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Imported here rather than at the top: `vi.mock` is hoisted above every import in the
+  // file, so a name from one is not initialised yet when this runs.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    // **Built from the real `ipc` rather than listed by hand** (T470). This screen grew a
+    // call to `qualityMeasurements` when `Borrow` arrived, and a hand-written object that
+    // did not have it threw inside an effect and took twenty-four tests down with it. What
+    // is named below is what this file is about; everything else answers and gets out of
+    // the way.
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       ladderPlan: () => mockLadderPlan(),
       qualityMeasureResult: () => mockMeasureResult(),
-      // Borrow lives on this screen now (T427). A stub the screen calls and this object
-      // does not have throws inside an effect and takes the whole render with it — the
-      // third time this trap has caught me, and the reason T470 exists.
-      qualityMeasurements: () => Promise.resolve([]),
-      qualityMeasureReuse: vi.fn(),
-      qualityMeasureForget: vi.fn(),
       ladderMeasure: () => mockLadderMeasure(),
       ladderValidate: () => mockLadderValidate(),
       qualityMeasurePreview: () => mockMeasurePreview(),
       qualityMeasureStart: () => mockMeasureStart(),
       ladderBuild: (...a: unknown[]) => mockBuild(...a),
-    },
+    }),
     onTaskDone: async (handler: (e: unknown) => void) => {
       const mine = handler as typeof finish;
       finish = mine;
@@ -546,9 +547,7 @@ describe("what a measurement will cost", () => {
     renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
 
     await waitFor(() =>
-      expect(screen.getByTestId("estimate-from")).toHaveTextContent(
-        en.ui.ladder.estimateNotAsked,
-      ),
+      expect(screen.getByTestId("estimate-from")).toHaveTextContent(en.ui.ladder.estimateNotAsked),
     );
     expect(screen.getByTestId("estimate-from")).not.toHaveTextContent(
       en.ui.ladder.estimateFromModel,

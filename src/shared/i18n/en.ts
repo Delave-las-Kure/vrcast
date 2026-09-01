@@ -447,10 +447,12 @@ export const en: Catalogue = {
       "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
     LADDER_NOT_ENOUGH_SPACE:
       "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
-    OBJECTION_RUNG_ABOVE_SOURCE: "Rung {index}: above the source — those bits add nothing but weight",
+    OBJECTION_RUNG_ABOVE_SOURCE:
+      "Rung {index}: above the source — those bits add nothing but weight",
     OBJECTION_BUFSIZE_TOO_LARGE:
       "Rung {index}: the buffer is larger than the ceiling — real peaks will exceed it and a viewer will stall",
-    OBJECTION_LEVEL_EXCEEDED: "Rung {index}: the variant does not fit the level it declares, {level}",
+    OBJECTION_LEVEL_EXCEEDED:
+      "Rung {index}: the variant does not fit the level it declares, {level}",
     OBJECTION_OUT_OF_ORDER: "Rung {index}: the rungs are not in descending order",
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
@@ -581,8 +583,9 @@ export const en: Catalogue = {
         "A quality set is several versions of one film. A viewer's player takes whichever their connection can hold.",
       pickFile: "Choose a source",
       working: "Working out the rungs — looking at what this material is…",
-    noServer: "No server is chosen, so there is nowhere to build the set. Pick one under Servers.",
-    measuring: "Measuring the source…",
+      noServer:
+        "No server is chosen, so there is nowhere to build the set. Pick one under Servers.",
+      measuring: "Measuring the source…",
       sourceIs: "Source: {width}×{height}, {fps} frames a second, {bitrate}",
       peakIs: "Peak: {peak} — a viewer's connection has to hold this, not the average",
 
@@ -608,8 +611,10 @@ export const en: Catalogue = {
       measureTakes: "About {minutes} min: {points} points",
       measureTakesResume: "About {minutes} min: {points} points left of {total}",
       measureStandsOn: "What this estimate stands on",
-      measureChunks: "Measured on three pieces of the film, at minute {starts}. Not consecutive and not from the start: the opening is usually easier than what follows.",
-      measureAnchor: "The top of the grid is {mbps} Mbit/s: that is what the complexity probe asked for on this material.",
+      measureChunks:
+        "Measured on three pieces of the film, at minute {starts}. Not consecutive and not from the start: the opening is usually easier than what follows.",
+      measureAnchor:
+        "The top of the grid is {mbps} Mbit/s: that is what the complexity probe asked for on this material.",
       measureNothingLeft: "The whole grid is measured — there is nothing left to run.",
       estimateFromThisMachine:
         "Estimated from your own earlier measurements: {points} points at {seconds} s each — {times} times the modelled speed.",
@@ -650,8 +655,8 @@ export const en: Catalogue = {
         measured_optimum:
           "The height {height} was chosen by the measurement, not by the formula: at {mbps} Mbit/s it scored the best VMAF of those tried.",
         borrowed_measurement: "The measurement behind this rung was taken on another file.",
-      filled_a_gap:
-        "This rung is here to break the fall: the step from the one above to the next one down was too big, and a player cannot make that jump. Its {mbps} Mbit/s is a real measured point, but it was picked for the ladder rather than for the picture.",
+        filled_a_gap:
+          "This rung is here to break the fall: the step from the one above to the next one down was too big, and a player cannot make that jump. Its {mbps} Mbit/s is a real measured point, but it was picked for the ladder rather than for the picture.",
       },
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",
@@ -938,11 +943,13 @@ export const en: Catalogue = {
     },
 
     viewers: {
-    placesMissing: "The tables of places have not been downloaded, so no country or city is shown for a viewer.",
-    placesStale: "The tables of places are from {month}; a newer set is out, so places may be off.",
-    placesFetch: "Download",
-    placesFetching: "Downloading…",
-    placesFailed: "The download did not go through — try again later.",
+      placesMissing:
+        "The tables of places have not been downloaded, so no country or city is shown for a viewer.",
+      placesStale:
+        "The tables of places are from {month}; a newer set is out, so places may be off.",
+      placesFetch: "Download",
+      placesFetching: "Downloading…",
+      placesFailed: "The download did not go through — try again later.",
       explain:
         "Who is pulling from your server right now. The list keeps itself up to date while this screen is open.",
       noServer: "Choose a server first — there is nobody to watch yet.",
@@ -1020,7 +1027,7 @@ export const en: Catalogue = {
       authKey: "By key",
       authPassword: "By password",
       pickKey: "Browse\u2026",
-    fieldKeyPath: "Path to the private key",
+      fieldKeyPath: "Path to the private key",
       fieldPassphrase: "Key passphrase",
       fieldPassword: "Password",
       secretHint:
@@ -1124,7 +1131,8 @@ export const en: Catalogue = {
         "The usual way is to cut it into qualities: the viewer's player then takes whichever one their connection carries. Sending it as one file is simpler, but then every viewer gets the same weight.",
       nextLadder: "Cut into qualities",
       nextUpload: "Send as one file",
-      nextFailed: "The preparation failed, so there is nothing to go on with. The task says what happened.",
+      nextFailed:
+        "The preparation failed, so there is nothing to go on with. The task says what happened.",
     },
 
     library: {
@@ -1238,7 +1246,7 @@ export const en: Catalogue = {
       batchIs: "Batch: {films} video(s), {left} task(s) left.",
       batchStopped: "Stopped {n} task(s)",
       counts: "Running: {running}. Waiting: {queued}.",
-    heading: "Tasks",
+      heading: "Tasks",
       reading: "Reading the task list…",
       empty: "No tasks yet. They will appear when you start preparing or uploading video.",
       speed: "{mbit} Mbit/s",

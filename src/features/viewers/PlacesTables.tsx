@@ -64,7 +64,12 @@ export function PlacesTables() {
       {status.ready
         ? fill(words.placesStale, { month: status.month ?? "" }, t, lang)
         : words.placesMissing}{" "}
-      <button type="button" className="button-link" onClick={() => void fetchThem()} disabled={busy}>
+      <button
+        type="button"
+        className="button-link"
+        onClick={() => void fetchThem()}
+        disabled={busy}
+      >
         {busy ? words.placesFetching : words.placesFetch}
       </button>
       {error && <span className="form__hint">{words.placesFailed}</span>}

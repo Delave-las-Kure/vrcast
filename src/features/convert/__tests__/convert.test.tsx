@@ -35,14 +35,17 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       sourceProbe: () => mockSourceProbe(),
       convertPreview: () => mockConvertPreview(),
       convertStart: (request: ConvertStart) => mockConvertStart(request),
       convertValidate: vi.fn(),
-    },
+    }),
     onTaskDone: async (handler: (e: unknown) => void) => {
       const mine = handler as typeof finish;
       finish = mine;
@@ -129,7 +132,11 @@ async function pickSource() {
 describe("preparation screen", () => {
   it("shows what is actually in the file", async () => {
     // FR-020. Choosing a bitrate without knowing what the source is means guessing.
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
     // One line, matched whole: "hevc" also appears in the preview's explanation,
     // and matching it alone would find either and prove neither.
@@ -149,7 +156,11 @@ describe("preparation screen", () => {
   it("says plainly that re-encoding is about to happen, and why", async () => {
     // The whole reason this screen is not just a button: copying takes minutes,
     // re-encoding takes hours, and from the outside both look the same.
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
 
     expect(await screen.findByText(ru.ui.convert.lossy)).toBeInTheDocument();
@@ -170,7 +181,11 @@ describe("preparation screen", () => {
         plan: { ...preview().plan, video: { kind: "copy" }, audio: { kind: "copy" } },
       }),
     );
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
 
     expect(await screen.findByText(ru.ui.convert.lossless)).toBeInTheDocument();
@@ -185,7 +200,11 @@ describe("preparation screen", () => {
         encoder_notice: { key: "NOTICE_NO_HARDWARE_FOUND" },
       }),
     );
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
 
     expect(await screen.findByText(ru.details.NOTICE_NO_HARDWARE_FOUND)).toBeInTheDocument();
@@ -202,7 +221,11 @@ describe("preparation screen", () => {
         },
       }),
     );
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
 
     // Asked of the catalogue rather than copied out of it: what matters is that the
@@ -216,7 +239,12 @@ describe("preparation screen", () => {
   });
 
   it("explains the same preparation in English when English is chosen", async () => {
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>, "en");
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+      "en",
+    );
     fireEvent.click(await screen.findByText(en.ui.convert.pickFile));
     await screen.findByText(/1920×1080/);
 
@@ -251,7 +279,11 @@ describe("preparation screen", () => {
         ],
       }),
     );
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
 
     expect(screen.getByText(/Дорожка 1, стерео/)).toBeInTheDocument();
@@ -260,14 +292,22 @@ describe("preparation screen", () => {
 
   it("does not let a file without sound be prepared silently", async () => {
     mockSourceProbe.mockResolvedValue(source({ audio_tracks: [] }));
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
 
     expect(screen.getByText(ru.ui.convert.noTracks)).toBeInTheDocument();
   });
 
   it("cannot be started before a source is chosen", async () => {
-    renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     expect(await screen.findByText(ru.ui.convert.start)).toBeDisabled();
   });
 
@@ -336,7 +376,11 @@ describe("preparation screen", () => {
     // The field is gone (owner, 2026-08-28): asking for a number before anybody has looked
     // at the material is asking for a guess. What must not happen quietly is the screen
     // going on sending some number of its own.
-    const { container } = renderIn(<MemoryRouter><ConvertScreen /></MemoryRouter>);
+    const { container } = renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
     await pickSource();
 
     // The screen really did draw its form — otherwise the next assertion would pass

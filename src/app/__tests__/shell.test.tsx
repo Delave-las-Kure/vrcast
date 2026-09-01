@@ -39,9 +39,12 @@ const SETTINGS: Settings = {
 
 vi.mock("../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../shared/ipc")>("../../shared/ipc");
+  // Built from the real `ipc` rather than listed by hand (T470). Imported here
+  // because `vi.mock` is hoisted above every import in the file.
+  const { stubIpc } = await import("../../test-ipc");
   return {
     ...actual,
-    ipc: {
+    ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       appVersions: () => mockAppVersions(),
       tasksList: () => mockTasksList(),
       taskGet: vi.fn(),
@@ -59,7 +62,7 @@ vi.mock("../../shared/ipc", async () => {
       // does not happen.
       tasksOnClose: () => mockTasksOnClose(),
       serverProbeFingerprint: vi.fn(),
-    },
+    }),
     onTaskProgress: vi.fn(async () => () => {}),
     onTaskDone: vi.fn(async () => () => {}),
     onTaskNotify: vi.fn(async () => () => {}),
