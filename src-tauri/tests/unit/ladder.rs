@@ -14,7 +14,8 @@
 
 use vrcast_studio_lib::domain::convert_plan::{h264_level, level_exceeded, LevelLimit};
 use vrcast_studio_lib::domain::hls_master::{
-    average_bps, build, codecs_for, parse, peak_bps, MasterProblem, Segment, Variant,
+    average_bps, build, build_with_provenance, codecs_for, parse, peak_bps, MasterProblem,
+    Provenance, Segment, Variant,
 };
 use vrcast_studio_lib::domain::ladder::{
     density, plan, source_cap_mbps, validate, Layout, LayoutSource, Objection, Reason, Refusal,
@@ -672,4 +673,82 @@ fn the_step_check_still_catches_a_hole_and_a_duplicate() {
         !objects(&[(8_000_000, "4.1"), (5_000_000, "4.1")]),
         "8 over 5 was objected to"
     );
+}
+
+// ---------- where the rungs came from, in the description (T433) ----------
+
+fn one_variant() -> Vec<Variant> {
+    vec![Variant {
+        path: String::from("v7/stream.m3u8"),
+        bandwidth: 7_400_000,
+        average_bandwidth: 6_900_000,
+        width: 3840,
+        height: 2160,
+        fps: Some(24.0),
+        codecs: String::from("avc1.640033,mp4a.40.2"),
+    }]
+}
+
+#[test]
+fn the_description_says_whether_anybody_measured_this_film() {
+    // The numbers in a master say what each variant weighs and nothing about whether anybody
+    // ever looked at it. A ladder from the formula and one from a measurement make the same
+    // shape of file, and the difference between them is the whole of FR-141.
+    let v = one_variant();
+    let measured = build_with_provenance(&v, Provenance::Measured);
+    let borrowed = build_with_provenance(&v, Provenance::Borrowed);
+    let guessed = build_with_provenance(&v, Provenance::Formula);
+
+    assert_ne!(measured, borrowed);
+    assert_ne!(borrowed, guessed);
+    assert!(borrowed.contains("lent to this one"));
+    assert!(guessed.contains("not measured"));
+}
+
+#[test]
+fn the_description_never_carries_the_donors_path() {
+    // **Why this is a code and not a name.** `borrowed_from` is an absolute path on the
+    // person's own machine, and this file is served to every viewer who opens the link.
+    // Naming the donor would publish somebody's directory structure to strangers for the sake
+    // of a note — and the note is just as true without it. The file's name belongs on the
+    // screen at home, where `Borrow` shows it.
+    let text = build_with_provenance(&one_variant(), Provenance::Borrowed);
+    for leak in ["F:/", "C:/", "/home/", ".mkv", ".mp4"] {
+        assert!(
+            !text.contains(leak),
+            "the description carries something path-shaped ({leak}):\n{text}"
+        );
+    }
+}
+
+#[test]
+fn the_note_is_a_comment_every_player_must_ignore() {
+    // It costs a viewer nothing only if it is a comment. A line a player tried to read would
+    // be a broken playlist, and the whole point of putting it here is that it is free.
+    let text = build_with_provenance(&one_variant(), Provenance::Measured);
+    let note = text
+        .lines()
+        .find(|l| l.contains("ladder:"))
+        .expect("the note is not there");
+    assert!(note.starts_with('#'), "the note is not a comment: {note}");
+    assert!(
+        !note.starts_with("#EXT"),
+        "the note looks like a tag: {note}"
+    );
+
+    // And the description still reads back as itself.
+    let back = parse(&text).expect("the description with a note would not parse");
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].bandwidth, 7_400_000);
+}
+
+#[test]
+fn a_description_without_a_note_is_what_it_always_was() {
+    // `build` is still what everything that does not know about provenance calls, and it must
+    // keep producing exactly the file it did — the parser, the server and every reader of an
+    // older set depend on it.
+    let plain = build(&one_variant());
+    assert!(!plain.contains("ladder:"));
+    assert!(plain
+        .starts_with("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:"));
 }

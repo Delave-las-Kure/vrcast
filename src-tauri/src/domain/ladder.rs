@@ -548,6 +548,34 @@ pub fn from_measurement(
         });
     }
 
+    // **Brought inside what this film can hold** (T432). A measurement lent from a 60 Mbit/s
+    // master can top out at 22, and the film borrowing it may itself hold 15. Asking the
+    // encoder for 22 out of a 15 Mbit/s source spends an hour making a file no better than
+    // the source and larger than it.
+    //
+    // Until now this was caught only by the `RungAboveSource` objection — raised *after* the
+    // plan was built, which is the application complaining about a ladder it had just
+    // proposed. A rung that cannot be built should not be offered.
+    //
+    // The cap is `source_cap_mbps`, the same one the top of a formula ladder is held to, and
+    // for the same reason: it carries the allowance for a heavier codec, so a loan onto an
+    // HEVC source is not trimmed for being denser than H.264.
+    let cap = source_cap_mbps(source);
+    let kept: Vec<super::measured_ladder::Chosen> = chosen
+        .iter()
+        .filter(|rung| rung.bitrate_mbps <= cap)
+        .copied()
+        .collect();
+    // Nothing fits. An empty ladder is not a ladder, and handing one back as a success would
+    // send somebody to the build screen with nothing to build — so the loan is refused with
+    // the reason the source gives, the same one an unmeasurable source gets.
+    if kept.is_empty() {
+        return Err(Refusal::SourceBitrateTooLow {
+            bitrate_bps: source.bitrate_bps,
+        });
+    }
+    let chosen = &kept[..];
+
     let single = chosen.len() == 1;
     let rungs = chosen
         .iter()

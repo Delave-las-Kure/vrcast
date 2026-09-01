@@ -233,6 +233,30 @@ pub mod api {
         let profile = super::super::library::api::profile_of(state, &request.server_id)?;
         let source = super::super::api::source_probe(&request.path).await?;
         let (encoder, _) = pick_encoder(request.prefer_hardware).await?;
+        // Where these rungs came from, so the description can say it (T433). Asked of the
+        // same planner the screen asked, rather than guessed from the rungs: a rung carries
+        // `Quality::Borrowed`, but a set is measured, borrowed or guessed as a whole.
+        let provenance = match ladder_plan(
+            state,
+            &LadderRequest {
+                path: request.path.clone(),
+                codec: h264(),
+                native_height: None,
+                declared_layout: None,
+                prefer_hardware: request.prefer_hardware,
+            },
+        )
+        .await
+        {
+            Ok(plan) => match plan.from {
+                LadderSource::Measured => crate::domain::hls_master::Provenance::Measured,
+                LadderSource::Borrowed => crate::domain::hls_master::Provenance::Borrowed,
+                LadderSource::Formula => crate::domain::hls_master::Provenance::Formula,
+            },
+            // Not being able to ask does not stop a build that is otherwise ready. The
+            // honest answer then is the weakest one: nobody has shown these were measured.
+            Err(_) => crate::domain::hls_master::Provenance::Formula,
+        };
 
         let master_url = crate::domain::links::for_path(
             &profile.domain,
@@ -276,6 +300,7 @@ pub mod api {
                         encoder: &encoder,
                         audio_track: request.audio_track,
                         master_url: &master_url,
+                        provenance,
                         work_dir: &work_dir,
                     };
                     let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;

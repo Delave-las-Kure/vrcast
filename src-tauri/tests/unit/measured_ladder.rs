@@ -7,7 +7,7 @@
 use vrcast_studio_lib::domain::chunks::{reference_chunks, CHUNK_S};
 use vrcast_studio_lib::domain::ladder::plan;
 use vrcast_studio_lib::domain::ladder::{
-    buildable, from_measurement, validate, NotBuildable, Quality, Reason, SourceFacts,
+    buildable, from_measurement, validate, NotBuildable, Objection, Quality, Reason, SourceFacts,
 };
 use vrcast_studio_lib::domain::measure_grid::{
     grid, grid_bitrates_mbps, grid_heights, seconds_per_point, Cell,
@@ -575,5 +575,109 @@ fn a_ladder_with_no_hole_gains_nothing() {
     assert_eq!(
         chosen(&chose.rungs),
         vec![(15, 2160), (8, 1440), (4, 1080), (3, 1080)]
+    );
+}
+
+// ---------- a borrowed ladder brought inside the borrower's own source (T432) ----------
+
+/// One chosen rung, as the selection hands them over. (`chosen` above already names the
+/// other direction — a list of them, flattened for comparison.)
+fn a_rung(bitrate_mbps: u64, height: u32, vmaf: f64) -> Chosen {
+    Chosen {
+        bitrate_mbps,
+        height,
+        vmaf,
+    }
+}
+
+#[test]
+fn a_borrowed_rung_above_the_borrowers_own_source_is_not_offered() {
+    // **What goes wrong without this.** A measurement lent from a 60 Mbit/s master can top
+    // out at 22, and the film borrowing it may itself hold 15. Asking the encoder for 22 out
+    // of a 15 Mbit/s source spends an hour making a file no better than the source and larger
+    // than it — and the ladder's own top rung is then a rung nobody should build.
+    //
+    // Until now this was caught only by the `RungAboveSource` objection, raised **after** the
+    // plan was built: a complaint about a ladder the application had just proposed. The rung
+    // should not be proposed.
+    let chose = vec![
+        a_rung(22, 2160, 96.4),
+        a_rung(12, 1440, 92.0),
+        a_rung(6, 1080, 87.4),
+    ];
+    let mut lean = source(3840, 2160, 24, None);
+    lean.bitrate_bps = 15_000_000;
+
+    let plan = from_measurement(&chose, &lean, None, true).expect("refused");
+    assert!(
+        plan.rungs.iter().all(|r| r.bitrate_bps <= lean.bitrate_bps),
+        "a borrowed ladder proposed a rung above the borrower's own bitrate: {:?}",
+        plan.rungs.iter().map(|r| r.bitrate_bps).collect::<Vec<_>>()
+    );
+    // And the objection that used to be the only guard now has nothing to say.
+    assert!(
+        !validate(&plan.rungs, &lean, lean.fps)
+            .iter()
+            .any(|o| matches!(o, Objection::RungAboveSource { .. })),
+        "the plan still objects to itself"
+    );
+}
+
+#[test]
+fn trimming_keeps_what_fits_rather_than_refusing_the_lot() {
+    // The rungs under the source are perfectly good — they are what the borrower can hold —
+    // and throwing them away over the top one would turn a usable loan into no loan at all.
+    let chose = vec![
+        a_rung(22, 2160, 96.4),
+        a_rung(12, 1440, 92.0),
+        a_rung(6, 1080, 87.4),
+    ];
+    let mut lean = source(3840, 2160, 24, None);
+    lean.bitrate_bps = 15_000_000;
+
+    let plan = from_measurement(&chose, &lean, None, true).expect("refused");
+    assert_eq!(
+        plan.rungs
+            .iter()
+            .map(|r| r.bitrate_bps / 1_000_000)
+            .collect::<Vec<_>>(),
+        vec![12, 6],
+        "the rungs the borrower can hold were not kept"
+    );
+}
+
+#[test]
+fn a_ladder_that_already_fits_is_left_alone() {
+    // The negative control, and it earns its place: "drop the top rung" would satisfy both
+    // checks above and quietly cost every ordinary loan its best quality.
+    let chose = vec![
+        a_rung(22, 2160, 96.4),
+        a_rung(12, 1440, 92.0),
+        a_rung(6, 1080, 87.4),
+    ];
+    let roomy = source(3840, 2160, 24, None); // 60 Mbit/s
+    let plan = from_measurement(&chose, &roomy, None, true).expect("refused");
+    assert_eq!(
+        plan.rungs
+            .iter()
+            .map(|r| r.bitrate_bps / 1_000_000)
+            .collect::<Vec<_>>(),
+        vec![22, 12, 6]
+    );
+}
+
+#[test]
+fn a_loan_with_nothing_the_borrower_can_hold_is_refused_rather_than_emptied() {
+    // An empty ladder is not a ladder, and handing one back as a success would send somebody
+    // to the build screen with nothing to build. Refused, with the reason the source gives.
+    let chose = vec![a_rung(22, 2160, 96.4), a_rung(12, 1440, 92.0)];
+    let tiny = SourceFacts {
+        bitrate_bps: 3_000_000,
+        ..source(1920, 1080, 24, None)
+    };
+    let plan = from_measurement(&chose, &tiny, None, true);
+    assert!(
+        plan.is_err() || plan.as_ref().is_ok_and(|p| !p.rungs.is_empty()),
+        "a loan came back as an empty ladder"
     );
 }

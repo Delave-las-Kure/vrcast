@@ -143,8 +143,53 @@ pub fn init_name(playlist: &str) -> Option<String> {
 }
 
 /// Write the description of a quality set.
+/// Where a set's rungs came from, as the description records it (T433).
+///
+/// **A code, never the file name.** `borrowed_from` is an absolute path on the person's own
+/// machine, and this description is served to every viewer who opens the link — putting the
+/// path in it would publish somebody's directory structure to strangers for the sake of a
+/// note. The fact is what matters here; the file's name belongs on the screen at home, where
+/// `Borrow` already shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    /// Measured on this very material.
+    Measured,
+    /// Measured on another file and lent to this one.
+    Borrowed,
+    /// Out of the formula: nobody measured anything.
+    Formula,
+}
+
+impl Provenance {
+    fn as_note(self) -> &'static str {
+        match self {
+            Self::Measured => "measured on this material",
+            Self::Borrowed => "measured on another file and lent to this one",
+            Self::Formula => "from the formula, not measured",
+        }
+    }
+}
+
+/// The description, with a note on where its numbers came from.
+///
+/// The note is an `m3u8` comment, which every player is required to ignore — so it costs a
+/// viewer nothing and tells whoever opens the file by hand the one thing the numbers do not
+/// say: whether anybody actually looked at this film.
+pub fn build_with_provenance(variants: &[Variant], from: Provenance) -> String {
+    let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
+    out.push_str(&format!("# ladder: {}\n", from.as_note()));
+    out.push_str(&body(variants));
+    out
+}
+
 pub fn build(variants: &[Variant]) -> String {
     let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
+    out.push_str(&body(variants));
+    out
+}
+
+fn body(variants: &[Variant]) -> String {
+    let mut out = String::new();
     for v in variants {
         out.push_str("#EXT-X-STREAM-INF:");
         out.push_str(&format!("BANDWIDTH={}", v.bandwidth));

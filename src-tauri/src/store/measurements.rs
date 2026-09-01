@@ -48,6 +48,11 @@ pub struct Run {
     /// `None` when nothing was borrowed. The check after a loan (T437) needs both: two
     /// anchors far apart are the first sign that the material is far apart too.
     pub donor_anchor_mbps: Option<u64>,
+    /// What the film's weight-per-second looks like (T435).
+    ///
+    /// `None` on a row written before it was kept, and on one whose packets could not be
+    /// read. Not a shape of noughts: two unknowns must not compare equal.
+    pub shape: Option<crate::domain::chunks::Shape>,
 }
 
 /// What the material is, in the detail lending has to compare.
@@ -117,9 +122,10 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
                  source_bitrate_bps, heavier_codec, native_height,
                  anchor_mbps, chunk_starts, chunk_s, borrowed_from,
                  donor_anchor_mbps, source_codec, pix_fmt, color_transfer,
-                 duration_s, peak_bps, updated_at)
+                 duration_s, peak_bps, shape_median_bps, shape_p90_bps, shape_peak_bps,
+                 shape_peak_to_median_x100, shape_walls, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                     ?17, ?18, ?19, ?20)
+                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
              ON CONFLICT (source_key, codec) DO UPDATE SET
                 source_path = excluded.source_path,
                 width = excluded.width,
@@ -140,6 +146,17 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
                     COALESCE(excluded.color_transfer, quality_measurements.color_transfer),
                 duration_s = COALESCE(excluded.duration_s, quality_measurements.duration_s),
                 peak_bps = COALESCE(excluded.peak_bps, quality_measurements.peak_bps),
+                shape_median_bps =
+                    COALESCE(excluded.shape_median_bps, quality_measurements.shape_median_bps),
+                shape_p90_bps =
+                    COALESCE(excluded.shape_p90_bps, quality_measurements.shape_p90_bps),
+                shape_peak_bps =
+                    COALESCE(excluded.shape_peak_bps, quality_measurements.shape_peak_bps),
+                shape_peak_to_median_x100 = COALESCE(
+                    excluded.shape_peak_to_median_x100,
+                    quality_measurements.shape_peak_to_median_x100
+                ),
+                shape_walls = COALESCE(excluded.shape_walls, quality_measurements.shape_walls),
                 updated_at = excluded.updated_at",
             rusqlite::params![
                 run.source_key,
@@ -161,6 +178,11 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
                 run.material.as_ref().and_then(|m| m.color_transfer.clone()),
                 run.material.as_ref().map(|m| m.duration_s),
                 run.material.as_ref().and_then(|m| m.peak_bps).map(|v| v as i64),
+                run.shape.map(|s| s.median_bps as i64),
+                run.shape.map(|s| s.p90_bps as i64),
+                run.shape.map(|s| s.peak_bps as i64),
+                run.shape.map(|s| s.peak_to_median_x100 as i64),
+                run.shape.map(|s| s.walls as i64),
                 now_rfc3339(),
             ],
         )?;
@@ -323,7 +345,8 @@ pub fn run(db: &Db, source_key: &str, codec: &str) -> Result<Option<Run>, DbErro
                     source_bitrate_bps, heavier_codec, native_height,
                     anchor_mbps, chunk_starts, chunk_s, borrowed_from,
                     donor_anchor_mbps, source_codec, pix_fmt, color_transfer,
-                    duration_s, peak_bps
+                    duration_s, peak_bps, shape_median_bps, shape_p90_bps, shape_peak_bps,
+                    shape_peak_to_median_x100, shape_walls
              FROM quality_measurements WHERE source_key = ?1 AND codec = ?2",
             rusqlite::params![source_key, codec],
             row_to_run,
@@ -342,7 +365,8 @@ pub fn all(db: &Db) -> Result<Vec<Run>, DbError> {
                     source_bitrate_bps, heavier_codec, native_height,
                     anchor_mbps, chunk_starts, chunk_s, borrowed_from,
                     donor_anchor_mbps, source_codec, pix_fmt, color_transfer,
-                    duration_s, peak_bps
+                    duration_s, peak_bps, shape_median_bps, shape_p90_bps, shape_peak_bps,
+                    shape_peak_to_median_x100, shape_walls
              FROM quality_measurements ORDER BY updated_at DESC",
         )?;
         let rows = q
@@ -574,6 +598,26 @@ fn row_to_run(r: &rusqlite::Row) -> rusqlite::Result<Run> {
                 duration_s,
                 peak_bps: r.get::<_, Option<i64>>("peak_bps")?.map(|v| v as u64),
             }),
+            _ => None,
+        },
+        // All five or nothing, for the same reason as the material above: half a shape is
+        // worse than none, because a comparison would trust it.
+        shape: match (
+            r.get::<_, Option<i64>>("shape_median_bps")?,
+            r.get::<_, Option<i64>>("shape_p90_bps")?,
+            r.get::<_, Option<i64>>("shape_peak_bps")?,
+            r.get::<_, Option<i64>>("shape_peak_to_median_x100")?,
+            r.get::<_, Option<i64>>("shape_walls")?,
+        ) {
+            (Some(median), Some(p90), Some(peak), Some(ratio), Some(walls)) => {
+                Some(crate::domain::chunks::Shape {
+                    median_bps: median as u64,
+                    p90_bps: p90 as u64,
+                    peak_bps: peak as u64,
+                    peak_to_median_x100: ratio as u64,
+                    walls: walls as u64,
+                })
+            }
             _ => None,
         },
     })

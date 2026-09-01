@@ -475,6 +475,10 @@ async fn prepare(request: &MeasureRequest) -> Result<(Run, encoders::Encoder, Ve
             // erase a mark, and must not be made to.
             borrowed_from: None,
             donor_anchor_mbps: None,
+            // Worked out from the very packets the chunks were chosen by, and kept this time
+            // (T435). Reading them again would be a second pass over the whole film for
+            // numbers already in hand.
+            shape: crate::domain::chunks::shape_of(&seconds),
         },
         encoder,
         notices,

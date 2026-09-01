@@ -155,6 +155,7 @@ async fn measuring_quality_runs_whole_and_picks_up_where_it_stopped() {
         chunk_s: 5,
         borrowed_from: None,
         donor_anchor_mbps: None,
+        shape: vrcast_studio_lib::domain::chunks::shape_of(&seconds),
         material: Some(measurements::Material {
             codec: String::from("h264"),
             pix_fmt: String::from("yuv420p"),
@@ -345,6 +346,7 @@ async fn building_a_ladder_runs_from_the_refusal_to_the_verdict() {
                 encoder: &encoder,
                 audio_track: 0,
                 master_url: &job_url,
+                provenance: vrcast_studio_lib::domain::hls_master::Provenance::Measured,
                 work_dir: &work_dir,
             };
             let built = vrcast_studio_lib::tasks::ladder_build::run(&job, &ctx)
@@ -483,6 +485,7 @@ async fn a_set_that_will_not_fit_is_refused_against_a_real_disk() {
             encoder: &encoder,
             audio_track: 0,
             master_url: "http://example.invalid/master.m3u8",
+            provenance: vrcast_studio_lib::domain::hls_master::Provenance::Measured,
             work_dir: &work_dir,
         };
         let verdict = vrcast_studio_lib::tasks::ladder_build::room_for_the_set(&job, &work).await;
@@ -520,6 +523,7 @@ async fn a_set_that_will_not_fit_is_refused_against_a_real_disk() {
             encoder: &encoder,
             audio_track: 0,
             master_url: "http://example.invalid/master.m3u8",
+            provenance: vrcast_studio_lib::domain::hls_master::Provenance::Measured,
             work_dir: &work_dir,
         };
         match vrcast_studio_lib::tasks::ladder_build::room_for_the_set(&job, &work).await {
@@ -558,6 +562,7 @@ async fn a_set_that_will_not_fit_is_refused_against_a_real_disk() {
             encoder: &encoder,
             audio_track: 0,
             master_url: "http://example.invalid/master.m3u8",
+            provenance: vrcast_studio_lib::domain::hls_master::Provenance::Measured,
             work_dir: &work_dir,
         };
         let verdict = vrcast_studio_lib::tasks::ladder_build::room_for_the_set(&job, &work).await;

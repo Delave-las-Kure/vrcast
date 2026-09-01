@@ -93,6 +93,9 @@ pub struct BuildJob<'a> {
     pub audio_track: usize,
     /// Where a viewer would open the finished set.
     pub master_url: &'a str,
+    /// Where these rungs came from, for the description (T433). A code, never the donor's
+    /// path: this description is served to every viewer.
+    pub provenance: hls_master::Provenance,
     /// Somewhere local to put a variant while it is being prepared.
     pub work_dir: &'a Path,
 }
@@ -225,7 +228,12 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         notices.push(said);
     }
 
-    write_master(job.conn, &master_path, &hls_master::build(&variants)).await?;
+    write_master(
+        job.conn,
+        &master_path,
+        &hls_master::build_with_provenance(&variants, job.provenance),
+    )
+    .await?;
     cutting.tidy_up().await?;
 
     // And the only question that decides whether this was a success.
