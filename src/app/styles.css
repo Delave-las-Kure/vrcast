@@ -1,11 +1,11 @@
 /*
- * Оформление приложения.
+ * How the application looks.
  *
- * Цвета заданы переменными и переключаются одним атрибутом на корне документа: так тема
- * меняется мгновенно и целиком, без перерисовки дерева (FR-100).
+ * The colours are variables, switched by one attribute on the document root: the theme
+ * then changes at once and whole, without rebuilding the tree (FR-100).
  *
- * Переходы включены точечно — там, где меняется состояние, а не «на всё подряд»:
- * анимация ради анимации превращается в шум и мешает читать (FR-101).
+ * Transitions are turned on one at a time, where a state changes, rather than on
+ * everything: movement for its own sake is noise and gets in the way of reading (FR-101).
  */
 
 :root {
@@ -83,13 +83,13 @@ body {
     sans-serif;
   font-size: 14px;
   line-height: 1.55;
-  /* Смена темы не должна выглядеть рывком. */
+  /* Changing the theme should not look like a jolt. */
   transition:
     background-color var(--speed) var(--ease),
     color var(--speed) var(--ease);
 }
 
-/* Человек, попросивший систему меньше двигать картинку, получает своё. */
+/* Somebody who asked the system for less movement gets it. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -99,7 +99,7 @@ body {
   }
 }
 
-/* ---------- разметка ---------- */
+/* ---------- layout ---------- */
 
 .layout {
   display: grid;
@@ -112,7 +112,7 @@ body {
   padding: 28px 32px;
 }
 
-/* ---------- боковая полоса ---------- */
+/* ---------- the sidebar ---------- */
 
 .sidebar {
   display: flex;
@@ -205,7 +205,7 @@ body {
   font-size: 13px;
 }
 
-/* ---------- содержимое ---------- */
+/* ---------- the content ---------- */
 
 h1 {
   font-size: 22px;
@@ -220,7 +220,7 @@ h1 {
 
 .panel {
   max-width: 860px;
-  /* Появление раздела — короткое и однократное, без бесконечного движения. */
+  /* A section appears once and briefly, with nothing moving after that. */
   animation: appear var(--speed) var(--ease);
 }
 
@@ -235,7 +235,7 @@ h1 {
   }
 }
 
-/* ---------- задачи ---------- */
+/* ---------- tasks ---------- */
 
 .task-list {
   list-style: none;
@@ -315,11 +315,11 @@ h1 {
   height: 100%;
   background: var(--accent);
   border-radius: 999px;
-  /* Ширина сглаживается, иначе полоса дёргается при каждом событии. */
+  /* The width is eased, or the bar jerks on every event. */
   transition: width var(--speed) var(--ease);
 }
 
-/* ---------- кнопки ---------- */
+/* ---------- buttons ---------- */
 
 button {
   font: inherit;
@@ -352,7 +352,7 @@ button:focus-visible {
   background: var(--danger-bg);
 }
 
-/* ---------- сообщения ---------- */
+/* ---------- messages ---------- */
 
 .notice {
   display: flex;
@@ -397,7 +397,7 @@ button:focus-visible {
   color: var(--text-muted);
 }
 
-/* ---------- заголовок раздела с действиями ---------- */
+/* ---------- a section heading with actions in it ---------- */
 
 .panel__head {
   display: flex;
@@ -430,7 +430,7 @@ button:focus-visible {
   background: var(--bg-hover);
 }
 
-/* ---------- формы ---------- */
+/* ---------- forms ---------- */
 
 .form {
   display: flex;
@@ -504,7 +504,7 @@ button:focus-visible {
   margin-top: 4px;
 }
 
-/* ---------- мастер настройки ---------- */
+/* ---------- the setup wizard ---------- */
 
 .wizard__head {
   margin-bottom: 18px;
@@ -522,12 +522,12 @@ button:focus-visible {
   padding: 0;
   font-size: 13px;
   color: var(--text-muted);
-  counter-reset: шаг;
+  counter-reset: step;
 }
 
 .wizard__steps li::before {
-  counter-increment: шаг;
-  content: counter(шаг) ". ";
+  counter-increment: step;
+  content: counter(step) ". ";
 }
 
 .wizard__steps .is-current {
@@ -558,7 +558,7 @@ button:focus-visible {
   user-select: all;
 }
 
-/* ---------- шаги проверки ---------- */
+/* ---------- the steps of a check ---------- */
 
 .steps {
   list-style: none;
@@ -608,7 +608,7 @@ button:focus-visible {
   word-break: break-word;
 }
 
-/* ---------- серверы ---------- */
+/* ---------- servers ---------- */
 
 .server-list {
   list-style: none;
@@ -702,7 +702,7 @@ button:focus-visible {
   color: var(--danger);
 }
 
-/* ---------- библиотека ---------- */
+/* ---------- the library ---------- */
 
 .library__server {
   margin: 4px 0 14px;
@@ -867,7 +867,7 @@ button:focus-visible {
   padding-left: 12px;
 }
 
-/* ---------- диалоги ---------- */
+/* ---------- dialogues ---------- */
 
 .dialog {
   border: 1px solid var(--border);
@@ -898,17 +898,17 @@ button:focus-visible {
   border: 1px solid var(--warning);
 }
 
-/* Поле с пояснением: пояснение стоит рядом с меткой, а не внутри неё. */
+/* A field with a note: the note sits beside the label rather than inside it. */
 .field {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-/* ---------- заливка и очередь (Фаза 2) ---------- */
+/* ---------- uploading and the queue (phase 2) ---------- */
 
-/* Предупреждение — это вопрос, а не отказ, и выглядеть оно должно иначе:
-   человек различает их прежде, чем успевает дочитать. */
+/* A warning is a question rather than a refusal, and has to look like one:
+      a person tells them apart before they have finished reading. */
 .notice--warning {
   background: var(--bg-hover);
   border: 1px solid var(--warning);
@@ -931,8 +931,8 @@ button:focus-visible {
   font-size: 13px;
 }
 
-/* Потерянная работа выделяется, продолжающаяся — нет: тревожить надо только там,
-   где есть о чём. */
+/* Work that was lost stands out; work still running does not. Alarm belongs only where
+      there is something to be alarmed about. */
 .consequence--restarts {
   color: var(--warning);
 }
@@ -964,7 +964,7 @@ button:disabled {
   flex-wrap: wrap;
 }
 
-/* Путь к файлу бывает длинным, и переносить его посреди слова некуда. */
+/* A path can be long, and there is nowhere sensible to break one mid-word. */
 .form__value {
   font-size: 13px;
   color: var(--text-muted);
@@ -1020,11 +1020,11 @@ button:disabled {
   line-height: 1.4;
 }
 
-/* ---------- подготовка файлов (Фаза 3) ---------- */
+/* ---------- preparing files (phase 3) ---------- */
 
-/* Свёрнутые подробности: замечания, которые не влияют на дело, показываются,
-   но не занимают экран. Прятать их совсем нельзя — иначе потом не понять,
-   почему файл с предупреждениями приняли. */
+/* Folded-away detail: notes that change nothing are shown but take up no room. They
+      must not be hidden altogether — otherwise there is no telling afterwards why a file
+      with warnings on it was accepted. */
 .notice__details {
   margin-top: 8px;
   font-size: 13px;
@@ -1041,7 +1041,7 @@ button:disabled {
   word-break: break-all;
 }
 
-/* ---------- диагностика ---------- */
+/* ---------- diagnostics ---------- */
 
 .diag-controls {
   display: flex;
@@ -1058,8 +1058,8 @@ button:disabled {
 }
 
 /*
- * Цвет — не единственный признак. Оценка стоит рядом словом всегда, потому что
- * дальтоник и человек в ярком свете читают одно и то же и оба читают текст.
+ * Colour is never the only sign. The verdict is written beside it in words every time,
+ * because somebody colour-blind and somebody in bright sunlight both read the text.
  */
 .diag-rating-fine {
   color: var(--success);
@@ -1175,7 +1175,7 @@ button:disabled {
   word-break: break-all;
 }
 
-/* ---------- маскот и переходы ---------- */
+/* ---------- the mascot and its movement ---------- */
 
 .mascot-slot {
   display: flex;
@@ -1217,9 +1217,10 @@ button:disabled {
 }
 
 /*
- * Настроения. Отличаются не только цветом: цвет не читают дальтоники и не видно на ярком
- * свету, а форма глаз и рта видна всем. Подпись у svg есть всегда — тому, кто слушает
- * экран, картинка не говорит ничего.
+ * The moods. They differ by more than colour: colour is unreadable to somebody
+ * colour-blind and invisible in bright light, while the shape of the eyes and mouth is
+ * plain to everyone. The svg always carries a label: to somebody listening to the
+ * screen, a picture says nothing at all.
  */
 .mascot--working .mascot__spark {
   fill: var(--accent);
@@ -1230,7 +1231,7 @@ button:disabled {
 }
 
 .mascot--success .mascot__eye {
-  /* Щурится: глаз становится полоской. */
+  /* Squinting: the eye becomes a line. */
   transform: scaleY(0.35);
   transform-origin: center 33px;
 }
@@ -1248,15 +1249,15 @@ button:disabled {
 
 .mascot--trouble .mascot__mouth,
 .mascot--viewerTrouble .mascot__mouth {
-  /* Уголки вниз: та же дуга, отражённая. */
+  /* Corners down: the same arc, mirrored. */
   transform: scaleY(-1);
   transform-origin: center 45px;
 }
 
 /*
- * Движение — только там, где его не выключили. Проверяется и системная настройка, и наша:
- * системная перевешивает, потому что приложение не вправе включать обратно то, что человек
- * выключил во всей системе.
+ * Movement only where it has not been turned off. Both the system setting and ours are
+ * checked, and the system wins: an application has no business turning back on what
+ * somebody switched off across their whole machine.
  */
 @media (prefers-reduced-motion: no-preference) {
   [data-motion="on"] .content > * {
@@ -1288,7 +1289,7 @@ button:disabled {
   }
 }
 
-/* ---------- оформление ---------- */
+/* ---------- appearance ---------- */
 
 .appearance fieldset {
   border: 1px solid var(--border);
@@ -1314,7 +1315,7 @@ button:disabled {
   margin: 6px 0 0;
 }
 
-/* ---------- удаление данных ---------- */
+/* ---------- removing data ---------- */
 
 .forget {
   border-top: 1px solid var(--border);
@@ -1333,8 +1334,8 @@ button:disabled {
 }
 
 /*
- * Единственная потеря, которую нельзя отменить, — и выглядит она соответственно. Цвет тут
- * не единственный признак: рядом стоит текст, который её называет.
+ * The one loss that cannot be undone, and it looks like it. Colour is not the only sign
+ * here either: the text beside it says what it is.
  */
 .forget-danger {
   border-left: 3px solid var(--danger);

@@ -1,13 +1,13 @@
 /**
- * T327 — в каком настроении маскот, и почему именно в этом (FR-102).
+ * T327 — what mood the mascot is in, and why that one (FR-102).
  *
- * **Из тех же событий, что и экран задач.** Отдельный источник разошёлся бы с экраном, и
- * маскот радовался бы упавшей задаче — на экране красное, а он машет. Это не мелочь: он
- * заметнее любой строки, и человек читает сначала его.
+ * **From the same events as the task screen.** A source of its own would drift from the
+ * screen, and the mascot would be cheerful about a task that failed — red on the list and
+ * waving beside it. That is not a small thing: it catches the eye before any row does.
  *
- * Правила здесь и только здесь, без React: их надо проверять без экрана, а событие «задача
- * упала» приходит в тот же миг, что «задача закончилась», и порядок между ними решает, что
- * человек увидит.
+ * The rules live here and nowhere else, without React: they have to be checked without a
+ * screen, and "the task failed" arrives in the same instant as "the task ended" — the order
+ * between them decides what a person sees.
  */
 
 import type {
@@ -17,19 +17,19 @@ import type {
   ViewersUpdateEvent,
 } from "../../shared/contract";
 
-/** Настроение. */
+/** A mood. */
 export type Mood = "idle" | "working" | "success" | "trouble" | "viewerTrouble";
 
-/** Сколько держится настроение, наступившее от одного события, в миллисекундах. */
+/** How long a mood brought on by one event lasts, in milliseconds. */
 export const MOMENT_MS = 4000;
 
-/** Что маскот знает о происходящем. */
+/** What the mascot knows about what is going on. */
 export interface Mind {
-  /** Сколько задач идёт прямо сейчас. */
+  /** How many tasks are running right now. */
   running: Set<string>;
-  /** Настроение от последнего события и до какого момента оно держится. */
+  /** The mood the last event brought on, and the moment it lapses. */
   moment: { mood: Mood; until: number } | null;
-  /** Есть ли зритель, которому плохо. Держится, пока плохо, — это не миг, а состояние. */
+  /** Whether a viewer is having a bad time. It lasts while they are: a state, not an instant. */
   viewerInTrouble: boolean;
 }
 
@@ -38,12 +38,12 @@ export function emptyMind(): Mind {
 }
 
 /**
- * Что показывать сейчас.
+ * What to show now.
  *
- * **Порядок разбора — это и есть правило.** Беда важнее успеха, а успех важнее работы:
- * маскот, показывающий «работаю» поверх только что упавшей задачи, прячет единственное, ради
- * чего на него смотрят. `now` передаётся, а не берётся из часов, — иначе проверить это можно
- * было бы только ожиданием.
+ * **The order of the branches is the rule.** Trouble outranks success and success outranks
+ * work: a mascot showing "busy" over a task that has just failed hides the one thing
+ * anybody looks at it for. `now` is handed in rather than read off a clock, or checking this
+ * would mean waiting for it.
  */
 export function moodOf(mind: Mind, now: number): Mood {
   if (mind.moment && mind.moment.until > now) return mind.moment.mood;
@@ -52,7 +52,7 @@ export function moodOf(mind: Mind, now: number): Mood {
   return "idle";
 }
 
-/** Задача подвинулась. */
+/** A task moved. */
 export function onProgress(mind: Mind, e: TaskProgressEvent): Mind {
   const running = new Set(mind.running);
   if (e.state === "running") {
@@ -63,13 +63,13 @@ export function onProgress(mind: Mind, e: TaskProgressEvent): Mind {
   return { ...mind, running };
 }
 
-/** Задача закончилась — успехом, ошибкой или отменой. */
+/** A task ended — in success, in failure, or cancelled. */
 export function onDone(mind: Mind, e: TaskDoneEvent, now: number): Mind {
   const running = new Set(mind.running);
   running.delete(e.id);
 
-  // Отмена — не беда и не успех: человек сам её и отменил, и хвалить его за это нелепо,
-  // а тревожиться тем более.
+  // Cancelling is neither trouble nor success: the person did it themselves, and praising
+  // them for it would be odd, while worrying about it would be odder.
   if (e.state === "cancelled") return { ...mind, running };
 
   const failed = isFailure(e);
@@ -80,17 +80,17 @@ export function onDone(mind: Mind, e: TaskDoneEvent, now: number): Mind {
   };
 }
 
-/** Список зрителей обновился. */
+/** The list of viewers came round again. */
 export function onViewers(mind: Mind, e: ViewersUpdateEvent): Mind {
   return { ...mind, viewerInTrouble: e.active.some((v) => v.problems.length > 0) };
 }
 
-/** Что говорит вспомогательным средствам. Настроение без слов — это картинка без смысла. */
+/** What it tells assistive software. A mood with no words is a picture with no meaning. */
 export function moodLabel(mood: Mood, words: Record<string, string>): string {
   return words["mascot" + mood[0].toUpperCase() + mood.slice(1)] ?? "";
 }
 
-/** Была ли это ошибка. Отдельно, потому что `error` и `state` могут расходиться. */
+/** Whether this was a failure. Separate, because `error` and `state` can disagree. */
 export function isFailure(e: { state: string; error: AppError | null }): boolean {
   return e.state === "failed" || e.error !== null;
 }

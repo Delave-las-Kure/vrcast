@@ -20,7 +20,7 @@ export interface Wording {
 /**
  * Word forms for counting.
  *
- * Russian needs three (файл / файла / файлов) and English two. Both are declared so
+ * Russian needs three («файл» / «файла» / «файлов») and English two. Both are declared so
  * neither language has to pretend it works like the other.
  */
 export interface PluralForms {
@@ -55,11 +55,11 @@ export interface CatalogueCore {
 export type Widen<T> = {
   [K in keyof T]: T[K] extends string
     ? string
-    : // Функции проходят как есть. Почти всё в словаре — строка с подстановками, но
-      // несколько формулировок складываются из чисел прямо на месте («память 961 МБ,
-      // системный диск vda»), и заворачивать их в шаблон значило бы городить разбор ради
-      // двух предложений. Без этой ветви `Widen` съедал у функции её вызываемость, и
-      // словарь компилировался, а вызвать из него было нечего.
+    : // Functions pass through as they are. Nearly everything in a catalogue is a string with
+      // placeholders, but a few wordings are assembled from numbers on the spot ("memory 961 MB,
+      // system disk vda"), and wrapping those in a template would mean building a parser for the
+      // sake of two sentences. Without this branch `Widen` ate a function's callability, and the
+      // catalogue compiled while there was nothing in it that could be called.
       T[K] extends (...args: never[]) => unknown
       ? T[K]
       : Widen<T[K]>;

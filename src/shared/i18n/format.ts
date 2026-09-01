@@ -79,7 +79,7 @@ export function formatResolution(
 /**
  * Pick the word form for a count.
  *
- * Russian: 1 файл, 2 файла, 5 файлов — and eleven takes «файлов» despite ending in a
+ * Russian: «1 файл», «2 файла», «5 файлов» — and eleven takes «файлов» despite ending in a
  * one, which is why the last two digits are examined and not just the last. English
  * has two forms and reaches `many` for everything but one.
  */

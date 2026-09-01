@@ -96,57 +96,57 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 // ---------- commands ----------
 
 export const ipc = {
-  /** Версии рядом (FR-128). Без сервера — только про приложение, и без соединения. */
+  /** The versions side by side (FR-128). With no server: the application alone, and no connection. */
   appVersions: (serverId?: string) =>
     call<Versions>("app_versions", { serverId: serverId ?? null }),
 
-  // --- развёртывание ---
-  /** Что это за сервер (FR-120). Смотреть можно на любой, который отвечает. */
+  // --- deployment ---
+  /** What kind of server this is (FR-120). Any server that answers may be looked at. */
   serverDetect: (serverId: string) => call<ServerState>("server_detect", { serverId }),
   /**
-   * Ведёт ли домен сюда и сходится ли это с выбором про IPv6 (FR-137).
+   * Whether the domain points here, and whether that agrees with the choice about IPv6 (FR-137).
    *
-   * Отдельная команда, чтобы человек мог проверить только что заведённую запись, не
-   * начиная развёртывания: запись расходится по сети минутами, и ответ на «ещё нет» —
-   * спросить снова, а не начать.
+   * A command of its own so that a record just added can be checked without starting a
+   * deployment: a record takes minutes to spread, and the answer to "not yet" is to ask
+   * again rather than to begin.
    */
   dnsCheck: (serverId: string, ipv6: Ipv6Choice) =>
     call<DomainAnswer>("dns_check", { serverId, ipv6 }),
-  /** Что будет сделано, и ничего не делается (FR-122). */
+  /** What would be done, while nothing is done (FR-122). */
   deployPlan: (serverId: string, ipv6: Ipv6Choice) =>
     call<DeployPreview>("deploy_plan", { serverId, ipv6 }),
-  /** Развернуть. Без `confirmed` — отказ. Возвращает номер задачи (FR-080). */
+  /** Deploy. Refused without `confirmed`. Returns a task number (FR-080). */
   deployRun: (serverId: string, ipv6: Ipv6Choice, confirmed: boolean) =>
     call<string>("deploy_run", { serverId, ipv6, confirmed }),
   serverUpgradePlan: (serverId: string) => call<UpgradePlan>("server_upgrade_plan", { serverId }),
   serverUpgradeRun: (serverId: string, confirmed: boolean) =>
     call<string>("server_upgrade_run", { serverId, confirmed }),
-  /** Вернуть то, что заменило последнее обновление (FR-133). */
+  /** Put back what the last upgrade replaced (FR-133). */
   serverRollback: (serverId: string) => call<void>("server_rollback", { serverId }),
 
-  // --- диагностика ---
-  /** Как сервер себя чувствует (FR-070). */
+  // --- diagnostics ---
+  /** How the server is doing (FR-070). */
   diagHealth: (serverId: string) => call<Health>("diag_health", { serverId }),
-  /** Что раздача делала за промежуток (FR-071). */
+  /** What the serving did over a span of time (FR-071). */
   diagLogs: (serverId: string, minutes: number) => call<Logs>("diag_logs", { serverId, minutes }),
   /**
-   * Почему встаёт картинка (FR-072).
+   * Why the picture stalls (FR-072).
    *
-   * `file` — то, что нашёл `diagBitrate`, если его уже запускали. Без него вывод «виноват
-   * файл» не выдаётся вовсе, и это правильно: файл в методе разбирается последним.
+   * `file` is what `diagBitrate` found, when it has been run. Without it the conclusion "the
+   * file is at fault" is not reached at all, and rightly: the file comes last in the method.
    */
   diagExplainStalls: (
     serverId: string,
     minutes: number,
     file?: { average_mbit: number; peak_10s_mbit: number },
   ) => call<Stalls>("diag_explain_stalls", { serverId, minutes, file: file ?? null }),
-  /** Где пики у локального файла (FR-073). Сервер не трогается вовсе. */
+  /** Where a local file peaks (FR-073). The server is not touched at all. */
   diagBitrate: (path: string) => call<Peaks>("diag_bitrate", { path }),
 
-  // --- удаление (FR-114) ---
-  /** Что уйдёт, если убрать всё. Ничего не меняет. */
+  // --- removal (FR-114) ---
+  /** What would go if everything were removed. Changes nothing. */
   forgetPreview: () => call<WhatWouldGo>("forget_preview"),
-  /** Убрать. Без `confirmed` — отказ, до того как что-либо тронуто. */
+  /** Remove. Refused without `confirmed`, before anything is touched. */
   forgetEverything: (confirmed: boolean) => call<WhatWent>("forget_everything", { confirmed }),
 
   // --- updating the application (FR-113) ---
@@ -377,11 +377,11 @@ export function onViewersUpdate(
 }
 
 /**
- * Развёртывание подвинулось на шаг (FR-123).
+ * A deployment moved a step (FR-123).
  *
- * Приходит **весь** список, а не один подвинувшийся шаг: экран, собирающий список из
- * потока одиночных, покажет другое, если один пропустит, — а он пропустит, потому что
- * человек открывает экран посередине.
+ * The **whole** list arrives, not the one step that moved: a screen assembling a list out
+ * of a stream of single ones shows something different the moment it misses one — and it
+ * will miss one, because a person opens the screen in the middle of a deployment.
  */
 export function onDeployProgress(
   handler: (serverId: string, steps: PlannedStep[]) => void,

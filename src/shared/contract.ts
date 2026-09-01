@@ -232,7 +232,7 @@ export type DetailCode =
   | "UPLOAD_NAME_EMPTY"
   | "UPLOAD_ALREADY_RUNNING"
   | "UPLOAD_NAME_RESERVED"
-  // Что именно завести у регистратора, с каким значением и куда ведёт сейчас (FR-140).
+  // What to add at the registrar, with what value, and where it points now (FR-140).
   | "DOMAIN_ADD_RECORD"
   | "DOMAIN_FIX_RECORD"
   | "DOMAIN_REMOVE_RECORD"
@@ -259,7 +259,7 @@ export type DetailCode =
   | "NAME_WILL_BE_REPLACED"
   | "CDN_KEEPS_OLD_COPY"
   | "VIEWERS_ACTIVE_UPLOAD"
-  // Состояние сервера: каждая оценка приходит с числами, на которых держится (FR-070).
+  // How the server is: every verdict arrives with the figures it rests on (FR-070).
   | "HEALTH_NOT_ESTABLISHED"
   | "HEALTH_NOT_IN_CONTAINER"
   | "HEALTH_SERVING_RUNNING"
@@ -286,7 +286,7 @@ export type DetailCode =
   | "HEALTH_READAHEAD_SMALL"
   | "HEALTH_NO_AUTO_RESTART"
   | "HEALTH_AUTO_RESTART"
-  // Почему у зрителя встаёт картинка — причина и подтверждающие числа (FR-072).
+  // Why a viewer's picture stalls: the reason, and the figures behind it (FR-072).
   | "STALLS_TOO_SHORT"
   | "STALLS_KEEPING_UP"
   | "STALLS_SERVER_LINK"
@@ -500,29 +500,29 @@ export interface TaskOnClose {
 export interface Versions {
   app: string;
   /**
-   * Версия серверной части — того сервера, про который спросили.
+   * The server side's version, on the server that was asked about.
    *
-   * Пусто, если не спрашивали ни про какой или если сервер не ответил. Рядом с
-   * версией приложения она что-то значит, порознь — нет.
+   * Empty when no server was asked about, or when it would not say. Beside the
+   * application's own version it means something; apart from it, nothing.
    */
   server: number | null;
   schema: number;
 }
 
-// ---------- развёртывание (Фаза 7) ----------
+// ---------- deployment (phase 7) ----------
 
-/** Что за сервер по ту сторону (FR-120). */
+/** What kind of server is on the other end (FR-120). */
 export type ServerKind = "Clean" | "Managed" | "Unfinished" | "Foreign" | "Unreachable";
 
-/** Как версия серверной части соотносится с той, что нужна приложению. */
+/** How the server side's version stands against the one this application needs. */
 export type ServerCompat = "Ok" | "NeedsUpgrade" | "TooNew" | "NotDeployed" | "Unknown";
 
 /**
- * Состояние сервера. Не хранится — выясняется при подключении.
+ * How the server stands. Not stored: found out on connecting.
  *
- * `Unfinished` — развёртывание, не дошедшее до конца: наши следы есть, метки нет.
- * Экран говорит про него «настройка не закончена», а не «чужой сервер»: это наша
- * незаконченная работа, и её надо предложить довести.
+ * `Unfinished` is a deployment that did not run to the end: our traces are there and the
+ * mark is not. The screen calls that "setup unfinished" rather than "somebody else's
+ * server": it is our own unfinished work, and finishing it is what to offer.
  */
 export interface ServerState {
   kind: ServerKind;
@@ -534,15 +534,15 @@ export interface ServerState {
   foreign_reason: unknown | null;
 }
 
-/** Выбор пользователя про IPv6 (FR-135). Молчаливого умолчания здесь нет. */
+/** What the person decided about IPv6 (FR-135). There is no silent default here. */
 export type Ipv6Choice = "Keep" | "Disable";
 
 /**
- * Как стоит шаг развёртывания.
+ * How a step of a deployment stands.
  *
- * Названо `DeployStepStatus`, а не `StepStatus`: последнее уже занято проверкой соединения
- * с сервером, и это разные вещи — там «дошло / не дошло / не дошли», здесь «применено /
- * не применено / провалено / пропущено, и почему».
+ * Called `DeployStepStatus` rather than `StepStatus`: the latter is taken by the connection
+ * check, and they are different things — that one is "reached / did not reach", this one is
+ * "applied / not applied / failed / skipped, and why".
  */
 export type DeployStepStatus =
   | "NotApplied"
@@ -550,27 +550,27 @@ export type DeployStepStatus =
   | { Failed: { detail: string } }
   | { Skipped: { why: "NotNeeded" | { NotPossibleHere: { detail: string } } } };
 
-/** Один шаг, как его показывают человеку до согласия и по ходу (FR-122, FR-123). */
+/** One step, as it is shown before agreement and while it runs (FR-122, FR-123). */
 export interface PlannedStep {
   id: string;
-  /** Что именно изменит — кодами со значениями, а не готовой фразой. */
+  /** What it will change: codes with values, never a made-up sentence. */
   changes: unknown[];
-  /** Проваленный блокирующий останавливает развёртывание. */
+  /** A blocking step that failed stops the deployment. */
   blocking: boolean;
   status: DeployStepStatus;
 }
 
-/** Что ответила проверка домена (FR-137, FR-140). */
+/** What the domain check answered (FR-137, FR-140). */
 export interface DomainAnswer {
   verdict: unknown;
-  /** Найденные адреса — то, что человек сверяет со страницей регистратора. */
+  /** The addresses found: what a person checks against the registrar's page. */
   a: string[];
   aaaa: string[];
-  /** Что пойти и сделать. Код со значениями; формулировка — в словарях. */
+  /** What to go and do. A code with values; the wording lives in the catalogues. */
   advice: Detail | null;
 }
 
-/** Что сделает развёртывание, до того как что-либо сделано (FR-122). */
+/** What the deployment will do, before anything is done (FR-122). */
 export interface DeployPreview {
   domain: DomainAnswer;
   steps: PlannedStep[];
@@ -578,12 +578,12 @@ export interface DeployPreview {
   disk: string;
 }
 
-// --- диагностика (FR-070 – FR-073) ---
+// --- diagnostics (FR-070 to FR-073) ---
 
-/** Оценка одного показателя. «Не удалось выяснить» — отдельный ответ, не «норма». */
+/** The verdict on one reading. "Could not be determined" is its own answer, not "fine". */
 export type Rating = "fine" | "watch" | "trouble" | "unknown";
 
-/** О чём показатель. Код: называет его интерфейс, на своём языке и в своём порядке. */
+/** What the reading is about. A code: the interface names it, in its own language. */
 export type Reading =
   | "serving"
   | "delivery"
@@ -600,11 +600,11 @@ export type Reading =
 export interface Rated {
   about: Reading;
   rating: Rating;
-  /** Что сказать — с числами, на которых держится. Готовых фраз ядро не шлёт. */
+  /** What to say, with the figures it rests on. The core sends no ready-made sentences. */
   say: Detail;
 }
 
-/** Сырые показания. Показываются рядом с оценками: оценку должно быть чем оспорить. */
+/** The raw readings, shown beside the verdicts: a verdict needs something to argue with. */
 export interface HealthSnapshot {
   services: { name: string; state: string }[];
   firewall_status: string | null;
@@ -646,7 +646,7 @@ export interface LongRequest {
   seconds: number;
   bytes: number;
   mbit_s: number;
-  /** Долгий запрос сам по себе — норма. Здесь стоит `true` только вместе с низкой скоростью. */
+  /** A long request is ordinary by itself. This is `true` only alongside a low rate. */
   slow: boolean;
 }
 
@@ -667,17 +667,17 @@ export interface LogsDigest {
 
 export interface Logs {
   digest: LogsDigest;
-  /** Упор в потолок строк. Сообщается вслух — иначе сводка тихо отвечает не на тот вопрос. */
+  /** The line limit was reached. Said out loud, or the summary quietly answers another question. */
   reached_the_cap: boolean;
   oldest: string | null;
 }
 
-/** Что делал сам сервер, пока зритель висел. */
+/** What the server itself was doing while the viewer was stuck. */
 export interface ServerLoad {
   cpu_busy: number;
   disk_read_mb_s: number;
   out_mbit_s: number;
-  /** Ноль означает «не выяснено», и тогда канал сервера в виновные не попадает. */
+  /** Nought means "not determined", and the server's own link is then not among the suspects. */
   capacity_mbit_s: number;
   cache_small: boolean;
 }
@@ -690,11 +690,11 @@ export interface Watcher {
   first: string;
   last: string;
   elapsed_s: number;
-  /** Полученного против реального времени. Меньше 1.0 — не вытягивает. */
+  /** What arrived against real time. Under 1.0 means it is not keeping up. */
   content_ratio: number | null;
-  /** Его канал: по стенным часам, с паузами. */
+  /** Their link, by the wall clock, pauses included. */
   mbit_s: number | null;
-  /** Внутри закачек. Выше, и это НЕ его канал — показывается рядом ради самой разницы. */
+  /** Within the fetches. Higher, and NOT their link — shown beside it for the difference. */
   in_download_mbit_s: number | null;
   skipped: number[];
   restarts: number;
@@ -707,7 +707,7 @@ export type StallCause =
 
 export interface StallVerdict {
   cause: StallCause;
-  /** Подтверждающие числа. Вывод бывает неверен, и без них его нечем оспорить (FR-072). */
+  /** The figures behind it. A conclusion can be wrong, and without them there is nothing to argue with (FR-072). */
   say: Detail;
 }
 
@@ -723,40 +723,40 @@ export interface Stalls {
   load: ServerLoad;
 }
 
-/** Окно фильма и где оно. */
+/** A window of the film, and where it falls. */
 export interface BitrateWindow {
   at_s: number;
   length_s: number;
   bitrate_bps: number;
 }
 
-/** Как файл выглядит с точки зрения канала зрителя (FR-073). */
+/** What the file looks like from the viewer's link (FR-073). */
 export interface Peaks {
   average_bps: number;
   median_bps: number;
   one_second: BitrateWindow | null;
-  /** Пик 10-секундного окна — то самое, с чем сравнивают канал зрителя. */
+  /** The peak over a ten-second window: what a viewer's link is compared against. */
   wide: BitrateWindow | null;
   worst_wide: BitrateWindow[];
   seconds: number;
 }
 
-// --- удаление всего, что приложение о человеке держит (FR-114) ---
+// --- removing everything this application holds about a person (FR-114) ---
 
-/** Что уйдёт, названное поимённо. Список, а не обещание. */
+/** What will go, named one by one. A list, not a promise. */
 export interface WhatWouldGo {
   data_dir: string | null;
   bytes: number;
   servers: string[];
   secrets: number;
-  /** Сервера, которые станут недоступны навсегда: ключ к ним есть только здесь. */
+  /** Servers that become unreachable for good: the key to them exists only here. */
   locked_out: string[];
 }
 
 export interface WhatWent {
   data_dir_removed: boolean;
   secrets_removed: number;
-  /** Секреты, которых хранилище не отдало. Названы, а не проглочены. */
+  /** Secrets the store would not hand over. Named, rather than swallowed. */
   secrets_left: string[];
 }
 
@@ -785,12 +785,12 @@ export interface UpdateStanding {
   configured: boolean;
 }
 
-/** Что изменит обновление серверной части (FR-129). */
+/** What upgrading the server side will change (FR-129). */
 export interface UpgradePlan {
   from: number;
   to: number;
   steps: PlannedStep[];
-  /** Что будет скопировано в сторону до первой правки (FR-133). */
+  /** What will be copied aside before the first change (FR-133). */
   backing_up: string[];
 }
 
