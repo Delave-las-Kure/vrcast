@@ -305,6 +305,7 @@ detail_codes! {
     // that a person is not left comparing two files by eye against a list of eight things
     // this application looked at.
     NoticeVariantsStranded => "NOTICE_VARIANTS_STRANDED",
+    NoticeMaterialApart => "NOTICE_MATERIAL_APART",
 
     LendFrameDiffers => "LEND_FRAME_DIFFERS",
     LendFpsDiffers => "LEND_FPS_DIFFERS",

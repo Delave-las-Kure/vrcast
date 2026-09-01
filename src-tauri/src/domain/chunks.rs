@@ -140,3 +140,52 @@ pub fn shape_of(seconds: &[u64]) -> Option<Shape> {
             .count() as u64,
     })
 }
+
+/// How far apart two films are by the shape of their weight, in hundredths.
+///
+/// **Why this exists, and what it deliberately does not do.** R-46 measured four episodes of
+/// one season: identical frame, frame rate, codec and source bitrate, and one of the four
+/// scored fourteen VMAF below its neighbours — three times the measurement's own noise
+/// (R-45). Every field lending compares was equal on all four. So container equality is not
+/// material equality, and that is measured rather than suspected.
+///
+/// The shape is the one thing recorded that describes the picture rather than the container
+/// (T435), and it is the natural place to look. **But nobody has measured what a shape
+/// difference means yet** — R-45 and R-46 measured VMAF, not this — so this returns the
+/// distance and refuses anything. Judging it would mean inventing a threshold, and an
+/// invented threshold in a check is worse than no check: it looks like knowledge.
+///
+/// What it is for is the person. Shown the numbers beside a loan, somebody who knows their
+/// material can see that two films are not alike; shown nothing, they cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShapeGap {
+    /// How far the middle second differs, in hundredths of the lighter one.
+    pub median_x100: u64,
+    /// The same for the ninth decile.
+    pub p90_x100: u64,
+    /// And for the peak against the middle — the number that says what kind of film it is.
+    pub ratio_x100: u64,
+}
+
+/// The distance between two shapes, or `None` where either is not known.
+///
+/// `None` rather than nought: two films nobody has a shape for are not thereby alike, and a
+/// nought would say they were.
+pub fn shape_gap(a: Option<Shape>, b: Option<Shape>) -> Option<ShapeGap> {
+    let (a, b) = (a?, b?);
+    Some(ShapeGap {
+        median_x100: apart(a.median_bps, b.median_bps),
+        p90_x100: apart(a.p90_bps, b.p90_bps),
+        ratio_x100: apart(a.peak_to_median_x100, b.peak_to_median_x100),
+    })
+}
+
+/// How far two numbers are apart, as hundredths of the smaller.
+///
+/// Of the smaller rather than of either one in particular, so that the answer does not depend
+/// on which film is called the donor.
+fn apart(a: u64, b: u64) -> u64 {
+    let (low, high) = if a <= b { (a, b) } else { (b, a) };
+    let difference = high - low;
+    difference.saturating_mul(100).checked_div(low).unwrap_or(0)
+}

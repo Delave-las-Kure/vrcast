@@ -391,7 +391,32 @@ pub mod api {
         let (run, _, _) = prepare(&request).await?;
         match measurements::lend(&state.db, from_key, &run.codec, &run) {
             Ok(borrowed) => {
-                quality_measure_result(state, &borrowed.source_key, &borrowed.codec).await
+                // **How far apart the two films actually are** (R-46). Every field lending
+                // compares was equal on four episodes of one season, and one of the four
+                // scored fourteen VMAF below its neighbours — three times the measurement's
+                // own noise. Container equality is not material equality, and that is
+                // measured rather than suspected.
+                //
+                // Said rather than judged: nobody has measured what a difference in shape
+                // means, so a threshold here would be invented, and an invented threshold in
+                // a check is worse than no check because it looks like knowledge. The person
+                // knows their own material; this gives them the numbers to use.
+                let donor = measurements::run(&state.db, from_key, &borrowed.codec)
+                    .ok()
+                    .flatten();
+                let gap =
+                    crate::domain::chunks::shape_gap(donor.and_then(|d| d.shape), borrowed.shape);
+                let mut view =
+                    quality_measure_result(state, &borrowed.source_key, &borrowed.codec).await?;
+                if let Some(gap) = gap {
+                    view.notices.push(
+                        Detail::new(DetailCode::NoticeMaterialApart)
+                            .with("median", gap.median_x100)
+                            .with("p90", gap.p90_x100)
+                            .with("ratio", gap.ratio_x100),
+                    );
+                }
+                Ok(view)
             }
             Err(LendRefusal::NothingToLend) => Err(AppError::new(ErrorCode::MeasurementNotFound)),
             Err(LendRefusal::DifferentMaterial(why)) => {

@@ -494,7 +494,7 @@ fn the_same_material_is_lent() {
 // of a season have profiles that look alike, an episode and a trailer do not, whatever their
 // codec and frame size agree about.
 
-use vrcast_studio_lib::domain::chunks::shape_of;
+use vrcast_studio_lib::domain::chunks::{shape_gap, shape_of};
 
 #[test]
 fn a_flat_film_and_a_spiky_one_are_told_apart() {
@@ -588,4 +588,56 @@ fn a_second_run_does_not_wipe_a_shape_it_never_read() {
             .is_some(),
         "a run that could not read the packets erased what an earlier one had worked out"
     );
+}
+
+// ---------- how far apart two films are (R-46) ----------
+
+#[test]
+fn two_films_of_the_same_shape_are_no_distance_apart() {
+    // The negative control. "Report a distance" is satisfied by reporting one always, and
+    // then the number says nothing about any particular pair.
+    let one = shape_of(&[1_000_000, 2_000_000, 3_000_000, 1_000_000]);
+    let gap = shape_gap(one, one).expect("two known shapes have a distance");
+    assert_eq!(gap.median_x100, 0);
+    assert_eq!(gap.p90_x100, 0);
+    assert_eq!(gap.ratio_x100, 0);
+}
+
+#[test]
+fn a_film_of_another_kind_is_a_long_way_off() {
+    // What R-46 measured, in the terms this records: three episodes agreed and a fourth did
+    // not, with every field lending compares equal on all four. A flat film and a spiky one
+    // are the same *container* and different material.
+    let flat = shape_of(&std::iter::repeat_n(1_000_000u64, 100).collect::<Vec<_>>());
+    let spiky = shape_of(
+        &(0..100)
+            .map(|i| if i % 10 == 0 { 8_000_000 } else { 500_000 })
+            .collect::<Vec<_>>(),
+    );
+    let gap = shape_gap(flat, spiky).expect("both shapes are known");
+    assert!(
+        gap.ratio_x100 > 500,
+        "a flat film and one that spikes sixteenfold came out {}% apart",
+        gap.ratio_x100
+    );
+}
+
+#[test]
+fn the_distance_does_not_depend_on_which_film_is_the_donor() {
+    // Otherwise borrowing A from B and B from A would be told different things about the same
+    // pair, and whichever direction happened to look safer would be the one people used.
+    let a = shape_of(&[1_000_000, 2_000_000, 9_000_000]);
+    let b = shape_of(&[1_000_000, 1_100_000, 1_200_000]);
+    assert_eq!(shape_gap(a, b), shape_gap(b, a));
+}
+
+#[test]
+fn an_unknown_shape_is_no_distance_rather_than_none() {
+    // **`None`, never nought.** Two films nobody has a shape for are not thereby alike, and a
+    // nought would say they were — which is the reading that would let a loan through on the
+    // strength of both being unknown.
+    let known = shape_of(&[1_000_000, 2_000_000]);
+    assert!(shape_gap(known, None).is_none());
+    assert!(shape_gap(None, known).is_none());
+    assert!(shape_gap(None, None).is_none());
 }

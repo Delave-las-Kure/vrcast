@@ -457,6 +457,8 @@ export const en: Catalogue = {
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
       "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
+    NOTICE_MATERIAL_APART:
+      "How unlike the film this measurement came from this one is: the middle of the weight differs by {median}%, the heavy scenes by {p90}%, the peak against the middle by {ratio}%. There is deliberately no threshold — nobody has measured what these numbers mean, and an invented threshold in a check is worse than no check because it looks like knowledge. Measured on four episodes of one season: three agreed on quality and the fourth was 14 VMAF behind, with the frame, frame rate, codec and bitrate all identical. If these numbers are large and you know your material, measure this episode yourself.",
     NOTICE_VARIANTS_STRANDED:
       "{count} variant(s) are still on the server but outside this set ({names}). Their files and segments are intact, but the set no longer names them — viewers will not get those qualities, and the disk is still holding them. If that was not the intention, build the set with them; if it was, remove them from the server so they stop taking up room.",
     LEND_FRAME_DIFFERS:
