@@ -18,7 +18,7 @@ use vrcast_studio_lib::domain::ladder::{may_build_unasked, Objection};
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::tasks::engine::TaskEngine;
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
-use vrcast_studio_lib::tasks::store::Batch;
+use vrcast_studio_lib::tasks::store::{self, Batch};
 
 // ---------- the gate (T439, T442) ----------
 
@@ -316,4 +316,225 @@ async fn a_task_nobody_batched_belongs_to_no_batch() {
         .unwrap()
         .batch
         .is_none());
+}
+
+// ---------- when the build appears, and when it must not (T440, T441) ----------
+//
+// **What is checked here and what is not.** These drive the engine directly with stand-in
+// work rather than measuring a real film: what is being checked is *when* the second task
+// appears and whether anything can stop it, and a real measurement would take half an hour to
+// answer a question about ordering. That a real season survives one film failing is T447, and
+// it needs a real season — a stand-in that fails on command proves the engine carries on, not
+// that a measurement does.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_build_exists_while_the_measurement_is_still_running() {
+    // **The whole shape of the chain in one check.** The build is submitted by the
+    // measurement's own closure, at its very end. If it were submitted alongside — or by the
+    // screen that started the measurement — a build would be queued against rungs nobody had
+    // measured yet, and it would either wait in a lane or run on the guess.
+    let db = std::sync::Arc::new(Db::open_in_memory().unwrap());
+    let engine = TaskEngine::new(db.clone());
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+
+    let after = gate.clone();
+    let onward = engine.clone();
+    let measuring = engine
+        .submit(TaskKind::MeasureQuality, None, move |_ctx| async move {
+            after.notified().await;
+            // The chain: the build goes in here, at the end, and nowhere else.
+            onward
+                .submit(TaskKind::BuildLadder, None, |_| async { Ok(()) })
+                .await
+                .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    // While it runs there is no build anywhere — not queued, not paused, not anything.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(
+        !any_build(&db),
+        "a build existed while the measurement was still running"
+    );
+
+    gate.notify_one();
+    assert!(
+        wait_for_state(
+            &engine,
+            &measuring,
+            TaskState::Completed,
+            Duration::from_secs(5)
+        )
+        .await
+    );
+
+    // And after it, there is.
+    let appeared = wait_until(Duration::from_secs(5), || any_build(&db)).await;
+    assert!(appeared, "the measurement finished and no build followed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_measurement_cancelled_partway_leaves_no_build_behind() {
+    // T441(b). Cancelling is the person saying stop, and a chain that goes on to queue hours
+    // of encoding after that has not stopped — it has changed what it is doing.
+    let db = std::sync::Arc::new(Db::open_in_memory().unwrap());
+    let engine = TaskEngine::new(db.clone());
+
+    let onward = engine.clone();
+    let measuring = engine
+        .submit(TaskKind::MeasureQuality, None, move |ctx| async move {
+            // Long enough to be cancelled in the middle of, and it checks — the chain runs
+            // only where the work was not stopped.
+            for _ in 0..100 {
+                ctx.bail_if_cancelled()
+                    .map_err(|_| AppError::new(ErrorCode::Internal))?;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            onward
+                .submit(TaskKind::BuildLadder, None, |_| async { Ok(()) })
+                .await
+                .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    engine.cancel(&measuring).expect("the cancel would not go");
+    assert!(
+        wait_for_state(
+            &engine,
+            &measuring,
+            TaskState::Cancelled,
+            Duration::from_secs(5)
+        )
+        .await
+    );
+
+    // Given time to do the wrong thing, and it does not.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !any_build(&db),
+        "the measurement was cancelled and a build was queued anyway"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_chain_runs_with_nobody_listening() {
+    // T441(c). **This is the one that would fail on any implementation where a screen drives
+    // the chain**, and it is the reason the chain is in the core at all: the window may be
+    // shut, or in the tray, when the measurement ends. Nothing here subscribes to the event
+    // stream, and the build must appear regardless.
+    let db = std::sync::Arc::new(Db::open_in_memory().unwrap());
+    let engine = TaskEngine::new(db.clone());
+
+    let onward = engine.clone();
+    engine
+        .submit(TaskKind::MeasureQuality, None, move |_ctx| async move {
+            onward
+                .submit(TaskKind::BuildLadder, None, |_| async { Ok(()) })
+                .await
+                .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        wait_until(Duration::from_secs(5), || any_build(&db)).await,
+        "the chain did not run with nobody subscribed to its events"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_film_failing_does_not_stop_the_others() {
+    // T441(a), as far as an engine can answer it: the second film's chain fails, and its build
+    // **never** appears, while the first and third both reach theirs. What a real season adds
+    // is whether a real measurement fails the way this stand-in does, and that is T447.
+    let db = std::sync::Arc::new(Db::open_in_memory().unwrap());
+    let engine = TaskEngine::new(db.clone());
+
+    for (film, ok) in [("a", true), ("b", false), ("c", true)] {
+        let onward = engine.clone();
+        // Named by the batch label, which is what it is for: `server_id` refers to a real
+        // profile and cannot stand in for a film's name.
+        let mark = Some(Batch {
+            id: String::from("one-press"),
+            label: String::from(film),
+        });
+        engine
+            .submit_in_batch(
+                TaskKind::MeasureQuality,
+                None,
+                mark.clone(),
+                move |_ctx| async move {
+                    if !ok {
+                        return Err(AppError::new(ErrorCode::Internal));
+                    }
+                    onward
+                        .submit_in_batch(TaskKind::BuildLadder, None, mark, |_| async { Ok(()) })
+                        .await
+                        .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    // Two builds, and never a third.
+    assert!(
+        wait_until(Duration::from_secs(5), || builds_for(&db, "a")
+            && builds_for(&db, "c"))
+        .await,
+        "the films either side of the failure did not reach their builds"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !builds_for(&db, "b"),
+        "the film that failed got a build anyway"
+    );
+}
+
+/// Whether any build task exists at all, in any state.
+fn any_build(db: &Db) -> bool {
+    store::list(db)
+        .unwrap_or_default()
+        .iter()
+        .any(|t| t.kind == TaskKind::BuildLadder)
+}
+
+/// Whether a build exists for one film, by the label its batch gave it.
+fn builds_for(db: &Db, film: &str) -> bool {
+    store::list(db).unwrap_or_default().iter().any(|t| {
+        t.kind == TaskKind::BuildLadder && t.batch.as_ref().is_some_and(|b| b.label == film)
+    })
+}
+
+/// Wait for something to become true, or give up.
+async fn wait_until(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    false
+}
+
+/// The same helper the engine's own tests use, kept here so this file stands alone.
+async fn wait_for_state(e: &TaskEngine, id: &str, want: TaskState, limit: Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if let Ok(Some(rec)) = e.get(id) {
+            if rec.state == want {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    false
 }
