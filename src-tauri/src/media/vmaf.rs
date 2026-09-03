@@ -26,6 +26,12 @@ use crate::tasks::process::ManagedProcess;
 /// How many threads the scoring may use.
 pub const VMAF_THREADS: u32 = 8;
 
+/// What a measured chunk is muxed into.
+///
+/// See [`chunk_args`] for the measurement that settled this. Not a matter of taste: the same
+/// bytes score twenty-three VMAF lower read back out of the mp4 this used to write.
+pub const MEASURE_CONTAINER: &str = "matroska";
+
 /// The distance between keyframes while measuring.
 ///
 /// Fixed rather than taken from the material: every point of the grid has to be encoded the
@@ -163,7 +169,7 @@ struct Workspace {
 }
 
 impl Workspace {
-    const ENCODED: &'static str = "point.mp4";
+    const ENCODED: &'static str = "point.mkv";
     const SCORE: &'static str = "score.json";
 
     fn make(cell: Cell) -> Result<Self, VmafError> {
@@ -195,6 +201,35 @@ async fn encode_chunk(
     cell: Cell,
     encoder: &Encoder,
 ) -> Result<(), VmafError> {
+    let args = chunk_args(source, at_s, chunk_s, cell, encoder);
+    run_in(ffmpeg_bin, &work.dir, &args).await
+}
+
+/// The arguments that encode one chunk, apart from the running of them.
+///
+/// **The container is part of the measurement, and that is measured rather than assumed.**
+/// This wrote `-f mp4` until 2026-09-03. Measured that day on one chunk of Blue Eye Samurai
+/// S01E01 at 6 Mbit/s: the very same encoded bytes score **75.17 as the mp4 the muxer wrote,
+/// and 98.63 remuxed — stream-copied, not re-encoded — into Matroska**. The encode is sound;
+/// reading the mp4 back is not. Beside the video the muxer puts a `text` data track, and what
+/// libvmaf then lines up against the reference is not what was encoded.
+///
+/// The damage is worse than a level. Over three chunks the loss was 23.46, 7.94 and 6.49, so
+/// it cancels neither between chunks nor between films. Within one chunk it holds steady
+/// across bitrates (23.31, 23.59, 23.24 at 2, 4 and 12 Mbit/s), which is exactly why nobody
+/// caught it: the curve still rose with bitrate and looked entirely plausible. With the level
+/// pushed down some twelve points on average, `TARGET_VMAF` of 96 was all but unreachable,
+/// and the top rung was settled by where the grid happened to end rather than by quality.
+///
+/// Matroska, because that is what every measurement in R-45 through R-48 was taken with: the
+/// same cell through this path now gives 96.37 against the script's 96.38.
+pub fn chunk_args(
+    source: &Path,
+    at_s: u64,
+    chunk_s: u64,
+    cell: Cell,
+    encoder: &Encoder,
+) -> Vec<String> {
     let ceiling = ceiling_mbps(cell.bitrate_mbps);
     let mut args: Vec<String> = vec![
         "-nostdin".into(),
@@ -237,13 +272,13 @@ async fn encode_chunk(
         &KEYFRAME_EVERY.to_string(),
         "-an",
         "-f",
-        "mp4",
+        MEASURE_CONTAINER,
         Workspace::ENCODED,
     ] {
         args.push(a.to_owned());
     }
 
-    run_in(ffmpeg_bin, &work.dir, &args).await
+    args
 }
 
 /// Score one encoded chunk against the source it came from.

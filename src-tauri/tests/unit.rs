@@ -126,6 +126,8 @@ mod vmaf;
 #[path = "unit/batch.rs"]
 mod batch;
 
+#[path = "unit/check_point.rs"]
+mod check_point;
 #[path = "unit/scene_cut.rs"]
 mod scene_cut;
 

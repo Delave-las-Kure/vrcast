@@ -11,6 +11,7 @@
 //! the day the domain changes.
 
 pub mod access_log;
+pub mod check_point;
 pub mod chunks;
 pub mod connections;
 pub mod convert_plan;

@@ -77,3 +77,62 @@ fn a_report_with_no_score_in_it_is_not_a_score_of_zero() {
     assert!(pooled_mean(r#"{"pooled_metrics": {"psnr": {"mean": 41.0}}}"#).is_err());
     assert!(pooled_mean("not json at all").is_err());
 }
+
+// ---------- the container the measured chunk goes into (T476) ----------
+
+/// What the encoder is asked for, without an encoder to ask.
+fn args_for_a_chunk() -> Vec<String> {
+    vrcast_studio_lib::media::vmaf::chunk_args(
+        std::path::Path::new("film.mkv"),
+        611,
+        10,
+        vrcast_studio_lib::domain::measure_grid::Cell {
+            bitrate_mbps: 6,
+            height: 1080,
+        },
+        &vrcast_studio_lib::media::encoders::Encoder::Hardware {
+            name: String::from("h264_nvenc"),
+        },
+    )
+}
+
+#[test]
+fn the_measured_chunk_is_not_muxed_into_mp4() {
+    // ⚠ **This is not a preference about containers.** Measured 2026-09-03 on one chunk of
+    // Blue Eye Samurai S01E01 at 6 Mbit/s: the same encoded bytes score 75.17 read back out
+    // of the mp4 the muxer writes, and 98.63 after a stream copy into Matroska. Nothing about
+    // the encode changed — only what the score was read from. Over three chunks the loss ran
+    // 23.46, 7.94 and 6.49, so it cancels nowhere, and inside one chunk it barely moves with
+    // bitrate (23.31, 23.59, 23.24 at 2, 4 and 12), which is why the curve went on looking
+    // sensible while the whole ladder was chosen twelve points too low.
+    let args = args_for_a_chunk();
+    let after_f = args
+        .iter()
+        .position(|a| a == "-f")
+        .map(|i| args[i + 1].clone());
+    assert_eq!(
+        after_f.as_deref(),
+        Some("matroska"),
+        "the chunk being measured is muxed into something other than Matroska; \
+         if that is mp4 again, every score it produces is up to twenty-three VMAF low"
+    );
+    assert!(
+        !args.iter().any(|a| a.ends_with(".mp4")),
+        "the measured chunk is written to an .mp4 file: {args:?}"
+    );
+}
+
+#[test]
+fn the_chunk_is_asked_for_at_the_second_and_the_height_it_was_given() {
+    // The cell and the position have to survive into the arguments, or the point measured is
+    // not the point asked for — and nothing downstream would ever notice.
+    let args = args_for_a_chunk();
+    let joined = args.join(" ");
+    assert!(joined.contains("-ss 611"), "{joined}");
+    assert!(joined.contains("-t 10"), "{joined}");
+    assert!(joined.contains("scale=-2:1080"), "{joined}");
+    assert!(
+        joined.contains("-b:v 6000k") || joined.contains("6M"),
+        "{joined}"
+    );
+}
