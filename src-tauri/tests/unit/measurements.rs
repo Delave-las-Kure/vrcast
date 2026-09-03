@@ -641,3 +641,67 @@ fn an_unknown_shape_is_no_distance_rather_than_none() {
     assert!(shape_gap(None, known).is_none());
     assert!(shape_gap(None, None).is_none());
 }
+
+// ---------- lending onto a film that already has its own measurement (T477) ----------
+
+#[test]
+fn a_loan_does_not_leave_the_borrowers_own_points_mixed_in_with_the_donors() {
+    // ⚠ **What this catches.** A loan writes the donor's points into the borrower's row. If
+    // the borrower had already measured points of its own at cells the donor did not, those
+    // stayed put — and the ladder was then chosen from two films at once, with nothing
+    // anywhere saying so. `borrowed_from` marks the row, so every rung reads as borrowed,
+    // including the ones that were genuinely measured here; and the check after a loan
+    // (T437) would compare the donor against a mixture.
+    let db = Db::open_in_memory().unwrap();
+
+    let donor = a_run("donor", "/films/e01.mkv");
+    begin(&db, &donor).unwrap();
+    for (bitrate_mbps, vmaf) in [(4u64, 90.0), (8, 95.0)] {
+        record(
+            &db,
+            &donor.source_key,
+            &donor.codec,
+            &Point {
+                bitrate_mbps,
+                height: 1080,
+                actual_bps: bitrate_mbps * 1_000_000,
+                vmaf,
+            },
+            took(),
+        )
+        .unwrap();
+    }
+
+    // The borrower measured one cell of its own that the donor never touched.
+    let borrower = a_run("borrower", "/films/e02.mkv");
+    begin(&db, &borrower).unwrap();
+    record(
+        &db,
+        &borrower.source_key,
+        &borrower.codec,
+        &Point {
+            bitrate_mbps: 22,
+            height: 2160,
+            actual_bps: 22_000_000,
+            vmaf: 71.5,
+        },
+        took(),
+    )
+    .unwrap();
+
+    lend(&db, "donor", "h264", &borrower).expect("the loan would not go through");
+
+    let after = points(&db, "borrower", "h264").unwrap();
+    assert!(
+        !after
+            .iter()
+            .any(|p| p.bitrate_mbps == 22 && p.height == 2160),
+        "the borrower's own point survived the loan: the ladder would be chosen from two \
+         films at once, and every rung would read as borrowed. Points now: {after:?}"
+    );
+    assert_eq!(
+        after.len(),
+        2,
+        "the loan left something other than exactly the donor's points: {after:?}"
+    );
+}

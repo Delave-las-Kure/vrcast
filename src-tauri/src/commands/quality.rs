@@ -11,6 +11,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::error::{AppError, DetailCode, ErrorCode, Result};
+use crate::domain::check_point;
 use crate::domain::chunks::{reference_chunks, CHUNK_S};
 use crate::domain::ladder::SourceFacts;
 use crate::domain::measure_grid::grid;
@@ -388,7 +389,7 @@ pub mod api {
         from_key: &str,
         request: MeasureRequest,
     ) -> Result<MeasurementView> {
-        let (run, _, _) = prepare(&request).await?;
+        let (run, encoder, _) = prepare(&request).await?;
         match measurements::lend(&state.db, from_key, &run.codec, &run) {
             Ok(borrowed) => {
                 // **How far apart the two films actually are** (R-46). Every field lending
@@ -406,8 +407,18 @@ pub mod api {
                     .flatten();
                 let gap =
                     crate::domain::chunks::shape_gap(donor.and_then(|d| d.shape), borrowed.shape);
+
+                // **And then the loan is checked by measurement, not by fields** (T437).
+                // R-48 measured an episode of the same season, the same release, equal in
+                // every one of the eight fields above — and a different encode. No field
+                // could refuse it; one measured cell can. A loan that fails here is taken
+                // back rather than flagged: a borrowed ladder is wrong quietly, three or
+                // four steps of the selection out, and nothing downstream would notice.
+                let checked = held(state, &borrowed, from_key, &encoder).await?;
+
                 let mut view =
                     quality_measure_result(state, &borrowed.source_key, &borrowed.codec).await?;
+                view.notices.extend(checked);
                 if let Some(gap) = gap {
                     view.notices.push(
                         Detail::new(DetailCode::NoticeMaterialApart)
@@ -433,6 +444,93 @@ pub mod api {
     ) -> Result<()> {
         measurements::forget(&state.db, source_key, codec)
             .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))
+    }
+}
+
+/// Measure one cell on the borrower and hold the loan only if it lands near the donor's.
+///
+/// **Why one cell and not the fields.** Lending compares eight fields of the container, and
+/// R-48 measured an episode that passes every one of them and is still the wrong material:
+/// same season, same release, same frame, frame rate, codec, pixel format and colour
+/// transfer — a different encode, 4.06 Mbit/s against 6.33. It scored 3.19 VMAF below its
+/// neighbours where they sit within 0.56 of each other.
+///
+/// **Why the top rung.** Down the ladder the check is not weak but impossible: at 1 Mbit/s a
+/// wholly different film landed *inside* the band four legitimate episodes made. The bands
+/// only come apart near the top, and `TARGET_VMAF` puts the top rung exactly there without
+/// any number having to be written down here.
+///
+/// **Why the loan is taken back rather than marked.** A ladder standing on somebody else's
+/// measurement is wrong quietly — three or four steps of the selection out — and every screen
+/// downstream would go on showing it as a ladder. The film needs half an hour of its own.
+///
+/// The cost is one cell: three chunks of ten seconds, about a minute against the half hour a
+/// full measurement takes. ⚠ It is spent inside this call, so the screen that asked waits for
+/// it. Moving it into the task engine, with progress and a way to stop, is worth doing and is
+/// not done here.
+async fn held(
+    state: &super::AppState,
+    borrowed: &Run,
+    from_key: &str,
+    encoder: &encoders::Encoder,
+) -> Result<Option<Detail>> {
+    let donor_points = measurements::points(&state.db, from_key, &borrowed.codec)
+        .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+    let donor = crate::domain::measured_ladder::select(
+        &donor_points,
+        crate::domain::measured_ladder::TARGET_VMAF,
+        crate::domain::measured_ladder::VMAF_STEP,
+    );
+    // Nothing to check against. Not an excuse to pass: a donor with no rungs had nothing
+    // worth lending in the first place, and `lend` will have copied nothing.
+    let (Some(cell), Some(donor_vmaf)) =
+        (check_point::cell(&donor), check_point::donor_vmaf(&donor))
+    else {
+        return Ok(None);
+    };
+
+    let measured = crate::media::vmaf::measure_point(
+        Path::new(&borrowed.source_path),
+        borrowed.width,
+        borrowed.height,
+        // **The donor's seconds, which `lend` has already copied over.** On a film of another
+        // length the same second falls in whatever scene happens to be there, and the check
+        // would compare two arbitrary places rather than the same one.
+        &borrowed.chunk_starts,
+        borrowed.chunk_s,
+        cell,
+        encoder,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .map_err(vmaf_error)?;
+
+    match check_point::judge(donor_vmaf, measured.vmaf) {
+        // **Said, not merely done.** A check whose passing leaves no trace is one nobody can
+        // tell from a check that never ran — and this one costs a minute of somebody's
+        // machine, so it should at least say what it found.
+        check_point::Verdict::Same { apart_x100 } => Ok(Some(
+            Detail::new(DetailCode::NoticeCheckPointHeld)
+                .with("bitrate", cell.bitrate_mbps)
+                .with("height", cell.height as u64)
+                .with("apart", apart_x100),
+        )),
+        check_point::Verdict::Apart { apart_x100 } => {
+            // Taken back, and only then refused — so that a failure here cannot leave a
+            // borrowed ladder behind for the next screen to build from.
+            measurements::forget(&state.db, &borrowed.source_key, &borrowed.codec)
+                .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+            Err(
+                AppError::new(ErrorCode::MeasurementNotThisMaterial).with_detail(
+                    Detail::new(DetailCode::CheckPointApart)
+                        .with("bitrate", cell.bitrate_mbps)
+                        .with("height", cell.height as u64)
+                        .with("donor", (donor_vmaf * 100.0).round() as u64)
+                        .with("borrower", (measured.vmaf * 100.0).round() as u64)
+                        .with("apart", apart_x100),
+                ),
+            )
+        }
     }
 }
 
@@ -528,6 +626,20 @@ async fn pick_encoder(prefer_hardware: bool) -> Result<(encoders::Encoder, Vec<D
     let choice = encoders::choose(&info.hardware, info.has_x264, prefer_hardware)
         .map_err(|_| AppError::new(ErrorCode::NoHwEncoder))?;
     Ok((choice.encoder, choice.notice.into_iter().collect()))
+}
+
+/// The same translation for the one-cell path, which fails in its own vocabulary.
+///
+/// **A cell that would not measure is not a cell that agreed.** Every arm here refuses the
+/// loan: a check that cannot run must not be mistaken for a check that passed.
+fn vmaf_error(e: crate::media::vmaf::VmafError) -> AppError {
+    use crate::media::vmaf::VmafError as E;
+    match e {
+        E::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+        E::Unavailable => AppError::new(ErrorCode::VmafUnavailable),
+        E::NothingMeasured { .. } => AppError::new(ErrorCode::LadderNotMeasured),
+        other => AppError::new(ErrorCode::Internal).with_cause(other),
+    }
 }
 
 fn to_error(e: quality_measure::MeasureError) -> AppError {

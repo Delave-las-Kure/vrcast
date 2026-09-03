@@ -432,6 +432,18 @@ pub fn lend(db: &Db, from_key: &str, codec: &str, to: &Run) -> Result<Run, LendR
         return Err(LendRefusal::NothingToLend);
     }
 
+    // **The borrower's own points go first** (T477). A film may already have measured cells
+    // the donor never touched — a different anchor puts the grid somewhere else entirely —
+    // and those used to survive the loan. The ladder was then chosen from two films at once,
+    // while `borrowed_from` on the row made every rung read as borrowed, the genuinely
+    // measured ones included. And the check after a loan (T437) would have compared the
+    // donor against a mixture rather than against this film.
+    //
+    // A loan replaces a measurement; it does not top one up.
+    if clear_points(db, &borrowed.source_key, codec).is_err() {
+        return Err(LendRefusal::NothingToLend);
+    }
+
     let lent = points(db, from_key, codec).unwrap_or_default();
     for point in &lent {
         // Zero time: nothing was measured here, and counting a lent point as work done
@@ -445,6 +457,20 @@ pub fn lend(db: &Db, from_key: &str, codec: &str, to: &Run) -> Result<Run, LendR
         );
     }
     Ok(borrowed)
+}
+
+/// Drop the measured points of one film, leaving the row that describes it.
+///
+/// Apart from [`forget`], which removes the row as well: a loan is about to write the row
+/// itself, and deleting it first would lose the material description that `differs` needs.
+fn clear_points(db: &Db, source_key: &str, codec: &str) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "DELETE FROM quality_points WHERE source_key = ?1 AND codec = ?2",
+            rusqlite::params![source_key, codec],
+        )?;
+        Ok(())
+    })
 }
 
 /// What stops one measurement being lent to another film, or `None` when nothing does.

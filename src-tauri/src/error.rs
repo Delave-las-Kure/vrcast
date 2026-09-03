@@ -123,6 +123,9 @@ error_codes! {
     MeasurementNotFound => "MEASUREMENT_NOT_FOUND",
     /// The measurement asked for was taken on material of another kind entirely.
     MeasurementDifferentMaterial => "MEASUREMENT_DIFFERENT_MATERIAL",
+    /// Every field matched and the picture did not. The check after a loan (T437, R-48)
+    /// measured one cell on the borrower and found it too far from the donor's.
+    MeasurementNotThisMaterial => "MEASUREMENT_NOT_THIS_MATERIAL",
 
     // --- web server configuration ---
     CaddyValidateFailed => "CADDY_VALIDATE_FAILED",

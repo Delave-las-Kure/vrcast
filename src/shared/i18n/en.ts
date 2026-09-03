@@ -183,6 +183,10 @@ export const en: Catalogue = {
       message: "That measurement was taken on different material",
       hint: "Frame size, frame rate and the height the material really has must all agree. Native 4K and an upscale behave differently: the point where the resolution should drop sits somewhere else entirely.",
     },
+    MEASUREMENT_NOT_THIS_MATERIAL: {
+      message: "The measurement did not fit this film",
+      hint: "Every field matched — frame, frame rate, codec, pixel format — and the picture did not. One cell was measured to find out: on the same rung the donor and this film disagreed by more than episodes of one season ever do. This film needs a measurement of its own.",
+    },
     NO_LADDER_FOR_MEDIA: {
       message: "This medium has no quality ladder",
       hint: "Build a quality ladder first: capping quality means choosing from the rungs that exist.",
@@ -457,6 +461,10 @@ export const en: Catalogue = {
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
       "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
+    CHECK_POINT_APART:
+      "On the {bitrate} Mbit/s rung at {height}p the donor scores {donor} VMAF and this film {borrower} — {apart} hundredths apart. The threshold is 100 hundredths, and it is not invented: four episodes of one season disagreed by at most 56, while alien material stood at least 218 away. The same cell measured three times running gave the same number, so this is not the measurement wobbling.",
+    NOTICE_CHECK_POINT_HELD:
+      "The loan was checked by measurement: on the {bitrate} Mbit/s rung at {height}p this film differed from the donor by {apart} hundredths of a VMAF point, against a threshold of 100.",
     NOTICE_MATERIAL_APART:
       "How unlike the film this measurement came from this one is: the middle of the weight differs by {median}%, the heavy scenes by {p90}%, the peak against the middle by {ratio}%. There is deliberately no threshold — nobody has measured what these numbers mean, and an invented threshold in a check is worse than no check because it looks like knowledge. Measured on four episodes of one season: three agreed on quality and the fourth was 14 VMAF behind, with the frame, frame rate, codec and bitrate all identical. If these numbers are large and you know your material, measure this episode yourself.",
     NOTICE_VARIANTS_STRANDED:
