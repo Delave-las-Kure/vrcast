@@ -126,6 +126,8 @@ error_codes! {
     /// Every field matched and the picture did not. The check after a loan (T437, R-48)
     /// measured one cell on the borrower and found it too far from the donor's.
     MeasurementNotThisMaterial => "MEASUREMENT_NOT_THIS_MATERIAL",
+    /// The measurement was borrowed and its check has not come back yet (T478).
+    LadderCheckPending => "LADDER_CHECK_PENDING",
 
     // --- web server configuration ---
     CaddyValidateFailed => "CADDY_VALIDATE_FAILED",

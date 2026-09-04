@@ -4,8 +4,8 @@ use vrcast_studio_lib::domain::measure_grid::seconds_per_point;
 use vrcast_studio_lib::domain::measured_ladder::Point;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::measurements::{
-    all, begin, differs, forget, lend, machine_factor, points, record, run, LendRefusal, Material,
-    Mismatch, Run,
+    all, begin, checked, differs, forget, lend, machine_factor, points, record, run, LendRefusal,
+    Material, Mismatch, Run,
 };
 
 fn a_run(key: &str, path: &str) -> Run {
@@ -23,6 +23,7 @@ fn a_run(key: &str, path: &str) -> Run {
         chunk_starts: vec![233, 590, 947],
         chunk_s: 10,
         borrowed_from: None,
+        check_pending: false,
         donor_anchor_mbps: None,
         shape: None,
         material: Some(Material {
@@ -703,5 +704,68 @@ fn a_loan_does_not_leave_the_borrowers_own_points_mixed_in_with_the_donors() {
         after.len(),
         2,
         "the loan left something other than exactly the donor's points: {after:?}"
+    );
+}
+
+// ---------- a loan is provisional until its check lands (T478) ----------
+
+#[test]
+fn a_loan_is_marked_as_waiting_for_its_check_and_the_mark_can_be_cleared() {
+    // **The state between the loan and the verdict has to be visible.** The borrowed points
+    // are written at once, so without this mark a ladder nobody has vouched for looks exactly
+    // like one that has been — and the build that would spend hours on it starts before the
+    // check that would have refused it has finished.
+    let db = Db::open_in_memory().unwrap();
+    let donor = a_run("donor", "/films/e01.mkv");
+    begin(&db, &donor).unwrap();
+    record(
+        &db,
+        &donor.source_key,
+        &donor.codec,
+        &Point {
+            bitrate_mbps: 8,
+            height: 1080,
+            actual_bps: 8_000_000,
+            vmaf: 96.0,
+        },
+        took(),
+    )
+    .unwrap();
+    assert!(
+        !run(&db, "donor", "h264").unwrap().unwrap().check_pending,
+        "a measurement made here was marked as needing a check against something"
+    );
+
+    let borrower = a_run("borrower", "/films/e02.mkv");
+    lend(&db, "donor", "h264", &borrower).expect("the loan would not go through");
+    assert!(
+        run(&db, "borrower", "h264").unwrap().unwrap().check_pending,
+        "the loan was not marked as waiting for its check"
+    );
+
+    checked(&db, "borrower", "h264").unwrap();
+    assert!(
+        !run(&db, "borrower", "h264").unwrap().unwrap().check_pending,
+        "the mark would not clear once the check had landed"
+    );
+}
+
+#[test]
+fn measuring_a_film_properly_clears_a_mark_left_by_an_earlier_loan() {
+    // A run written afresh has just been measured here, so a stale "still waiting" left over
+    // from a loan somebody has since replaced would block every build for ever. This is the
+    // one mark that must not be coalesced across a write.
+    let db = Db::open_in_memory().unwrap();
+    let donor = a_run("donor", "/films/e01.mkv");
+    begin(&db, &donor).unwrap();
+    let borrower = a_run("borrower", "/films/e02.mkv");
+    lend(&db, "donor", "h264", &borrower).expect("the loan would not go through");
+    assert!(run(&db, "borrower", "h264").unwrap().unwrap().check_pending);
+
+    // Now it is measured for real.
+    begin(&db, &borrower).unwrap();
+    assert!(
+        !run(&db, "borrower", "h264").unwrap().unwrap().check_pending,
+        "measuring the film properly left it marked as an unchecked loan"
     );
 }

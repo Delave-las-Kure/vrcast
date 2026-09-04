@@ -230,6 +230,18 @@ pub mod api {
             }
         })?;
 
+        // **A loan whose check has not landed is refused here** (T478). Refused before a
+        // task exists, like every other quick refusal in this function: hours of encoding
+        // against a ladder nobody has vouched for is exactly what the check is for, and the
+        // check takes under a minute.
+        if let Ok(key) = measurements::key_for(std::path::Path::new(&request.path)) {
+            if let Ok(Some(run)) = measurements::run(&state.db, &key, &h264()) {
+                if run.check_pending {
+                    return Err(AppError::new(ErrorCode::LadderCheckPending));
+                }
+            }
+        }
+
         let profile = super::super::library::api::profile_of(state, &request.server_id)?;
         let source = super::super::api::source_probe(&request.path).await?;
         let (encoder, _) = pick_encoder(request.prefer_hardware).await?;
@@ -378,6 +390,11 @@ fn measured_plan(
     if points.is_empty() {
         return Ok(None);
     }
+    // **A loan still being checked is not a measurement yet** (T478). The points are already
+    // here — that is the whole reason this has to be said out loud: a provisional ladder
+    // looks exactly like a vouched-for one, and the check that would refuse it is still
+    // running.
+    let pending = run.check_pending;
 
     let chosen = crate::domain::measured_ladder::select(
         &points,
@@ -391,6 +408,11 @@ fn measured_plan(
     })?;
 
     let mut notices = Vec::new();
+    if pending {
+        notices.push(Detail::new(
+            crate::domain::wording::DetailCode::NoticeCheckPointRunning,
+        ));
+    }
     if let Some(from) = &run.borrowed_from {
         notices.push(
             Detail::new(crate::domain::wording::DetailCode::NoticeMeasurementBorrowed)

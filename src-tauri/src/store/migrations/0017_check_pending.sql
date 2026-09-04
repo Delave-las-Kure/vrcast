@@ -1,0 +1,12 @@
+-- Whether a borrowed measurement is still waiting to be checked (T478).
+--
+-- The check after a loan costs a cell of encoding — under a minute, but a minute during
+-- which the loan exists and nothing says it is provisional. Until now that minute was spent
+-- inside the command, so the screen that asked simply waited, with no progress and no way to
+-- stop. Moving it into the task engine buys both, and costs this column: between the loan
+-- and the verdict there is now a state, and a state nobody can see is a state that will be
+-- built from.
+--
+-- Nought for every row that exists, which is right: a measurement made here needs no check,
+-- and one borrowed before this column existed was checked inside the command that made it.
+ALTER TABLE quality_measurements ADD COLUMN check_pending INTEGER NOT NULL DEFAULT 0;

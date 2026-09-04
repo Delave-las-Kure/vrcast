@@ -183,6 +183,10 @@ export const en: Catalogue = {
       message: "That measurement was taken on different material",
       hint: "Frame size, frame rate and the height the material really has must all agree. Native 4K and an upscale behave differently: the point where the resolution should drop sits somewhere else entirely.",
     },
+    LADDER_CHECK_PENDING: {
+      message: "The borrowed measurement is still being checked",
+      hint: "The measurement came from another film, and one cell of the grid is being measured on this one to compare against the donor. That takes under a minute and its progress is in the task list. Building before the answer risks hours of encoding on a ladder that was never about this film.",
+    },
     MEASUREMENT_NOT_THIS_MATERIAL: {
       message: "The measurement did not fit this film",
       hint: "Every field matched — frame, frame rate, codec, pixel format — and the picture did not. One cell was measured to find out: on the same rung the donor and this film disagreed by more than episodes of one season ever do. This film needs a measurement of its own.",
@@ -461,6 +465,9 @@ export const en: Catalogue = {
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
       "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
+    NOTICE_CHECK_POINT_RUNNING:
+      "The measurement was borrowed from another film and is being checked: one cell of the grid is measured on this film and compared with the donor. No set can be built from it until that lands — under a minute, and its progress is in the task list.",
+    STAGE_CHECKING_LOAN: "Checking the borrowed measurement",
     CHECK_POINT_NOT_COMPARABLE:
       "The loan could not be checked: at {bitrate} Mbit/s and {height}p only {used} chunks of {asked} would measure. A chunk fails where the file is damaged or half-downloaded, and the ones left describe whatever survived — flattering the wreckage in proportion to how much is gone. That cannot be compared with the donor, so the loan has been taken back. Check the file is whole.",
     CHECK_POINT_APART:

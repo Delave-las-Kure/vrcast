@@ -48,6 +48,14 @@ pub struct Run {
     /// `None` when nothing was borrowed. The check after a loan (T437) needs both: two
     /// anchors far apart are the first sign that the material is far apart too.
     pub donor_anchor_mbps: Option<u64>,
+    /// Whether this is a loan still waiting for its check (T478).
+    ///
+    /// **A state between the loan and the verdict, and it has to be visible.** The check
+    /// costs a cell of encoding, and while it runs the borrowed points are already in the
+    /// store — so without this a build could be started from a ladder nobody has vouched for
+    /// yet. False for anything measured here: there is nothing to check it against.
+    #[serde(default)]
+    pub check_pending: bool,
     /// What the film's weight-per-second looks like (T435).
     ///
     /// `None` on a row written before it was kept, and on one whose packets could not be
@@ -123,9 +131,9 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
                  anchor_mbps, chunk_starts, chunk_s, borrowed_from,
                  donor_anchor_mbps, source_codec, pix_fmt, color_transfer,
                  duration_s, peak_bps, shape_median_bps, shape_p90_bps, shape_peak_bps,
-                 shape_peak_to_median_x100, shape_walls, updated_at)
+                 shape_peak_to_median_x100, shape_walls, check_pending, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
              ON CONFLICT (source_key, codec) DO UPDATE SET
                 source_path = excluded.source_path,
                 width = excluded.width,
@@ -157,6 +165,12 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
                     quality_measurements.shape_peak_to_median_x100
                 ),
                 shape_walls = COALESCE(excluded.shape_walls, quality_measurements.shape_walls),
+                -- **Straight over, not coalesced.** The other marks survive a fresh write
+                -- because a new measurement of the same film says nothing about where its
+                -- material came from. This one is the opposite: a run written afresh is a run
+                -- that has just been measured here, and a stale \"still waiting to be checked\"
+                -- left over from an earlier loan would block a build for ever.
+                check_pending = excluded.check_pending,
                 updated_at = excluded.updated_at",
             rusqlite::params![
                 run.source_key,
@@ -183,6 +197,7 @@ pub fn begin(db: &Db, run: &Run) -> Result<(), DbError> {
                 run.shape.map(|s| s.peak_bps as i64),
                 run.shape.map(|s| s.peak_to_median_x100 as i64),
                 run.shape.map(|s| s.walls as i64),
+                run.check_pending,
                 now_rfc3339(),
             ],
         )?;
@@ -346,7 +361,7 @@ pub fn run(db: &Db, source_key: &str, codec: &str) -> Result<Option<Run>, DbErro
                     anchor_mbps, chunk_starts, chunk_s, borrowed_from,
                     donor_anchor_mbps, source_codec, pix_fmt, color_transfer,
                     duration_s, peak_bps, shape_median_bps, shape_p90_bps, shape_peak_bps,
-                    shape_peak_to_median_x100, shape_walls
+                    shape_peak_to_median_x100, shape_walls, check_pending
              FROM quality_measurements WHERE source_key = ?1 AND codec = ?2",
             rusqlite::params![source_key, codec],
             row_to_run,
@@ -366,7 +381,7 @@ pub fn all(db: &Db) -> Result<Vec<Run>, DbError> {
                     anchor_mbps, chunk_starts, chunk_s, borrowed_from,
                     donor_anchor_mbps, source_codec, pix_fmt, color_transfer,
                     duration_s, peak_bps, shape_median_bps, shape_p90_bps, shape_peak_bps,
-                    shape_peak_to_median_x100, shape_walls
+                    shape_peak_to_median_x100, shape_walls, check_pending
              FROM quality_measurements ORDER BY updated_at DESC",
         )?;
         let rows = q
@@ -426,6 +441,10 @@ pub fn lend(db: &Db, from_key: &str, codec: &str, to: &Run) -> Result<Run, LendR
                 .unwrap_or_else(|| source.source_path.clone()),
         ),
         donor_anchor_mbps: Some(source.anchor_mbps),
+        // **Provisional until the check has run** (T478). The points go in at once, so
+        // without this the moment between the loan and the verdict is a moment when a ladder
+        // nobody has vouched for looks exactly like one that has been.
+        check_pending: true,
         ..to.clone()
     };
     if begin(db, &borrowed).is_err() {
@@ -457,6 +476,22 @@ pub fn lend(db: &Db, from_key: &str, codec: &str, to: &Run) -> Result<Run, LendR
         );
     }
     Ok(borrowed)
+}
+
+/// Mark a loan as checked: the cell was measured and it landed near the donor's.
+///
+/// Separate from [`begin`] because it is the only thing that may clear the mark. Writing a
+/// whole run to clear one flag would take the run as it was read minutes ago and put it back
+/// over whatever has happened since.
+pub fn checked(db: &Db, source_key: &str, codec: &str) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE quality_measurements SET check_pending = 0
+             WHERE source_key = ?1 AND codec = ?2",
+            rusqlite::params![source_key, codec],
+        )?;
+        Ok(())
+    })
 }
 
 /// Drop the measured points of one film, leaving the row that describes it.
@@ -612,6 +647,7 @@ fn row_to_run(r: &rusqlite::Row) -> rusqlite::Result<Run> {
         // All or nothing: a row that knows its codec but not its pixel format is a row from
         // an interrupted write, and half a description of the material is worse than none —
         // it would let lending vouch for what it cannot see.
+        check_pending: r.get::<_, i64>("check_pending")? != 0,
         material: match (
             r.get::<_, Option<String>>("source_codec")?,
             r.get::<_, Option<String>>("pix_fmt")?,

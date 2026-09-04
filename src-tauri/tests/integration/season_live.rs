@@ -172,14 +172,38 @@ async fn a_season_measured_once_and_checked_thereafter() {
     // --- everybody else borrows, and is checked ---------------------------------------
     for film in &films[1..] {
         let began = Instant::now();
+        // Which tasks existed before, so the check's own can be told from the donor's.
+        let before = task_ids(&state);
         let outcome = quality::quality_measure_reuse(&state, &donor_key, request(film)).await;
+        // **The loan comes back at once and the check follows** (T478). The reading has to
+        // wait for the verdict, and waiting for it here is also the proof that the loan is
+        // provisional in the meantime: what the store says between these two lines is what a
+        // build would see.
+        let verdict = match &outcome {
+            Ok(view) => {
+                assert!(
+                    view.run.check_pending,
+                    "the loan came back already vouched for: nothing would stop a build \
+                     starting before the check landed"
+                );
+                wait_for_the_check(&state, &view.run.source_key, &before).await
+            }
+            Err(_) => None,
+        };
         let minutes = began.elapsed().as_secs_f64() / 60.0;
         match outcome {
             Ok(view) => {
-                let rungs = view.selection.as_ref().map(|s| s.rungs.len()).unwrap_or(0);
+                // What it has *now*, not what it had at the moment of the loan: a refused
+                // check takes the rungs back, and printing the borrowed count beside the word
+                // "refused" would say the opposite of what happened.
+                let rungs = quality::quality_measure_result(&state, &view.run.source_key, "h264")
+                    .await
+                    .ok()
+                    .and_then(|now| now.selection.map(|s| s.rungs.len()))
+                    .unwrap_or(0);
                 // What the check said, in its own words rather than in ours.
-                let said = view
-                    .notices
+                let said = verdict
+                    .unwrap_or_default()
                     .iter()
                     .filter(|d| format!("{:?}", d.key).contains("CheckPointHeld"))
                     .map(|d| {
@@ -194,7 +218,15 @@ async fn a_season_measured_once_and_checked_thereafter() {
                         )
                     })
                     .next()
-                    .unwrap_or_else(|| String::from("held, and said nothing"));
+                    .unwrap_or_else(|| {
+                        // The task is where the refusal lives now, so read it from there.
+                        the_new_task(&state, &before)
+                            .map(|t| match t.error {
+                                Some(e) => format!("refused: {e:?}"),
+                                None => String::from("held, and said nothing"),
+                            })
+                            .unwrap_or_else(|| String::from("no check task at all"))
+                    });
                 table.push(Line {
                     film: name_of(film),
                     rungs,
@@ -248,4 +280,62 @@ fn name_of(path: &str) -> String {
         .chars()
         .take(32)
         .collect()
+}
+
+/// The newest check task, whatever became of it.
+/// Every task there is, by number.
+fn task_ids(state: &AppState) -> Vec<String> {
+    vrcast_studio_lib::commands::api::tasks_list(state)
+        .map(|all| all.into_iter().map(|t| t.id).collect())
+        .unwrap_or_default()
+}
+
+/// The task the loan just started — the one that was not there a moment ago.
+///
+/// **By difference rather than by "the newest"**, which is what this did at first and why it
+/// hung: whichever end of the list `.pop()` took, it was as likely to hand back the donor's
+/// own completed measurement as the check, and a completed task never fails, so the wait
+/// went round until its deadline.
+fn the_new_task(
+    state: &AppState,
+    before: &[String],
+) -> Option<vrcast_studio_lib::tasks::store::TaskRecord> {
+    vrcast_studio_lib::commands::api::tasks_list(state)
+        .ok()?
+        .into_iter()
+        .find(|t| !before.contains(&t.id))
+}
+
+/// Wait for the loan's check to land, and give back what it said.
+///
+/// `None` when it refused: the notice lives on the task only when it held.
+async fn wait_for_the_check(
+    state: &AppState,
+    source_key: &str,
+    before: &[String],
+) -> Option<Vec<vrcast_studio_lib::domain::wording::Detail>> {
+    use vrcast_studio_lib::tasks::state::TaskState;
+    let deadline = Instant::now() + Duration::from_secs(600);
+    while Instant::now() < deadline {
+        // The mark clearing is the verdict landing; the task carries what it said.
+        let still = vrcast_studio_lib::commands::quality::api::quality_measurements(state)
+            .await
+            .ok()
+            .and_then(|all| all.into_iter().find(|r| r.source_key == source_key));
+        match still {
+            // Taken back: the check refused it.
+            None => return None,
+            Some(run) if !run.check_pending => {
+                return the_new_task(state, before).map(|t| t.notices);
+            }
+            _ => {}
+        }
+        if let Some(task) = the_new_task(state, before) {
+            if matches!(task.state, TaskState::Failed | TaskState::Cancelled) {
+                return None;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    None
 }

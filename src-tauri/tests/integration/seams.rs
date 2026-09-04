@@ -139,6 +139,7 @@ async fn measuring_quality_runs_whole_and_picks_up_where_it_stopped() {
         .await
         .expect("the packets would not read");
     let run = Run {
+        check_pending: false,
         source_key: measurements::key_for(&film).expect("no key for the film"),
         codec: String::from("h264"),
         source_path: film.to_string_lossy().into_owned(),

@@ -389,7 +389,7 @@ pub mod api {
         from_key: &str,
         request: MeasureRequest,
     ) -> Result<MeasurementView> {
-        let (run, encoder, _) = prepare(&request).await?;
+        let (run, _, _) = prepare(&request).await?;
         match measurements::lend(&state.db, from_key, &run.codec, &run) {
             Ok(borrowed) => {
                 // **How far apart the two films actually are** (R-46). Every field lending
@@ -408,17 +408,63 @@ pub mod api {
                 let gap =
                     crate::domain::chunks::shape_gap(donor.and_then(|d| d.shape), borrowed.shape);
 
-                // **And then the loan is checked by measurement, not by fields** (T437).
-                // R-48 measured an episode of the same season, the same release, equal in
-                // every one of the eight fields above — and a different encode. No field
-                // could refuse it; one measured cell can. A loan that fails here is taken
-                // back rather than flagged: a borrowed ladder is wrong quietly, three or
-                // four steps of the selection out, and nothing downstream would notice.
-                let checked = held(state, &borrowed, from_key, &encoder).await?;
+                // **And then the loan is checked by measurement, not by fields** (T437) —
+                // as a task, not here (T478). R-48 measured an episode of the same season,
+                // the same release, equal in every one of the eight fields above, and a
+                // different encode. No field could refuse it; one measured cell can. A loan
+                // that fails the check is taken back rather than flagged: a borrowed ladder
+                // is wrong quietly, three or four steps of the selection out, and nothing
+                // downstream would notice.
+                //
+                // **Why a task.** The cell costs a cell of encoding — eighteen seconds
+                // measured on a real season, most of it probing the file rather than
+                // encoding. Spent inside this call it froze the screen that asked, with no
+                // progress and no way to stop. The loan is marked provisional in the store
+                // instead (`check_pending`), and a build from a provisional loan is refused
+                // until the verdict lands.
+                let onward = state.clone();
+                let borrowed_key = borrowed.source_key.clone();
+                let borrowed_codec = borrowed.codec.clone();
+                let donor_key = from_key.to_owned();
+                state
+                    .tasks
+                    .submit_in_batch(
+                        TaskKind::MeasureQuality,
+                        None,
+                        request.batch.clone(),
+                        move |ctx| async move {
+                            ctx.report(0.0, DetailCode::StageCheckingLoan);
+                            let Some(borrowed) =
+                                measurements::run(&onward.db, &borrowed_key, &borrowed_codec)
+                                    .map_err(|e| {
+                                        AppError::new(ErrorCode::Internal).with_cause(e)
+                                    })?
+                            else {
+                                // Gone between the loan and the check — somebody threw it
+                                // away, which is an answer and not a failure.
+                                return Ok(());
+                            };
+                            // The encoder is picked here rather than carried in: between
+                            // the loan and the check somebody may have unplugged the card,
+                            // and a check run on a different encoder than it says would be
+                            // worse than one that refuses.
+                            let (encoder, _) = pick_encoder(true).await?;
+                            let notice = held(&onward, &borrowed, &donor_key, &encoder).await?;
+                            measurements::checked(&onward.db, &borrowed_key, &borrowed_codec)
+                                .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+                            if let Some(n) = notice {
+                                ctx.add_notice(n);
+                            }
+                            ctx.report_important(1.0, DetailCode::StageDone);
+                            Ok(())
+                        },
+                    )
+                    .await?;
 
                 let mut view =
                     quality_measure_result(state, &borrowed.source_key, &borrowed.codec).await?;
-                view.notices.extend(checked);
+                view.notices
+                    .push(Detail::new(DetailCode::NoticeCheckPointRunning));
                 if let Some(gap) = gap {
                     view.notices.push(
                         Detail::new(DetailCode::NoticeMaterialApart)
@@ -593,6 +639,8 @@ async fn prepare(request: &MeasureRequest) -> Result<(Run, encoders::Encoder, Ve
 
     Ok((
         Run {
+            // Measured here, so there is nothing to check it against (T478).
+            check_pending: false,
             source_key,
             codec: request.codec.clone(),
             source_path: request.path.clone(),

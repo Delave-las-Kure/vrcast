@@ -310,6 +310,8 @@ detail_codes! {
     NoticeCheckPointHeld => "NOTICE_CHECK_POINT_HELD",
     CheckPointApart => "CHECK_POINT_APART",
     CheckPointNotComparable => "CHECK_POINT_NOT_COMPARABLE",
+    NoticeCheckPointRunning => "NOTICE_CHECK_POINT_RUNNING",
+    StageCheckingLoan => "STAGE_CHECKING_LOAN",
 
     LendFrameDiffers => "LEND_FRAME_DIFFERS",
     LendFpsDiffers => "LEND_FPS_DIFFERS",
