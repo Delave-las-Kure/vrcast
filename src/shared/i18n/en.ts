@@ -1213,6 +1213,13 @@ export const en: Catalogue = {
       unrecognizedCount: "{n} {n|plural:file} · {bytes|bytes}",
       unrecognizedNote:
         "These files are on the server but belong to no medium. They take up room and are served over direct links. Assign them to a medium — or delete them.",
+      suggestionNote:
+        "Some of these look related by name. A suggestion only — nothing is grouped, and nothing will be until you assign the files yourself:",
+      suggestionGroup: "— {n} files, {why}",
+      groupReason: {
+        SAME_DIRECTORY: "in one directory",
+        BITRATE_VARIANTS: "bitrate variants of one file",
+      },
       assignTo: "Assign to a medium",
       assignChoose: "— choose —",
       createHeading: "New medium",

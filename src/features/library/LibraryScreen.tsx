@@ -268,6 +268,7 @@ export function LibraryScreen() {
             <UnrecognizedGroup
               files={view.unrecognized}
               media={view.media}
+              serverId={active.id}
               disabled={busy || view.stale}
               onAssign={(path, mediaId) =>
                 void act(() => ipc.fileMove(active.id, path, mediaId, true))

@@ -158,6 +158,7 @@ pub fn run() {
             commands::geo::ipc::geo_status,
             commands::geo::ipc::geo_update,
             commands::library::ipc::library_list,
+            commands::library::ipc::library_suggest_groups,
             commands::library::ipc::media_create,
             commands::library::ipc::media_rename,
             commands::library::ipc::media_delete,

@@ -31,10 +31,6 @@ const NOT_REACHED_YET: &[(&str, &str)] = &[
          converter gives back (T454, not measured). Closed by T454 and the screen after it.",
     ),
     (
-        "domain::grouping",
-        "⚠ not a deferral but a debt, and the entry says so. It is the whole of T033, which is          ticked, and T033 is what FR-015 is claimed by — so a requirement stands as delivered          on a module the application cannot call, and neither half of FR-015 exists anywhere          else: nothing in the commands or the interface knows the words for a file belonging          to no media. Closed by T480, which either connects it or deletes it.",
-    ),
-    (
         "media::split",
         "milestone F: the cutting and the joining themselves. Same reason as scene_cut, and \
          they go in together: cutting with nothing to join is worse than neither.",

@@ -15,7 +15,7 @@
 //! person meant, and untangling that is harder than grouping by hand.
 
 /// A suggested group of files.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SuggestedGroup {
     /// The common part of the name — a ready `slug`, should the person agree.
     pub key: String,
@@ -29,7 +29,8 @@ pub struct SuggestedGroup {
 }
 
 /// The grounds on which files were brought into a group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GroupReason {
     /// They are in one directory — usually a quality ladder.
     SameDirectory,
@@ -47,7 +48,7 @@ impl GroupReason {
 }
 
 /// What the analysis found.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Suggestion {
     /// Files that could be brought together.
     pub groups: Vec<SuggestedGroup>,

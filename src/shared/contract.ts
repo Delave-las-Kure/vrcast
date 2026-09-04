@@ -386,6 +386,27 @@ export interface TestStep {
 }
 
 /** An offer to carry settings over from `server.env` (T043). */
+/** Why files were brought into one suggested group (T480). */
+export type GroupReason = "SAME_DIRECTORY" | "BITRATE_VARIANTS";
+
+/** A suggested group of files the catalogue knows nothing about. */
+export interface SuggestedGroup {
+  key: string;
+  suggested_title: string;
+  files: string[];
+  reason: GroupReason;
+}
+
+/**
+ * What the core suggests for the unrecognized files.
+ *
+ * A suggestion and nothing else — nothing is grouped until the person says so.
+ */
+export interface GroupSuggestion {
+  groups: SuggestedGroup[];
+  singles: string[];
+}
+
 export interface ImportSuggestion {
   source: string;
   needs_passphrase: boolean;

@@ -21,6 +21,7 @@ import {
   type PlannedStep,
   type ServerState,
   type UpgradePlan,
+  type GroupSuggestion,
   type ImportSuggestion,
   type LibraryChangedEvent,
   type LibraryView,
@@ -260,6 +261,16 @@ export const ipc = {
    * measurement from the first episode of a season to the second, and there was no way to
    * ask it to.
    */
+  /**
+   * What the core makes of the files it does not recognise (T480).
+   *
+   * Written in milestone A and called from nowhere until the reachability guard found it.
+   * A suggestion only: nothing is grouped, and the screen offers it beside the files rather
+   * than acting on it.
+   */
+  librarySuggestGroups: (serverId: string) =>
+    call<GroupSuggestion>("library_suggest_groups", { serverId }),
+
   qualityMeasurements: () => call<StoredMeasurement[]>("quality_measurements", {}),
 
   /** Take another film's measurement for this one. Marked as borrowed on every rung. */

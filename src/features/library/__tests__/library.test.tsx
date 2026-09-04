@@ -18,6 +18,7 @@ import { en, renderIn, ru } from "../../../test-utils";
 import type {
   AppError,
   FileView,
+  GroupSuggestion,
   LibraryView,
   MediaView,
   ServerProfile,
@@ -25,6 +26,7 @@ import type {
 
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockLibraryList = vi.fn<() => Promise<LibraryView>>();
+const mockSuggestGroups = vi.fn<() => Promise<GroupSuggestion>>();
 const mockMediaDelete = vi.fn();
 const mockFileDelete = vi.fn();
 const mockFileMove = vi.fn();
@@ -42,6 +44,10 @@ vi.mock("../../../shared/ipc", async () => {
       serversList: () => mockServersList(),
       serverSetActive: vi.fn(),
       libraryList: (...a: unknown[]) => mockLibraryList(...(a as [])),
+      // The stub's default is an empty **list**, and this one answers with an object — so
+      // without a line here the screen reads `.groups` off an array and the whole library
+      // goes white. Named rather than left to the default for that reason (T470, T480).
+      librarySuggestGroups: () => mockSuggestGroups(),
       mediaCreate: (...a: unknown[]) => mockMediaCreate(...a),
       mediaRename: (...a: unknown[]) => mockMediaRename(...a),
       mediaDelete: (...a: unknown[]) => mockMediaDelete(...a),
@@ -132,6 +138,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   useServers.setState({ profiles: [profile()], loading: false, error: null });
   mockServersList.mockResolvedValue([profile()]);
+  mockSuggestGroups.mockResolvedValue({ groups: [], singles: [] });
   mockLibraryList.mockResolvedValue(view());
 });
 
@@ -232,6 +239,39 @@ describe("what was not recognised", () => {
     fireEvent.click(await screen.findByText(ru.ui.library.unrecognizedTitle));
     expect(await screen.findByText("одинокий ролик.mp4")).toBeInTheDocument();
     expect(screen.getByText(ru.ui.library.unrecognizedNote)).toBeInTheDocument();
+  });
+
+  it("says what it thinks belongs together, and groups nothing by itself", async () => {
+    // T480. The core has been able to work this out since milestone A and nothing called it:
+    // the module was reachable from no command, no task and no screen until the reachability
+    // guard found it. What is checked here is that the suggestion reaches the screen, and
+    // that it stays a suggestion — the files are still assigned one at a time, by hand.
+    mockLibraryList.mockResolvedValue(
+      view({
+        unrecognized: [file({ path: "Backrooms_10.mp4" }), file({ path: "Backrooms_22.mp4" })],
+      }),
+    );
+    mockSuggestGroups.mockResolvedValue({
+      groups: [
+        {
+          key: "backrooms",
+          suggested_title: "Backrooms",
+          files: ["Backrooms_10.mp4", "Backrooms_22.mp4"],
+          reason: "BITRATE_VARIANTS",
+        },
+      ],
+      singles: [],
+    });
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.library.unrecognizedTitle));
+    expect(await screen.findByText("Backrooms")).toBeInTheDocument();
+    expect(screen.getByTestId("group-suggestion")).toHaveTextContent(
+      ru.ui.library.groupReason.BITRATE_VARIANTS,
+    );
+    // And nothing was moved: a suggestion that acted on itself would be the very thing this
+    // screen exists to avoid.
+    expect(mockFileMove).not.toHaveBeenCalled();
   });
 
   it("lets a file be tied to a medium without touching its name", async () => {

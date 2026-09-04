@@ -10,6 +10,7 @@
 
 use super::error::{AppError, DetailCode, ErrorCode, Result};
 use super::AppState;
+use crate::domain::grouping::Suggestion;
 use crate::domain::wording::Detail;
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +127,14 @@ pub mod ipc {
         refresh: Option<bool>,
     ) -> Result<LibraryView> {
         api::library_list(&state, &server_id, refresh.unwrap_or(false)).await
+    }
+
+    #[tauri::command]
+    pub async fn library_suggest_groups(
+        state: State<'_, AppState>,
+        server_id: String,
+    ) -> Result<Suggestion> {
+        api::library_suggest_groups(&state, &server_id).await
     }
 
     #[tauri::command]
@@ -409,6 +418,29 @@ pub mod api {
 
     /// Create a medium. The `slug` is unique within a server; an empty one is made from
     /// the title.
+    /// Suggest how the unrecognized files might belong together (T480).
+    ///
+    /// **Written in milestone A and connected to nothing until now.** `domain::grouping` was
+    /// built for this very screen — the module's own words are "show them and, where it can,
+    /// suggest what is what" — and only the showing half was ever wired. The reachability
+    /// guard (T479) found it, which is what that guard is for.
+    ///
+    /// **The names come from the store, not from the caller.** The screen is showing the same
+    /// list, and taking it from there would put the question of what counts as unrecognized on
+    /// the side of the screen, where it does not belong.
+    ///
+    /// A suggestion and nothing more: nothing is written and nothing is grouped. A guessed
+    /// connection put into the catalogue unasked diverges from what the person meant, and
+    /// untangling that later is harder than grouping by hand.
+    pub async fn library_suggest_groups(
+        state: &super::super::AppState,
+        server_id: &str,
+    ) -> Result<Suggestion> {
+        let view = library_list(state, server_id, false).await?;
+        let names: Vec<String> = view.unrecognized.iter().map(|f| f.path.clone()).collect();
+        Ok(crate::domain::grouping::suggest(&names))
+    }
+
     pub async fn media_create(
         state: &AppState,
         server_id: &str,
