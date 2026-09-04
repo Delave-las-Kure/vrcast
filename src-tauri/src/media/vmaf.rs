@@ -309,16 +309,23 @@ pub fn chunk_args(
     args
 }
 
-/// Score one encoded chunk against the source it came from.
-async fn score_chunk(
-    ffmpeg_bin: &Path,
-    work: &Workspace,
+/// What FFmpeg is asked in order to score one chunk — without an FFmpeg to ask.
+///
+/// **Lifted out for the same reason as [`chunk_args`], and after the same accident.** The
+/// container the measured chunk went into was wrong for weeks; the scores came out up to
+/// twenty-three VMAF low and the curve went on looking sensible, so nothing said anything
+/// (T476, R-49). The comparison carries decisions of exactly that kind — which input is the
+/// reference, whether the variant is stretched back up before it is judged (FR-143), which
+/// scaler does the stretching, whether the two are put on one clock — and every one of them
+/// changes the number without changing the shape of the answer. They lived where no check
+/// could look at them until T490.
+pub fn score_args(
     source: &Path,
     at_s: u64,
     chunk_s: u64,
     source_width: u32,
     source_height: u32,
-) -> Result<f64, VmafError> {
+) -> Vec<String> {
     // The reference is the source's own frames; the distorted one is stretched back up to
     // meet it. `setpts` on both puts them on the same clock — without it the two inputs
     // start at different timestamps and the filter compares frame 0 against frame 240.
@@ -329,7 +336,7 @@ async fn score_chunk(
         Workspace::SCORE
     );
 
-    let args: Vec<String> = vec![
+    vec![
         "-nostdin".into(),
         "-v".into(),
         "error".into(),
@@ -346,7 +353,20 @@ async fn score_chunk(
         "-f".into(),
         "null".into(),
         "-".into(),
-    ];
+    ]
+}
+
+/// Score one encoded chunk against the source it came from.
+async fn score_chunk(
+    ffmpeg_bin: &Path,
+    work: &Workspace,
+    source: &Path,
+    at_s: u64,
+    chunk_s: u64,
+    source_width: u32,
+    source_height: u32,
+) -> Result<f64, VmafError> {
+    let args = score_args(source, at_s, chunk_s, source_width, source_height);
 
     run_in(ffmpeg_bin, &work.dir, &args).await?;
 
