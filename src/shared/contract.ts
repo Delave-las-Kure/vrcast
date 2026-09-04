@@ -301,7 +301,8 @@ export type DetailCode =
   | "STALLS_SERVER_LINK"
   | "STALLS_DISK"
   | "STALLS_FILE_PEAKS"
-  | "STALLS_VIEWER_LINK";
+  | "STALLS_VIEWER_LINK"
+  | "STALLS_THE_PLAYER";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {

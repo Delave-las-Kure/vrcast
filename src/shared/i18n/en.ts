@@ -557,6 +557,8 @@ export const en: Catalogue = {
       "{disk_read_mb_s} MB/s is being read off the disk, and {ratio}× of real time received. The viewers are spread along the timeline and their pieces do not fit in memory.",
     STALLS_FILE_PEAKS:
       "The viewer's {mbit_s} Mbit/s carries the average bitrate of {average_mbit} but not the ten-second peak of {peak_10s_mbit}. It is the file that hangs the player; a re-encode with the peaks capped is the cure.",
+    STALLS_THE_PLAYER:
+      "Not the viewer's link. While anything was arriving it arrived at {in_download_mbit_s} Mbit/s, which would keep up with a film needing {average_mbit}. The shortfall built up in the gaps, when the viewer was asking for nothing: a player stopped, a decoder that could not keep pace, or somebody pressing pause. Over the clock they got {mbit_s} Mbit/s, a ratio of {ratio}. Player restarts: {restarts}, segments skipped: {skipped}.",
     STALLS_VIEWER_LINK:
       "The viewer's link is short: {ratio}× of real time received at {mbit_s} Mbit/s (inside the downloads — {in_download_mbit_s}). Segments skipped: {skipped}, player restarts: {restarts}.",
   },

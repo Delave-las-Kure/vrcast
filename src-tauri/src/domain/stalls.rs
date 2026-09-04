@@ -164,6 +164,9 @@ pub enum Cause {
     Disk,
     /// The link is wide enough on average and the file's peaks are not.
     TheFileItself,
+    /// Not the link at all: it carries what the film needs whenever it is carrying anything,
+    /// and the viewer is not asking in between (T482).
+    ThePlayer,
     /// Not enough to say. Never dressed up as one of the above.
     Unclear,
 }
@@ -387,6 +390,33 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
                     .with("mbit_s", round2(mbit))
                     .with("average_mbit", round2(file.average_mbit))
                     .with("peak_10s_mbit", round2(file.peak_10s_mbit)),
+            };
+        }
+    }
+
+    // ⚠ **Not the link, when the link demonstrably carries it.** Measured on the stand
+    // 2026-09-04: a viewer at a ratio of 0.39 was told their link was too thin while the
+    // speed *inside* their downloads was 30.35 Mbit/s against a film needing 4 — a hundred
+    // and sixty times over. The link was fine and they were not asking; the answer sent them
+    // to argue with their provider. There was no cause for this at all, and the catch-all
+    // took it.
+    //
+    // **The comparison is the film's own figure, not a threshold of ours.** If what arrives
+    // while anything is arriving would keep up with the film, the shortfall is in the gaps —
+    // a player that has stopped, a decoder that cannot keep pace, somebody who pressed pause.
+    // Without a file to compare against nothing is claimed, and the catch-all keeps the case:
+    // saying "not the link" needs a number for what the link would have to carry.
+    if let (Some(file), Some(in_download)) = (file, watcher.in_download_mbit_s) {
+        if in_download >= file.average_mbit {
+            return Verdict {
+                cause: Cause::ThePlayer,
+                say: Detail::new(DetailCode::StallsThePlayer)
+                    .with("ratio", round2(ratio))
+                    .with("mbit_s", watcher.mbit_s.map(round2))
+                    .with("in_download_mbit_s", round2(in_download))
+                    .with("average_mbit", round2(file.average_mbit))
+                    .with("restarts", watcher.restarts as u64)
+                    .with("skipped", watcher.skipped.len() as u64),
             };
         }
     }

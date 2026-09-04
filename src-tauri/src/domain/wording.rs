@@ -398,6 +398,7 @@ detail_codes! {
     StallsFilePeaks => "STALLS_FILE_PEAKS",
     /// `ratio`, `mbit_s`, `in_download_mbit_s`, `skipped`, `restarts`.
     StallsViewerLink => "STALLS_VIEWER_LINK",
+    StallsThePlayer => "STALLS_THE_PLAYER",
 }
 
 impl TryFrom<String> for DetailCode {

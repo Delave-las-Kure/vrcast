@@ -11,7 +11,7 @@
 //! real ones are viewers' addresses, and FR-057 does not let those into a repository.
 
 use vrcast_studio_lib::domain::access_log::parse_line;
-use vrcast_studio_lib::domain::stalls::{self, Cause, FileShape, Load, NotAViewer};
+use vrcast_studio_lib::domain::stalls::{self, Cause, FileShape, Load, NotAViewer, Watcher};
 
 /// The addresses the fixture was built with.
 const STARVING: &str = "203.0.113.24";
@@ -228,4 +228,111 @@ fn a_line_caught_mid_write_does_not_take_the_report_with_it() {
         "something other than the half-written last line failed to parse"
     );
     assert!(!sifted().watchers.is_empty());
+}
+
+#[test]
+fn a_viewer_whose_link_carries_it_is_not_told_their_link_is_the_problem() {
+    // ⚠ **The numbers here were measured on the stand, 2026-09-04** (T482). A viewer at a
+    // ratio of 0.39 — plainly behind — was told the fault was their link, while the speed
+    // *inside* their downloads was 30.35 Mbit/s against a film needing 4. A hundred and sixty
+    // times what it takes. The link was fine and they were not asking in between; the answer
+    // sent them to argue with their provider.
+    //
+    // There was no cause for this at all, and `ViewerLink` — the last branch, reached when
+    // nothing else fits — took it.
+    let watcher = Watcher {
+        client_ip: String::from("203.0.113.7"),
+        watching: None,
+        segments: 5,
+        bytes: 9_500_000,
+        first: time::OffsetDateTime::UNIX_EPOCH,
+        last: time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(60),
+        elapsed_s: 60.0,
+        content_ratio: Some(0.39),
+        mbit_s: Some(0.19),
+        in_download_mbit_s: Some(30.35),
+        skipped: Vec::new(),
+        restarts: 0,
+        reinits: 0,
+        failures: 0,
+    };
+    let film = FileShape {
+        average_mbit: 4.0,
+        peak_10s_mbit: 6.0,
+    };
+    let verdict = stalls::explain(&watcher, None, Some(&film));
+    assert_eq!(
+        verdict.cause,
+        Cause::ThePlayer,
+        "a viewer whose link carries the film seven times over was blamed for their link"
+    );
+    // And with both numbers, because the whole argument is the difference between them.
+    assert_eq!(
+        verdict
+            .say
+            .params
+            .get("in_download_mbit_s")
+            .and_then(|v| v.as_f64()),
+        Some(30.35)
+    );
+    assert_eq!(
+        verdict
+            .say
+            .params
+            .get("average_mbit")
+            .and_then(|v| v.as_f64()),
+        Some(4.0)
+    );
+}
+
+#[test]
+fn a_viewer_whose_link_really_is_thin_is_still_told_so() {
+    // The other side of the same rule, so it does not turn into "never blame the link". Here
+    // the downloads themselves crawl: under what the film needs even while they are running.
+    let watcher = Watcher {
+        client_ip: String::from("203.0.113.8"),
+        watching: None,
+        segments: 5,
+        bytes: 900_000,
+        first: time::OffsetDateTime::UNIX_EPOCH,
+        last: time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(60),
+        elapsed_s: 60.0,
+        content_ratio: Some(0.30),
+        mbit_s: Some(0.12),
+        in_download_mbit_s: Some(1.2),
+        skipped: Vec::new(),
+        restarts: 0,
+        reinits: 0,
+        failures: 0,
+    };
+    let film = FileShape {
+        average_mbit: 4.0,
+        peak_10s_mbit: 6.0,
+    };
+    let verdict = stalls::explain(&watcher, None, Some(&film));
+    assert_eq!(verdict.cause, Cause::ViewerLink);
+}
+
+#[test]
+fn without_a_film_to_compare_against_nothing_is_claimed_about_the_player() {
+    // Saying "not the link" needs a number for what the link would have to carry. Without one
+    // the old answer stands rather than a guess dressed as a finding.
+    let watcher = Watcher {
+        client_ip: String::from("203.0.113.9"),
+        watching: None,
+        segments: 5,
+        bytes: 9_500_000,
+        first: time::OffsetDateTime::UNIX_EPOCH,
+        last: time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(60),
+        elapsed_s: 60.0,
+        content_ratio: Some(0.39),
+        mbit_s: Some(0.19),
+        in_download_mbit_s: Some(30.35),
+        skipped: Vec::new(),
+        restarts: 0,
+        reinits: 0,
+        failures: 0,
+    };
+    let verdict = stalls::explain(&watcher, None, None);
+    assert_eq!(verdict.cause, Cause::ViewerLink);
 }
