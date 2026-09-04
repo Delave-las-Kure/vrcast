@@ -188,7 +188,15 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        # **`--features integration` here, though the tests behind it run elsewhere.**
+        # Without it the integration suite is not compiled in this job at all, and a
+        # remark in it — or a change that stops it compiling — is found by nobody:
+        # the integration job builds it on Linux only, and clippy never sees it there.
+        # Found by the audit of 2026-09-04 (T489): locally `check-all.sh` had always
+        # passed the feature and CI never had.
+        run: >
+          cargo clippy --manifest-path src-tauri/Cargo.toml
+          --all-targets --features integration -- -D warnings
 
       - name: Core tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
@@ -679,6 +687,31 @@ jobs:
         run: bash scripts/check-version.sh
       - name: Both themes line up
         run: bash scripts/check-theme.sh
-      # The isolation check (principle VII) runs locally before a phase is handed over: CI
-      # sees only the application's directory, while the protected files live outside the
-      # repository.
+      # ⚠ **Two guards deliberately absent, and it is written here so the question is not
+      # re-opened every time somebody counts the scripts** (T489, 2026-09-04):
+      #
+      # - the isolation check (principle VII) needs the protected files, which live
+      #   OUTSIDE the repository; CI checks out the application alone, so every file
+      #   would read as missing and this job would be red for ever. It runs locally,
+      #   before a phase is handed over, where those files are;
+      # - the server reference check compares against the skill, which lives outside the
+      #   repository for the same reason. Its own text says it: with nothing to compare
+      #   against it exits 0 saying the comparison was NOT MADE, and a step that goes
+      #   green having compared nothing is worse than no step.
+      #
+      # `check-workflows.sh` is the third and is absent for a different reason — it
+      # lints through a container, and the bind mount it needs cannot be made from
+      # inside a job container onto the machine's own daemon. Hardened instead so it
+      # cannot pass without having linted anything.
+      - name: The leak guard's own rule
+        # The four lines that decide whether a leaked Docker network makes a build red.
+        # A build that is red for somebody else's leak teaches people not to read red,
+        # which is the argument the guard itself is written on — so the rule has a test,
+        # and until now the test ran nowhere.
+        run: bash scripts/check-leak-guard.sh
+      - name: The release file assembler
+        # ⚠ **The sharpest of the three that were missing.** `latest-json.py` runs once
+        # per release, on a machine nobody is watching, and a `latest.json` short of a
+        # platform does not fail anything — it publishes, and everybody on that platform
+        # silently stops being offered updates. The test for it existed and ran nowhere.
+        run: bash scripts/test-latest-json.sh
