@@ -158,3 +158,160 @@ fn every_combination_holds() {
         }
     }
 }
+
+// ---------- the gate is the door, and there is no second one (T488) ----------
+//
+// ⚠ **The rule above is checked; the way to it was not.** Everything in this file judges
+// `allowed(state, intent)` — the decision. But a decision is only worth what reaching it is
+// worth, and reaching it is not a rule of the type system: it is four call sites of
+// `Connection::connect` that somebody chose to write one way rather than another. A fifth,
+// added in the ordinary course of work, would open a session on a machine the application
+// never asked itself about, and not one of this project's checks would notice.
+//
+// **What the guard is written against was chosen after looking.** The obvious rule —
+// "`connect_raw` has one caller" — is itself the failure it is meant to prevent: it guards a
+// door with three others standing open beside it. `connect_raw` is not where a connection is
+// made; `Connection::connect` is, and it is reached from three places besides the gate. So
+// the list below is of every place in the core that reaches a server at all, with why each
+// may do so without asking first.
+
+/// Every place in the core that opens a session, how many times, and why it may do so before
+/// — or without — the gate's decision.
+///
+/// **A count, not just a file.** A new `Connection::connect` beside an allowed one is exactly
+/// the case this exists for: the file is already on the list, so naming files alone would
+/// wave it through.
+const REACHES_A_SERVER: &[(&str, usize, &str)] = &[
+    (
+        "server/mod.rs",
+        1,
+        "`connect_raw` itself — the one door, which `gate::open` opens after it has decided.",
+    ),
+    (
+        "commands/servers.rs",
+        1,
+        "The step-by-step connection check (T041). It exists precisely to find out what is at \
+         the other end, so it cannot be made to wait for an answer that comes from connecting. \
+         It reads and reports; it changes nothing.",
+    ),
+    (
+        "commands/deploy.rs",
+        2,
+        "The two proofs after the hardening (T274): that the key still works, and that a \
+         password is now refused. Each needs a session of its own — the one being held would \
+         go on working whatever the settings became, which is what makes it the wrong witness. \
+         Both run on a machine the gate has already judged ours.",
+    ),
+];
+
+/// Every `.rs` file under a directory, path first.
+fn core_files(dir: &std::path::Path, into: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            core_files(&path, into);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            into.push(path);
+        }
+    }
+}
+
+/// The file's code with its line comments taken out, so a mention in prose is not a call.
+fn without_comments(body: &str) -> String {
+    body.lines()
+        .map(|l| match l.find("//") {
+            Some(at) => &l[..at],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Where the core opens sessions, counted per file and named the way the list names them.
+fn where_a_server_is_reached(needle: &str) -> std::collections::BTreeMap<String, usize> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    core_files(&src, &mut files);
+
+    let mut found = std::collections::BTreeMap::new();
+    for path in files {
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let times = without_comments(&body).matches(needle).count();
+        if times > 0 {
+            let rel = path
+                .strip_prefix(&src)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            *found.entry(rel).or_insert(0) += times;
+        }
+    }
+    found
+}
+
+#[test]
+fn nothing_reaches_a_server_except_the_places_that_say_why() {
+    let found = where_a_server_is_reached("Connection::connect(");
+    let mut wrong = Vec::new();
+
+    for (where_, times) in &found {
+        match REACHES_A_SERVER.iter().find(|(f, _, _)| f == where_) {
+            None => wrong.push(format!(
+                "{where_} opens a session {times} time(s) and is on no list. Either it must go \
+                 through `gate::open`, or it must be added here with why it may not."
+            )),
+            Some((_, allowed, _)) if allowed != times => wrong.push(format!(
+                "{where_} opens a session {times} time(s); the list allows {allowed}. A new one \
+                 beside an allowed one is still a new way past the gate."
+            )),
+            Some(_) => {}
+        }
+    }
+    for (where_, allowed, _) in REACHES_A_SERVER {
+        if !found.contains_key(*where_) {
+            wrong.push(format!(
+                "{where_} is allowed {allowed} session(s) and opens none. The list has outlived \
+                 the code — take the entry out."
+            ));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "principle I rests on the gate being the only way to a server:\n  {}",
+        wrong.join("\n  ")
+    );
+}
+
+#[test]
+fn the_undecided_door_is_opened_only_by_the_gate() {
+    // `connect_raw` is the connection made *without* asking whether the machine may be
+    // touched — its own doc says so. `pub(crate)` keeps it inside the core; nothing keeps a
+    // second place inside the core from calling it.
+    let found = where_a_server_is_reached("connect_raw(");
+    let callers: Vec<&String> = found
+        .keys()
+        .filter(|f| f.as_str() != "server/mod.rs")
+        .collect();
+    assert_eq!(
+        callers,
+        vec![&String::from("server/gate.rs")],
+        "`connect_raw` reaches a server without asking whether it may be touched, so only the \
+         gate may call it; these do: {callers:?}"
+    );
+}
+
+#[test]
+fn every_place_that_may_skip_the_gate_carries_its_reason() {
+    for (where_, _, why) in REACHES_A_SERVER {
+        assert!(
+            why.len() > 40,
+            "{where_} may reach a server ungated with no reason written down"
+        );
+    }
+}
