@@ -704,9 +704,9 @@ async fn scenario_4_both_kinds_of_viewer_are_seen_and_a_slow_one_is_named() {
         &stand,
         &format!("curl -s -o /dev/null --max-time 60 '{hls}'"),
     );
-    let _ = from_here.join();
 
     let seen = gather_viewers(&mut updates, Duration::from_secs(90)).await;
+    let _ = from_here.join();
     println!("{} viewer(s) seen", seen.len());
     for v in &seen {
         // The address itself is never printed (FR-057) — only what is known about it.
@@ -728,6 +728,107 @@ async fn scenario_4_both_kinds_of_viewer_are_seen_and_a_slow_one_is_named() {
         let placed = v.country.is_some() || v.city.is_some() || v.asn_org.is_some();
         println!("  placed: {placed}");
     }
+
+    // --- 4. one of them on a line too thin for what they are being sent ---------------
+    //
+    // ⚠ **The link is thinned, not the reader** — and the first version of this got that
+    // wrong. Pulling with `curl --limit-rate` throttles whoever is reading, not the network:
+    // TCP hands the whole file over at once and then waits, `bytes_acked` stops growing, and
+    // `ss` reports `rwnd_limited: 97%`. That is a player with a full buffer, which the core
+    // deliberately does **not** flag (`RECEIVER_LIMITED`) — marking it would light the flag
+    // for every healthy viewer there is. The check failed because the application was right.
+    //
+    // So the serving's own outgoing link is narrowed below what the variant needs, which is
+    // what a thin link actually is. It is put back below whatever happens.
+    let iface = on_the_stand(&stand, "ip -o -4 route show default | awk '{print $5}'");
+    let iface = iface.trim().to_owned();
+    on_the_stand(
+        &stand,
+        &format!("tc qdisc replace dev {iface} root tbf rate 2mbit burst 32kbit latency 400ms"),
+    );
+    let _thin = ThinLink {
+        stand: &stand,
+        iface: iface.clone(),
+    };
+    let big = format!("https://{}/videos/{slug}/v4/index.m3u8", stand.domain);
+    let pulling = std::thread::spawn(move || {
+        for n in 0..8 {
+            let _ = std::process::Command::new("curl")
+                .args([
+                    "-s",
+                    "-o",
+                    "/dev/null",
+                    "--max-time",
+                    "40",
+                    &big.replace("index.m3u8", &format!("seg_{n:05}.ts")),
+                ])
+                .status();
+        }
+    });
+
+    let mut troubled = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout_at(deadline, updates.recv()).await {
+            Ok(Ok(vrcast_studio_lib::commands::AppEvent::ViewersUpdate(u))) => {
+                for v in &u.active {
+                    if !v.problems.is_empty() {
+                        println!(
+                            "  trouble {:?}: delivering {:?}, needs {:?}",
+                            v.problems, v.delivery_bps, v.required_bps
+                        );
+                    }
+                }
+                troubled = u
+                    .active
+                    .iter()
+                    .filter(|v| !v.problems.is_empty())
+                    .cloned()
+                    .collect();
+                if !troubled.is_empty() {
+                    break;
+                }
+            }
+            Ok(Ok(_)) => {}
+            _ => break,
+        }
+    }
+    assert!(
+        !troubled.is_empty(),
+        "a viewer pulling at 25 kB/s from a variant that needs a megabit was not marked as \
+         having trouble — the list says everyone is fine while somebody is watching a slideshow"
+    );
+
+    // --- 5. and when they stop, they leave the active list for the history ------------
+    let _ = pulling.join();
+    let threshold =
+        Duration::from_secs(vrcast_studio_lib::domain::viewers::DEFAULT_ACTIVITY_THRESHOLD_S + 20);
+    println!("waiting out the activity threshold ({threshold:?})");
+    let deadline = tokio::time::Instant::now() + threshold;
+    let mut emptied = false;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout_at(deadline, updates.recv()).await {
+            Ok(Ok(vrcast_studio_lib::commands::AppEvent::ViewersUpdate(u))) => {
+                if u.active.is_empty() {
+                    emptied = true;
+                    break;
+                }
+            }
+            Ok(Ok(_)) => {}
+            _ => break,
+        }
+    }
+    let history = viewers::viewers_history(&state);
+    println!("active emptied: {emptied}; history holds {}", history.len());
+    assert!(
+        emptied,
+        "nobody left the active list after the pulling stopped and the threshold passed — the \
+         count of who is watching only ever grows"
+    );
+    assert!(
+        !history.is_empty(),
+        "the viewers left the active list and the history kept none of them"
+    );
 }
 
 /// Collect the viewers the watch reports, until the time is up.
@@ -752,4 +853,19 @@ async fn gather_viewers(
         }
     }
     best
+}
+
+/// Puts the serving's link back to full width when it goes out of scope.
+struct ThinLink<'a> {
+    stand: &'a Stand,
+    iface: String,
+}
+
+impl Drop for ThinLink<'_> {
+    fn drop(&mut self) {
+        on_the_stand(
+            self.stand,
+            &format!("tc qdisc del dev {} root || true", self.iface),
+        );
+    }
 }
