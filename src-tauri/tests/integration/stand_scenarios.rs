@@ -988,3 +988,136 @@ fn mark(ip: &str) -> String {
     }
     format!("{:06x}", h & 0xffffff)
 }
+
+// ---------------- scenario 8, steps 2 and 3: explaining a complaint (T333) ----------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "reads a real machine's log after making a viewer fall behind: run by hand"]
+async fn scenario_8_a_complaint_of_stalling_is_explained_with_the_readings_behind_it() {
+    // Quickstart scenario 8, step 2. **"It stalls" is what a person says; the answer has to be
+    // what the server was doing at the time.** A verdict on its own — "the link is slow" —
+    // sends somebody to argue with their provider on our word. The readings behind it are what
+    // make the verdict arguable, which is the only kind worth giving.
+    //
+    // ⚠ **The stall is made of the rhythm of the requests, not of a narrow link**, and two
+    // earlier attempts got that wrong. Narrowing the serving's egress with `tc` broke
+    // connections outright rather than slowing them — a token bucket small enough to matter is
+    // too small for a TLS handshake — and the link between this machine and the stand fails on
+    // its own from time to time, which is indistinguishable from a throttle that worked.
+    // Neither makes a viewer who is falling behind.
+    //
+    // What does: asking for four-second segments every twelve seconds. That is somebody
+    // watching at a third of real time, which is what the log of a stalling viewer looks like.
+    // It is done from the stand itself, where the path is not in question.
+    let stand = stand();
+    let state = app_state();
+    let id = profile_for(&state, &stand).await;
+    let slug = std::env::var("VRCAST_STAND_SLUG")
+        .expect("VRCAST_STAND_SLUG is not set: name the set scenario 5 built");
+
+    // ⚠ **From here, not from the stand.** A first attempt made the requests on the stand
+    // itself, and they came back "set aside" rather than as a watcher — which is correct and
+    // deliberate: a machine's own requests are not viewers of it. Correct, and it means the
+    // complaint has to come from outside, over the same link everybody else uses.
+    let domain = stand.domain.clone();
+    let for_pull = slug.clone();
+    let watching = std::thread::spawn(move || {
+        for n in 0..6 {
+            let url = format!("https://{domain}/videos/{for_pull}/v4/seg_{n:05}.ts");
+            let _ = std::process::Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "--max-time", "20", &url])
+                .status();
+            std::thread::sleep(Duration::from_secs(12));
+        }
+    });
+    // Long enough for the pattern to be in the log rather than only begun.
+    tokio::time::sleep(Duration::from_secs(62)).await;
+
+    let stalls = diag::diag_explain_stalls(
+        &state,
+        &id,
+        5,
+        Some(vrcast_studio_lib::domain::stalls::FileShape {
+            average_mbit: 4.0,
+            peak_10s_mbit: 6.0,
+        }),
+    )
+    .await
+    .expect("the complaint would not be looked into");
+    let _ = watching.join();
+
+    println!(
+        "{} watcher(s), {} set aside, {} verdict(s)",
+        stalls.watchers.len(),
+        stalls.set_aside.len(),
+        stalls.verdicts.len()
+    );
+    println!("  load: {:?}", stalls.load);
+    for v in &stalls.verdicts {
+        println!("  {v:?}");
+    }
+    assert!(
+        !stalls.watchers.is_empty(),
+        "somebody asked for five segments over a minute and the complaint came back about \
+         nobody at all"
+    );
+    assert_eq!(
+        stalls.verdicts.len(),
+        stalls.watchers.len(),
+        "a watcher came back without a verdict — the complaint was heard and not answered"
+    );
+    // **A cause, and the numbers it was reached from.** Step 2 asks for both, and a verdict
+    // with nothing to look at is one nobody can argue with.
+    for v in &stalls.verdicts {
+        assert!(
+            !v.say.params.is_empty(),
+            "a verdict came back with no figures behind it: {v:?}"
+        );
+    }
+    // ⚠ **The cause is read as a cause, not looked for in the text.** The first version of
+    // this searched the debug output for "Stall" — and `StallsKeepingUp`, the verdict that
+    // says the viewer is *fine*, contains it. The check passed while proving the opposite of
+    // what it claimed: the very failure this project keeps finding elsewhere, in its own hands.
+    use vrcast_studio_lib::domain::stalls::Cause;
+    let causes: Vec<Cause> = stalls.verdicts.iter().map(|v| v.cause).collect();
+    println!("  causes: {causes:?}");
+    assert!(
+        causes.iter().any(|c| !matches!(c, Cause::NothingWrong)),
+        "every verdict says nothing is wrong, for a viewer asking for four seconds of film \
+         every twelve. Either the complaint was not made or it was not heard: {causes:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "reads a real film: run by hand"]
+async fn scenario_8_the_peaks_of_a_film_are_found_and_placed() {
+    // Step 3, and it touches no server at all: the question is about the film. Which is why it
+    // can be asked *before* an upload, when it is most useful.
+    let source = std::env::var("VRCAST_STAND_SOURCE")
+        .expect("VRCAST_STAND_SOURCE is not set: name the film");
+    let peaks = diag::diag_bitrate(&source)
+        .await
+        .expect("the film would not be measured");
+    println!(
+        "{} second(s): average {:.2} Mbit/s, median {:.2}",
+        peaks.seconds,
+        peaks.average_bps as f64 / 1e6,
+        peaks.median_bps as f64 / 1e6
+    );
+    println!("  the worst second: {:?}", peaks.one_second);
+    println!("  the worst ten:    {:?}", peaks.wide);
+    assert!(peaks.seconds > 0, "the film measured as no seconds long");
+    let peak = peaks
+        .one_second
+        .as_ref()
+        .expect("no peak second was found in a film that has scenes");
+    assert!(
+        peak.bitrate_bps > peaks.median_bps,
+        "the worst second is no worse than the middle one — nothing was found, only averaged"
+    );
+    // **Where, not just how much.** A peak with no position cannot be looked at.
+    assert!(
+        peak.at_s > 0.0 || peaks.wide.as_ref().is_some_and(|w| w.at_s > 0.0),
+        "the peak was found and not placed: {peak:?}"
+    );
+}
