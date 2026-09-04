@@ -112,9 +112,11 @@ mod seams;
 #[path = "integration/quality_live.rs"]
 mod quality_live;
 
-/// The real stand (T332). Ignored by default: it changes a real server.
 #[path = "integration/stand_live.rs"]
 mod stand_live;
+/// The real stand (T332). Ignored by default: it changes a real server.
+#[path = "integration/stand_scenarios.rs"]
+mod stand_scenarios;
 
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;
