@@ -21,10 +21,77 @@ use std::time::{Duration, Instant};
 
 /// How many gigabytes to send. Fewer and the transfer ends before it can be broken five
 /// times; more and the check becomes impossibly long.
-const GIGABYTES: usize = 2;
+///
+/// **Two by default and thirty on request** (T474). SC-003 names thirty gigabytes, and the
+/// figure is not decoration: at that size a break lands in the middle of a transfer that has
+/// already been running for a quarter of an hour, and what is resumed from is an offset no
+/// short run ever reaches. Thirty every time would make this untouchable, so the ordinary run
+/// stays at two and the acceptance run asks for the rest:
+///
+/// ```text
+/// VRCAST_UPLOAD_GB=30 cargo test --features integration --test integration ///   -- --ignored --nocapture upload_scenario
+/// ```
+fn gigabytes() -> usize {
+    std::env::var("VRCAST_UPLOAD_GB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2)
+}
 
 /// How many times to break the connection. As many as the quickstart scenario has.
 const BREAKS: usize = 5;
+
+/// Wait until the staged file has passed a mark, saying what the task thinks it is doing.
+///
+/// **Where the break lands is the point.** A break at a tenth of a percent proves nothing
+/// about resuming from two thirds of the way through, and the waiter this replaced only asked
+/// whether anything had moved at all.
+async fn wait_until_past_watching(
+    server: &TestServer,
+    name: &str,
+    mark: u64,
+    seconds: u64,
+    watching: Option<(&vrcast_studio_lib::commands::AppState, &str)>,
+) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut furthest = staged_size(server, name);
+    let mut moved_at = Instant::now();
+    loop {
+        let at = staged_size(server, name);
+        if at >= mark {
+            return at;
+        }
+        if at > furthest {
+            furthest = at;
+            moved_at = Instant::now();
+        }
+        // ⚠ **A transfer that has stopped is a failure, not a wait.** This used to give back
+        // whatever it had reached when its time ran out, and the run carried on: the next
+        // break fired at the very same offset, and the one after that, and five breaks were
+        // reported against a transfer that had not moved a byte since the first. Three hours
+        // of a run said "five breaks survived" about nothing at all.
+        if let Some((state, task)) = watching {
+            if let Ok(Some(rec)) = state.tasks.get(task) {
+                println!(
+                    "    at {at} B — task {:?} {:.1}% stage {:?} err {:?}",
+                    rec.state,
+                    rec.progress * 100.0,
+                    rec.stage,
+                    rec.error.as_ref().map(|e| e.code)
+                );
+            }
+        }
+        assert!(
+            moved_at.elapsed() < Duration::from_secs(180),
+            "the transfer has not moved past {furthest} bytes for three minutes while waiting              for {mark}. It is stopped, not slow — and a check that waits it out would report              breaks it never made"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "the transfer did not reach {mark} bytes within {seconds}s; it got to {furthest}"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
 
 /// Write a large file without holding it in memory.
 ///
@@ -80,13 +147,34 @@ async fn the_upload_scenario_survives_breaks_and_a_restart() {
 
     let server = TestServer::start().expect("the container would not come up");
 
-    let dir = std::env::temp_dir().join(format!("vrcast-scn-{}", uuid::Uuid::new_v4().simple()));
+    // ⚠ **Where the file goes is told, not assumed, and the room is checked before a byte is
+    // written.** The temporary directory is on the system drive, and a thirty-gigabyte run put
+    // there filled it — 931 GB down to 2.1 free, with three abandoned copies left behind by
+    // runs that were interrupted. Writing until the disk stops you is the worst way to find
+    // out you had no room: it takes the machine with it. The application refuses a build it
+    // cannot fit (FR-149); a check of the application has no business behaving worse.
+    let root = std::env::var("VRCAST_UPLOAD_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let dir = root.join(format!("vrcast-scn-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&dir).expect("could not create the working directory");
     let local = dir.join(NAME);
 
-    println!("preparing a file of {GIGABYTES} GB…");
+    let gigabytes = gigabytes();
+    let need = gigabytes as u64 * 1024 * 1024 * 1024;
+    let free = vrcast_studio_lib::media::local_disk::usage(&dir)
+        .map(|u| u.free_bytes)
+        .unwrap_or(u64::MAX);
+    assert!(
+        free > need + need / 10,
+        "this needs {need} bytes for the film and there are {free} free under {}. Point \
+         VRCAST_UPLOAD_DIR at a drive with room — filling the disk instead would take the \
+         whole machine down with it",
+        dir.display()
+    );
+    println!("preparing a file of {gigabytes} GB…");
     let started = Instant::now();
-    make_big_file(&local, GIGABYTES);
+    make_big_file(&local, gigabytes);
     let size = std::fs::metadata(&local).unwrap().len();
     println!("the file is ready: {size} B in {:?}", started.elapsed());
 
@@ -111,11 +199,24 @@ async fn the_upload_scenario_survives_breaks_and_a_restart() {
         .expect("the upload would not submit");
     println!("the upload has begun: {task}");
 
-    // ---- five forced breaks ----
+    // ---- five forced breaks, spread along the transfer ----
+    //
+    // ⚠ **Spread by progress, not by the clock.** They used to be made one after another with
+    // two seconds between, which on a two-gigabyte file lands them across a fair part of it —
+    // and on thirty gigabytes puts all five inside the first tenth of a percent (measured:
+    // breaks at 7, 15, 19, 27 and 31 MB of 32 GB, and then twenty-nine gigabytes carried
+    // through untouched). That is not what SC-003 asks. The interesting break is the late one:
+    // resuming from an offset no short run ever reaches.
+    let total = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
     for n in 1..=BREAKS {
-        let before = wait_growth(&server, NAME, staged_size(&server, NAME), 120).await;
+        let want = total * (n as u64) * 15 / 100;
+        let before =
+            wait_until_past_watching(&server, NAME, want, 3600, Some((&state, &task))).await;
         break_connections(&server);
-        println!("break {n}/{BREAKS} at {before} B");
+        println!(
+            "break {n}/{BREAKS} at {before} B ({:.1}% of {total})",
+            100.0 * before as f64 / total.max(1) as f64
+        );
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         let record = state
@@ -156,7 +257,9 @@ async fn the_upload_scenario_survives_breaks_and_a_restart() {
     upload::upload_resume(&state, &task).expect("the task would not carry on");
 
     // ---- through to the end ----
-    let deadline = Instant::now() + Duration::from_secs(900);
+    // Fifteen minutes for the ordinary two gigabytes, and room for the rest in proportion:
+    // a thirty-gigabyte run is an acceptance run and takes as long as it takes.
+    let deadline = Instant::now() + Duration::from_secs(900 + gigabytes as u64 * 600);
     loop {
         let record = state
             .tasks
@@ -206,18 +309,52 @@ async fn the_upload_scenario_survives_breaks_and_a_restart() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Wait until there is more on the server than there was.
-async fn wait_growth(server: &TestServer, name: &str, from: u64, seconds: u64) -> u64 {
-    let deadline = Instant::now() + Duration::from_secs(seconds);
-    loop {
-        let now = staged_size(server, name);
-        if now > from {
-            return now;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "not a byte beyond {from} was sent in {seconds} s"
-        );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+#[tokio::test]
+#[ignore = "kills sessions on a container: run by hand"]
+async fn a_command_in_flight_does_not_outlive_the_connection_it_runs_on() {
+    // ⚠ **The same question as T483, asked of the other half.** The write to the server had no
+    // bound on it and a broken connection froze the transfer for ever; `exec` is the path
+    // everything else takes — the health readings, the deploy steps, the following of viewers,
+    // the listing of the library. If it hangs the same way, every one of those hangs with it,
+    // and a hang is worse than a failure because nothing says it happened.
+    //
+    // Evidence before a fix: this asks whether it hangs, and says which.
+    use vrcast_studio_lib::ssh::{fingerprint, Connection, Credentials, ServerAddress};
+
+    let server = TestServer::start().expect("the container would not come up");
+    let address = ServerAddress::new(server.host(), server.port);
+    let fp = fingerprint::probe(&address)
+        .await
+        .expect("the fingerprint was not obtained");
+    let conn = Connection::connect(
+        address,
+        "root",
+        Credentials::Key {
+            path: super::fixture::key_path(),
+            passphrase: Some(super::fixture::KEY_PASSPHRASE.to_owned()),
+        },
+        &fp,
+    )
+    .await
+    .expect("connecting failed");
+
+    let running = tokio::spawn({
+        let conn = conn.clone();
+        async move { conn.exec("sleep 600; echo done").await }
+    });
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    break_connections(&server);
+
+    // The keepalives are ninety seconds; three minutes is twice that and then some.
+    let outcome = tokio::time::timeout(Duration::from_secs(180), running).await;
+    match outcome {
+        Ok(Ok(Ok(out))) => println!("the command came back on its own: ok={}", out.ok()),
+        Ok(Ok(Err(e))) => println!("the command came back as an error, which is right: {e}"),
+        Ok(Err(e)) => panic!("the task running the command panicked: {e}"),
+        Err(_) => panic!(
+            "a command still in flight outlived the connection it ran on by three minutes. \
+             Everything that talks to a server goes through here, so everything that talks to \
+             a server can hang the same way — and a hang says nothing at all"
+        ),
     }
 }

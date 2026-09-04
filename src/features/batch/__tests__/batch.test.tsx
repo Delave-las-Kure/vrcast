@@ -123,3 +123,33 @@ it("offers nothing to start while nothing is in", async () => {
   await waitFor(() => expect(screen.getByText(ru.ui.batch.pick)).toBeTruthy());
   expect(screen.getByTestId("batch-start")).toBeDisabled();
 });
+
+it("takes a season from chosen to building in the presses SC-002 allows", async () => {
+  // ⚠ **SC-002 counts actions, not minutes** — "no more than 6 user actions from choosing the
+  // source to a ready viewer link, and everything else without their involvement". The count
+  // is the thing that rots: a confirmation added here, a step added there, and the number
+  // creeps past six while every individual addition looked reasonable. So it is counted.
+  //
+  // Counted on this screen: **choose**, then **start**. Everything from there — measuring,
+  // choosing the rungs, encoding, sending, publishing — is the core's, because `then_build`
+  // goes in with the measurement. What is left outside this screen is the file dialogue
+  // itself (one action) and, at the far end, copying the link from the library (one action,
+  // after navigating there). Six all told, and this holds the two that are ours.
+  let gestures = 0;
+  const press = (el: HTMLElement) => {
+    gestures += 1;
+    fireEvent.click(el);
+  };
+
+  mockOpen.mockResolvedValue(["F:/films/s01e01.mkv", "F:/films/s01e02.mkv"]);
+  renderIn(<BatchScreen />);
+  press(await screen.findByText(ru.ui.batch.pick));
+  await screen.findByTestId("batch-files");
+  press(screen.getByTestId("batch-start"));
+  await waitFor(() => expect(started).toHaveLength(2));
+
+  expect(gestures).toBe(2);
+  // And nothing was asked in between: no confirmation, no per-film question. A batch that
+  // stopped to ask about each film would be twelve sittings again wearing a different hat.
+  expect(started.every((r) => r.then_build)).toBe(true);
+});

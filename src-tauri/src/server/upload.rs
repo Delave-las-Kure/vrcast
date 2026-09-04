@@ -23,7 +23,7 @@ use crate::ssh::{Connection, SshError};
 use crate::tasks::engine::TaskContext;
 use russh_sftp::protocol::OpenFlags;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// What to send, and where.
 #[derive(Debug, Clone)]
@@ -136,6 +136,90 @@ pub async fn uploaded_so_far(conn: &Connection, remote_temp: &str) -> Result<u64
     Ok(out.trimmed().trim().parse::<u64>().unwrap_or(0))
 }
 
+/// Write one window, and give up on it when the connection has died under it.
+///
+/// ⚠ **Without this the transfer does not fail — it stops** (T483, measured 2026-09-04). The
+/// write waits for an acknowledgement from the far end, and when that end is gone the
+/// acknowledgement never comes and the wait never ends. Nothing above notices: retrying lives
+/// a floor up and is reached by an `Interrupted`, which is never returned, so the task sits at
+/// `Running` with its progress frozen for as long as anybody leaves it. Measured: the staged
+/// file stopped at 4,896,849,920 bytes and had not moved three hours later, with the task
+/// still reporting 11.7% and no error at all. "Without manual intervention" (SC-003) then
+/// means "not at all".
+///
+/// Two ways out, because they cover different failures. The keepalives close the connection
+/// about ninety seconds after the far end stops answering (`ssh::fingerprint::client_config`),
+/// and that is the ordinary case: a break is noticed in a minute and a half and the retry
+/// takes over. The ceiling is for a connection that is neither alive nor closed — a state no
+/// keepalive reports — and is deliberately far above any real window: four megabytes at even
+/// two hundred kilobits a second is under three minutes.
+///
+/// **Abandoning a write half-done is safe here and nowhere else.** What is resumed from is the
+/// size of the staged file on the server, read afresh (`decide_resume`), so a torn tail costs
+/// the window and not the transfer.
+async fn write_window<W: tokio::io::AsyncWrite + Unpin>(
+    conn: &Connection,
+    remote: &mut W,
+    bytes: &[u8],
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    alive(conn, remote.write_all(bytes))
+        .await
+        .map_err(|e| UploadError::Interrupted(format!("the write to the server broke off: {e}")))
+}
+
+/// Wait on the far end only while there is a far end to wait on.
+///
+/// ⚠ **Measured, and narrower than it first looked.** `exec` does not need this: a command in
+/// flight comes back by itself when its session is killed, because the channel closes and the
+/// loop reading it ends — checked on 2026-09-04, it returned in ten seconds with a failure.
+/// What does need it is anything holding an SFTP file, which waits for a reply to a request
+/// the far end will never read. That is the whole difference, and it is why this sits here
+/// rather than inside the connection.
+async fn alive<T, E, F>(conn: &Connection, work: F) -> std::result::Result<T, WriteGaveUp<E>>
+where
+    F: std::future::Future<Output = std::result::Result<T, E>>,
+{
+    let dead = async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if !conn.is_alive() {
+                return;
+            }
+        }
+    };
+
+    tokio::select! {
+        done = work => done.map_err(WriteGaveUp::Failed),
+        _ = dead => Err(WriteGaveUp::ConnectionDied),
+        _ = tokio::time::sleep(WINDOW_CEILING) => Err(WriteGaveUp::TookTooLong),
+    }
+}
+
+/// Why waiting on the far end ended without an answer.
+enum WriteGaveUp<E> {
+    Failed(E),
+    ConnectionDied,
+    TookTooLong,
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for WriteGaveUp<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(e) => write!(f, "{e}"),
+            Self::ConnectionDied => write!(f, "the connection to the server died"),
+            Self::TookTooLong => write!(f, "it took longer than any window can"),
+        }
+    }
+}
+
+/// The longest a single window may take before the connection is presumed gone.
+///
+/// See [`write_window`]. Generous on purpose: it is the answer for a connection that neither
+/// carries data nor reports itself closed, not the ordinary way a break is noticed.
+const WINDOW_CEILING: Duration = Duration::from_secs(600);
+
 /// One attempt at the transfer. Returns how much lies in the staged file in all.
 ///
 /// `estimate` is passed in from outside and survives reconnections: otherwise the time
@@ -220,19 +304,19 @@ pub async fn transfer_once(
             }
         }
 
-        remote.write_all(&buf[..read]).await.map_err(|e| {
-            UploadError::Interrupted(format!("the write to the server broke off: {e}"))
-        })?;
+        write_window(conn, &mut remote, &buf[..read]).await?;
 
         sent += read as u64;
         estimate.record(Instant::now(), sent);
         report(ctx, plan, estimate, sent);
     }
 
-    remote.flush().await.map_err(|e| {
+    // The same guard as the windows: these wait on the far end exactly as a write does, and a
+    // connection that died between the last window and the close would hold them just as long.
+    alive(conn, remote.flush()).await.map_err(|e| {
         UploadError::Interrupted(format!("the write to the server did not finish: {e}"))
     })?;
-    remote.shutdown().await.map_err(|e| {
+    alive(conn, remote.shutdown()).await.map_err(|e| {
         UploadError::Interrupted(format!("the file on the server would not close: {e}"))
     })?;
 
