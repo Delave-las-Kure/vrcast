@@ -92,6 +92,8 @@ mod upload_live;
 
 #[path = "integration/scenario_upload.rs"]
 mod scenario_upload;
+#[path = "integration/season_live.rs"]
+mod season_live;
 
 /// A check of the fixture itself (T149, T151, T152): that it serves, writes its log and
 /// gives every viewer an address of their own.

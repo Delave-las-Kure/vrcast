@@ -78,12 +78,36 @@ pub fn ceiling_mbps(bitrate_mbps: u64) -> u64 {
     }
 }
 
+/// What one point of the grid came out at, and on how much of the film.
+///
+/// **The sample is part of the answer** (R-50). A point averaged over two chunks used to be
+/// indistinguishable from one averaged over three, and on 2026-09-04 that let an episode
+/// which is 98% zeroes — a half-downloaded file — score 95.81 from its two surviving seconds
+/// and pass the check after a loan. The number was not wrong; it described the parts of the
+/// film that still existed. Nothing said so.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sampled {
+    pub point: Point,
+    /// How many chunks actually encoded and scored.
+    pub chunks_used: usize,
+    /// How many were asked for.
+    pub chunks_asked: usize,
+}
+
+impl Sampled {
+    /// Whether every chunk asked for landed.
+    pub fn whole(&self) -> bool {
+        self.chunks_used == self.chunks_asked
+    }
+}
+
 /// Measure one point of the grid on the given chunks.
 ///
-/// The result is the average over the chunks that encoded. **A chunk that fails is skipped
-/// rather than fatal**: two chunks out of three still say something about the material,
-/// while refusing the point would leave a hole in the grid and the hull would step over it
-/// as if the bitrate had never been tried.
+/// The result is the average over the chunks that encoded, **and how many those were**. A
+/// chunk that fails is skipped rather than fatal: two chunks out of three still say something
+/// about the material, while refusing the point would leave a hole in the grid and the hull
+/// would step over it as if the bitrate had never been tried. What must not happen is the
+/// skipping going unsaid — see [`Sampled`].
 #[allow(clippy::too_many_arguments)]
 pub async fn measure_point(
     source: &Path,
@@ -94,7 +118,7 @@ pub async fn measure_point(
     cell: Cell,
     encoder: &Encoder,
     cancel: &CancellationToken,
-) -> Result<Point, VmafError> {
+) -> Result<Sampled, VmafError> {
     let ffmpeg_bin = ffmpeg::locate("ffmpeg")?;
     let work = Workspace::make(cell)?;
 
@@ -152,11 +176,15 @@ pub async fn measure_point(
         });
     }
 
-    Ok(Point {
-        bitrate_mbps: cell.bitrate_mbps,
-        height: cell.height,
-        actual_bps: weights.iter().sum::<u64>() / weights.len() as u64,
-        vmaf: scores.iter().sum::<f64>() / scores.len() as f64,
+    Ok(Sampled {
+        point: Point {
+            bitrate_mbps: cell.bitrate_mbps,
+            height: cell.height,
+            actual_bps: weights.iter().sum::<u64>() / weights.len() as u64,
+            vmaf: scores.iter().sum::<f64>() / scores.len() as f64,
+        },
+        chunks_used: scores.len(),
+        chunks_asked: chunk_starts.len(),
     })
 }
 

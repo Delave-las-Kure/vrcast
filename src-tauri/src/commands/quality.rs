@@ -505,7 +505,12 @@ async fn held(
     .await
     .map_err(vmaf_error)?;
 
-    match check_point::judge(donor_vmaf, measured.vmaf) {
+    match check_point::judge(
+        donor_vmaf,
+        measured.point.vmaf,
+        measured.chunks_used,
+        measured.chunks_asked,
+    ) {
         // **Said, not merely done.** A check whose passing leaves no trace is one nobody can
         // tell from a check that never ran — and this one costs a minute of somebody's
         // machine, so it should at least say what it found.
@@ -526,8 +531,25 @@ async fn held(
                         .with("bitrate", cell.bitrate_mbps)
                         .with("height", cell.height as u64)
                         .with("donor", (donor_vmaf * 100.0).round() as u64)
-                        .with("borrower", (measured.vmaf * 100.0).round() as u64)
+                        .with("borrower", (measured.point.vmaf * 100.0).round() as u64)
                         .with("apart", apart_x100),
+                ),
+            )
+        }
+        check_point::Verdict::NotComparable { used, asked } => {
+            // **A check that could not run is not a check that passed** (R-50). The seconds
+            // that would not encode are the film's own damage, and what is left describes
+            // whatever survived — which flatters the wreckage exactly in proportion to how
+            // much of it is gone.
+            measurements::forget(&state.db, &borrowed.source_key, &borrowed.codec)
+                .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+            Err(
+                AppError::new(ErrorCode::MeasurementNotThisMaterial).with_detail(
+                    Detail::new(DetailCode::CheckPointNotComparable)
+                        .with("used", used as u64)
+                        .with("asked", asked as u64)
+                        .with("bitrate", cell.bitrate_mbps)
+                        .with("height", cell.height as u64),
                 ),
             )
         }

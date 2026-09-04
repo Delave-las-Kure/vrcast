@@ -95,6 +95,8 @@ pub async fn run(job: &MeasureJob<'_>, ctx: &TaskContext) -> Result<Outcome, Mea
             .collect();
 
     let mut done = already.len();
+    // Points that landed on fewer chunks than they were given.
+    let mut thin: Vec<(Cell, usize, usize)> = Vec::new();
     report(ctx, done, total);
 
     for cell in cells {
@@ -108,15 +110,24 @@ pub async fn run(job: &MeasureJob<'_>, ctx: &TaskContext) -> Result<Outcome, Mea
 
         let started = std::time::Instant::now();
         match measure_one(job, cell, ctx).await {
-            Ok(point) => {
+            Ok(sampled) => {
                 measurements::record(
                     job.db,
                     &job.run.source_key,
                     &job.run.codec,
-                    &point,
+                    &sampled.point,
                     started.elapsed(),
                 )?;
                 done += 1;
+                if !sampled.whole() {
+                    // **A point measured on part of the film is not a whole point** (R-50).
+                    // A chunk fails where the material is damaged or half-written, and what
+                    // is left describes whatever survived — which flatters the wreckage
+                    // exactly in proportion to how much of it is missing. Counted here rather
+                    // than left in a log line, because the count below counts points, and a
+                    // point measured on two chunks of three used to pass as a whole one.
+                    thin.push((cell, sampled.chunks_used, sampled.chunks_asked));
+                }
             }
             Err(VmafError::Cancelled) => return Err(MeasureError::Cancelled),
             Err(VmafError::Unavailable) => return Err(MeasureError::Unavailable),
@@ -142,6 +153,16 @@ pub async fn run(job: &MeasureJob<'_>, ctx: &TaskContext) -> Result<Outcome, Mea
                 .with("total", total as u64),
         );
     }
+    if let Some((cell, used, asked)) = thin.first() {
+        notices.push(
+            Detail::new(DetailCode::NoticeMeasurementThin)
+                .with("points", thin.len() as u64)
+                .with("used", *used as u64)
+                .with("asked", *asked as u64)
+                .with("bitrate", cell.bitrate_mbps)
+                .with("height", cell.height as u64),
+        );
+    }
     if let Some(from) = &job.run.borrowed_from {
         notices.push(Detail::new(DetailCode::NoticeMeasurementBorrowed).with("from", from.clone()));
     }
@@ -158,7 +179,7 @@ async fn measure_one(
     job: &MeasureJob<'_>,
     cell: Cell,
     ctx: &TaskContext,
-) -> Result<crate::domain::measured_ladder::Point, VmafError> {
+) -> Result<vmaf::Sampled, VmafError> {
     vmaf::measure_point(
         job.source,
         job.run.width,

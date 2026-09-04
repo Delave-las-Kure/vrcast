@@ -37,6 +37,9 @@ fn ladder_of(points: &[(u64, u32, f64)]) -> Selection {
 }
 
 /// What the four kin episodes scored on the top rung, and what the two others did.
+/// The donor's grid uses three chunks, and a whole sample is all three of them.
+const WHOLE: usize = 3;
+
 const KIN_AT_TOP: [f64; 4] = [96.38, 96.67, 96.94, 96.42];
 const SAME_SEASON_OTHER_ENCODE: f64 = 92.97;
 const A_DIFFERENT_FILM: f64 = 93.97;
@@ -67,7 +70,7 @@ fn every_pair_of_kin_passes_on_the_top_rung() {
     for (i, &a) in KIN_AT_TOP.iter().enumerate() {
         for &b in KIN_AT_TOP.iter().skip(i + 1) {
             assert!(
-                matches!(judge(a, b), Verdict::Same { .. }),
+                matches!(judge(a, b, WHOLE, WHOLE), Verdict::Same { .. }),
                 "two episodes of one release were called different material: {a} against {b}"
             );
         }
@@ -82,7 +85,10 @@ fn the_episode_that_passes_every_field_is_still_caught() {
     // (4.06 Mbit/s against 6.33). Lending cannot refuse it. One cell can.
     for &kin in KIN_AT_TOP.iter() {
         assert!(
-            matches!(judge(kin, SAME_SEASON_OTHER_ENCODE), Verdict::Apart { .. }),
+            matches!(
+                judge(kin, SAME_SEASON_OTHER_ENCODE, WHOLE, WHOLE),
+                Verdict::Apart { .. }
+            ),
             "the other encode passed as the same material against {kin}"
         );
     }
@@ -92,7 +98,10 @@ fn the_episode_that_passes_every_field_is_still_caught() {
 fn a_wholly_different_film_is_caught() {
     for &kin in KIN_AT_TOP.iter() {
         assert!(
-            matches!(judge(kin, A_DIFFERENT_FILM), Verdict::Apart { .. }),
+            matches!(
+                judge(kin, A_DIFFERENT_FILM, WHOLE, WHOLE),
+                Verdict::Apart { .. }
+            ),
             "a different film passed as the same material against {kin}"
         );
     }
@@ -102,15 +111,27 @@ fn a_wholly_different_film_is_caught() {
 fn a_borrower_far_above_the_donor_is_caught_too() {
     // Not a quality failure but still the wrong ladder: built for material harder than its
     // own, it spends bitrate nobody needed. Distance is absolute, in both directions.
-    assert!(matches!(judge(93.97, 96.38), Verdict::Apart { .. }));
-    assert!(matches!(judge(96.38, 93.97), Verdict::Apart { .. }));
+    assert!(matches!(
+        judge(93.97, 96.38, WHOLE, WHOLE),
+        Verdict::Apart { .. }
+    ));
+    assert!(matches!(
+        judge(96.38, 93.97, WHOLE, WHOLE),
+        Verdict::Apart { .. }
+    ));
 }
 
 #[test]
 fn the_distance_is_reported_and_not_merely_the_verdict() {
     // A refusal that will not say by how much is a refusal nobody can argue with.
-    assert_eq!(judge(96.38, 92.97), Verdict::Apart { apart_x100: 341 });
-    assert_eq!(judge(96.38, 96.42), Verdict::Same { apart_x100: 4 });
+    assert_eq!(
+        judge(96.38, 92.97, WHOLE, WHOLE),
+        Verdict::Apart { apart_x100: 341 }
+    );
+    assert_eq!(
+        judge(96.38, 96.42, WHOLE, WHOLE),
+        Verdict::Same { apart_x100: 4 }
+    );
 }
 
 #[test]
@@ -138,4 +159,32 @@ fn on_the_bottom_rung_no_threshold_could_work_at_all() {
          nearest alien {nearest_alien} — the reasoning for putting the cell at the top rests \
          on this being false"
     );
+}
+
+#[test]
+fn a_cell_that_would_not_measure_on_every_second_is_not_a_pass() {
+    // ⚠ **This is the check that was missing on 2026-09-04, and what it cost** (R-50). An
+    // episode 98% of which is zeroes — a half-downloaded file — had one of the donor's three
+    // seconds fail to encode. The two that survived averaged 95.81 against the donor's 96.38,
+    // which is 0.57 apart, which is under the threshold, and the loan was held. The
+    // arithmetic was right; the two numbers described different parts of two different films.
+    //
+    // Note the direction of the damage: the more of a film is missing, the more chunks fail,
+    // and the better the wreckage scores — so this can never be left to the threshold.
+    assert_eq!(
+        judge(96.38, 95.81, 2, 3),
+        Verdict::NotComparable { used: 2, asked: 3 },
+        "a cell measured on two seconds of three was compared as though it were whole"
+    );
+    // Even a borrower that would obviously fail on distance is refused for the sample first:
+    // there is nothing to be distant from.
+    assert!(matches!(
+        judge(96.38, 60.0, 1, 3),
+        Verdict::NotComparable { .. }
+    ));
+    // And nothing at all measured is not agreement either.
+    assert!(matches!(
+        judge(96.38, 96.38, 0, 0),
+        Verdict::NotComparable { .. }
+    ));
 }

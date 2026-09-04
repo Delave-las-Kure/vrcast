@@ -160,12 +160,19 @@ async fn how_long_a_point_takes() {
         took.push(seconds);
         match point {
             Ok(p) => println!(
-                "{:>3} Mbit/s @ {:>4}p : VMAF {:>6.2}, actually {:.1} Mbit/s — {:.1} s",
-                p.bitrate_mbps,
-                p.height,
-                p.vmaf,
-                p.actual_bps as f64 / 1e6,
-                seconds
+                "{:>3} Mbit/s @ {:>4}p : VMAF {:>6.2}, actually {:.1} Mbit/s — {:.1} s{}",
+                p.point.bitrate_mbps,
+                p.point.height,
+                p.point.vmaf,
+                p.point.actual_bps as f64 / 1e6,
+                seconds,
+                // How much of the film the number describes (R-50): a point averaged over
+                // fewer chunks than it was given says less than it looks.
+                if p.whole() {
+                    String::new()
+                } else {
+                    format!(" — on {} chunks of {}", p.chunks_used, p.chunks_asked)
+                }
             ),
             Err(e) => println!(
                 "{:>3} Mbit/s @ {:>4}p : would not measure ({e}) — {:.1} s",

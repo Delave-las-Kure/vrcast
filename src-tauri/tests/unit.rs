@@ -71,6 +71,8 @@ mod reconcile;
 #[path = "unit/viewers.rs"]
 mod viewers;
 
+#[path = "unit/reachable.rs"]
+mod reachable;
 #[path = "unit/redact.rs"]
 mod redact;
 

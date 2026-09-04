@@ -306,8 +306,10 @@ detail_codes! {
     // this application looked at.
     NoticeVariantsStranded => "NOTICE_VARIANTS_STRANDED",
     NoticeMaterialApart => "NOTICE_MATERIAL_APART",
+    NoticeMeasurementThin => "NOTICE_MEASUREMENT_THIN",
     NoticeCheckPointHeld => "NOTICE_CHECK_POINT_HELD",
     CheckPointApart => "CHECK_POINT_APART",
+    CheckPointNotComparable => "CHECK_POINT_NOT_COMPARABLE",
 
     LendFrameDiffers => "LEND_FRAME_DIFFERS",
     LendFpsDiffers => "LEND_FPS_DIFFERS",
