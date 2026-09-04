@@ -869,3 +869,122 @@ impl Drop for ThinLink<'_> {
         );
     }
 }
+
+// ---------------- the delivered speed (T481) ----------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "pulls video from a real machine for a minute: run by hand at the throwaway stand"]
+async fn the_delivered_speed_appears_for_a_viewer_who_stays_long_enough() {
+    // Half of FR-051: the address and the duration were there on the stand, the delivered
+    // speed was not. It turned out to be there too — see below — and what this now guards is
+    // that it stays there.
+    //
+    // ⚠ **A pull that is not happening looks exactly like a speed that is not worked out**,
+    // and three runs in a row blamed the application for the second when it was the first.
+    // So the pull is proved alive, through the connection table, *before* anything is
+    // concluded about the speed: no row, no verdict.
+    let stand = stand();
+    let state = app_state();
+    let id = profile_for(&state, &stand).await;
+    let slug = std::env::var("VRCAST_STAND_SLUG")
+        .expect("VRCAST_STAND_SLUG is not set: name the set scenario 5 built");
+
+    let mut updates = state.subscribe();
+    viewers::viewers_watch_start(&state, &id)
+        .await
+        .expect("the watching would not start");
+
+    let url = format!("https://{}/videos/{slug}_4.mp4", stand.domain);
+    let pulling = std::thread::spawn(move || {
+        let _ = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-o",
+                "/dev/null",
+                "--max-time",
+                "90",
+                "--limit-rate",
+                "400k",
+                &url,
+            ])
+            .status();
+    });
+
+    // Prove somebody is actually pulling before judging anything.
+    let profile = vrcast_studio_lib::store::profiles::get(&state.db, &id)
+        .expect("the profile would not read")
+        .expect("the profile is not there");
+    let conn = vrcast_studio_lib::server::gate::open(
+        state.secrets.as_ref(),
+        &profile,
+        vrcast_studio_lib::server::gate::Intent::Read,
+    )
+    .await
+    .expect("the stand would not open")
+    .conn;
+    let command = vrcast_studio_lib::domain::connections::poll_command();
+    let mut alive = false;
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if let Ok(out) = conn.exec(&command).await {
+            if let Some(poll) = vrcast_studio_lib::domain::connections::parse_poll(&out.stdout) {
+                if !poll.rows.is_empty() {
+                    alive = true;
+                    break;
+                }
+            }
+        }
+    }
+    assert!(
+        alive,
+        "no connection to the serving was open at all — the pull this check depends on never          happened, and nothing can be said about the delivered speed either way"
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    let mut best: Option<u64> = None;
+    let mut sightings = 0;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout_at(deadline, updates.recv()).await {
+            Ok(Ok(vrcast_studio_lib::commands::AppEvent::ViewersUpdate(u))) => {
+                for v in &u.active {
+                    sightings += 1;
+                    // A mark for the address rather than the address (FR-057).
+                    println!(
+                        "  viewer {} variant {:?} delivering {:?}",
+                        mark(&v.ip),
+                        v.variant,
+                        v.delivery_bps
+                    );
+                    if let Some(bps) = v.delivery_bps {
+                        if bps > 0 {
+                            best = Some(bps.max(best.unwrap_or(0)));
+                        }
+                    }
+                }
+                if best.is_some() {
+                    break;
+                }
+            }
+            Ok(Ok(_)) => {}
+            _ => break,
+        }
+    }
+    let _ = pulling.join();
+
+    println!("{sightings} sighting(s); best delivered speed {best:?}");
+    assert!(
+        best.is_some(),
+        "a viewer was pulling — the connection table said so — and no delivered speed was          worked out across {sightings} sighting(s). Half of FR-051 shows nothing, and an empty          field is indistinguishable from one still being counted"
+    );
+}
+
+/// A short mark standing for an address, so two sightings can be compared without the
+/// address appearing anywhere (FR-057).
+fn mark(ip: &str) -> String {
+    let mut h: u64 = 1469598103934665603;
+    for b in ip.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
+    format!("{:06x}", h & 0xffffff)
+}
