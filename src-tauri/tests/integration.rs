@@ -53,6 +53,9 @@ mod deploy_resume;
 #[path = "integration/deploy_stand.rs"]
 mod deploy_stand;
 
+#[path = "integration/deploy_foreign.rs"]
+mod deploy_foreign;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 
