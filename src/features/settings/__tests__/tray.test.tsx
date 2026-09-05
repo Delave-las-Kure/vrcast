@@ -18,7 +18,7 @@ const notify = vi.fn<() => Promise<void>>();
 let trayState: TrayState = "installed";
 let hidden: (() => void) | null = null;
 let settings: Settings;
-const update = vi.fn<(patch: Partial<Settings>) => void>();
+let saved: Settings | null = null;
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(true),
@@ -33,6 +33,11 @@ vi.mock("../../../shared/ipc", async () => {
     ...actual,
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       trayState: () => Promise.resolve(trayState),
+      settingsGet: () => Promise.resolve(settings),
+      settingsSet: (s: Settings) => {
+        saved = s;
+        return Promise.resolve(s);
+      },
     }),
     onHiddenToTray: async (handler: () => void) => {
       hidden = handler;
@@ -44,16 +49,15 @@ vi.mock("../../../shared/ipc", async () => {
   };
 });
 
-vi.mock("../../../app/settings", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../app/settings")>("../../../app/settings");
-  return {
-    ...actual,
-    useSettings: () => ({ settings, update, error: null }),
-  };
-});
-
+// ⚠ **The settings come from the real provider, not from a mock of the module** (T494).
+// Replacing `app/settings` was this file's own invention — twenty other test files reach the
+// same end by stubbing `settingsGet`/`settingsSet` and rendering inside the real
+// `SettingsProvider`. The invention cost something: with the module mocked, the diagnosis
+// screen's eight tests failed once in six runs with "useSettings is not a function", in a
+// file that mocks nothing of the kind. An intermittent failure in somebody else's tests is
+// the worst way to pay for a shortcut in your own.
 const { CloseButton } = await import("../CloseButton");
+const { SettingsProvider } = await import("../../../app/settings");
 const { useTrayNotice } = await import("../../tasks/notifications");
 
 function Listener() {
@@ -61,9 +65,18 @@ function Listener() {
   return null;
 }
 
+/** The section as a person meets it: inside the settings the application really keeps. */
+function show() {
+  return renderIn(
+    <SettingsProvider>
+      <CloseButton />
+    </SettingsProvider>,
+  );
+}
+
 beforeEach(() => {
   sendNotification.mockReset();
-  update.mockReset();
+  saved = null;
   hidden = null;
   trayState = "installed";
   settings = {
@@ -83,18 +96,20 @@ beforeEach(() => {
 // ---------- the choice ----------
 
 it("offers the choice where there is somewhere to hide, and says what will happen", async () => {
-  renderIn(<CloseButton />);
+  show();
   const box = await screen.findByTestId("close-to-tray-switch");
   expect((box as HTMLInputElement).checked).toBe(true);
   expect(screen.getByTestId("close-behaviour").textContent).toBe(ru.ui.appearance.closeHides);
 
+  // What a click is worth is what reaches the store, not what a spy saw: the switch is bound
+  // to the settings the application actually keeps.
   fireEvent.click(box);
-  expect(update).toHaveBeenCalledWith({ close_to_tray: false });
+  await waitFor(() => expect(saved?.close_to_tray).toBe(false));
 });
 
 it("says the other thing when the other thing was asked for", async () => {
   settings = { ...settings, close_to_tray: false };
-  renderIn(<CloseButton />);
+  show();
   await screen.findByTestId("close-to-tray-switch");
   expect(screen.getByTestId("close-behaviour").textContent).toBe(ru.ui.appearance.closeExits);
 });
@@ -103,7 +118,7 @@ it("offers no choice where there is nowhere to hide", async () => {
   // The setting cannot ask for the window to be lost. Showing a switch that the core
   // overrules would be worse than showing none: it would say the decision was theirs.
   trayState = "unavailable";
-  renderIn(<CloseButton />);
+  show();
   await screen.findByTestId("close-behaviour");
   expect(screen.queryByTestId("close-to-tray-switch")).toBeNull();
   expect(screen.getByTestId("close-behaviour").textContent).toBe(ru.ui.appearance.closeExits);
@@ -111,7 +126,7 @@ it("offers no choice where there is nowhere to hide", async () => {
 
 it("says it does not know rather than guessing", async () => {
   trayState = "unknown" as TrayState;
-  renderIn(<CloseButton />);
+  show();
   await screen.findByTestId("close-behaviour");
   expect(screen.getByTestId("close-behaviour").textContent).toBe(ru.ui.appearance.closeUnknown);
   expect(screen.queryByTestId("close-to-tray-switch")).toBeNull();

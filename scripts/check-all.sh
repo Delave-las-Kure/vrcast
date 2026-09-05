@@ -59,12 +59,27 @@ summary() {
 # to read red, and that argument is already written into the leak guard. So the third answer,
 # code 2: it ran, it could not see everything, and it says which. It does not stop a push —
 # what it could not look at, continuous integration can.
+# ⚠ **Every step's output is kept, and that is not tidiness** (T494, 2026-09-05). "Interface:
+# tests" went red twice inside this runner while `npm test` on its own passed 230 of 230 ten
+# times over. Both times the output was gone — read off the terminal, filtered down to the
+# summary line, never saved. A failure that happens once in six runs and leaves nothing behind
+# is a failure nobody can chase, and an intermittent check teaches people to re-run instead of
+# to read, so the first real fault in that step will be blamed on the flicker.
+#
+# Kept for every step rather than only the failing one: the run stops at the first failure, so
+# by the time we know which step matters its output has already gone by.
+LOGS="${TMPDIR:-/tmp}/vrcast-check-$$"
+mkdir -p "$LOGS"
+
 step() {
   local name="$1"; shift
+  local log="$LOGS/$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '-')".log
   printf '\n\033[1m> %s\033[0m\n' "$name"
   set +e
-  "$@"
-  local code=$?
+  # Through `tee`, so it is both on the screen and on disk. `pipefail` is on, so the step's
+  # own failure still decides the code and `tee`'s success cannot hide it.
+  "$@" 2>&1 | tee "$log"
+  local code=${PIPESTATUS[0]}
   set -e
   if [ "$code" -eq 0 ]; then
     printf '\033[32m  passed: %s\033[0m\n' "$name"
@@ -73,6 +88,7 @@ step() {
     PARTLY="$PARTLY \"$name\""
   else
     printf '\033[31m  FAILED: %s\033[0m\n' "$name"
+    printf '\033[31m  the whole output is in %s\033[0m\n' "$log"
     FAILED="$FAILED \"$name\""
     # Stop at once: there is no point waiting another five minutes for a second failure.
     summary
