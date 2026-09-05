@@ -430,6 +430,17 @@ export function onAppQuitRequested(handler: () => void): Promise<UnlistenFn> {
   return tauriListen<void>(EVENTS.appQuitRequested, () => handler());
 }
 
+/**
+ * The window has just gone into the tray for the first time (T399, FR-150).
+ *
+ * The core decides *whether* — only it remembers whether this has happened before, and the
+ * fact has to survive a restart. The interface decides *what it says*, in the language in
+ * use, exactly as for a task's notification.
+ */
+export function onHiddenToTray(handler: () => void): Promise<UnlistenFn> {
+  return tauriListen<void>(EVENTS.appHiddenToTray, () => handler());
+}
+
 export function onLibraryChanged(handler: (serverId: string) => void): Promise<UnlistenFn> {
   return tauriListen<LibraryChangedEvent>(EVENTS.libraryChanged, (ev) =>
     handler(ev.payload.server_id),

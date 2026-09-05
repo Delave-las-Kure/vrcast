@@ -34,6 +34,23 @@ pub struct Settings {
     pub language: Option<String>,
     /// Light or dark. `None` means "the system's".
     pub theme: Option<String>,
+    /// Whether the close button hides the window instead of ending the application (FR-150).
+    ///
+    /// **A preference, and only half of the decision.** The other half is whether there is
+    /// anywhere to hide to: on a desktop with no tray the button closes whatever this says,
+    /// because a window hidden into nothing is the worst outcome available — the application
+    /// goes on holding encodes with nothing on screen to say so.
+    pub close_to_tray: bool,
+    /// Whether the person has already been told where the window goes (T399).
+    ///
+    /// ⚠ **A remembered fact, not a preference**, and it is here because this is where facts
+    /// that must survive a restart live. It exists because the thing it stands in for cannot
+    /// be checked: `rect()` on Linux is always `None`, there are no tray events and no error,
+    /// so "the icon is invisible" is indistinguishable from "the icon is there" (R-35). On
+    /// Windows 11 a new icon goes into the overflow, which is invisible in a different way.
+    /// Either way the window vanishes and the only honest answer is to say where it went —
+    /// once, because saying it every time is how people learn to dismiss notices unread.
+    pub tray_notice_seen: bool,
     /// Where a variant is written while it is being made (T450, T451).
     ///
     /// `None` means "beside the source" — see `domain::work_dir`, which holds the reasoning
@@ -52,6 +69,8 @@ impl Default for Settings {
             animations: true,
             language: None,
             theme: None,
+            close_to_tray: true,
+            tray_notice_seen: false,
             work_dir: None,
         }
     }
@@ -162,6 +181,8 @@ pub fn save(db: &Db, settings: &Settings) -> Result<Settings, DbError> {
         ("animations", settings.animations.to_string()),
         ("language", settings.language.clone().unwrap_or_default()),
         ("theme", settings.theme.clone().unwrap_or_default()),
+        ("close_to_tray", settings.close_to_tray.to_string()),
+        ("tray_notice_seen", settings.tray_notice_seen.to_string()),
         ("work_dir", settings.work_dir.clone().unwrap_or_default()),
     ];
     db.with_conn_mut(|conn| {
@@ -203,6 +224,16 @@ fn apply(settings: &mut Settings, name: &str, value: &str) {
         "mascot" => {
             if let Ok(v) = value.parse() {
                 settings.mascot = v;
+            }
+        }
+        "close_to_tray" => {
+            if let Ok(v) = value.parse() {
+                settings.close_to_tray = v;
+            }
+        }
+        "tray_notice_seen" => {
+            if let Ok(v) = value.parse() {
+                settings.tray_notice_seen = v;
             }
         }
         "animations" => {

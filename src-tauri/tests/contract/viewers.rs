@@ -97,6 +97,10 @@ fn what_is_set_is_what_comes_back() {
         animations: false,
         language: Some(String::from("en")),
         theme: Some(String::from("dark")),
+        // Both deliberately away from their defaults (true, false): a round trip that carried
+        // the default back would look identical to one that carried nothing at all.
+        close_to_tray: false,
+        tray_notice_seen: true,
         work_dir: Some(String::from("E:/scratch")),
     };
 

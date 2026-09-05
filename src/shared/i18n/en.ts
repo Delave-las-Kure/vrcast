@@ -819,6 +819,7 @@ export const en: Catalogue = {
       language: "Language",
 
       closeTitle: "The close button",
+      closeToTray: "Minimise to the notification area",
       closeHides:
         "The window goes to the notification area and the work carries on: tasks keep running, and the icon shows the application is there. To leave altogether, use Quit on the menu of that icon.",
       closeExits:
@@ -1323,6 +1324,9 @@ export const en: Catalogue = {
 
     notifications: {
       completed: "Task finished",
+      hiddenTitle: "The window is hidden; the application is still working",
+      hiddenBody:
+        'There is an icon in the notification area: "Show window" on it brings this back. On Windows 11 new icons start out in the overflow (the arrow on the taskbar). To leave for good use "Leave" in the same menu; anything running will say what becomes of it first.',
       failed: "Task failed",
       lookInTasks: "The details are in the Tasks section.",
       done: {

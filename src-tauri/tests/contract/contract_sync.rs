@@ -170,6 +170,7 @@ fn the_event_names_match_both_ways() {
         names::VIEWERS_UPDATE,
         names::DEPLOY_PROGRESS,
         names::APP_QUIT,
+        names::APP_HIDDEN,
     ]
     .into_iter()
     .map(str::to_owned)

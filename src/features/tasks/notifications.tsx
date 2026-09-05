@@ -19,7 +19,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import type { TaskKind, TaskNotifyRequest } from "../../shared/contract";
-import { onTaskNotify } from "../../shared/ipc";
+import { onHiddenToTray, onTaskNotify } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
 import type { Catalogue, Lang } from "../../shared/i18n";
 import { renderError } from "../../shared/i18n/render";
@@ -71,4 +71,54 @@ export function useTaskNotifications() {
       stop?.();
     };
   }, [t, lang]);
+}
+
+/**
+ * Where the window went, the first time it goes there (T399, FR-150).
+ *
+ * ⚠ **This stands in for a check that cannot be made.** Whether the tray icon is visible has
+ * no answer: `rect()` on Linux is always `None`, tray events are documented as unsupported
+ * there, and nothing reports a failure (R-35). On Windows 11 a new icon goes into the
+ * overflow, invisible in a different way. So the window may have vanished into nothing the
+ * person can see, and the honest answer is to say where it went.
+ *
+ * Once, and the core is what knows it is the first time — the fact has to survive a restart,
+ * so it lives in its settings, not here. The wording is this side's, as for every other
+ * notification.
+ */
+export function useTrayNotice() {
+  const t = useT();
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let dropped = false;
+
+    onHiddenToTray(async () => {
+      try {
+        let allowed = await isPermissionGranted();
+        if (!allowed) allowed = (await requestPermission()) === "granted";
+        if (!allowed) return;
+
+        sendNotification({
+          title: t.ui.notifications.hiddenTitle,
+          body: t.ui.notifications.hiddenBody,
+        });
+      } catch {
+        // No notification service, or permission refused. Nothing to repair — and nothing
+        // to retry either: the core has already written down that it was said.
+      }
+    })
+      .then((unlisten) => {
+        if (dropped) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => {
+        // Outside the shell (in tests) there is nothing to listen to.
+      });
+
+    return () => {
+      dropped = true;
+      stop?.();
+    };
+  }, [t]);
 }

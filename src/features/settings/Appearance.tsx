@@ -12,6 +12,7 @@
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { Forget } from "./Forget";
+import { CloseButton } from "./CloseButton";
 import { WorkDir } from "./WorkDir";
 import { useSettings } from "../../app/settings";
 import { useLang, useT, LANGUAGES } from "../../shared/i18n";
@@ -98,6 +99,11 @@ export function Appearance() {
         </label>
         <p className="appearance__means">{words.animationsMeans}</p>
       </fieldset>
+
+      {/* ⚠ Mounted at last (T399). This section had existed since T395, worded in both
+          languages, with three tests — and no screen rendered it: the tests imported the
+          component and rendered it themselves, so they passed while nobody could reach it. */}
+      <CloseButton />
 
       {/* Not about appearance either, and here for the same reason: this is the only
           settings section there is. */}

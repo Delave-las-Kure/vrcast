@@ -64,6 +64,8 @@ beforeEach(() => {
     animations: true,
     language: null,
     theme: null,
+    close_to_tray: true,
+    tray_notice_seen: false,
     work_dir: null,
   };
   // Every stub gets an answer, not only the ones a given test reads: a stub without one

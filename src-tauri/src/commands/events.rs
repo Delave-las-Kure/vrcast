@@ -37,6 +37,12 @@ pub mod names {
     /// and the interface names what, task by task, and asks. Nothing exits until it is
     /// answered — see `commands::api::app_exit`.
     pub const APP_QUIT: &str = "app:quit-requested";
+    /// The window was hidden into the tray for the first time (T399, FR-150).
+    ///
+    /// Sent once in the life of an installation, and the core is what knows it is the first
+    /// time — the fact is remembered in its settings. The interface words it, in whatever
+    /// language is in use, exactly as it does for `TASK_NOTIFY`.
+    pub const APP_HIDDEN: &str = "app:hidden-to-tray";
 }
 
 /// Start forwarding task events to the interface.

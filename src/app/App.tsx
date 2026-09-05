@@ -25,7 +25,7 @@ import { LeaveConfirm } from "../features/tasks/LeaveConfirm";
 import { UploadScreen } from "../features/upload/UploadScreen";
 import { ipc } from "../shared/ipc";
 import { LanguageProvider, useT } from "../shared/i18n";
-import { useTaskNotifications } from "../features/tasks/notifications";
+import { useTaskNotifications, useTrayNotice } from "../features/tasks/notifications";
 import { Sidebar } from "./Sidebar";
 import { SettingsProvider, useSettings } from "./settings";
 import { ThemeProvider } from "./theme";
@@ -66,6 +66,11 @@ function AppShell() {
   // to notify (only it knows the window is out of sight), the interface decides *what
   // it says*, in the language in use.
   useTaskNotifications();
+
+  // Where the window went, the first time it goes into the tray (T399). Here rather than on
+  // a screen: the window is hidden when it happens, and a listener living inside a section
+  // would only hear it if that section were the one open.
+  useTrayNotice();
 
   return (
     <div className="layout">

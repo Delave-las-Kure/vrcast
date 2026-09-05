@@ -1261,6 +1261,13 @@ export interface Settings {
   animations: boolean;
   language: string | null;
   theme: string | null;
+  /** Whether the close button hides the window instead of ending the application (FR-150).
+   *  Only half the decision: where there is no tray the button closes whatever this says,
+   *  because a window hidden into nothing is worse than one that closed. */
+  close_to_tray: boolean;
+  /** Whether the person has already been told where the window goes (T399). A remembered
+   *  fact rather than a preference, and not a control on any screen. */
+  tray_notice_seen: boolean;
   /** Where a variant is written while it is being made (T450). Null means "beside the
    *  source": the disk a film is on certainly fits a film, which no other default can
    *  promise. */
@@ -1277,6 +1284,8 @@ export const EVENTS = {
   deployProgress: "deploy:progress",
   /** "Exit" was chosen in the tray menu while something was running (T400, FR-086). */
   appQuitRequested: "app:quit-requested",
+  /** The window was hidden into the tray for the first time (T399). */
+  appHiddenToTray: "app:hidden-to-tray",
 } as const;
 
 export interface TaskProgressEvent {

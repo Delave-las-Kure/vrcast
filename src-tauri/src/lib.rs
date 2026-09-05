@@ -20,6 +20,46 @@ pub mod tasks;
 pub mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Tell the person where the window went — once in the life of an installation (T399).
+///
+/// ⚠ **This exists because the thing it stands in for cannot be checked.** Whether the tray
+/// icon is actually visible has no answer: `rect()` on Linux is always `None`, `TrayIconEvent`
+/// is documented as unsupported there, and nothing reports a failure (R-35). On Windows 11 a
+/// new icon goes straight into the overflow, which is a different kind of invisible. So a
+/// window that vanishes may have vanished into nothing a person can see, and the only honest
+/// answer left is to say where it went.
+///
+/// **Once, and the order matters.** The notice is asked for first and remembered only if the
+/// asking got through: a person told twice is mildly annoyed, a person never told is looking
+/// at a machine that appears to have closed an application which is in fact still encoding.
+/// Of the two, the repeat is the one to risk.
+fn say_where_the_window_went<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    settings: crate::store::settings::Settings,
+) {
+    use tauri::{Emitter, Manager};
+
+    if settings.tray_notice_seen {
+        return;
+    }
+    if let Err(e) = app.emit(commands::events::names::APP_HIDDEN, &()) {
+        tracing::debug!(error = %e, "the notice about the tray was not delivered");
+        return;
+    }
+    let Some(state) = app.try_state::<commands::AppState>() else {
+        return;
+    };
+    let remembered = crate::store::settings::Settings {
+        tray_notice_seen: true,
+        ..settings
+    };
+    if let Err(e) = crate::store::settings::save(&state.db, &remembered) {
+        // Said, but not written down. Next time it will be said again — which is the
+        // direction this is meant to fail in.
+        tracing::warn!(error = %e, "the notice about the tray was shown and not remembered");
+    }
+}
+
 pub fn run() {
     // First of all, the log with secret redaction. Nothing may be logged before this
     // line: anything written earlier goes past the guard (constitution, principle IV).
@@ -85,10 +125,22 @@ pub fn run() {
         // did.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if crate::tray::close_action(crate::tray::probe()) == crate::tray::CloseAction::Hide
+                // The preference is read here rather than remembered at start-up: somebody
+                // who turns it off expects the very next press of the button to obey.
+                // Unreadable settings mean the default, which is to keep the window — the
+                // safe half, since the tray probe still has a veto over it.
+                let app = window.app_handle();
+                let settings = app
+                    .try_state::<commands::AppState>()
+                    .and_then(|s| crate::store::settings::load(&s.db).ok())
+                    .unwrap_or_default();
+
+                if crate::tray::close_action(crate::tray::probe(), settings.close_to_tray)
+                    == crate::tray::CloseAction::Hide
                 {
                     api.prevent_close();
                     let _ = window.hide();
+                    say_where_the_window_went(app, settings);
                 }
             }
         })

@@ -39,14 +39,20 @@ pub enum CloseAction {
     Exit,
 }
 
-/// What the close button must do, given what the system can show.
+/// What the close button must do, given what the system can show and what was asked for.
 ///
-/// Pure and one line, and separate all the same: it is the whole of the decision, and the
-/// only part of it that can be checked without a desktop session.
-pub fn close_action(state: TrayState) -> CloseAction {
-    match state {
-        TrayState::Installed => CloseAction::Hide,
-        TrayState::Unavailable => CloseAction::Exit,
+/// **Two halves, and they are not equal partners** (T399). The preference decides only where
+/// there is somewhere to go: a person who asked for the window to be kept still gets it
+/// closed on a desktop with no tray, because a window hidden into nothing is the worst
+/// outcome available — the application goes on running and holding encodes with nothing on
+/// screen to say so, and no way back. The setting cannot ask for that, so it is not offered.
+///
+/// Pure and separate: it is the whole of the decision, and the only part of it that can be
+/// checked without a desktop session.
+pub fn close_action(state: TrayState, close_to_tray: bool) -> CloseAction {
+    match (state, close_to_tray) {
+        (TrayState::Installed, true) => CloseAction::Hide,
+        (TrayState::Installed, false) | (TrayState::Unavailable, _) => CloseAction::Exit,
     }
 }
 

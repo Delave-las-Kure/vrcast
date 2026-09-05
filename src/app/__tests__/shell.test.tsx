@@ -34,6 +34,8 @@ const SETTINGS: Settings = {
   animations: true,
   language: null,
   theme: null,
+  close_to_tray: true,
+  tray_notice_seen: false,
   work_dir: null,
 };
 

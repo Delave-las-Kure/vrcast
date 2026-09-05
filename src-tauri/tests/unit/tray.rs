@@ -81,8 +81,69 @@ fn the_search_stops_at_the_first_one_that_loads() {
 
 #[test]
 fn the_close_button_hides_only_where_there_is_somewhere_to_hide() {
-    assert_eq!(close_action(TrayState::Installed), CloseAction::Hide);
-    assert_eq!(close_action(TrayState::Unavailable), CloseAction::Exit);
+    // The desktop's half of the decision, with the preference left at its default.
+    assert_eq!(close_action(TrayState::Installed, true), CloseAction::Hide);
+    assert_eq!(
+        close_action(TrayState::Unavailable, true),
+        CloseAction::Exit
+    );
+}
+
+#[test]
+fn asking_for_the_window_to_be_kept_cannot_ask_for_it_to_be_lost() {
+    // T399. The preference decides only where there is somewhere to go. A person who turns
+    // it on from a desktop with no tray — or who carries their settings to one — still gets
+    // the button that closes, because the alternative is a window hidden into nothing while
+    // the application goes on holding encodes, with nothing on screen to say so and no way
+    // back. The setting is not offered there, and this is what makes the not-offering safe.
+    assert_eq!(
+        close_action(TrayState::Unavailable, true),
+        CloseAction::Exit
+    );
+    assert_eq!(
+        close_action(TrayState::Unavailable, false),
+        CloseAction::Exit
+    );
+    // And where there is a tray, the answer is theirs.
+    assert_eq!(close_action(TrayState::Installed, false), CloseAction::Exit);
+    assert_eq!(close_action(TrayState::Installed, true), CloseAction::Hide);
+}
+
+#[test]
+fn the_close_button_asks_the_settings_and_tells_the_person_once() {
+    // ⚠ **Read out of the source, because the handler cannot be called.** It is a closure
+    // given to Tauri's builder and needs a window to fire. Two things about it are the whole
+    // of T399 on this path: it must consult the preference rather than the tray alone, and
+    // the notice about where the window went must be sent once and remembered — a notice
+    // repeated on every close is one people learn to dismiss, and then it says nothing.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let text = std::fs::read_to_string(&path).expect("lib.rs would not read");
+
+    let at = text
+        .find("WindowEvent::CloseRequested")
+        .expect("the close button is no longer intercepted at all");
+    let handler = &text[at..(at + 1400).min(text.len())];
+
+    assert!(
+        handler.contains("settings.close_to_tray"),
+        "the close button decides without asking what was asked for (FR-150):
+{handler}"
+    );
+    assert!(
+        handler.contains("say_where_the_window_went"),
+        "the window is hidden without a word about where it went. On Linux nothing can say          whether the icon is even visible (R-35), so this notice is the only answer there          is:
+{handler}"
+    );
+
+    let at = text
+        .find("fn say_where_the_window_went")
+        .expect("the notice about the tray is gone");
+    let notice = &text[at..(at + 1600).min(text.len())];
+    assert!(
+        notice.contains("if settings.tray_notice_seen") && notice.contains("tray_notice_seen: true"),
+        "the notice is not said once: it must stop when it has been said, and it must write          that down, or a restart starts the telling over:
+{notice}"
+    );
 }
 
 #[test]
