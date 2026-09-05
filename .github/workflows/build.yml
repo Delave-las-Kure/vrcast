@@ -505,6 +505,24 @@ jobs:
         run: >
           cargo test --manifest-path src-tauri/Cargo.toml
           --features integration --test integration -- --test-threads=1
+      # ⚠ **Principle IV had no guard that ran anywhere** (T489, found 2026-09-04). This
+      # script existed, had a container mode, and was named by neither `check-all.sh` nor any
+      # workflow — zero mentions in all three. It re-runs eight of the suites above with the
+      # log turned up to `trace`, where talkative libraries lay out everything they know, and
+      # searches the output for the key's own bytes and for the passphrase. At `info` the
+      # libraries stay quiet and the hunt would be idle, which is the whole point of the level.
+      #
+      # **Yes, those eight run twice.** That is the cost of asking a different question of the
+      # same work: the step above asks whether the behaviour is right, this one asks what the
+      # behaviour said out loud while being right. Measured 2026-09-04: 29,932 lines, 29 tests.
+      #
+      # It cannot pass having checked nothing — it counts the tests that ran and the lines the
+      # log holds, and says so rather than reporting a clean log it never produced.
+      #
+      # After the tests, not before: the key it hunts for is made by the first integration
+      # test that needs one, and without it the script stops with "there is no test key".
+      - name: No secrets in the log (principle IV, FR-091, SC-011)
+        run: bash scripts/check-no-secrets-in-logs.sh container
       - name: Make sure the containers cleaned up after themselves
         if: always()
         # **Оболочка названа, а не взята по умолчанию.** В задании-контейнере по умолчанию

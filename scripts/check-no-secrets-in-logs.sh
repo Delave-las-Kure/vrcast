@@ -119,7 +119,12 @@ done < "$LOG.needles"
 # test` reports success, and this check announces a clean log it never read. Counting
 # the log's own line is the only way to tell "nothing was wrong" from "nothing
 # happened".
-ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$LOG" | grep -oE '[0-9]+' | head -1)
+# `|| true` and not by oversight: with `set -euo pipefail` a `grep` that matches nothing
+# ends the script here, one line before the explanation below is reached. The check
+# still failed — but with a bare exit code, after fifteen minutes, saying nothing about
+# the one failure it was written to name. Found 2026-09-04 by feeding it a log with no
+# test result in it.
+ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$LOG" | grep -oE '[0-9]+' | head -1 || true)
 if [ -z "${ran:-}" ] || [ "$ran" -eq 0 ]; then
   echo "NOT ONE TEST RAN — the filters name tests that no longer exist." >&2
   echo "Filters: ${RUN[*]}" >&2
