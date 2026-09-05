@@ -101,3 +101,14 @@ if [ "$exempted" -gt 0 ]; then
 else
   echo "No hardcoded servers found."
 fi
+
+# ⚠ **Nothing found is not the same as nothing looked for** (2026-09-05). Without the two
+# secrets the only needle left is the default video path — the address and the domain, which
+# are the substance of FR-004, were never searched for. Saying so on standard error was not
+# enough: `check-all.sh` reads the exit code and printed "passed" over it. Code 2 is the
+# third answer, and it is not a failure: this machine is not meant to hold those secrets, and
+# continuous integration does hold them.
+if [ -z "${FORBID_IP:-}" ] && [ -z "${FORBID_DOMAIN:-}" ]; then
+  echo "The address and the domain were NOT searched for: no FORBID_IP, no FORBID_DOMAIN." >&2
+  exit 2
+fi

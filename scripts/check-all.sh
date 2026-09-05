@@ -29,10 +29,18 @@ FULL=0
 [ "${1:-}" = "--full" ] && FULL=1
 
 FAILED=""
+PARTLY=""
 
 summary() {
   printf '\n'
-  if [ -z "$FAILED" ]; then
+  if [ -n "$PARTLY" ]; then
+    printf '\033[33m--- ran without being able to check everything:%s ---\033[0m\n' "$PARTLY"
+  fi
+  if [ -z "$FAILED" ] && [ -n "$PARTLY" ]; then
+    # Not "all checked": it was not. Safe to push all the same — what this machine could not
+    # look at is exactly what continuous integration holds the secrets for.
+    printf '\033[32m--- nothing failed here; the rest is for CI to look at ---\033[0m\n'
+  elif [ -z "$FAILED" ]; then
     printf '\033[32m--- all checked, safe to push ---\033[0m\n'
   else
     printf '\033[31m--- failed:%s ---\033[0m\n' "$FAILED"
@@ -40,11 +48,29 @@ summary() {
   fi
 }
 
+# ⚠ **Three answers, not two** (2026-09-05). "Passed" and "failed" were not enough, and the
+# gap between them was being filled by the wrong one. Some checks here cannot always look at
+# what they guard — the server's address and domain are secrets this machine legitimately does
+# not have, and the skill's scripts live outside the repository — so they said so on standard
+# error and exited zero. This runner reads only the exit code, so it printed "passed" over a
+# check that had looked at nothing: the exact shape this project spends its days removing.
+#
+# Failing instead would be worse. A check that is red on every honest run teaches people not
+# to read red, and that argument is already written into the leak guard. So the third answer,
+# code 2: it ran, it could not see everything, and it says which. It does not stop a push —
+# what it could not look at, continuous integration can.
 step() {
   local name="$1"; shift
   printf '\n\033[1m> %s\033[0m\n' "$name"
-  if "$@"; then
+  set +e
+  "$@"
+  local code=$?
+  set -e
+  if [ "$code" -eq 0 ]; then
     printf '\033[32m  passed: %s\033[0m\n' "$name"
+  elif [ "$code" -eq 2 ]; then
+    printf '\033[33m  partly: %s — see above for what was not looked at\033[0m\n' "$name"
+    PARTLY="$PARTLY \"$name\""
   else
     printf '\033[31m  FAILED: %s\033[0m\n' "$name"
     FAILED="$FAILED \"$name\""

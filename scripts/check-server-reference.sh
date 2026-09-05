@@ -24,14 +24,17 @@ RES="vrcast-studio/src-tauri/resources/server"
 
 # The reference lives OUTSIDE the repository (principle VII: the skills are not part of the
 # application), so on a machine where only the application was cloned there is nothing to
-# compare against. That is said out loud and the exit code stays 0 — but it must never read
+# compare against. That is said out loud and the exit code is **2** — the runner's third
+# answer, "ran without being able to look". It stayed 0 until 2026-09-05, and it must never read
 # as a pass, because a check that quietly reports success on a comparison it did not make is
 # worse than no check at all. This is why it runs locally before a phase is handed over and
 # not in continuous integration, which checks out the application alone.
 if [ ! -d "$SKILL" ]; then
   echo "Эталон скилла недоступен ($SKILL) — сверка НЕ ВЫПОЛНЯЛАСЬ."
   echo "Это не успех: она идёт локально, там же, где лежат скиллы, а не в CI."
-  exit 0
+  # Code 2, not 0: the runner has a third answer now, and
+  # "passed" was never the honest one here.
+  exit 2
 fi
 
 fail=0

@@ -18,8 +18,9 @@
 # ⚠ **Run locally, not in continuous integration, and that is not an oversight.** The scripts
 # live OUTSIDE the repository (principle VII); CI checks out the application alone, so there is
 # nothing there to compare against. When the skill is absent this says the comparison was NOT
-# MADE and exits 0 — it must never read as a pass, for the same reason
-# `check-server-reference.sh` says so: a green step that compared nothing is worse than no step.
+# MADE and exits **2** — the runner's third answer, "ran without being able to look". It said
+# 0 until 2026-09-05, and `check-all.sh` reads only the exit code, so it printed "passed" over
+# a comparison that never happened: a green step that compared nothing is worse than no step.
 set -euo pipefail
 export LC_ALL=C
 
@@ -30,7 +31,9 @@ SCRIPTS="$ROOT/.claude/skills/vrcast-convert/scripts"
 if [ ! -d "$SCRIPTS" ]; then
   echo "Скрипты скилла недоступны ($SCRIPTS) — сверка формул НЕ ВЫПОЛНЯЛАСЬ."
   echo "Это не успех: она идёт локально, там же, где лежат скиллы, а не в CI."
-  exit 0
+  # Code 2, not 0: the runner has a third answer now, and
+  # "passed" was never the honest one here.
+  exit 2
 fi
 
 fail=0
