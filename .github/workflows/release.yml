@@ -157,6 +157,40 @@ jobs:
 
       - run: npm ci
 
+      # ⚠ **The two halves of the pair, compared before anything is published** (2026-09-05).
+      # Nothing checked that `plugins.updater.pubkey` and the TAURI_SIGNING_PRIVATE_KEY secret
+      # belong together. Mismatched, this workflow publishes installers signed by one key and
+      # an application carrying another: every update is refused *after* being downloaded,
+      # with nothing on any screen to explain it. It is the quietest way for updating to stop
+      # existing, and the step above only ever asked whether the secret was set at all.
+      #
+      # **Here rather than in `preflight`, and that is a compromise.** Before anything is built
+      # is where this belongs; but `preflight` runs in the check image and this needs both the
+      # signer and cargo, which are guaranteed in this job and not in that one. A release still
+      # cannot publish over a failure here — nothing is uploaded until every bundle is built.
+      #
+      # Signed in a scratch directory on purpose: the `.sig` committed beside the payload is
+      # the **forgery** the other tests in `forged_update.rs` are built on, and overwriting it
+      # would quietly disarm them.
+      - name: The shipped key and the signing key are two halves of one pair
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="${RUNNER_TEMP:-/tmp}/vrcast-pair"
+          mkdir -p "$scratch"
+          cp src-tauri/tests/fixtures/updater/payload.bin "$scratch/payload.bin"
+          # The key is read from the environment, never from the command line: an argument
+          # lands in the run's log, and a signing key in a log is a signing key given away.
+          npx --no-install tauri signer sign "$scratch/payload.bin"
+          VRCAST_RELEASE_SIG="$(cat "$scratch/payload.bin.sig")" \
+            cargo test --manifest-path src-tauri/Cargo.toml --test unit -- \
+            --ignored --exact \
+            forged_update::the_shipped_key_verifies_what_the_signing_key_signed
+          rm -rf "$scratch"
+
       - name: Build the installers, signed
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

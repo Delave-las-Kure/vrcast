@@ -199,3 +199,39 @@ fn the_shipped_key_is_a_whole_minisign_key_that_names_itself() {
          mangled somewhere between the owner and this file:\n  {comment}"
     );
 }
+
+/// The environment variable the release hands the signature over in.
+const RELEASE_SIG: &str = "VRCAST_RELEASE_SIG";
+
+#[test]
+#[ignore = "needs a signature made by the private half: the release workflow runs it"]
+fn the_shipped_key_verifies_what_the_signing_key_signed() {
+    // ⚠ **The half that could not be checked, checked where the key is.** Nothing anywhere
+    // compared `plugins.updater.pubkey` against `TAURI_SIGNING_PRIVATE_KEY`. Mismatched, a
+    // release publishes installers signed by one key and an application carrying another:
+    // every update is refused after being downloaded, and nothing on any screen says why. It
+    // is the quietest possible way for updating to stop existing.
+    //
+    // The private half is a secret of the repository and is not on any developer's machine —
+    // principle IV, working as intended. So this test does not go looking for it: the release
+    // signs the committed payload with it and hands the signature over in the environment.
+    //
+    // **A missing variable is a failure here, not a skip.** The only reason to run this test
+    // is to give it a signature; run without one it must say so rather than pass. That is why
+    // it is `#[ignore]`d instead: not run at all is honest, run and quietly satisfied is not.
+    let signature = std::env::var(RELEASE_SIG).unwrap_or_else(|_| {
+        panic!(
+            "{RELEASE_SIG} is not set. This check exists to be handed a signature made by the \
+             release's own key; without one there is nothing to check and it must not pass."
+        )
+    });
+
+    verifies(&our_pubkey(), &signature, PAYLOAD).unwrap_or_else(|e| {
+        panic!(
+            "the key the application ships cannot verify what the release key signed: {e}\n\n\
+             `plugins.updater.pubkey` in tauri.conf.json and the TAURI_SIGNING_PRIVATE_KEY \
+             secret are not two halves of one pair. Releasing now would publish installers \
+             that every installed copy refuses to update to, silently."
+        )
+    });
+}
