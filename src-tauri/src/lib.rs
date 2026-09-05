@@ -138,6 +138,7 @@ pub fn run() {
             commands::ipc::tasks_reorder,
             commands::ipc::tasks_queue_order,
             commands::ipc::tasks_on_close,
+            commands::ipc::app_exit,
             commands::ipc::ffmpeg_probe_self,
             commands::ipc::source_probe,
             commands::ipc::server_probe_fingerprint,

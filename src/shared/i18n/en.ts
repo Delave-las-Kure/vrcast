@@ -1314,6 +1314,11 @@ export const en: Catalogue = {
       moveDown: "Move down the queue",
       closeLosing: "Closing the application now would lose some of the work",
       closeSafe: "The application can be closed: unfinished work will continue at the next start",
+      leaveQuestion: "Leave the application?",
+      leaveUnknown:
+        "What would become of the tasks could not be established. Preparing a file is lost on leaving; an upload carries on from where it got to.",
+      leaveConfirm: "Leave",
+      leaveCancel: "Stay",
     },
 
     notifications: {

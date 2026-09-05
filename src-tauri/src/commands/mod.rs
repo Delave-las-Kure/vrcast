@@ -426,6 +426,19 @@ pub mod ipc {
         api::tasks_on_close(&state)
     }
 
+    /// Leave, having been told what it costs (T400, FR-086).
+    ///
+    /// **The only way out through the tray menu when something is running.** The menu no
+    /// longer exits by itself: it asks (`events::names::APP_QUIT`), the interface names the
+    /// consequences task by task, and a person answers. This is the answer "yes".
+    ///
+    /// Nothing is decided here and nothing is checked here — the decision was the person's,
+    /// and re-deciding it would mean the question had been for show.
+    #[tauri::command]
+    pub fn app_exit(app: tauri::AppHandle) {
+        tauri::Manager::app_handle(&app).exit(0);
+    }
+
     #[tauri::command]
     pub async fn ffmpeg_probe_self() -> Result<crate::media::ffmpeg::FfmpegInfo> {
         api::ffmpeg_probe_self().await

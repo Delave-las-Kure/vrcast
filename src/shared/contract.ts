@@ -1275,6 +1275,8 @@ export const EVENTS = {
   serverState: "server:state",
   viewersUpdate: "viewers:update",
   deployProgress: "deploy:progress",
+  /** "Exit" was chosen in the tray menu while something was running (T400, FR-086). */
+  appQuitRequested: "app:quit-requested",
 } as const;
 
 export interface TaskProgressEvent {

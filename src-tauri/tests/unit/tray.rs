@@ -176,3 +176,76 @@ fn the_deb_says_it_needs_the_library_the_tray_is_drawn_by() {
          verify the name on a real Fedora or RHEL before writing it down"
     );
 }
+
+// ---------- leaving through the menu, and what it costs first (T400, FR-086) ----------
+
+#[test]
+fn leaving_with_nothing_at_stake_asks_nothing() {
+    // A dialog that always appears and always has one right answer is one people learn to
+    // dismiss unread — and then the one that mattered goes past with the rest. FR-086 asks
+    // for a warning **during running tasks**, not for a toll gate.
+    use vrcast_studio_lib::tray::{quit_action, QuitAction};
+    assert_eq!(quit_action(0), QuitAction::Straight);
+}
+
+#[test]
+fn leaving_with_anything_at_stake_asks() {
+    use vrcast_studio_lib::tray::{quit_action, QuitAction};
+    assert_eq!(quit_action(1), QuitAction::Ask);
+    assert_eq!(quit_action(7), QuitAction::Ask);
+}
+
+#[test]
+fn the_tray_menu_asks_before_it_ends_the_application() {
+    // ⚠ **Read out of the source, because nothing else can read it.** The menu handler is a
+    // closure handed to Tauri's builder; there is no way to call it without a desktop session
+    // and a real icon, and on Linux even a click cannot be waited for (R-35). What the check
+    // is for is one line and the whole of FR-086 on this path: until T400 it said
+    // `QUIT => app.exit(0)`, and somebody with a thirty-gigabyte upload running chose "Exit"
+    // and lost it without a word.
+    //
+    // Crude on purpose. The alternative was no check at all on the one line that decides
+    // whether a person is warned.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tray/mod.rs");
+    let text = std::fs::read_to_string(&path).expect("the tray module would not read");
+
+    let at = text
+        .find(".on_menu_event(")
+        .expect("the tray menu no longer answers its items — has the handler been renamed?");
+    let closing = text[at..]
+        .find("\n            })")
+        .expect("the menu handler's end was not found; this check has come adrift from the file");
+    let handler = &text[at..at + closing];
+
+    assert!(
+        handler.contains("QUIT => quit_pressed(app)"),
+        "the tray menu's \"Exit\" no longer goes through `quit_pressed`, which is where the \
+         cost of leaving is counted:\n{handler}"
+    );
+    assert!(
+        !handler.contains("exit("),
+        "the tray menu ends the application from inside its own handler. That is what it did \
+         before T400, and it meant leaving without being told what leaving costs (FR-086):\n\
+         {handler}"
+    );
+}
+
+#[test]
+fn not_being_able_to_count_the_cost_is_treated_as_a_cost() {
+    // The other half of `quit_pressed`, and the reason it is written the way it is: when the
+    // core cannot be reached, `at_stake` is 1, not 0. Not knowing is not the same as knowing
+    // there is nothing, and exiting on a question nobody could answer is the one outcome that
+    // cannot be taken back.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tray/mod.rs");
+    let text = std::fs::read_to_string(&path).expect("the tray module would not read");
+    let at = text
+        .find("fn quit_pressed")
+        .expect("`quit_pressed` is gone — the menu decides some other way now");
+    let body = &text[at..(at + 1200).min(text.len())];
+
+    assert!(
+        body.contains("unwrap_or(1)") && body.contains("None => 1"),
+        "a tray \"Exit\" that cannot reach the core now falls through to leaving. Both ways of \
+         failing to count must read as \"something is at stake\":\n{body}"
+    );
+}

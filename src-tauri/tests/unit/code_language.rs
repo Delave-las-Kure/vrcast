@@ -188,6 +188,15 @@ fn the_tray_puts_no_words_of_its_own_on_the_screen() {
         };
         for (i, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
+            // ⚠ **A line in the log is not a line on the screen** (T400). This exempts
+            // `tracing::` and nothing else, and it narrows the rule towards what the rule
+            // says it is for rather than away from it: a menu label reaches a person by
+            // being handed to `MenuItem`, and no logging macro can hand it anything. Left
+            // out, the rule forbids the module to explain a failure to whoever is reading
+            // the trace — and the way that gets resolved in practice is by not explaining.
+            if code.trim_start().starts_with("tracing::") {
+                continue;
+            }
             let mut rest = code;
             while let Some(open) = rest.find('"') {
                 let after = &rest[open + 1..];

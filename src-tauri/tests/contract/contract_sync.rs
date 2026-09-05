@@ -65,7 +65,25 @@ fn declared_strings(ts: &str, marker: &str) -> HashSet<String> {
         "the declaration \"{marker}\" is not closed by a semicolon"
     );
 
-    clean
+    // ⚠ **Block comments too, and not only `//`** (found 2026-09-04 adding an event). A
+    // `/** ... */` above an entry is the ordinary way things are explained in this file, and
+    // a quoted word inside one — "Exit", say — was read as a declared name. The sentry then
+    // reported a drift that did not exist, which is the way a sentry stops being read.
+    let mut visible = String::with_capacity(clean.len());
+    let mut rest = clean.as_str();
+    while let Some(at) = rest.find("/*") {
+        visible.push_str(&rest[..at]);
+        match rest[at..].find("*/") {
+            Some(end) => rest = &rest[at + end + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    visible.push_str(rest);
+
+    visible
         .split('"')
         .skip(1)
         .step_by(2)
@@ -151,6 +169,7 @@ fn the_event_names_match_both_ways() {
         names::SERVER_STATE,
         names::VIEWERS_UPDATE,
         names::DEPLOY_PROGRESS,
+        names::APP_QUIT,
     ]
     .into_iter()
     .map(str::to_owned)

@@ -181,6 +181,12 @@ export const ipc = {
   /** The ids of waiting tasks, in the order they will run. */
   tasksQueueOrder: () => call<string[]>("tasks_queue_order"),
   tasksOnClose: () => call<TaskOnClose[]>("tasks_on_close"),
+  /**
+   * Leave, the question having been answered (T400, FR-086).
+   *
+   * There is no matching "stay": staying is what happens when nothing is called.
+   */
+  appExit: () => call<void>("app_exit"),
 
   serverProbeFingerprint: (host: string, port: number) =>
     call<string>("server_probe_fingerprint", { host, port }),
@@ -410,6 +416,18 @@ export function onDeployProgress(
   return tauriListen<{ server_id: string; steps: PlannedStep[] }>(EVENTS.deployProgress, (ev) =>
     handler(ev.payload.server_id, ev.payload.steps),
   );
+}
+
+/**
+ * "Exit" was chosen in the tray menu and something is running (T400, FR-086).
+ *
+ * A question put to the interface, not an announcement. The core has already decided that
+ * leaving costs something — it counted — and it exits nothing until `appExit` is called.
+ * What it cannot do is say what the cost is in words a person reads, which is why the
+ * question comes here at all.
+ */
+export function onAppQuitRequested(handler: () => void): Promise<UnlistenFn> {
+  return tauriListen<void>(EVENTS.appQuitRequested, () => handler());
 }
 
 export function onLibraryChanged(handler: (serverId: string) => void): Promise<UnlistenFn> {

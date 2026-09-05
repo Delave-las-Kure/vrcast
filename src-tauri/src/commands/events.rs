@@ -31,6 +31,12 @@ pub mod names {
     pub const VIEWERS_UPDATE: &str = "viewers:update";
     /// A deployment moved on a step (FR-123).
     pub const DEPLOY_PROGRESS: &str = "deploy:progress";
+    /// "Exit" was chosen in the tray menu while something was running (T400, FR-086).
+    ///
+    /// A question, not an announcement: the core has decided that leaving costs something,
+    /// and the interface names what, task by task, and asks. Nothing exits until it is
+    /// answered — see `commands::api::app_exit`.
+    pub const APP_QUIT: &str = "app:quit-requested";
 }
 
 /// Start forwarding task events to the interface.

@@ -127,6 +127,38 @@ pub struct Labels {
 pub const SHOW: &str = "show";
 pub const QUIT: &str = "quit";
 
+/// What "Exit" from the tray menu must do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitAction {
+    /// Nothing is at stake. Go, without asking a question that has one sensible answer.
+    Straight,
+    /// Something is running whose fate a person is entitled to know before deciding: bring
+    /// the window back and let the interface name the consequences task by task.
+    Ask,
+}
+
+/// Whether leaving now costs anything, given how many tasks would be affected.
+///
+/// ⚠ **Until T400 this decision did not exist: the menu called `app.exit(0)`.** Somebody with
+/// a thirty-gigabyte upload running picked "Exit" and lost it without a word. FR-086 requires
+/// the warning **at exit** — and says in as many words that a general "tasks are running,
+/// close?" is not enough, because it does not let anybody decide. So the count decides only
+/// whether to ask; *what* is said is the interface's, per task, by name.
+///
+/// **Asking when nothing is at stake would be worse than not asking.** A dialog that always
+/// appears and always has one right answer is a dialog people learn to dismiss unread — and
+/// then the one that mattered goes past with the rest.
+///
+/// Pure, and separate, for the same reason as [`close_action`]: it is the whole of the
+/// decision and the only part of it checkable without a desktop session.
+pub fn quit_action(at_stake: usize) -> QuitAction {
+    if at_stake == 0 {
+        QuitAction::Straight
+    } else {
+        QuitAction::Ask
+    }
+}
+
 #[cfg(desktop)]
 mod desktop {
     use super::{Labels, QUIT, SHOW};
@@ -168,11 +200,44 @@ mod desktop {
             .show_menu_on_left_click(true)
             .on_menu_event(|app, event| match event.id.as_ref() {
                 SHOW => show_the_window(app),
-                QUIT => app.exit(0),
+                QUIT => quit_pressed(app),
                 _ => {}
             })
             .build(app)?;
         Ok(())
+    }
+
+    /// "Exit" was chosen in the tray menu (T400, FR-086).
+    ///
+    /// **The count is asked for here rather than left to the interface**, and the reason is
+    /// what happens on the day the interface is wedged: with nothing running, a person who
+    /// wants out gets out. Only when there is something to lose does leaving wait on a window.
+    ///
+    /// Failing to reach the core counts as "something is at stake". Not knowing is not the
+    /// same as knowing there is nothing, and exiting on a question we could not answer is the
+    /// one outcome that cannot be undone.
+    fn quit_pressed<R: Runtime>(app: &AppHandle<R>) {
+        let at_stake = match app.try_state::<crate::commands::AppState>() {
+            Some(state) => crate::commands::api::tasks_on_close(&state)
+                .map(|tasks| tasks.len())
+                .unwrap_or(1),
+            None => 1,
+        };
+
+        if super::quit_action(at_stake) == super::QuitAction::Straight {
+            app.exit(0);
+            return;
+        }
+
+        // The window first: an event sent to a hidden window asks a question nobody can see,
+        // and the application would look as though "Exit" did nothing at all.
+        show_the_window(app);
+        if let Err(e) = tauri::Emitter::emit(app, crate::commands::events::names::APP_QUIT, &()) {
+            // Nothing can carry the question. Better to stay running with the window in front
+            // — a person can see the tasks and close it themselves — than to exit on a
+            // warning that was never delivered.
+            tracing::error!(error = %e, "the question about leaving could not be put to the interface");
+        }
     }
 
     /// Bring the window back and put it in front.

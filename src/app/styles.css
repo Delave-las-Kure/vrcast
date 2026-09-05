@@ -30,6 +30,10 @@
   --radius: 10px;
   --radius-sm: 6px;
   --shadow: 0 1px 2px rgb(16 24 40 / 6%), 0 4px 12px rgb(16 24 40 / 5%);
+  /* Behind the question about leaving (T400). Dark in both themes rather than "the other
+     theme's background": what it has to do is push the page back, and a pale scrim over a
+     pale page pushes nothing back at all. */
+  --scrim: rgb(16 24 40 / 45%);
 
   --speed: 160ms;
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
@@ -57,6 +61,7 @@
   --warning: #e0a34a;
 
   --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 4px 14px rgb(0 0 0 / 25%);
+  --scrim: rgb(0 0 0 / 60%);
 
   color-scheme: dark;
 }
@@ -885,6 +890,27 @@ button:focus-visible {
 
 .dialog h3 {
   margin: 0;
+}
+
+/* T400 — the question about leaving, over everything else.
+   Over, not beside: it is the answer to a menu item that used to end the application on the
+   spot, and a person who chose "Exit" is looking for the consequence of that choice, not
+   scrolling a page for it. The ground is painted from a token so the panel behind does not
+   show through in one theme and not the other. */
+.leave {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim);
+}
+
+.leave .dialog {
+  margin-bottom: 0;
+  width: min(560px, 100%);
 }
 
 .dialog__error {

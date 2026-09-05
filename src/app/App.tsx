@@ -21,6 +21,7 @@ import { Appearance } from "../features/settings/Appearance";
 import { DiagPage } from "../features/diag/DiagPage";
 import { ViewersScreen } from "../features/viewers/ViewersScreen";
 import { TasksPanel } from "../features/tasks/TasksPanel";
+import { LeaveConfirm } from "../features/tasks/LeaveConfirm";
 import { UploadScreen } from "../features/upload/UploadScreen";
 import { ipc } from "../shared/ipc";
 import { LanguageProvider, useT } from "../shared/i18n";
@@ -68,6 +69,14 @@ function AppShell() {
 
   return (
     <div className="layout">
+      {/*
+       * T400 — the question the tray's "Exit" now asks (FR-086).
+       *
+       * Mounted here, above the routes, on purpose: the menu item can be chosen from any
+       * screen and while the window is hidden, and a listener living inside one section
+       * would miss it from every other. It draws nothing until the core asks.
+       */}
+      <LeaveConfirm />
       <Sidebar version={version} />
       {/*
        * T326 — fades between sections (FR-101), which a setting can turn off (FR-103).
