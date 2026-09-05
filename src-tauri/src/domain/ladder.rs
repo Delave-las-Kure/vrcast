@@ -305,18 +305,47 @@ pub enum Refusal {
     SourceBitrateTooLow { bitrate_bps: u64 },
 }
 
+/// A file with less than this in it does not want a ladder; it wants to be served as it is.
+///
+/// ⚠ **Written out, having been an accident.** Until 2026-09-05 the refusal was spelled
+/// `source_cap_mbps(source) == 0` — true only because the cap truncated its input to whole
+/// megabits first. The moment that truncation was corrected the refusal stopped firing for
+/// HEVC sources between 0.625 and 1 Mbit/s, silently, and they began receiving a one-rung
+/// ladder instead of being sent away. A rule that holds because of how a neighbouring
+/// calculation rounds is not a rule; it is a coincidence waiting for somebody to fix the
+/// neighbour.
+const LADDER_FLOOR_BPS: u64 = MBIT;
+
+/// Whether there is enough in the source to be worth a ladder at all.
+pub fn worth_a_ladder(source: &SourceFacts) -> bool {
+    source.bitrate_bps >= LADDER_FLOOR_BPS
+}
+
 /// What the source allows the top of a ladder to be, in whole megabits per second.
 ///
-/// The script's own arithmetic, integer division and all: a 12 Mbit/s HEVC source gives
-/// `12 * 16 / 10` = **19**, not 19.2. The rounding is not a detail to be tidied up — it is
-/// what puts the cap on the same whole-megabit grid as the rungs and the measurements.
+/// **The script's own arithmetic, and it changed on 2026-09-05.** `convert.sh` used to
+/// truncate to whole megabits *before* applying the heavier-codec allowance and again after,
+/// so a 7.842 Mbit/s HEVC master became 7, then `7 * 16 / 10` = 11 — where the source is
+/// really worth 12.5. Twelve per cent of the allowance thrown away by rounding, on every
+/// master whose bitrate is not a whole number of megabits, which is nearly all of them.
+///
+/// It now truncates once, at the end, and this carries that over (principle VI: the formulas
+/// come from the scripts unchanged). The cap still lands on the whole-megabit grid the rungs
+/// and the measurements live on — that was the reason given for the old rounding, and it
+/// survives; what does not survive is rounding the *input* as well.
+///
+/// **No floor of one here.** `convert.sh` clamps its result up to 1 because it must hand the
+/// encoder a bitrate to work with. A cap is not a target: zero means "less than a megabit
+/// survives the allowance", and [`worth_a_ladder`] — not this — decides what to do about it.
+/// Porting the clamp would delete that decision without anybody noticing.
 pub fn source_cap_mbps(source: &SourceFacts) -> u64 {
-    let s = source.bitrate_bps / MBIT;
-    if source.heavier_codec {
-        s * 16 / 10
+    let kbit = source.bitrate_bps / 1000;
+    let capped_kbit = if source.heavier_codec {
+        kbit * 16 / 10
     } else {
-        s
-    }
+        kbit
+    };
+    capped_kbit / 1000
 }
 
 /// The constant the ladder used before the probe existed, in megabits per second.
@@ -455,7 +484,7 @@ pub fn plan(
     source: &SourceFacts,
     declared: Option<Layout>,
 ) -> Result<Plan, Refusal> {
-    if source_cap_mbps(source) == 0 {
+    if !worth_a_ladder(source) {
         return Err(Refusal::SourceBitrateTooLow {
             bitrate_bps: source.bitrate_bps,
         });
@@ -544,7 +573,7 @@ pub fn from_measurement(
     declared: Option<Layout>,
     borrowed: bool,
 ) -> Result<Plan, Refusal> {
-    if source_cap_mbps(source) == 0 {
+    if !worth_a_ladder(source) {
         return Err(Refusal::SourceBitrateTooLow {
             bitrate_bps: source.bitrate_bps,
         });

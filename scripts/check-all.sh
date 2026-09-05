@@ -59,6 +59,11 @@ step "Hardcoded servers (FR-004)" bash scripts/check-no-hardcoded-server.sh
 # Local only, for the same reason as the isolation check: what it compares against lives
 # outside the repository, and continuous integration checks out only the application.
 step "The server reference and the resources agree" bash scripts/check-server-reference.sh
+# Principle VI, and it had no guard until 2026-09-05: the formulas the core carries over
+# from the skill's scripts. Beside the server reference because it is the same kind of
+# check and has the same limit — the scripts live outside the repository, so this runs
+# here and cannot run in CI.
+step "The carried-over formulas agree" bash scripts/check-carried-rules.sh
 step "Bundled FFmpeg can do what is needed" bash scripts/check-ffmpeg-features.sh
 step "Core: format" cargo fmt --manifest-path src-tauri/Cargo.toml --check
 step "Core: clippy over all targets" \

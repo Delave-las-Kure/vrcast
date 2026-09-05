@@ -752,3 +752,88 @@ fn a_description_without_a_note_is_what_it_always_was() {
     assert!(plain
         .starts_with("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-STREAM-INF:"));
 }
+
+// ---------- the cap, on sources that are not whole megabits (2026-09-05) ----------
+
+/// A source whose bitrate is not a round number, which is what real masters look like.
+fn source_bps(bitrate_bps: u64, heavier: bool) -> SourceFacts {
+    let mut s = source(3840, 2160, 24, 0);
+    s.bitrate_bps = bitrate_bps;
+    s.heavier_codec = heavier;
+    s
+}
+
+#[test]
+fn the_allowance_is_not_thrown_away_by_rounding_the_source_first() {
+    // ⚠ **What this is written about, and why the test beside it could not find it.**
+    // `convert.sh` truncated the source to whole megabits, applied the ×1.6, and truncated
+    // again: 7.842 Mbit/s became 7, then 11 — where the source is worth 12.5. Twelve per
+    // cent of the allowance gone to rounding, on every master whose bitrate is not a whole
+    // number of megabits, which is nearly all of them. The script was corrected on
+    // 2026-09-05 and this carries that over (principle VI).
+    //
+    // `a_heavier_source_codec_buys_the_ladder_more_room` above stands on 12 Mbit/s exactly —
+    // the one input where both arithmetics agree — so it went on passing while the two
+    // drifted a megabit apart. Whole numbers are the natural thing to write a test with and
+    // the one thing that cannot show this.
+    assert_eq!(
+        source_cap_mbps(&source_bps(7_842_000, true)),
+        12,
+        "7.842 × 1.6 = 12.5"
+    );
+    assert_eq!(
+        source_cap_mbps(&source_bps(4_820_000, true)),
+        7,
+        "4.820 × 1.6 = 7.7"
+    );
+    assert_eq!(
+        source_cap_mbps(&source_bps(6_330_000, true)),
+        10,
+        "6.330 × 1.6 = 10.1"
+    );
+    assert_eq!(
+        source_cap_mbps(&source_bps(19_900_000, true)),
+        31,
+        "19.9 × 1.6 = 31.8"
+    );
+
+    // And the whole-megabit cases still answer as they always did: the grid the rungs and
+    // every measurement live on has not moved.
+    assert_eq!(source_cap_mbps(&source_bps(12_000_000, true)), 19);
+    assert_eq!(source_cap_mbps(&source_bps(35_000_000, false)), 35);
+}
+
+#[test]
+fn a_source_too_light_for_a_ladder_is_refused_by_a_rule_and_not_by_a_rounding() {
+    // ⚠ **This is the trap that came with correcting the arithmetic.** The refusal used to
+    // be spelled `source_cap_mbps(source) == 0`, which held only because the cap truncated
+    // its input to whole megabits: a 0.9 Mbit/s source gave 0, and 0 meant "send them away".
+    // Truncate once instead of twice and the same source gives 1 — so an HEVC file between
+    // 0.625 and 1 Mbit/s would quietly start receiving a one-rung ladder instead of being
+    // told it does not want one. Nothing would have failed; the rule would simply have
+    // stopped existing.
+    let light = source_bps(900_000, true);
+    assert!(
+        source_cap_mbps(&light) > 0,
+        "the test is built wrong: this source is supposed to survive the allowance"
+    );
+    assert!(matches!(
+        plan(Some(35_000_000), &light, None),
+        Err(Refusal::SourceBitrateTooLow { .. })
+    ));
+
+    // Just over the line, and it is a ladder again.
+    assert!(plan(Some(35_000_000), &source_bps(1_000_000, false), None).is_ok());
+}
+
+#[test]
+fn the_cap_is_a_cap_and_not_a_target() {
+    // `convert.sh` clamps its own result up to 1, because it has to hand the encoder a
+    // bitrate to work with. Carrying that clamp across would have deleted the refusal above
+    // without touching a line of it: every source would have had a cap of at least 1, and
+    // `worth_a_ladder` would never have been consulted. A cap of zero is a real answer here
+    // — "less than a megabit survives the allowance" — and it is somebody else's business
+    // what to do about it.
+    assert_eq!(source_cap_mbps(&source_bps(400_000, false)), 0);
+    assert_eq!(source_cap_mbps(&source_bps(0, true)), 0);
+}
