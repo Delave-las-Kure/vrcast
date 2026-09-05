@@ -8,7 +8,7 @@
 
 use super::support::{state, valid_input};
 use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
-use vrcast_studio_lib::commands::servers::{api, StepStatus, TEST_STEPS};
+use vrcast_studio_lib::commands::servers::{api, ServerInput, StepStatus, TEST_STEPS};
 use vrcast_studio_lib::domain::server_profile::AuthKind;
 use vrcast_studio_lib::store::secrets::SecretRef;
 
@@ -274,4 +274,84 @@ async fn checking_a_profile_that_does_not_exist_is_an_error_rather_than_an_empty
         .await
         .expect_err("a profile that does not exist was checked");
     assert_eq!(err.code, ErrorCode::InvalidInput);
+}
+
+// ---------- editing an address is meeting a different machine (2026-09-05) ----------
+
+/// Confirm a fingerprint the way the wizard does, so the tests below start from a profile
+/// that has actually seen a machine.
+fn confirmed(s: &vrcast_studio_lib::commands::AppState, id: &str, fingerprint: &str) {
+    api::server_fingerprint_confirm(s, id, fingerprint).expect("the fingerprint was not confirmed");
+    assert_eq!(
+        api::servers_list(s).unwrap()[0].host_fingerprint.as_deref(),
+        Some(fingerprint),
+        "the test is built wrong: nothing was confirmed, so there is nothing to lose"
+    );
+}
+
+#[test]
+fn editing_a_field_that_is_not_the_address_keeps_the_confirmed_machine() {
+    // The other half of the rule, and the reason it is a rule and not a blanket clearing:
+    // renaming a profile or pointing it at another directory does not change which computer
+    // is at the other end, and making somebody confirm it again for that would teach them to
+    // confirm without looking.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    confirmed(
+        &s,
+        &id,
+        "SHA256:aFingerprintOfTheMachineWeAgreedTo0000000000",
+    );
+
+    let mut input = valid_input("Renamed");
+    input.domain = String::from("new.example.com");
+    api::server_update(&s, &id, input, None).expect("the profile was not changed");
+
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0]
+            .host_fingerprint
+            .as_deref(),
+        Some("SHA256:aFingerprintOfTheMachineWeAgreedTo0000000000"),
+        "the confirmation was thrown away although the machine never changed"
+    );
+}
+
+#[test]
+fn moving_a_profile_to_another_address_stops_it_claiming_to_have_seen_the_machine() {
+    // ⚠ **The fingerprint used to be carried across unconditionally**, with a comment saying
+    // confirmation is a deliberate act of a person's own. So it is — about *one machine*. A
+    // fingerprint says "this is the computer I looked at and agreed to"; move the address and
+    // the profile goes on saying it was confirmed about a computer that is no longer there.
+    //
+    // What that produced was not a silent connection to the wrong machine — the check refuses
+    // a mismatch — but a refusal blaming the server for a changed key, when what changed was
+    // the address, with no way out offered (FR-092).
+    for (what, edit) in [
+        (
+            "the host",
+            (|i: &mut ServerInput| i.host = String::from("10.0.0.9")) as fn(&mut _),
+        ),
+        (
+            "the port",
+            (|i: &mut ServerInput| i.port = 2222) as fn(&mut _),
+        ),
+    ] {
+        let s = state();
+        let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+        confirmed(
+            &s,
+            &id,
+            "SHA256:aFingerprintOfTheMachineWeAgreedTo0000000000",
+        );
+
+        let mut input = valid_input("Server");
+        edit(&mut input);
+        api::server_update(&s, &id, input, None).expect("the profile was not changed");
+
+        assert_eq!(
+            api::servers_list(&s).unwrap()[0].host_fingerprint,
+            None,
+            "{what} was changed and the profile still claims to have seen that machine"
+        );
+    }
 }

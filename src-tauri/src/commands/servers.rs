@@ -179,10 +179,33 @@ pub mod api {
         let existing = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
 
         let mut profile = profile_from(input, existing.id.clone(), existing.secret_ref.clone());
-        // Editing the fields leaves the active mark and the confirmed fingerprint alone:
-        // both of those are deliberate acts of a person's own.
+        // The active mark is a deliberate act of a person's own and editing a field is not a
+        // reason to undo it.
         profile.is_active = existing.is_active;
-        profile.host_fingerprint = existing.host_fingerprint.clone();
+
+        // ⚠ **The confirmed fingerprint is carried only while the machine is the same one.**
+        //
+        // It used to be carried unconditionally, with the same reasoning as the active mark —
+        // and that reasoning is right for the name or the video directory and wrong for the
+        // address. A fingerprint is a fact about *one machine*: it says "this is the computer
+        // I looked at and agreed to". Move the address and the fact is about a computer that
+        // is no longer at the other end, while the profile goes on saying it was confirmed.
+        //
+        // The failure it produced was not a silent connection to the wrong machine — the
+        // check would refuse a mismatch — but something nearly as bad: a refusal blaming the
+        // server for a key that changed, when what changed was the address, and the way out
+        // (confirm this machine, as at the start) not offered. Here the profile simply stops
+        // claiming to have seen a machine it has not seen (FR-092).
+        //
+        // Nobody could reach this until now — no screen calls `server_update` at all, which
+        // is how it went unnoticed (found 2026-09-05). The fix goes in ahead of the screen
+        // rather than after it.
+        let same_machine = profile.host == existing.host && profile.port == existing.port;
+        profile.host_fingerprint = if same_machine {
+            existing.host_fingerprint.clone()
+        } else {
+            None
+        };
         profile.normalize();
         check(&profile)?;
 
