@@ -5,7 +5,13 @@
 //! that forgery is offered here to the public key the released application actually carries.
 //!
 //! **What this proves, exactly.** The key in `tauri.conf.json` — read from the file, not copied
-//! here — refuses a signature made by another key, and accepts the one made for it. The steps
+//! here — refuses a signature made by another key. ⚠ **It does NOT prove that it accepts the
+//! one made for it**, and this sentence used to say it did: accepting needs a signature from
+//! the private half, which lives with the owner and not in a repository. The consequence was
+//! found by breaking these guards on 2026-09-05 — every one of them went on passing with the
+//! shipped key replaced, because refusing a forgery is something any key does. What can be
+//! checked without the private half is that the key is whole and names itself; see
+//! `the_shipped_key_is_a_whole_minisign_key_that_names_itself`. The steps
 //! are the plugin's own, in the same order and with the same crate: base64-decode the key,
 //! `PublicKey::decode`, base64-decode the signature, `Signature::decode`, `verify`. Compared
 //! against `tauri-plugin-updater` 2.10.1, `verify_signature`, on 2026-08-28.
@@ -123,4 +129,73 @@ fn a_payload_the_signature_was_not_made_for_is_refused() {
     };
     verifies(FOREIGN_PUBKEY, FORGED_SIG, &tampered)
         .expect_err("bytes that were never signed were accepted by the signature over others");
+}
+
+#[test]
+fn the_shipped_key_is_a_whole_minisign_key_that_names_itself() {
+    // ⚠ **Found by breaking this file's own guards, 2026-09-05.** Every test above went on
+    // passing when the shipped public key was altered — and that is not a fault in them:
+    // refusing a forgery is something *any* key does, so a swapped key refuses it just as
+    // well. Nothing here looked at whether the key the application ships is the key it is
+    // supposed to ship.
+    //
+    // **What can be checked without the private key.** A minisign public key carries its own
+    // identifier: two bytes of algorithm, eight of key id, thirty-two of key — and the
+    // untrusted comment above it names that same id in hex. A truncated paste, an editor's
+    // line wrapping, a key that is not Ed25519: all of those break the shape or the
+    // correspondence, and this catches them.
+    //
+    // ⚠ **What it does NOT catch, measured rather than assumed.** A character changed inside
+    // the thirty-two bytes of key material leaves the id and the comment agreeing perfectly,
+    // and this test goes on passing. The first draft of this comment claimed a typo would be
+    // caught; breaking the key one character at a time showed otherwise, and the claim was
+    // wrong in the direction that matters — it would have been read as cover.
+    //
+    // **What would close it, and it needs one thing from the owner.** A payload signed once
+    // by the private half, committed as a fixture: then the shipped key either verifies it or
+    // does not, and every byte of the key is covered. Until that exists, "the key is whole and
+    // names itself" is the whole of the claim here.
+    let engine = base64::engine::general_purpose::STANDARD;
+    let text = engine
+        .decode(our_pubkey().trim())
+        .expect("the shipped key is not base64");
+    let text = String::from_utf8(text).expect("the shipped key is not text");
+
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let comment = lines.next().expect("the shipped key has no comment line");
+    let body = lines.next().expect("the shipped key has no key line");
+
+    let blob = engine
+        .decode(body.trim())
+        .expect("the key line is not base64");
+    assert_eq!(
+        blob.len(),
+        42,
+        "a minisign public key is two bytes of algorithm, eight of id and thirty-two of key; \
+         this one is {} bytes long",
+        blob.len()
+    );
+    assert_eq!(
+        &blob[..2],
+        b"Ed",
+        "the key does not say it is an Ed25519 one"
+    );
+
+    // Minisign prints the id the other way round from the way it stores it.
+    let id: String = blob[2..10]
+        .iter()
+        .rev()
+        .map(|b| format!("{b:02X}"))
+        .collect();
+    let named = comment
+        .rsplit(':')
+        .next()
+        .expect("the comment names nothing")
+        .trim();
+
+    assert_eq!(
+        id, named,
+        "the key's own identifier and the one written above it disagree, so the key was \
+         mangled somewhere between the owner and this file:\n  {comment}"
+    );
 }
