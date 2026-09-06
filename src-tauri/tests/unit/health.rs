@@ -181,3 +181,83 @@ fn the_measured_settings_are_read_against_the_measured_values() {
     snap.tuning.restart = Some(String::from("no"));
     assert_eq!(rating_of(&snap, Reading::AutoRestart), Rating::Watch);
 }
+
+// ---------- a verdict that can only be "fine" (T527) ----------
+
+/// ⚠ **A reading that can only answer "nothing to do" must say why it cannot say more.**
+///
+/// The module opens by promising it: "What is a choice is marked too, and marked plainly."
+/// `ports` kept that promise — "listed, not judged: which ports ought to be open depends on
+/// what else the owner runs" — and `memory` did not. It returned `Fine` for any amount of
+/// memory in use whatever, with no comment at all, so a reading that had weighed nothing was
+/// indistinguishable from one that had weighed something and been content. That is the
+/// module's own opening warning about `Unknown` shown as `Fine`, one layer along.
+///
+/// **The check is on the source, and the property is exact**: a rating function whose body
+/// never mentions `Watch` or `Trouble` cannot return either, so it must carry the mark. There
+/// is no way to ask this of the behaviour — a function that always answers `Fine` and one
+/// that answers `Fine` for every input a test happens to try are the same from outside.
+///
+/// It does not say memory *should* be judged. It says that not judging it is a decision, and
+/// a decision has to be written down where the next person will meet it.
+#[test]
+fn a_reading_that_can_only_say_fine_says_why_it_cannot_say_more() {
+    const MARK: &str = "Listed, not judged";
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/domain/health.rs");
+    let text = std::fs::read_to_string(&path).expect("could not read health.rs");
+
+    let mut checked = 0usize;
+    let mut silent = Vec::new();
+
+    for (at, _) in text.match_indices("fn ") {
+        // A rating function and nothing else: `fn name(...) -> Rated {`.
+        let Some(line_end) = text[at..].find('\n') else {
+            continue;
+        };
+        let head = &text[at..at + line_end];
+        // A reading, and not one of the two constructors that also hand back a `Rated`:
+        // a reading is the thing that looks at a snapshot and forms a verdict about it.
+        if !head.ends_with("-> Rated {") || !head.contains("snap: &Snapshot") {
+            continue;
+        }
+        let name = head[3..].split('(').next().unwrap_or_default().to_owned();
+
+        // The body, by counting braces from the opening one of the signature.
+        let open = at + head.rfind('{').expect("the signature ends with a brace");
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, c) in text[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(open + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &text[open..end.expect("a rating function is never closed")];
+        checked += 1;
+
+        let can_object = body.contains("Rating::Watch") || body.contains("Rating::Trouble");
+        if !can_object && !body.contains(MARK) {
+            silent.push(name);
+        }
+    }
+
+    assert!(
+        checked >= 8,
+        "only {checked} rating functions were found — the reader has stopped matching how \
+         they are written, and everything above would pass over nothing"
+    );
+    assert!(
+        silent.is_empty(),
+        "these readings can never answer anything but \"fine\", and do not say why: {silent:?}\n\
+         Either give them a threshold, or mark the choice with \"{MARK}\" and the reason — \
+         the module's own header promises that a choice is marked plainly."
+    );
+}

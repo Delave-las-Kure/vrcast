@@ -99,7 +99,10 @@ pub mod api {
     ) -> Result<DeployPreview> {
         let profile = super::super::library::api::profile_of(state, server_id)?;
         let opened = gate::open(state.secrets.as_ref(), &profile, Intent::Setup).await?;
-        let public_key = public_key_for(state.secrets.as_ref(), &profile)?;
+        // The same answer the run will work from, by the same function (T502). It used to be
+        // `public_key_for`, which refuses a password profile — so the plan failed on exactly
+        // the server the deployment was written for, and the screen never offered the button.
+        let (public_key, _made) = public_key_to_deploy_with(state.secrets.as_ref(), &profile)?;
         let facts = machine::look(&opened.conn).await?;
 
         // The domain is asked about here, before the person agrees to anything (FR-137).
@@ -325,12 +328,18 @@ fn addresses_of(profile: &ServerProfile, machine: &Machine) -> ServerAddresses {
 
 /// The public half of the key this profile signs in with.
 ///
-/// **A password-only profile cannot be deployed from yet, and it says so.** Turning password
-/// logins off without a key first would lock the application — and the person — out, so the
-/// step order refuses it (R-12). Making a key of our own would be the way round that, and it
-/// is a decision rather than a line of code: a private key has to live somewhere, and this
-/// project keeps secrets in the operating system's store rather than in files (principle IV),
-/// while the way in takes a **path**. Left as a named gap instead of guessed at.
+/// **A password profile has none, and this says so** — deliberately, and it is not the whole
+/// answer any more. The gap this paragraph used to describe was closed by T290a: the
+/// application makes a key of its own and the private half goes into the operating system's
+/// store, not into a file (principle IV). `public_key_to_deploy_with` is where that decision
+/// lives; every caller wanting "the key to deploy with" wants that one, and this is only the
+/// half that reads a key already chosen.
+///
+/// ⚠ **Left refusing rather than made to make a key**, because the refusal is what would have
+/// caught T502: `deploy_plan` called this instead, and a password profile — the ordinary
+/// bought server — could not be planned, so the screen never offered the button for a run
+/// that would have worked. A function that quietly did the right thing here would have hidden
+/// that a caller was asking the wrong question.
 fn public_key_for(secrets: &dyn SecretStore, profile: &ServerProfile) -> Result<String> {
     if profile.auth_kind == AuthKind::ManagedKey {
         let openssh = secrets
@@ -389,6 +398,32 @@ fn make_key_for(profile: &ServerProfile) -> Result<crate::ssh::keygen::MadeKey> 
         "vrcast-studio: {}",
         profile.name
     ))?)
+}
+
+/// The public key a deployment works against, whatever the profile signs in with.
+///
+/// ⚠ **Written once because being written twice cost the whole of SC-014** (T502). `start`
+/// had the password branch — T290a, "the ordinary first contact with a bought server is
+/// exactly an address and a root password" — and `deploy_plan` did not: it called
+/// `public_key_for`, which refuses a password profile outright. The screen only draws its
+/// "agree, deploy" button once a plan has come back, so the run that would have worked could
+/// not be reached, and "a bought VPS to a working link without a single console command"
+/// was unreachable from the interface while being perfectly possible underneath.
+///
+/// **Making a key inside a plan is free of consequences**: `keygen::make` writes nothing
+/// anywhere — the store is touched only by `switch_to_managed_key`, once the `ssh-key` step
+/// is known to have worked. So the plan makes one, uses its public half to ask "is this key
+/// on the server yet", is told no, and throws it away. No is the right answer: there is no
+/// key on that server yet, and the plan should say the step is still to do.
+fn public_key_to_deploy_with(
+    secrets: &dyn crate::store::secrets::SecretStore,
+    profile: &ServerProfile,
+) -> Result<(String, Option<crate::ssh::keygen::MadeKey>)> {
+    if profile.auth_kind == AuthKind::Password {
+        let made = make_key_for(profile)?;
+        return Ok((made.public_openssh.clone(), Some(made)));
+    }
+    Ok((public_key_for(secrets, profile)?, None))
 }
 
 /// Put the made key in the store and point the profile at it.
@@ -453,15 +488,7 @@ async fn start(
     // **A server reached by password gets a key made for it** (T290a). It has to exist
     // before the hardening step, or that step turns off the only way in — and the ordinary
     // first contact with a bought server is exactly an address and a root password.
-    let made = if profile.auth_kind == AuthKind::Password {
-        Some(make_key_for(&profile)?)
-    } else {
-        None
-    };
-    let public_key = match &made {
-        Some(made) => made.public_openssh.clone(),
-        None => public_key_for(state.secrets.as_ref(), &profile)?,
-    };
+    let (public_key, made) = public_key_to_deploy_with(state.secrets.as_ref(), &profile)?;
 
     let domain = look_at_domain(&profile, &facts, ipv6).await;
     if !domain.ok() {

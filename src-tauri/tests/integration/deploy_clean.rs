@@ -221,3 +221,81 @@ test -f /etc/vrcast/state.json && echo state",
     let _ = target.reset();
     let _ = Duration::from_secs(0);
 }
+
+// ---------- the bought server, from the screen's side (T502, SC-014) ----------
+
+/// ⚠ **The whole of SC-014, and it was unreachable from the interface.**
+///
+/// "A bought VPS to a working link in twenty minutes without a single console command" starts
+/// with an address and a root password, which is what a provider gives you. `start` knew that
+/// — T290a made a key for exactly this case — and `deploy_plan` did not: it asked
+/// `public_key_for`, which refuses a password profile outright. The deployment screen draws
+/// its "agree, deploy" button only inside `{preview && ...}`, so a plan that errors means a
+/// button that never appears, and a run that would have worked could not be started.
+///
+/// **Every test that reached `deploy_plan` used a key profile**, and every test of the
+/// password flow — `deploy_clean` above included — built the `Context` by hand and never went
+/// through `commands::deploy` at all. The two halves were each covered and the seam between
+/// them was not. So this one goes through the command the screen calls, on the profile a
+/// bought server actually has.
+#[tokio::test]
+async fn a_server_reachable_only_by_password_can_be_planned_from_the_screen() {
+    use std::sync::Arc;
+    use vrcast_studio_lib::commands::deploy::api as deploy_api;
+    use vrcast_studio_lib::commands::servers::{api as servers, ServerInput};
+    use vrcast_studio_lib::domain::server_profile::AuthKind;
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::store::secrets::InMemorySecretStore;
+
+    let target = match DeployTarget::start(Flavour::Clean) {
+        Ok(t) => t,
+        Err(why) => panic!("{why}"),
+    };
+    let state = vrcast_studio_lib::commands::AppState::with_db(
+        Arc::new(Db::open_in_memory().unwrap()),
+        Arc::new(InMemorySecretStore::new()),
+    )
+    .expect("the application state would not assemble");
+
+    let id = servers::server_add(
+        &state,
+        ServerInput {
+            name: String::from("Bought"),
+            host: String::from("127.0.0.1"),
+            port: target.port,
+            user: String::from("root"),
+            auth_kind: AuthKind::Password,
+            key_path: None,
+            domain: String::from("stream.example.com"),
+            video_dir: None,
+            cdn_base: None,
+            ipv6_mode: None,
+        },
+        ROOT_PASSWORD,
+    )
+    .expect("the profile was not created");
+
+    let seen = vrcast_studio_lib::commands::api::server_probe_fingerprint("127.0.0.1", target.port)
+        .await
+        .expect("the fingerprint was not obtained");
+    servers::server_fingerprint_confirm(&state, &id, &seen)
+        .expect("the fingerprint was not confirmed");
+
+    let preview = deploy_api::deploy_plan(&state, &id, Ipv6Choice::Keep)
+        .await
+        .expect(
+            "a server reachable only by password could not be planned — so the screen shows no \
+             button, and SC-014 cannot be walked at all",
+        );
+
+    // ⚠ **One assertion, and the reason the obvious second one is not here.** Coming back at
+    // all is the whole of the defect: `deploy_plan` refused a password profile before it
+    // looked at anything, so the screen drew no button. Asserting afterwards that the ssh-key
+    // step reads "not applied" was tried and taken out — on a container that has never seen a
+    // key it cannot come out any other way, so it was a line that could only pass, which is
+    // the thing this project keeps finding and refusing to ship.
+    assert!(
+        preview.steps.iter().any(|s| s.id == StepId::SshKey),
+        "the plan does not mention putting a key on the server, and that is the step the whole          password case turns on"
+    );
+}

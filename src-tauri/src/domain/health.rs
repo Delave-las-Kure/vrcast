@@ -329,6 +329,25 @@ fn ports(snap: &Snapshot) -> Rated {
 }
 
 fn memory(snap: &Snapshot) -> Rated {
+    // **Listed, not judged, and this is the choice being marked** (T527). The header of this
+    // file promises that what is a choice is marked plainly; `ports` carries such a mark and
+    // this did not, so a reading that can only ever answer "nothing to do" looked like one
+    // that had weighed something.
+    //
+    // **What judges memory is two readings away from here, and both of them measure.** A
+    // machine short of memory shows it in the serving cache — below a quarter of memory while
+    // somebody is watching, the disk is being read instead — and in swap, which on a serving
+    // machine is not touched at all until memory has run out. Both carry a threshold and a
+    // reason for it. `used_mb` on its own carries neither: a number that is high because the
+    // owner runs something else of their own is not a fault, and calling it one is the
+    // crying-wolf mistake this module opens by warning against.
+    //
+    // ⚠ **The gap this leaves, stated rather than hidden:** memory full, nobody watching, and
+    // swap present but untouched reads as entirely well. It is a real state and the panel
+    // does not name it. Closing it needs a number for "too much memory in use on a serving
+    // machine", and this project has no measurement that gives one — `swap::TARGET_TOTAL_MB`
+    // answers a different question (enough for apt to unpack) and reusing it would be a
+    // borrowed justification, which is worse than an admitted gap.
     let m = snap.memory;
     if m.total_mb == 0 {
         return unknown(Reading::Memory);
