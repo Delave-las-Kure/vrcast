@@ -705,8 +705,13 @@ jobs:
         run: bash scripts/check-version.sh
       - name: Both themes line up
         run: bash scripts/check-theme.sh
-      # ⚠ **Two guards deliberately absent, and it is written here so the question is not
-      # re-opened every time somebody counts the scripts** (T489, 2026-09-04):
+      - name: The movement switch reaches what it promises
+        run: bash scripts/check-motion.sh
+      # ⚠ **Three guards deliberately absent, and it is written here so the question is not
+      # re-opened every time somebody counts the scripts** (T489, 2026-09-04; the third added
+      # 2026-09-06 by an audit that found it missing from this very list — a guard written
+      # after the list was, and never entered in it, which is how a list meant to be complete
+      # stops being):
       #
       # - the isolation check (principle VII) needs the protected files, which live
       #   OUTSIDE the repository; CI checks out the application alone, so every file
@@ -715,7 +720,12 @@ jobs:
       # - the server reference check compares against the skill, which lives outside the
       #   repository for the same reason. Its own text says it: with nothing to compare
       #   against it exits 0 saying the comparison was NOT MADE, and a step that goes
-      #   green having compared nothing is worse than no step.
+      #   green having compared nothing is worse than no step;
+      # - the carried-over formulas check (principle VI) compares the application's
+      #   arithmetic against `convert.sh`'s, and that script lives outside the repository
+      #   with the rest of the skills. With nothing to compare against it exits 2 — "ran,
+      #   could not look at everything" — which locally is honest and here would be a step
+      #   that never once compared anything.
       #
       # `check-workflows.sh` is the third and is absent for a different reason — it
       # lints through a container, and the bind mount it needs cannot be made from

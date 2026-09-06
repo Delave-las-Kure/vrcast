@@ -1563,3 +1563,93 @@ fn the_constraint_is_read_from_the_migration_rather_than_assumed() {
         "the newest constraint was not the one read: {allowed:?}"
     );
 }
+
+/// ⚠ **Every deployment step has a name in both languages, or a failure says `Firewall`.**
+///
+/// Added 2026-09-06, when T506 made the gap matter. The plan screen has always read the step
+/// names from `ui.deploySteps`, and now a failure reads them from the same place — so a step
+/// added in Rust and forgotten in the catalogues shows a person the Rust variant's name, in
+/// both the plan and the failure, and nothing anywhere would have said so. The other four
+/// enumerations that cross this boundary have had a sentry since T015; this one did not,
+/// because until now nothing in the core pointed at it.
+///
+/// Checked over `ORDER`, which is the deployment itself: a step that is not in it is not run,
+/// and one that is must be nameable.
+#[test]
+fn every_deployment_step_is_named_in_both_languages() {
+    use vrcast_studio_lib::domain::deploy_steps::ORDER;
+
+    for (lang, file) in [
+        ("ru", "src/shared/i18n/ru.ts"),
+        ("en", "src/shared/i18n/en.ts"),
+    ] {
+        let path = frontend_file(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+        let named = keys_of_block(&text, "deploySteps", lang);
+
+        for id in ORDER {
+            assert!(
+                named.contains(&format!("{id:?}")),
+                "{lang} does not name the step {id:?}, so a person is shown the Rust name of \
+                 it — in the plan and, since T506, in the failure too"
+            );
+        }
+    }
+}
+
+/// The keys of one object in a catalogue, by counting its braces.
+///
+/// ⚠ **Both halves of this were wrong in the first version, and a deliberate break found
+/// them** (2026-09-06). It guessed the closing brace from indentation — `\n  },` — and the
+/// two catalogues are indented differently, so in English the span ran far past the object
+/// and took in the whole rest of the file. Then it asked `contains("Firewall:")`, which is
+/// true of `readingFirewall:` sitting two hundred lines below. Removing a step's English name
+/// changed nothing: the check went on passing, on text about something else entirely.
+///
+/// So: braces are counted rather than guessed, and a key is a whole key — the part of a line
+/// before its first colon, trimmed — rather than a substring of one.
+fn keys_of_block(ts: &str, name: &str, lang: &str) -> HashSet<String> {
+    let marker = format!("{name}: {{");
+    let at = ts
+        .find(&marker)
+        .unwrap_or_else(|| panic!("{lang} has no {name} at all"));
+    let open = at + marker.len() - 1;
+    let mut depth = 0usize;
+    let mut end = None;
+    for (i, c) in ts[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.unwrap_or_else(|| panic!("{lang}'s {name} is never closed"));
+
+    let mut out = HashSet::new();
+    for line in ts[open + 1..end].lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+            continue;
+        }
+        let Some((left, _)) = line.split_once(':') else {
+            continue;
+        };
+        let key = left.trim();
+        if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            out.insert(key.to_owned());
+        }
+    }
+    assert!(
+        !out.is_empty(),
+        "{lang}'s {name} was read and gave no keys at all, so everything checked against it \
+         would pass"
+    );
+    out
+}
