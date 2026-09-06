@@ -555,6 +555,16 @@ pub mod api {
             ));
         }
 
+        // ⚠ **Asked twice on the way through, because there used to be nowhere it was asked
+        // at all** (T503). The last phase is not instant: the checksum reads the whole file,
+        // which on thirty gigabytes is minutes, and pressing stop through them did nothing —
+        // the transfer went on, the file entered serving, and the engine then wrote the task
+        // down as cancelled. A person saw "cancelled" about a film that was being served.
+        if ctx.is_cancelled() {
+            upload::cleanup(conn, &plan.remote_temp).await;
+            return Ok(());
+        }
+
         ctx.report_important(0.98, DetailCode::StageChecksum);
 
         let ours = checksum::local(&plan.local_path)
@@ -572,13 +582,32 @@ pub mod api {
                 .detail(DetailCode::UploadChecksumMismatch));
         }
 
+        // The last place a cancellation can still be obeyed. After the rename the file is
+        // being served, and there is no taking that back inside this function — deleting a
+        // file somebody may already be watching is not what "stop the upload" asked for.
+        if ctx.is_cancelled() {
+            upload::cleanup(conn, &plan.remote_temp).await;
+            return Ok(());
+        }
+
         upload::publish(conn, plan)
             .await
             .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
 
+        // **The window that cannot be closed, said out loud instead of hidden.** Between the
+        // check above and the rename finishing there is a moment, and a cancellation arriving
+        // in it is real: the engine will write the task down as cancelled, truthfully as far
+        // as the person's press goes, while the file is serving. The row then says "cancelled"
+        // and nothing else — so the note is what makes the two agree. The alternative,
+        // un-publishing, would delete under a viewer who has already started watching.
+        if ctx.is_cancelled() {
+            ctx.add_notice(
+                Detail::new(DetailCode::NoticeCancelledAfterPublish).with("name", clean_name),
+            );
+        }
+
         ctx.report_important(1.0, DetailCode::StageDone);
         let _ = request;
-        let _ = clean_name;
         Ok(())
     }
 

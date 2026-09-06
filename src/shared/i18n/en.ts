@@ -456,6 +456,8 @@ export const en: Catalogue = {
     DEPLOY_STOPPED_AT_STEP:
       "It stopped at the step \u201c{step|deployStep}\u201d. Steps completed: {done}.",
     DEPLOY_STOPPED_AFTER: "Steps completed: {done}.",
+    NOTICE_CANCELLED_AFTER_PUBLISH:
+      "The stop arrived while \u201c{name}\u201d was already entering serving. It is on the server and being served \u2014 if it does not belong there, delete it in the library.",
     LADDER_NOT_ENOUGH_SPACE:
       "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
     OBJECTION_RUNG_ABOVE_SOURCE:

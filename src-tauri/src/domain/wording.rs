@@ -263,6 +263,11 @@ detail_codes! {
     /// not it — the likeliest shape of a record left from the domain's previous life.
     DomainServerHasNoIpv6 => "DOMAIN_SERVER_HAS_NO_IPV6",
 
+    /// `name`. A stop that arrived while the file was entering serving (T503). It is being
+    /// served, and the task is written down as cancelled — both true, and neither on its own
+    /// tells a person what is on the server now.
+    NoticeCancelledAfterPublish => "NOTICE_CANCELLED_AFTER_PUBLISH",
+
     // --- deployment: where it stopped (T506, FR-123) ---
     //
     // ⚠ **The step used to be named in `cause`, and the next line wiped it.** `with_cause`

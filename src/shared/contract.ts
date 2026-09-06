@@ -242,6 +242,8 @@ export type DetailCode =
   // Which step a deployment stopped at, and how far it got (FR-123).
   | "DEPLOY_STOPPED_AT_STEP"
   | "DEPLOY_STOPPED_AFTER"
+  // A stop that arrived while the file was already entering serving (T503).
+  | "NOTICE_CANCELLED_AFTER_PUBLISH"
   | "NOT_ENOUGH_SPACE"
   | "LADDER_NOT_ENOUGH_SPACE"
   | "CHAIN_STOPPED_BY_OBJECTION"
