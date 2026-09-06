@@ -268,18 +268,33 @@ pub fn save_state(
     error: Option<&AppError>,
 ) -> Result<bool, DbError> {
     db.with_conn(|c| {
+        // **Whose task this is, written the moment it starts running** (T514). Only then:
+        // a queued task belongs to nobody yet, and a finished one to nobody any more, so
+        // stamping either would leave a claim outlasting the claim's point. The mark is the
+        // same pair migration 0010 gave the process records, and for the same reason — the
+        // number alone lies once the system has handed it out again.
+        let owner = if state == TaskState::Running {
+            let pid = std::process::id();
+            Some((pid, crate::tasks::process::process_identity(pid)))
+        } else {
+            None
+        };
         let changed = c.execute(
             "UPDATE tasks SET
                 state = ?2,
                 progress = CASE WHEN ?2 = 'completed' THEN 1.0 ELSE progress END,
                 error = COALESCE(?3, error),
-                updated_at = ?4
+                updated_at = ?4,
+                owner_pid = COALESCE(?5, owner_pid),
+                owner_identity = COALESCE(?6, owner_identity)
              WHERE id = ?1",
             rusqlite::params![
                 id,
                 state.as_str(),
                 error.and_then(|e| serde_json::to_string(e).ok()),
-                now_rfc3339()
+                now_rfc3339(),
+                owner.as_ref().map(|(pid, _)| *pid),
+                owner.as_ref().and_then(|(_, identity)| identity.clone())
             ],
         )?;
         Ok(changed > 0)
@@ -361,16 +376,65 @@ pub struct RecoveryReport {
     pub interrupted: Vec<String>,
 }
 
+/// Whether the instance that was running this task is still there.
+///
+/// **Two steps, and the second is the one that matters.** A process number on its own is a
+/// lie waiting to happen: the system hands it out again, and by the next start-up the old
+/// instance's number may belong to a person's browser — which would then be read as "still
+/// running" and the task left in limbo for ever. The identity is the process start time, the
+/// same mark migration 0004 gave the child processes and 0010 gave their owners.
+///
+/// **When the mark cannot be read, the answer is "still running".** That direction is chosen:
+/// sparing a task that should have been recovered leaves it looking busy until somebody stops
+/// it, while recovering one that should have been spared takes a live instance's work away
+/// from it. The same asymmetry, and the same choice, as `registry::sweep_on_startup`.
+///
+/// Both columns empty means a row from before this existed. Those are recovered as they
+/// always were: nothing could have been running beside them.
+fn owner_is_still_running(pid: Option<u32>, identity: Option<&str>) -> bool {
+    let Some(pid) = pid else { return false };
+    if pid == std::process::id() && identity.is_none() {
+        return false;
+    }
+    if crate::tasks::process::process_name(pid).is_none() {
+        return false;
+    }
+    match (identity, crate::tasks::process::process_identity(pid)) {
+        (Some(was), Some(now)) => was == now,
+        _ => true,
+    }
+}
+
 /// Sort out the state after the application starts.
 ///
 /// Tasks left in the running state belong to the previous run: their processes are
 /// gone. They are moved to **paused** — and never to completed (constitution,
 /// principle III; SC-010). The difference is not cosmetic: "completed" would mean the
 /// result is ready, and it was cut off halfway.
+///
+/// ⚠ **"The previous run" had to be made true** (T514). This selected every running row
+/// there was and rewrote the lot, on the premise stated in the line above — and minimising
+/// to the tray made that premise false: the first instance goes on running with encodes in
+/// flight, somebody opens the application again, and the second declares the first one's work
+/// interrupted. Worse than a wrong label: `restore_uploads` then finds an unfinished upload
+/// sitting at paused and raises it here, one press away from two processes writing the same
+/// file on the server. FR-151.
+///
+/// A row whose owner is alive is left exactly as it is. The check is migration 0010's, moved
+/// one table along: the number **and** the start-time identity, because a number alone lies
+/// once the system has handed it out again.
 pub fn recover_after_start(db: &Db) -> Result<RecoveryReport, DbError> {
-    let interrupted: Vec<String> = db.with_conn(|c| {
-        let mut stmt = c.prepare("SELECT id FROM tasks WHERE state = 'running'")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    type Row = (String, Option<u32>, Option<String>);
+    let running: Vec<Row> = db.with_conn(|c| {
+        let mut stmt =
+            c.prepare("SELECT id, owner_pid, owner_identity FROM tasks WHERE state = 'running'")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<u32>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -378,15 +442,34 @@ pub fn recover_after_start(db: &Db) -> Result<RecoveryReport, DbError> {
         Ok(out)
     })?;
 
+    let mut interrupted = Vec::new();
+    let mut still_running = Vec::new();
+    for (id, pid, identity) in running {
+        if owner_is_still_running(pid, identity.as_deref()) {
+            still_running.push(id);
+        } else {
+            interrupted.push(id);
+        }
+    }
+
+    if !still_running.is_empty() {
+        tracing::info!(
+            count = still_running.len(),
+            "left alone: another instance of the application is running them"
+        );
+    }
+
     if interrupted.is_empty() {
         return Ok(RecoveryReport::default());
     }
 
     db.with_conn(|c| {
-        c.execute(
-            "UPDATE tasks SET state = 'paused', updated_at = ?1 WHERE state = 'running'",
-            [now_rfc3339()],
-        )?;
+        for id in &interrupted {
+            c.execute(
+                "UPDATE tasks SET state = 'paused', updated_at = ?2 WHERE id = ?1",
+                rusqlite::params![id, now_rfc3339()],
+            )?;
+        }
         Ok(())
     })?;
 

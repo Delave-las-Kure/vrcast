@@ -1178,3 +1178,118 @@ fn the_ladder_build_says_things_as_they_happen_rather_than_at_the_end() {
         );
     }
 }
+
+// ---------- whose task is it (T514, FR-151) ----------
+
+/// Stamp a task with an owner directly, the way `save_state` does when it starts running.
+fn owned_by(db: &Db, id: &str, pid: u32, identity: Option<&str>) {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET owner_pid = ?2, owner_identity = ?3 WHERE id = ?1",
+            rusqlite::params![id, pid, identity],
+        )?;
+        Ok(())
+    })
+    .expect("the owner would not be written");
+}
+
+/// ⚠ **A second instance must not take the first one's work away from it** (FR-151).
+///
+/// The recovery read `WHERE state = 'running'` over the whole table and rewrote the lot, on
+/// the premise that a running row belongs to a run that is over. Minimising to the tray made
+/// that false: the first instance goes on encoding, somebody opens the application again, and
+/// the second declares the first one's tasks interrupted. Worse than a wrong label —
+/// `restore_uploads` then finds an unfinished upload sitting at paused and raises it, one
+/// press away from two processes writing the same file on the server.
+///
+/// Migration 0010 solved exactly this for the process records and stopped there; its own note
+/// scopes the remedy to "the record of a started program", which is why the task rows were
+/// left open. This is that check, one table along.
+///
+/// The live owner here is **this** test process, which is certainly running and certainly
+/// itself — the only owner a test can honestly claim is alive.
+#[tokio::test]
+async fn a_task_belonging_to_a_running_instance_is_left_alone() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+
+    let mut theirs = store::TaskRecord::new("t-live", TaskKind::Upload, None);
+    theirs.state = TaskState::Running;
+    store::upsert(&db, &theirs).unwrap();
+    // Stamped by the same call the engine makes when a task starts running, rather than by
+    // hand: that way this covers the writing of the mark as well as the reading of it. The
+    // owner is therefore **this** process — the only one a test can honestly claim is alive.
+    store::save_state(&db, "t-live", TaskState::Running, None).unwrap();
+
+    let mut orphan = store::TaskRecord::new("t-orphan", TaskKind::Upload, None);
+    orphan.state = TaskState::Running;
+    store::upsert(&db, &orphan).unwrap();
+    // A number no process has. Chosen high on purpose: process numbers are handed out from
+    // the low end, and one this large on a machine that has just booted belongs to nobody.
+    owned_by(&db, "t-orphan", 4_000_000_000, Some("not-a-real-mark"));
+
+    // ⚠ **A number that is alive and is somebody else.** This is what the identity is for,
+    // and the first version of this test never reached it: the orphan above uses a number no
+    // process has, so the comparison short-circuits at "is anything there at all" and the
+    // marks are never compared. Breaking the comparison on purpose left the test green.
+    //
+    // So: this very process's number, with a mark that is not this process's. That is exactly
+    // what a reused number looks like — the old instance is gone, the system handed its
+    // number to something that is running, and without the mark that something would be read
+    // as the task's owner and the task left at running for ever.
+    let mut reused = store::TaskRecord::new("t-reused", TaskKind::Upload, None);
+    reused.state = TaskState::Running;
+    store::upsert(&db, &reused).unwrap();
+    owned_by(
+        &db,
+        "t-reused",
+        std::process::id(),
+        Some("a mark from an instance that is gone"),
+    );
+
+    let e = TaskEngine::new(db.clone());
+    let report = e.recover_after_start().unwrap();
+
+    assert_eq!(
+        store::get(&db, "t-reused").unwrap().unwrap().state,
+        TaskState::Paused,
+        "a task whose owner's number was handed out to somebody else was taken for a live          instance's, so it stays at running with nothing behind it"
+    );
+    assert_eq!(
+        store::get(&db, "t-live").unwrap().unwrap().state,
+        TaskState::Running,
+        "a task another running instance owns was declared interrupted, and its upload is now \
+         one press away from being started a second time"
+    );
+    assert_eq!(
+        store::get(&db, "t-orphan").unwrap().unwrap().state,
+        TaskState::Paused,
+        "a task whose owner is gone was not recovered, so it looks busy for ever"
+    );
+    let mut named = report.interrupted.clone();
+    named.sort();
+    assert_eq!(
+        named,
+        vec![String::from("t-orphan"), String::from("t-reused")],
+        "the report names the wrong tasks as interrupted"
+    );
+}
+
+/// A row from before the owner was recorded is recovered exactly as it always was.
+///
+/// Both columns empty means a version that could not have had a live instance beside it —
+/// closing the window ended the application. Reading "unknown" as "alive" would leave every
+/// such row stuck at running for ever, which is the opposite failure and just as bad.
+#[tokio::test]
+async fn a_task_from_before_owners_were_recorded_is_still_recovered() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let mut old = store::TaskRecord::new("t-old", TaskKind::Convert, None);
+    old.state = TaskState::Running;
+    store::upsert(&db, &old).unwrap();
+
+    let e = TaskEngine::new(db.clone());
+    e.recover_after_start().unwrap();
+    assert_eq!(
+        store::get(&db, "t-old").unwrap().unwrap().state,
+        TaskState::Paused
+    );
+}
