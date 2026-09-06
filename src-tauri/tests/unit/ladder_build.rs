@@ -25,6 +25,7 @@ fn source(width: u32, height: u32, fps: u32, bitrate_bps: u64, codec: &str) -> S
         audio_tracks: vec![AudioTrack {
             index: 0,
             codec: String::from("aac"),
+            profile: Some(String::from("LC")),
             channels: 2,
             bitrate_bps: Some(192_000),
             language: None,

@@ -14,6 +14,7 @@ fn track(codec: &str, channels: u16) -> AudioTrack {
     AudioTrack {
         index: 0,
         codec: String::from(codec),
+        profile: Some(String::from("LC")),
         channels,
         bitrate_bps: None,
         language: Some(String::from("rus")),

@@ -72,6 +72,7 @@ fn source_of(path: &str) -> SourceFile {
         audio_tracks: vec![AudioTrack {
             index: 0,
             codec: String::from("aac"),
+            profile: Some(String::from("LC")),
             channels: 2,
             bitrate_bps: Some(128_000),
             language: None,

@@ -80,6 +80,7 @@ function source(over: Partial<SourceFile> = {}): SourceFile {
       {
         index: 0,
         codec: "aac",
+        profile: "LC",
         channels: 2,
         bitrate_bps: 256_000,
         language: "rus",
@@ -261,6 +262,7 @@ describe("preparation screen", () => {
           {
             index: 0,
             codec: "aac",
+            profile: "LC",
             channels: 2,
             bitrate_bps: null,
             language: null,
@@ -270,6 +272,7 @@ describe("preparation screen", () => {
           {
             index: 1,
             codec: "ac3",
+            profile: "LC",
             channels: 6,
             bitrate_bps: null,
             language: null,

@@ -11,10 +11,20 @@ use vrcast_studio_lib::domain::convert_plan::{
 use vrcast_studio_lib::domain::source::{AudioTrack, SourceFile};
 use vrcast_studio_lib::domain::wording::DetailCode;
 
+/// A track that is what it says it is: AAC here means AAC-LC.
+///
+/// The profile is a parameter of `track_with_profile` rather than a default here, because
+/// T508 was exactly a test helper that could not express the difference: `track("aac", 2)`
+/// stood for both AAC-LC and HE-AAC, and the check that told them apart could not be written.
 fn track(codec: &str, channels: u16) -> AudioTrack {
+    track_with_profile(codec, channels, Some("LC"))
+}
+
+fn track_with_profile(codec: &str, channels: u16, profile: Option<&str>) -> AudioTrack {
     AudioTrack {
         index: 0,
         codec: String::from(codec),
+        profile: profile.map(String::from),
         channels,
         bitrate_bps: None,
         language: Some(String::from("rus")),
@@ -127,6 +137,70 @@ fn changing_the_frame_size_rules_out_carrying_across() {
 }
 
 // ---------- audio (FR-021, FR-024) ----------
+
+/// ⚠ **The name of a codec does not say what the codec did** (T508).
+///
+/// HE-AAC is AAC: it passed the codec test, it is stereo, it is well inside the bitrate — and
+/// it is not the target format. The check that would have caught it could not even be written
+/// before this, because `AudioTrack` had nowhere to put a profile and the test helper had no
+/// way to say which kind of AAC it meant. ffprobe has always answered — the project's own
+/// recorded fixture carries `"profile": "LC"` — and nothing read it.
+#[test]
+fn high_efficiency_aac_is_not_carried_across_despite_the_codec() {
+    let src = SourceFile {
+        audio_tracks: vec![track_with_profile("aac", 2, Some("HE-AAC"))],
+        ..compatible()
+    };
+    let p = plan::plan(&src, &as_is()).expect("the plan would not be made");
+    let AudioAction::Reencode { reason, .. } = &p.audio else {
+        panic!(
+            "HE-AAC was carried across as though it were the target format: {:?}",
+            p.audio
+        );
+    };
+    assert_eq!(reason.key, DetailCode::ReasonAudioProfile);
+    assert_eq!(
+        reason.params.get("profile"),
+        Some(&serde_json::json!("HE-AAC")),
+        "the person is not told which profile it was, so they cannot tell this from any          other reason to re-encode"
+    );
+}
+
+/// A profile nobody declared is re-encoded, and that is the deliberate direction.
+///
+/// The two ways to be wrong do not cost the same: re-encoding a track that was LC all along
+/// costs minutes of processor on already-lossy audio, and passing SBR through costs a viewer
+/// a film that will not play. Principle II.
+#[test]
+fn an_undeclared_audio_profile_is_re_encoded_rather_than_assumed() {
+    let src = SourceFile {
+        audio_tracks: vec![track_with_profile("aac", 2, None)],
+        ..compatible()
+    };
+    let p = plan::plan(&src, &as_is()).expect("the plan would not be made");
+    let AudioAction::Reencode { reason, .. } = &p.audio else {
+        panic!(
+            "an unknown profile was taken for the target one: {:?}",
+            p.audio
+        );
+    };
+    assert_eq!(reason.key, DetailCode::ReasonAudioProfileUnknown);
+}
+
+/// And the plain case still copies, or the two above would be met by re-encoding everything.
+#[test]
+fn plain_stereo_aac_lc_is_still_carried_across_untouched() {
+    let src = SourceFile {
+        audio_tracks: vec![track_with_profile("aac", 2, Some("LC"))],
+        ..compatible()
+    };
+    let p = plan::plan(&src, &as_is()).expect("the plan would not be made");
+    assert_eq!(
+        p.audio,
+        AudioAction::Copy,
+        "AAC-LC stereo is the target format and must not be re-encoded"
+    );
+}
 
 #[test]
 fn multi_channel_aac_is_not_carried_across_despite_the_codec() {

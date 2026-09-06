@@ -1143,3 +1143,38 @@ async fn a_failed_task_still_carries_what_it_managed_to_say() {
         "the failure swallowed what the task had already managed to report"
     );
 }
+
+/// ⚠ **The test above passed for months while the ladder build lost every notice it had.**
+///
+/// The engine has always carried notices through a failure. `tasks::ladder_build` never used
+/// it: it gathered its notices into a local `Vec` and handed them over inside `Built`, which
+/// exists only on the successful path. So any `Err` — a cancellation, a refusal to prepare,
+/// to send, or to cut — took the lot with it, and the build that fails is precisely the one
+/// whose notices explain the failure. "How much room is needed could not be worked out"
+/// followed by "the build failed" is a pair, and the pair never arrived together (T524).
+///
+/// A mechanism that is tested and a caller that does not use it: the shape this whole sweep
+/// keeps turning up. The check that closes it has to be on the caller, because the mechanism
+/// was never at fault.
+///
+/// **Narrow on purpose, one file.** `quality_measure` holds a `Vec<Detail>` too and is not
+/// the same thing — its three notices are built on the line before the `Ok`, so no failure
+/// can come between. Read, and left alone. A rule stated over every `Vec<Detail>` in the core
+/// would fail that one for no reason, and a check that cries wolf gets switched off.
+#[test]
+fn the_ladder_build_says_things_as_they_happen_rather_than_at_the_end() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tasks/ladder_build.rs");
+    let text = std::fs::read_to_string(&path).expect("could not read ladder_build.rs");
+
+    assert!(
+        text.contains("ctx.add_notice("),
+        "the ladder build reports nothing through the task at all — either it stopped having          anything to say, or it is buffering again"
+    );
+
+    for shape in ["notices.push(", "notices.extend(", "let mut notices"] {
+        assert!(
+            !text.contains(shape),
+            "`{shape}` is back in the ladder build: a notice held in a local collection              reaches nobody when the build fails, and the failing build is the one whose              notices explain it (T524). Say it through `ctx.add_notice` where it happens."
+        );
+    }
+}

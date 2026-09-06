@@ -109,7 +109,6 @@ pub struct Built {
     pub prepared: usize,
     pub reused: usize,
     pub verdict: hls_verify::LadderVerdict,
-    pub notices: Vec<Detail>,
 }
 
 /// Build the ladder.
@@ -131,19 +130,31 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         SEGMENT_SECONDS,
     );
 
-    let mut notices: Vec<Detail> = work.iter().flat_map(|w| w.notices.clone()).collect();
+    // ⚠ **Said to the task as it happens, not gathered up and handed over at the end**
+    // (T524). This used to be a local `Vec` that reached the outside world only through
+    // `Built`, which exists only on the successful path — so any `Err` (a cancellation, a
+    // refusal to prepare, a refusal to send, a refusal to cut) took every notice with it.
+    // The build that fails is exactly the one whose notices explain the failure: "how much
+    // room is needed could not be worked out" followed by "the build failed" is a pair, and
+    // the pair never arrived together.
+    //
+    // `TaskContext::add_notice` is the right channel because `TaskEngine::finish` writes the
+    // notices down for **every** ending — completed, failed and cancelled alike.
+    for said in work.iter().flat_map(|w| w.notices.clone()) {
+        ctx.add_notice(said);
+    }
 
     // **Will it fit?** Asked once, here, before a byte is encoded. A set is hours of work
     // and tens of gigabytes; running into the end of the disk halfway leaves the first
     // rungs being served, the next one half written, and a person with no idea which is
     // which.
     if let Some(unknown) = room_for_the_set(job, &work).await? {
-        notices.push(unknown);
+        ctx.add_notice(unknown);
     }
     // And the disk this machine is about to write to, which had never been asked (T452). It
     // is the one that fills first: a variant is written whole before a byte of it is sent.
     if let Some(unknown) = room_here(job, &work)? {
-        notices.push(unknown);
+        ctx.add_notice(unknown);
     }
 
     let mut prepared = 0usize;
@@ -173,7 +184,9 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         // What preparing this variant had to say — the graphics card refusing and the work
         // going to the processor, for instance. Collected rather than dropped: a fallback
         // nobody is told about is a slower build with no explanation for why (T464).
-        notices.extend(prepare_and_send(job, variant, ctx).await?);
+        for said in prepare_and_send(job, variant, ctx).await? {
+            ctx.add_notice(said);
+        }
         prepared += 1;
     }
 
@@ -225,7 +238,7 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     // may have meant to drop 4, and quietly restoring it would overrule that. What is owed is
     // the fact, said out loud.
     if let Some(said) = left_behind(job, &work).await {
-        notices.push(said);
+        ctx.add_notice(said);
     }
 
     write_master(
@@ -246,7 +259,7 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     }
 
     if reused > 0 {
-        notices.push(Detail::new(DetailCode::NoticeVariantsReused).with("count", reused as u64));
+        ctx.add_notice(Detail::new(DetailCode::NoticeVariantsReused).with("count", reused as u64));
     }
     ctx.report_important(1.0, DetailCode::StageDone);
 
@@ -256,7 +269,6 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         prepared,
         reused,
         verdict,
-        notices,
     })
 }
 

@@ -404,6 +404,10 @@ export const ruCore: CatalogueCore = {
       "Опорные кадры исходника стоят не там, где пройдут границы отрезков",
     REASON_TARGET_BITRATE: "задан целевой битрейт",
     REASON_AUDIO_NOT_AAC: "звук в {codec} — целевой формат AAC",
+    REASON_AUDIO_PROFILE:
+      "звук в AAC, но профиль {profile} — целевой AAC-LC, и другие профили воспроизводятся не у всех",
+    REASON_AUDIO_PROFILE_UNKNOWN:
+      "контейнер не сообщает профиль звука — пережимаем, чтобы наверняка был AAC-LC",
     REASON_AUDIO_CHANNELS: "звук {channels}-канальный — целевой формат стерео",
     REASON_AUDIO_TOO_FAT: "дорожка толще целевого битрейта",
 

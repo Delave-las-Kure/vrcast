@@ -317,14 +317,14 @@ pub mod api {
                     };
                     let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;
                     conn.close().await;
-                    // `outcome.map(|_| ())` used to throw away everything the build had
-                    // worked out about itself: how many variants it took from a previous run
-                    // rather than made, and which it had to re-encode because the source's
-                    // keyframes would not line up (T416).
-                    let built = outcome.map_err(build_error)?;
-                    for notice in &built.notices {
-                        ctx.add_notice(notice.clone());
-                    }
+                    // ⚠ **The build says what it has to say as it happens, and this no
+                    // longer carries it** (T524). The first shape of this fixed T416 —
+                    // `outcome.map(|_| ())` threw away everything the build had worked out
+                    // about itself — by copying `Built.notices` across here. That still lost
+                    // every one of them on any failure, because `Built` only exists when
+                    // there is no failure, and the build that fails is the one whose notices
+                    // explain why. They go into the task where they are produced now.
+                    outcome.map_err(build_error)?;
                     Ok(())
                 },
             )

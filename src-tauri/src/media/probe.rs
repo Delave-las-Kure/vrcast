@@ -91,6 +91,9 @@ struct Format {
 struct Stream {
     codec_type: Option<String>,
     codec_name: Option<String>,
+    /// What the codec actually did, where the container says. Asked for all along by
+    /// `-show_streams` and dropped here until 2026-09-06 (T508).
+    profile: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     pix_fmt: Option<String>,
@@ -140,6 +143,7 @@ pub fn parse(json: &str, path: &str) -> Result<SourceFile> {
             // means picking the wrong track on any file where audio is not first.
             index,
             codec: s.codec_name.clone().unwrap_or_default(),
+            profile: not_empty(&s.profile),
             channels: s.channels.unwrap_or(0),
             bitrate_bps: number(&s.bit_rate),
             language: language(&s.tags.language),

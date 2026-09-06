@@ -443,6 +443,7 @@ fn source_of_length(seconds: f64) -> vrcast_studio_lib::domain::source::SourceFi
         audio_tracks: vec![vrcast_studio_lib::domain::source::AudioTrack {
             index: 0,
             codec: String::from("aac"),
+            profile: Some(String::from("LC")),
             channels: 2,
             bitrate_bps: Some(256_000),
             language: None,

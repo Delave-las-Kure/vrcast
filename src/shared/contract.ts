@@ -211,6 +211,8 @@ export type DetailCode =
   | "REASON_TARGET_BITRATE"
   | "REASON_KEYFRAMES_UNALIGNED"
   | "REASON_AUDIO_NOT_AAC"
+  | "REASON_AUDIO_PROFILE"
+  | "REASON_AUDIO_PROFILE_UNKNOWN"
   | "REASON_AUDIO_CHANNELS"
   | "REASON_AUDIO_TOO_FAT"
 
@@ -1387,6 +1389,9 @@ export interface AudioTrack {
   /** The index among audio tracks, from zero. This is what ffmpeg understands. */
   index: number;
   codec: string;
+  /** The codec's profile as the container declares it: `LC`, `HE-AAC`. Null where it does
+   *  not say — which is not the same as LC, and is not treated as it (T508). */
+  profile: string | null;
   channels: number;
   bitrate_bps: number | null;
   /** The language. Often missing, which is ordinary rather than a fault. */

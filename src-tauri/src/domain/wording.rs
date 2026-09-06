@@ -215,6 +215,11 @@ detail_codes! {
     ReasonKeyframesUnaligned => "REASON_KEYFRAMES_UNALIGNED",
     /// `codec` — what the track is in.
     ReasonAudioNotAac => "REASON_AUDIO_NOT_AAC",
+    /// `profile` — AAC, but not the profile the target format admits (T508). HE-AAC is the
+    /// one that reaches viewers: it is AAC by name and does not play for all of them.
+    ReasonAudioProfile => "REASON_AUDIO_PROFILE",
+    /// The container does not say which profile, so it is re-encoded to be certain (T508).
+    ReasonAudioProfileUnknown => "REASON_AUDIO_PROFILE_UNKNOWN",
     /// `channels` — how many the track has.
     ReasonAudioChannels => "REASON_AUDIO_CHANNELS",
     ReasonAudioTooFat => "REASON_AUDIO_TOO_FAT",

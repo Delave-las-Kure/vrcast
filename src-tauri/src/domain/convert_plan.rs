@@ -393,16 +393,33 @@ fn video_action(
     }
 }
 
+/// The one AAC profile the target format admits.
+///
+/// The module's opening line names it — "AAC-LC stereo audio" — and until 2026-09-06 nothing
+/// checked it. ffprobe writes it as `LC`.
+const TARGET_AUDIO_PROFILE: &str = "lc";
+
 fn audio_action(track: &AudioTrack) -> AudioAction {
-    // All three conditions are required, and that is a recorded mistake: checking only the
-    // codec let a six-channel track through against the target format — given AAC 5.1 on
-    // the way in, the file went out with six channels.
+    // **Four conditions, and every one of them was added after something got through.**
+    // Checking only the codec let a six-channel track past — given AAC 5.1 on the way in, the
+    // file went out with six channels. And checking codec, channels and bitrate let HE-AAC
+    // past, because HE-AAC is AAC by name: the profile is what says what the codec actually
+    // did, and it was never read (T508).
     let codec_fits = track.codec.eq_ignore_ascii_case("aac");
     let is_stereo = track.channels == 2;
     let budget = u64::from(AUDIO_KBPS) * 1000 * (100 + AUDIO_TOLERANCE_PERCENT) / 100;
     let within_budget = track.bitrate_bps.is_none_or(|b| b <= budget);
+    // ⚠ **An unknown profile is re-encoded, and that is the deliberate direction.** A
+    // container that does not declare one leaves two ways to be wrong, and they do not cost
+    // the same: re-encoding a track that was LC all along costs a few minutes of processor
+    // on audio that is already lossy, while passing SBR through costs a viewer a film that
+    // will not play. Principle II — nothing unchecked reaches viewers.
+    let profile_fits = track
+        .profile
+        .as_deref()
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case(TARGET_AUDIO_PROFILE));
 
-    if codec_fits && is_stereo && within_budget {
+    if codec_fits && is_stereo && within_budget && profile_fits {
         return AudioAction::Copy;
     }
 
@@ -410,8 +427,12 @@ fn audio_action(track: &AudioTrack) -> AudioAction {
         Detail::new(DetailCode::ReasonAudioNotAac).with("codec", track.codec.clone())
     } else if !is_stereo {
         Detail::new(DetailCode::ReasonAudioChannels).with("channels", track.channels)
-    } else {
+    } else if !within_budget {
         Detail::new(DetailCode::ReasonAudioTooFat)
+    } else if let Some(profile) = track.profile.as_deref() {
+        Detail::new(DetailCode::ReasonAudioProfile).with("profile", profile.to_owned())
+    } else {
+        Detail::new(DetailCode::ReasonAudioProfileUnknown)
     };
 
     AudioAction::Reencode {

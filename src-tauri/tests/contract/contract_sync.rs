@@ -308,6 +308,7 @@ fn an_examined_source_s_shape_matches_both_ways() {
     let track = AudioTrack {
         index: 0,
         codec: String::from("aac"),
+        profile: Some(String::from("LC")),
         channels: 2,
         bitrate_bps: Some(256_000),
         language: Some(String::from("rus")),

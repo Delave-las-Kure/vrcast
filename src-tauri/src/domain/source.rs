@@ -19,6 +19,17 @@ pub struct AudioTrack {
     /// `-map 0:a:<N>`. A person is shown it counting from one.
     pub index: usize,
     pub codec: String,
+    /// The codec's profile, as the container declares it: `LC`, `HE-AAC`, `HE-AACv2`.
+    ///
+    /// ⚠ **The name of a codec does not say what the codec did** (T508). The target is
+    /// AAC-LC, and HE-AAC is AAC by name: a track carrying SBR passed the "already the target
+    /// format" test on the strength of its name and went out untouched. ffprobe has always
+    /// answered this — the project's own recorded fixture carries `"profile": "LC"` — and
+    /// nothing asked for it.
+    ///
+    /// `None` where the container does not say. That is not the same as LC, and is not
+    /// treated as it: see `convert_plan::audio_action`.
+    pub profile: Option<String>,
     pub channels: u16,
     /// The track's bitrate, when known.
     pub bitrate_bps: Option<u64>,

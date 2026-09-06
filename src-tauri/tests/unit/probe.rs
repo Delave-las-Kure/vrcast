@@ -24,6 +24,17 @@ fn a_real_answer_is_read_whole() {
     assert_eq!(src.pix_fmt, "yuv420p");
     assert!(!src.is_hdr());
 
+    // ⚠ **The profile, which this very fixture has always carried and nothing read** (T508).
+    // `-show_streams` asks for it, ffprobe answers `"profile": "LC"`, and the deserialiser
+    // had no field for it — so serde dropped it silently and the plan decided by the codec's
+    // name alone. Asserted from the recorded answer rather than an invented one, because the
+    // point is that the real thing says it.
+    assert_eq!(
+        src.audio_tracks[0].profile.as_deref(),
+        Some("LC"),
+        "the recorded answer says which AAC this is and the parser is not reading it"
+    );
+
     assert_eq!(src.audio_tracks.len(), 1);
     let t = &src.audio_tracks[0];
     assert_eq!(t.codec, "aac");

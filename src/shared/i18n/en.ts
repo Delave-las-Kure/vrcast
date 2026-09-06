@@ -409,6 +409,10 @@ export const en: Catalogue = {
       "The source's keyframes do not fall where the segment boundaries will",
     REASON_TARGET_BITRATE: "a target bitrate was set",
     REASON_AUDIO_NOT_AAC: "audio is {codec} — the target format is AAC",
+    REASON_AUDIO_PROFILE:
+      "the audio is AAC but the profile is {profile} — the target is AAC-LC, and other profiles do not play for everyone",
+    REASON_AUDIO_PROFILE_UNKNOWN:
+      "the container does not say which audio profile this is — re-encoded to be certain it is AAC-LC",
     REASON_AUDIO_CHANNELS: "audio has {channels} channels — the target format is stereo",
     REASON_AUDIO_TOO_FAT: "the track is fatter than the target bitrate",
 
