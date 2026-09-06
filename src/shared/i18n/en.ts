@@ -373,6 +373,8 @@ export const en: Catalogue = {
     ON_CLOSE_RESTARTS_LOSING: "will have to start over — {percent}% of the work would be lost",
     ON_CLOSE_NOT_STARTED_YET: "has not begun yet, will start later",
     ON_CLOSE_MUST_RUN_AGAIN: "will have to be run again",
+    ON_CLOSE_WORK_KEPT_START_AGAIN:
+      "the {percent}% already done will keep, but you will have to start it again — it does not come back by itself",
 
     // --- steps of the connection check ---
     STEP_NET_BANNER: "answers with {banner}",

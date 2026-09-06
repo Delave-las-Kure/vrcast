@@ -783,11 +783,37 @@ impl TaskEngine {
     /// The list of tasks from the database — finished ones and leftovers from previous
     /// runs included.
     pub fn list(&self) -> Result<Vec<TaskRecord>> {
-        Ok(store::list(&self.db)?)
+        let mut out = store::list(&self.db)?;
+        for task in &mut out {
+            task.can_resume = self.could_carry_on(task);
+        }
+        Ok(out)
     }
 
     pub fn get(&self, id: &str) -> Result<Option<TaskRecord>> {
-        Ok(store::get(&self.db, id)?)
+        Ok(store::get(&self.db, id)?.map(|mut task| {
+            task.can_resume = self.could_carry_on(&task);
+            task
+        }))
+    }
+
+    /// Whether "carry on" would do anything for this task (T515).
+    ///
+    /// **Membership in the living map, which is what `resume` needs and nothing else is.**
+    /// After a restart only an upload is raised into it; a measurement, a build and a
+    /// deployment are rows and nothing more, and `resume` answers `TaskNotFound` — a phrase
+    /// about an identifier, offered to somebody looking at the task on their screen.
+    ///
+    /// The state is checked too, so the answer is about this moment rather than about the
+    /// kind: a running task is not resumed, it is already going.
+    fn could_carry_on(&self, task: &TaskRecord) -> bool {
+        if task.state != TaskState::Paused {
+            return false;
+        }
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&task.id)
     }
 
     /// Take a place in the lane and become running — atomically, under one lock.

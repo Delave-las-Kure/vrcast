@@ -184,6 +184,7 @@ export type DetailCode =
   | "ON_CLOSE_RESTARTS_LOSING"
   | "ON_CLOSE_NOT_STARTED_YET"
   | "ON_CLOSE_MUST_RUN_AGAIN"
+  | "ON_CLOSE_WORK_KEPT_START_AGAIN"
 
   // steps of the connection check (FR-003)
   | "STEP_NET_BANNER"
@@ -520,6 +521,13 @@ export interface Task {
   batch: Batch | null;
   /** Place in the queue: lower runs sooner. Changed by reordering (FR-083). */
   queue_order: number;
+  /** Whether pressing "carry on" would do anything (T515).
+   *
+   *  Not every paused task can be. After a restart only an upload is raised back into the
+   *  engine; the rest are rows, and asking one of them to carry on answers "task not found" —
+   *  a phrase about an identifier, shown to somebody looking at the task on their screen. The
+   *  button belongs where the answer is yes. */
+  can_resume: boolean;
   created_at: string;
   updated_at: string;
 }

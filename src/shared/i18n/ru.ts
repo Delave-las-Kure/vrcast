@@ -369,6 +369,8 @@ export const ruCore: CatalogueCore = {
     ON_CLOSE_RESTARTS_LOSING: "придётся начать заново — потеряется {percent} % работы",
     ON_CLOSE_NOT_STARTED_YET: "ещё не начиналась, запустится позже",
     ON_CLOSE_MUST_RUN_AGAIN: "придётся выполнить заново",
+    ON_CLOSE_WORK_KEPT_START_AGAIN:
+      "сделанные {percent} % не пропадут, но задачу придётся запустить снова — сама она не вернётся",
 
     // --- шаги проверки подключения ---
     STEP_NET_BANNER: "отвечает {banner}",

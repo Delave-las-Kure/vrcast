@@ -68,6 +68,9 @@ function task(over: Partial<Task> = {}): Task {
   return {
     id: "t-1",
     kind: "upload",
+    // Paused rows in these tests stand for ones the engine really has raised: the
+    // panel offers "carry on" only where it would do something (T515).
+    can_resume: true,
     server_id: null,
     state: "running",
     progress: 0.4,
@@ -171,6 +174,24 @@ it("tells a failed task what to do about it, and not only what went wrong", asyn
   renderIn(<TasksPanel />);
   await screen.findByText(ru.errors.SSH_AUTH_FAILED.message);
   expect(screen.getByText(ru.errors.SSH_AUTH_FAILED.hint)).toBeTruthy();
+});
+
+it("offers no carry-on to a paused task the core cannot carry on", async () => {
+  // T515. After a restart only an upload is raised back into the engine; the rest are rows,
+  // and asking one to carry on answers "task not found" — a phrase about an identifier, put
+  // to somebody looking at the task on their screen. The core says which is which, and the
+  // button belongs where the answer is yes.
+  list = [task({ kind: "measure_quality", state: "paused", can_resume: false })];
+  renderIn(<TasksPanel />);
+  await screen.findByText(ru.ui.tasks.states.paused);
+  expect(screen.queryByRole("button", { name: ru.ui.tasks.resume })).toBeNull();
+});
+
+it("offers a carry-on to one the core is holding", async () => {
+  // The other side, or the check above would be met by never showing the button at all.
+  list = [task({ kind: "upload", state: "paused", can_resume: true })];
+  renderIn(<TasksPanel />);
+  expect(await screen.findByRole("button", { name: ru.ui.tasks.resume })).toBeTruthy();
 });
 
 it("says nothing where a task had nothing to say", async () => {

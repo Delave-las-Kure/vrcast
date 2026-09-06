@@ -298,6 +298,7 @@ describe("the queue", () => {
     return {
       id,
       kind: "upload",
+      can_resume: false,
       server_id: "s1",
       state: "queued",
       progress: 0,

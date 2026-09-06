@@ -62,6 +62,19 @@ pub struct TaskRecord {
     pub queue_order: i64,
     pub created_at: String,
     pub updated_at: String,
+    /// Whether pressing "carry on" would do anything.
+    ///
+    /// ⚠ **Not stored, and filled in by the engine** (T515). Resuming needs the task in the
+    /// engine's living map, and after a restart only an upload gets back into it — everything
+    /// else stays a row. The list showed the button for anything marked paused, so a person
+    /// pressed it on a measurement and got "task not found", which describes nothing they can
+    /// see and nothing they did.
+    ///
+    /// A row read straight out of the database has this false, which is exactly right: a row
+    /// nobody raised cannot be carried on. It is the engine that knows, and the engine is what
+    /// the interface asks.
+    #[serde(default)]
+    pub can_resume: bool,
 }
 
 impl TaskRecord {
@@ -83,6 +96,7 @@ impl TaskRecord {
             queue_order: 0,
             created_at: now.clone(),
             updated_at: now,
+            can_resume: false,
         }
     }
 }
@@ -93,6 +107,10 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
     Ok(TaskRecord {
         id: row.get("id")?,
         kind: TaskKind::parse(&kind).unwrap_or(TaskKind::Probe),
+        // A row is only a row: whether carrying on would do anything is the engine's to say,
+        // and it says so in `list` and `get`. False here is the honest default — a task
+        // nobody has raised cannot be carried on.
+        can_resume: false,
         server_id: row.get("server_id")?,
         state: TaskState::parse(&state).unwrap_or(TaskState::Failed),
         progress: row.get("progress")?,

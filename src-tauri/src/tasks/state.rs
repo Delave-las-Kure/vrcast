@@ -74,6 +74,31 @@ impl TaskKind {
         }
     }
 
+    /// Whether the task starts itself again when the application does.
+    ///
+    /// ⚠ **Not the same question as `pause_kind`, and running them together made the exit
+    /// dialog say something untrue** (T515). `ResumableAcrossRestart` answers "is the work
+    /// still there afterwards", and for five kinds it is: a measurement keeps the grid points
+    /// it took, a ladder build finds the variants already on the server, a deployment's steps
+    /// each check before they apply. But **only an upload comes back on its own** —
+    /// `save_resume_token` is written by nothing else, and `restore_uploads` raises nothing
+    /// else. Telling a person "carries on from 40% next time you open it" about a build they
+    /// will have to start again by hand is a promise the application does not keep.
+    ///
+    /// Exhaustive with no wildcard, for the reason `runs_an_encoder` gives: a new kind of task
+    /// should not compile until somebody has answered this for it.
+    pub fn returns_by_itself(&self) -> bool {
+        match self {
+            // The position is bytes on the server, written down as it goes, and start-up
+            // looks for exactly these.
+            Self::Upload => true,
+            // The work survives; the task does not restart itself. See the note above.
+            Self::BuildLadder | Self::Deploy | Self::UpgradeServer | Self::MeasureQuality => false,
+            // Nothing to carry on from in the first place.
+            Self::Convert | Self::Probe | Self::Diagnose => false,
+        }
+    }
+
     /// Whether it can be paused without losing the work, and whether that survives the
     /// application being closed.
     pub fn pause_kind(&self) -> PauseKind {

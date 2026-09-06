@@ -288,9 +288,20 @@ pub mod api {
             }
             let percent = (t.progress * 100.0).round() as i64;
             let (outcome, explanation) = match t.kind.pause_kind() {
-                PauseKind::ResumableAcrossRestart => (
+                // ⚠ **Two answers here, because there are two situations and the dialog used
+                // to give the first one to both** (T515, FR-086). "Carries on from 40% next
+                // time" is true of an upload and of nothing else: the work of the other four
+                // survives — the measurement keeps its points, the build finds the variants
+                // already made, the deployment checks before it applies — but the task does
+                // not raise itself, and a person who was told it would comes back to a list
+                // that has forgotten it.
+                PauseKind::ResumableAcrossRestart if t.kind.returns_by_itself() => (
                     "resumes",
                     Detail::new(DetailCode::OnCloseResumesFrom).with("percent", percent),
+                ),
+                PauseKind::ResumableAcrossRestart => (
+                    "restarts",
+                    Detail::new(DetailCode::OnCloseWorkKeptStartAgain).with("percent", percent),
                 ),
                 PauseKind::SuspendedProcess => (
                     "restarts",

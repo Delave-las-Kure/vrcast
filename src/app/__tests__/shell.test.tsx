@@ -82,6 +82,9 @@ function makeTask(over: Partial<Task> = {}): Task {
   return {
     id: "t1",
     kind: "upload",
+    // A paused task the engine really holds: the panel offers "carry on" only where it
+    // would do something (T515), and these tests are about the buttons.
+    can_resume: true,
     server_id: null,
     state: "running",
     progress: 0.42,

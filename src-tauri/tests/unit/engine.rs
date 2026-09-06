@@ -1293,3 +1293,132 @@ async fn a_task_from_before_owners_were_recorded_is_still_recovered() {
         TaskState::Paused
     );
 }
+
+/// ⚠ **"Carry on" is offered only where it would do something** (T515).
+///
+/// `resume` needs the task in the engine's living map and nothing else does. After a restart
+/// only an upload gets back into it — a measurement, a build, a deployment are rows and no
+/// more — and the panel showed the button for anything marked paused. Pressing it answered
+/// `TaskNotFound`: a phrase about an identifier, put to somebody looking at the task on their
+/// screen.
+#[tokio::test]
+async fn a_paused_task_nobody_raised_is_not_offered_a_carry_on() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+
+    let mut orphan = store::TaskRecord::new("t-row-only", TaskKind::MeasureQuality, None);
+    orphan.state = TaskState::Paused;
+    store::upsert(&db, &orphan).unwrap();
+
+    let e = TaskEngine::new(db.clone());
+    let listed = e.list().unwrap();
+    let row = listed.iter().find(|t| t.id == "t-row-only").unwrap();
+    assert!(
+        !row.can_resume,
+        "the list says this can be carried on, and asking it to would answer that there is no \
+         such task"
+    );
+    // And the engine agrees with itself: the offer and the answer are the same fact.
+    assert!(
+        e.resume("t-row-only").is_err(),
+        "the engine offered nothing and would have done something — then `can_resume` is \
+         answering the wrong question"
+    );
+
+    // A task the engine really holds is offered it, or the check above would be met by
+    // answering "no" to everything.
+    let id = e
+        // Long enough that it is still running when it is paused: a body that returns at
+        // once goes Running to Completed between two polls, and then there is no paused task
+        // to ask about.
+        .submit(TaskKind::Upload, None, |ctx| async move {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            ctx.wait_while_paused().await;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(wait_for_state(&e, &id, TaskState::Running, Duration::from_secs(5)).await);
+    e.pause(&id).unwrap();
+    let listed = e.list().unwrap();
+    let live = listed.iter().find(|t| t.id == id).unwrap();
+    assert!(
+        live.can_resume,
+        "a paused task the engine is holding was not offered a carry on"
+    );
+
+    // And a task that is running is not offered it either: it is already going, and "carry
+    // on" beside it describes nothing. Found missing by breaking the state test on purpose.
+    e.resume(&id).unwrap();
+    assert!(wait_for_state(&e, &id, TaskState::Running, Duration::from_secs(5)).await);
+    let listed = e.list().unwrap();
+    let running = listed.iter().find(|t| t.id == id).unwrap();
+    assert!(!running.can_resume, "a running task was offered a carry on");
+}
+
+/// ⚠ **What the dialog actually says, and not merely what it could say.**
+///
+/// `only_the_kinds_that_really_come_back_are_promised_they_will` checks the kinds; breaking
+/// the dialog so it ignored them left that test green. This is the other half: the sentence a
+/// person reads, for a kind that keeps its work and does not raise itself.
+#[tokio::test]
+async fn the_exit_dialog_does_not_promise_a_build_it_will_carry_on_by_itself() {
+    use vrcast_studio_lib::commands::AppState;
+    use vrcast_studio_lib::store::secrets::InMemorySecretStore;
+
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let mut build = store::TaskRecord::new("t-build", TaskKind::BuildLadder, None);
+    build.state = TaskState::Paused;
+    build.progress = 0.4;
+    store::upsert(&db, &build).unwrap();
+
+    let state = AppState::with_db(db, Arc::new(InMemorySecretStore::new()))
+        .expect("the application state would not assemble");
+    let said = vrcast_studio_lib::commands::api::tasks_on_close(&state).unwrap();
+    let about = said
+        .iter()
+        .find(|t| t.id == "t-build")
+        .expect("the dialog says nothing about a paused build");
+
+    assert_eq!(
+        about.outcome, "restarts",
+        "the dialog promises a build will carry on by itself, and nothing raises one at          start-up but an upload"
+    );
+    assert_eq!(
+        about.explanation.key,
+        DetailCode::OnCloseWorkKeptStartAgain,
+        "the build is described with the wrong sentence: what is true of it is that the work          keeps and the task does not come back"
+    );
+}
+
+/// ⚠ **What the exit dialog promises, kind by kind** (T515, FR-086).
+///
+/// It read `pause_kind` alone, and `ResumableAcrossRestart` answers "is the work still there
+/// afterwards" — true of five kinds. Only an upload comes back on its own. So a person closing
+/// the application during a ladder build was told it would carry on from 40% next time, and it
+/// did not: the work was there, the task was not, and nothing said so.
+#[test]
+fn only_the_kinds_that_really_come_back_are_promised_they_will() {
+    use vrcast_studio_lib::tasks::state::PauseKind;
+
+    let by_itself: Vec<TaskKind> = TaskKind::ALL
+        .iter()
+        .copied()
+        .filter(TaskKind::returns_by_itself)
+        .collect();
+    assert_eq!(
+        by_itself,
+        vec![TaskKind::Upload],
+        "the kinds that raise themselves at start-up are exactly the ones `restore_uploads` \
+         raises; if that changed, this and the dialog both have to know"
+    );
+
+    // And the distinction is not empty: something must keep its work without coming back, or
+    // the second wording would describe nobody.
+    assert!(
+        TaskKind::ALL.iter().any(|k| {
+            k.pause_kind() == PauseKind::ResumableAcrossRestart && !k.returns_by_itself()
+        }),
+        "nothing keeps its work while needing to be started again, so the two answers have \
+         collapsed back into one"
+    );
+}

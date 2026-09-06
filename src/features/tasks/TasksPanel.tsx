@@ -308,7 +308,10 @@ export function TasksPanel() {
                     {t.ui.tasks.pause}
                   </button>
                 )}
-                {task.state === "paused" && (
+                {/* Only where it would do something (T515). A paused task that nothing raised back
+                    into the engine answers "task not found", which describes neither what the
+                    person sees nor what they did. */}
+                {task.state === "paused" && task.can_resume && (
                   <button onClick={() => void act(() => ipc.taskResume(task.id))}>
                     {t.ui.tasks.resume}
                   </button>

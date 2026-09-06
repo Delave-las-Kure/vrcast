@@ -166,6 +166,9 @@ detail_codes! {
     OnCloseRestartsLosing => "ON_CLOSE_RESTARTS_LOSING",
     OnCloseNotStartedYet => "ON_CLOSE_NOT_STARTED_YET",
     OnCloseMustRunAgain => "ON_CLOSE_MUST_RUN_AGAIN",
+    /// `percent`. The work is not lost and the task will not come back by itself (T515):
+    /// somebody has to start it again, and it will pick up what is already done.
+    OnCloseWorkKeptStartAgain => "ON_CLOSE_WORK_KEPT_START_AGAIN",
 
     // --- steps of the connection check (FR-003) ---
     /// `banner` — what the server introduced itself as.
