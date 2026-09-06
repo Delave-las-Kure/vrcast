@@ -458,7 +458,6 @@ pub mod api {
 
         let mut estimate = ProgressEstimate::default();
         let mut delay = FIRST_RETRY_DELAY;
-
         for attempt in 1..=MAX_ATTEMPTS {
             let conn = match gate::open(secrets.as_ref(), &profile, Intent::Change)
                 .await
@@ -469,16 +468,34 @@ pub mod api {
                     if attempt == MAX_ATTEMPTS {
                         return Err(e.into());
                     }
-                    wait_before_retry(&ctx, &mut delay).await?;
+                    // The same cleanup as below, and found by the compiler when the wait
+                    // stopped being a `Result` (T521): this caller dropped the cancellation
+                    // too. On a second attempt or later there is already a part-file on the
+                    // server, and the connection this arm is retrying is the one that failed
+                    // — so a fresh one is opened to tidy up, exactly as after a break.
+                    if wait_before_retry(&ctx, &mut delay).await == Waited::Cancelled {
+                        sweep_after_cancelling(secrets.as_ref(), &profile, &plan).await;
+                        return Ok(());
+                    }
                     continue;
                 }
             };
 
-            if attempt == 1 {
-                if let Err(e) = upload::ensure_staging(&conn, &staging, &profile.video_dir).await {
-                    conn.close().await;
-                    return Err(AppError::new(ErrorCode::Internal).with_cause(e));
-                }
+            // ⚠ **On every fresh connection, with no memory of whether it has been done**
+            // (T521). It used to be `if attempt == 1`, which looks equivalent and is not: when
+            // the first attempt fails at the gate it never reaches here, and every attempt
+            // after has `attempt != 1` — so the directory was never made and the two
+            // `stat -c %d` were never compared. That comparison is the whole reason the
+            // staging sits beside the serving directory: on one file system entering serving
+            // is a rename, across two it is a copy of the entire file.
+            //
+            // The fix is to keep no state rather than to keep it correctly. `mkdir -p` and two
+            // `stat` are one round trip on a connection that has just been established after a
+            // break — against an hour of transfer, and against a whole class of bug about
+            // remembering whether something was done.
+            if let Err(e) = upload::ensure_staging(&conn, &staging, &profile.video_dir).await {
+                conn.close().await;
+                return Err(AppError::new(ErrorCode::Internal).with_cause(e));
             }
 
             match upload::transfer_once(&conn, &ctx, &plan, &mut estimate).await {
@@ -498,7 +515,16 @@ pub mod api {
                     // longer describes what is happening.
                     estimate.reset();
                     conn.close().await;
-                    wait_before_retry(&ctx, &mut delay).await?;
+                    // ⚠ **A cancellation here used to leave the part-file behind for good**
+                    // (T521, FR-038). This is exactly when somebody presses stop: the transfer
+                    // has visibly stalled and the pauses are doubling. The `?` carried the
+                    // cancellation out past both places that clean up, and the connection had
+                    // been closed a line above — so there was nothing left to clean up with,
+                    // and nothing anywhere sweeps abandoned staging files later.
+                    if wait_before_retry(&ctx, &mut delay).await == Waited::Cancelled {
+                        sweep_after_cancelling(secrets.as_ref(), &profile, &plan).await;
+                        return Ok(());
+                    }
                 }
                 Err(e) => {
                     conn.close().await;
@@ -556,18 +582,63 @@ pub mod api {
         Ok(())
     }
 
+    /// Remove what a cancelled transfer left on the server, on a connection of its own.
+    ///
+    /// **A second connection, because by here there is no first one** (T521, FR-038). The
+    /// cancellation that reaches this arrives during the pause between attempts, and the pause
+    /// deliberately holds no connection: waiting out a doubling backoff with one open would
+    /// take a channel from the server for minutes, and there are eight (R-04).
+    ///
+    /// **Failing to clean up is not reported, and that is the same rule `upload::cleanup`
+    /// states**: the cancellation has already happened, the person asked for it and got it,
+    /// and turning "we could not tidy up afterwards" into a failure would tell them their stop
+    /// did not work. It is logged, which is where somebody looking for a stray file will look.
+    async fn sweep_after_cancelling(
+        secrets: &dyn crate::store::secrets::SecretStore,
+        profile: &crate::domain::server_profile::ServerProfile,
+        plan: &UploadPlan,
+    ) {
+        match gate::open(secrets, profile, Intent::Change).await {
+            Ok(opened) => {
+                upload::cleanup(&opened.conn, &plan.remote_temp).await;
+                opened.conn.close().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "a cancelled transfer's leftovers could not be removed")
+            }
+        }
+    }
+
+    /// How a wait between attempts ended.
+    ///
+    /// ⚠ **An enumeration and not a `Result`, so that the cancellation cannot be `?`-ed
+    /// away** (T521). It was a `Result<(), AppError>`, and the one caller wrote
+    /// `wait_before_retry(..).await?` — which carried the cancellation straight out of the
+    /// function, past both places that clean up, leaving the part-file on the server for good
+    /// (FR-038). `?` was the natural thing to write and the compiler had no opinion. It has
+    /// one now: this is not an error, so there is nothing to propagate, and a caller has to
+    /// say what happens in each case.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[must_use]
+    enum Waited {
+        /// The pause ran its course; try again.
+        Elapsed,
+        /// Somebody pressed stop while we were waiting.
+        Cancelled,
+    }
+
     /// Wait before retrying, without missing a cancellation.
     async fn wait_before_retry(
         ctx: &crate::tasks::engine::TaskContext,
         delay: &mut Duration,
-    ) -> std::result::Result<(), AppError> {
+    ) -> Waited {
         let cancel = ctx.cancel_token();
         tokio::select! {
             _ = tokio::time::sleep(*delay) => {}
-            _ = cancel.cancelled() => return Err(AppError::new(ErrorCode::TaskCancelled)),
+            _ = cancel.cancelled() => return Waited::Cancelled,
         }
         *delay = (*delay * 2).min(MAX_RETRY_DELAY);
-        Ok(())
+        Waited::Elapsed
     }
 }
 

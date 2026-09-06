@@ -107,3 +107,51 @@ fn the_check_can_actually_fail() {
          and would pass however the rest of the core started its programs"
     );
 }
+
+// ---------- a cancellation that gets dropped on the floor (T521, FR-038) ----------
+
+/// ⚠ **What `#[must_use]` cannot say, said here.**
+///
+/// `wait_before_retry` used to answer with a `Result`, and both of its callers wrote
+/// `.await?`. That carried a cancellation straight out of the upload past every place that
+/// cleans up — and the connection had been closed a line earlier, so there was nothing left
+/// to clean up with and nothing anywhere sweeps abandoned staging files later. A person who
+/// pressed stop during the backoff, which is exactly when a stalled transfer invites it, left
+/// a part-file on the server for good.
+///
+/// The answer is an enumeration now, so `?` does not compile and the second caller was found
+/// by the compiler the moment it changed. **Measured limit:** `#[must_use]` stops the value
+/// being dropped and stops `?`, and `let _ = …` still gets past both — tried, and it is not
+/// caught. Nothing in the language closes that, so this does: the one shape the type system
+/// cannot refuse.
+#[test]
+fn a_wait_between_attempts_is_never_answered_with_a_shrug() {
+    let path = source_root().join("commands/upload.rs");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+
+    // The subject must be there, or this passes over a file that no longer holds the code.
+    assert!(
+        text.contains("fn wait_before_retry"),
+        "the wait between attempts is gone from {} — if it moved, move this with it",
+        path.display()
+    );
+    let calls = text.matches("wait_before_retry(").count();
+    assert!(
+        calls >= 3,
+        "only {calls} mentions of the wait were found (its definition and its callers): the \
+         reader has stopped matching how it is written"
+    );
+
+    for (n, line) in text.lines().enumerate() {
+        if !line.contains("wait_before_retry(") {
+            continue;
+        }
+        assert!(
+            !line.contains("let _"),
+            "upload.rs:{}: the wait's answer is bound to `_`, which is how a cancellation \
+             stops being acted on. Match it, and clean up when it says Cancelled.",
+            n + 1
+        );
+    }
+}
