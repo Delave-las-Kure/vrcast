@@ -73,7 +73,15 @@ function AppShell() {
   useTrayNotice();
 
   return (
-    <div className="layout">
+    /*
+     * **The switch lives on the whole layout, not on the content alone** (T516).
+     *
+     * It used to sit on `<main className="content">`, and the mascot is in the side panel —
+     * outside it. So the setting whose own label promises "transitions between sections and
+     * the mascot's movement" could not reach the second half of what it promised: the mascot
+     * went on nodding, gated only by the system's own reduce-motion. Here it covers both.
+     */
+    <div className="layout" data-motion={motion ? "on" : "off"}>
       {/*
        * T400 — the question the tray's "Exit" now asks (FR-086).
        *
@@ -87,12 +95,13 @@ function AppShell() {
        * T326 — fades between sections (FR-101), which a setting can turn off (FR-103).
        *
        * The address is the key: without it React takes the contents for the same thing and the
-       * fade happens once, on the first render. The `data-motion` attribute is read by CSS —
-       * the rule lives beside the animation and cannot drift away from it — and the system's
-       * own "reduce motion" is checked in the same place and outranks ours: what somebody has
-       * turned off system-wide is not for the application to turn back on.
+       * fade happens once, on the first render. The switch itself is read by CSS from
+       * `data-motion` on the layout above — the rule lives beside the animation and cannot
+       * drift away from it — and the system's own "reduce motion" is checked in the same place
+       * and outranks ours: what somebody has turned off system-wide is not for the application
+       * to turn back on.
        */}
-      <main className="content" data-motion={motion ? "on" : "off"}>
+      <main className="content">
         <Routes key={location.pathname}>
           <Route path="/" element={<Navigate to="/tasks" replace />} />
           <Route path="/tasks" element={<TasksPanel />} />

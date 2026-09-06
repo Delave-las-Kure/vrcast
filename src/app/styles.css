@@ -1310,16 +1310,23 @@ button:disabled {
     animation: appear var(--speed) var(--ease);
   }
 
-  .mascot__spark,
-  .mascot__eye,
-  .mascot__mouth,
-  .mascot__antenna {
+  /*
+   * ⚠ **The mascot is gated by the setting too** (T516). These four rules and the nod below
+   * used to sit here bare, answering only to the system's reduce-motion — while the setting's
+   * own label promised "transitions between sections and the mascot's movement". Half of what
+   * it said it did, it did not do. The attribute is on the layout rather than on `.content`
+   * for exactly this reason: the mascot is in the side panel.
+   */
+  [data-motion="on"] .mascot__spark,
+  [data-motion="on"] .mascot__eye,
+  [data-motion="on"] .mascot__mouth,
+  [data-motion="on"] .mascot__antenna {
     transition:
       fill var(--speed) var(--ease),
       transform var(--speed) var(--ease);
   }
 
-  .mascot--working .mascot__antenna {
+  [data-motion="on"] .mascot--working .mascot__antenna {
     animation: mascot-nod 1.4s var(--ease) infinite;
   }
 }

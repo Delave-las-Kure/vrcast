@@ -123,6 +123,7 @@ step "The version is in one place" bash scripts/check-version.sh
 # one moment where a mistake publishes quietly instead of failing (T362).
 step "The release file assembler" bash scripts/test-latest-json.sh
 step "Both themes line up" bash scripts/check-theme.sh
+step "The movement switch reaches what it promises" bash scripts/check-motion.sh
 step "Interface: types" npm run --silent typecheck
 step "Interface: style" npm run --silent lint
 step "Interface: tests" npm test --silent
