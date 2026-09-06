@@ -77,6 +77,13 @@ pub struct ManagedProcess {
     suspended: bool,
     child: Child,
     program: String,
+    /// The number this program was written into the account under (T504).
+    ///
+    /// Kept separately from `child.id()` because that answers `None` once the process has
+    /// been reaped — which is exactly the moment the record has to be crossed off, so asking
+    /// then would cross off nothing and leave the row behind for the next start-up to
+    /// consider a survivor.
+    recorded: Option<u32>,
     #[cfg(windows)]
     job: windows_job::Job,
 }
@@ -140,7 +147,10 @@ impl ManagedProcess {
                         //
                         // Two limits worth remembering:
                         //   1. It applies only to the DIRECT child. Grandchildren are
-                        //      covered by the start-up sweep (see tasks::registry).
+                        //      covered by the start-up sweep (see tasks::registry) — which
+                        //      until 2026-09-06 read a table nothing ever wrote to, so this
+                        //      line pointed a reader at a closed case that was open (T504).
+                        //      `spawn_in` writes into it now, at the end of this function.
                         //   2. It fires when the parent THREAD dies, not the process. So
                         //      processes must not be spawned from short-lived threads —
                         //      see the warning on ManagedProcess::spawn.
@@ -201,9 +211,28 @@ impl ManagedProcess {
 
         tracing::debug!(program, pid = ?child.id(), "external program started in its own group");
 
+        // **Written into the account here, and nowhere else** (T504). The account exists so
+        // that a program which outlived a crash can be finished off at the next start-up —
+        // on Linux that is any grandchild, since the kernel's signal reaches only the direct
+        // child. `record` and `forget` were written for it, `sweep_on_startup` has been
+        // called at every start since, and **nothing ever called the first two**: the sweep
+        // read an empty table for ever, while a comment further down this very file pointed
+        // at it as the thing covering that case.
+        //
+        // In `spawn_in` rather than at the three places that start programs, for the reason
+        // `spawn_hygiene` gives about the window flag: it was forgotten in seven places not
+        // by seven accidents but because nothing made anybody think about it. One funnel,
+        // and the guard that keeps it the only one, is what makes forgetting impossible
+        // rather than unlikely.
+        let pid = child.id();
+        if let Some(pid) = pid {
+            crate::tasks::registry::note_started(pid, program);
+        }
+
         Ok(Self {
             child,
             program: program.to_owned(),
+            recorded: pid,
             #[cfg(windows)]
             job,
             suspended: false,
@@ -318,6 +347,27 @@ impl ManagedProcess {
             )));
         };
         windows_job::suspend_process(pid, stop).map_err(ProcessError::Suspend)
+    }
+}
+
+/// Cross the program off the account when the handle to it goes (T504).
+///
+/// **In `Drop` rather than in `wait` or `kill_tree`, because those are not every way out.**
+/// A task that returns early, one that fails, one that panics and unwinds — all of them drop
+/// the handle and none of them go through either. `kill_on_drop` already relies on exactly
+/// this: the process ends here, so the note about it ends here too, and the two cannot come
+/// apart.
+///
+/// A record left behind is not harmless. At the next start-up the sweep finds it and asks
+/// whether that number is still the same program — and process numbers are reused, so what
+/// it protects against then is killing somebody's browser. It does check, and the check is
+/// what keeps a stale row from being dangerous; leaving rows for it to check is still work
+/// nobody asked for, growing without limit.
+impl Drop for ManagedProcess {
+    fn drop(&mut self) {
+        if let Some(pid) = self.recorded {
+            crate::tasks::registry::note_ended(pid);
+        }
     }
 }
 

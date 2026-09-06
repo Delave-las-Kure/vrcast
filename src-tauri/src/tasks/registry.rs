@@ -33,6 +33,75 @@
 use super::process::{kill_pid, process_name};
 use crate::store::db::{now_rfc3339, Db, DbError};
 
+/// Where the account is kept, for the one place that starts programs.
+///
+/// ⚠ **A single handle, because the alternative was an account nobody wrote to** (T504).
+/// `record` existed, `forget` existed, `sweep_on_startup` was called at every start — and
+/// nothing anywhere called the first two, so the sweep read an empty table for ever. Worse
+/// than absent: `process.rs` pointed a reader at that sweep as the thing covering
+/// grandchildren on Linux, so the case looked closed.
+///
+/// It was not wired because `ManagedProcess::spawn` has no database and, by the deliberate
+/// design of `TaskContext`, is not going to be given one — "nothing else is any of the task's
+/// business, not the database". Recording a started program is not the task's business
+/// either; it is the business of whatever starts programs, and there is exactly one of those.
+/// So the handle is installed once, at start-up, beside the sweep it feeds.
+///
+/// **Absent means "not recording", and that is only right in a test.** A build of the
+/// application installs it in `AppState`; a unit test that starts a program does not, and
+/// nothing should be written on its behalf. `the_account_is_installed_where_the_sweep_is`
+/// is what keeps the application itself from quietly becoming such a test.
+/// ⚠ **A lock and not a `OnceLock`, and the reason is that the first version could not be
+/// checked.** With a value that can only be set once, a test that installs an account for
+/// itself wins or loses depending on which test ran first — and the property worth checking
+/// here is precisely "a program that starts really does land in the table", which needs an
+/// account of one's own. A guarantee that makes the thing it guards untestable buys nothing:
+/// the application still installs it exactly once, and `the_account_is_installed_beside_the_
+/// sweep_that_reads_it` is what says so. The same shape, and for the same reason, as the
+/// redaction registry in `store::redact`.
+fn account() -> &'static std::sync::RwLock<Option<std::sync::Arc<Db>>> {
+    static ACCOUNT: std::sync::OnceLock<std::sync::RwLock<Option<std::sync::Arc<Db>>>> =
+        std::sync::OnceLock::new();
+    ACCOUNT.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// Install the account. The application calls this once, at start-up.
+pub fn keep_account_in(db: std::sync::Arc<Db>) {
+    if let Ok(mut slot) = account().write() {
+        *slot = Some(db);
+    }
+}
+
+/// Put the account away again. For tests, which must not write into each other's.
+pub fn keep_no_account() {
+    if let Ok(mut slot) = account().write() {
+        *slot = None;
+    }
+}
+
+/// Write down a program that has just started, if there is an account to write it in.
+///
+/// Quiet on failure and quiet when there is no account: a program that started is running
+/// whatever the bookkeeping did, and refusing to run it because the note failed would trade a
+/// working encode for a tidy table. The warning is what a person looking for a stray process
+/// will find.
+pub fn note_started(pid: u32, program: &str) {
+    let Ok(slot) = account().read() else { return };
+    let Some(db) = slot.as_ref() else { return };
+    if let Err(e) = record(db, pid, program, None) {
+        tracing::warn!(error = %e, pid, program, "a started program was not written down");
+    }
+}
+
+/// Cross a program off, if there is an account it was written in.
+pub fn note_ended(pid: u32) {
+    let Ok(slot) = account().read() else { return };
+    let Some(db) = slot.as_ref() else { return };
+    if let Err(e) = forget(db, pid) {
+        tracing::warn!(error = %e, pid, "a finished program was not crossed off");
+    }
+}
+
 /// Record a started program so that it can be finished off after a crash.
 pub fn record(db: &Db, pid: u32, program: &str, task_id: Option<&str>) -> Result<(), DbError> {
     // The identifying mark is taken right now, while the process is certainly alive and

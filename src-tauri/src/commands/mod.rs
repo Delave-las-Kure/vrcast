@@ -114,6 +114,12 @@ impl AppState {
         // finished off, and only then are the tasks sorted out: otherwise a task would be
         // declared paused while its process is still alive and still writing into the
         // result file.
+        // The account the sweep below reads is written by `ManagedProcess`, and this is what
+        // gives it somewhere to write (T504). First of all, so that no program can be started
+        // before there is an account for it: an unrecorded one is exactly the survivor the
+        // sweep exists to find, and it would be invisible to it.
+        crate::tasks::registry::keep_account_in(db.clone());
+
         match crate::tasks::registry::sweep_on_startup(&db) {
             Ok(report) if !report.is_clean() => {
                 tracing::warn!(

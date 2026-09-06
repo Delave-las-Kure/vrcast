@@ -301,3 +301,95 @@ async fn a_record_whose_owner_has_since_died_is_still_swept() {
 
     let _ = p.kill_tree().await;
 }
+
+// ---------- the account nobody was writing in (T504) ----------
+
+/// The account is one per process, and cargo runs tests in threads of that process.
+///
+/// The same reasoning as `redact.rs` sets out: two tests each installing an account of their
+/// own would write into each other's table, and the loser reports a defect that is not there.
+/// A flaky guard is worse than none — it teaches people to re-run until it passes.
+static ACCOUNT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the account for the duration of a test. A poisoned lock is taken anyway: it means
+/// another test panicked, and that test reports its own failure.
+fn alone_with_account(db: std::sync::Arc<Db>) -> std::sync::MutexGuard<'static, ()> {
+    let guard = ACCOUNT.lock().unwrap_or_else(|e| e.into_inner());
+    registry::keep_account_in(db);
+    guard
+}
+
+fn rows_in(db: &Db) -> Vec<u32> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare("SELECT pid FROM running_processes")?;
+        let rows = stmt.query_map([], |r| r.get::<_, u32>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    })
+    .expect("the account would not read")
+}
+
+/// ⚠ **What the sweep is for, and what it had to work with.**
+///
+/// `record`, `forget` and `sweep_on_startup` were all written and all tested — and nothing in
+/// the working code ever called the first two, so the sweep read an empty table at every
+/// start-up for as long as it existed. On Linux that means every grandchild of a crashed run
+/// survived, which is the exact case the account was built for: the kernel's signal reaches
+/// only the direct child. And a comment in `process.rs` pointed a reader at this sweep as the
+/// thing covering it, so the case looked closed.
+///
+/// The tests above portray a survivor by writing a row themselves. That is what let the gap
+/// hide: they check the sweep faithfully and say nothing about whether anything fills the
+/// table. This one starts a real program through the one place that starts programs, and
+/// looks.
+#[test]
+fn a_program_started_the_ordinary_way_lands_in_the_account() {
+    let db = std::sync::Arc::new(Db::open_in_memory().unwrap());
+    let _account = alone_with_account(db.clone());
+
+    let (program, args) = long_running();
+    let child = ManagedProcess::spawn(program, &args).expect("the program would not start");
+    let pid = child.id().expect("a started program has no number");
+
+    assert!(
+        rows_in(&db).contains(&pid),
+        "a program was started and the account does not know about it, so a crash would \
+         leave it running and the next start-up would never look for it"
+    );
+
+    drop(child);
+    assert!(
+        !rows_in(&db).contains(&pid),
+        "the program is gone and its row is not: the next start-up would spend its sweep on \
+         a number that now belongs to somebody else"
+    );
+
+    registry::keep_no_account();
+}
+
+/// The account has to be installed where the sweep that reads it is, and before it.
+///
+/// A source check, because the alternative is raising a whole application state in a test to
+/// find out whether one line was called. What it defends is small and exact: the two halves
+/// were written months apart, and the second was never wired to the first.
+#[test]
+fn the_account_is_installed_beside_the_sweep_that_reads_it() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands/mod.rs");
+    let text = std::fs::read_to_string(&path).expect("could not read commands/mod.rs");
+
+    let installed = text
+        .find("registry::keep_account_in")
+        .expect("nothing installs the account, so the sweep reads an empty table (T504)");
+    let swept = text
+        .find("registry::sweep_on_startup")
+        .expect("nothing sweeps at start-up any more");
+
+    assert!(
+        installed < swept,
+        "the account is installed after the sweep: a program started in between would be \
+         unrecorded, which is exactly the survivor the sweep exists to find"
+    );
+}
