@@ -299,3 +299,77 @@ async fn a_server_reachable_only_by_password_can_be_planned_from_the_screen() {
         "the plan does not mention putting a key on the server, and that is the step the whole          password case turns on"
     );
 }
+
+/// ⚠ **A first deployment copies aside too, and until 2026-09-06 it did not** (T513, FR-095).
+///
+/// `back_up` had one caller: `upgrade::run`. `Kind::Fresh` went straight to `deploy::run`, so
+/// the run that touches a machine for the first time — editing `/etc/default/ufw` in place,
+/// appending to `/etc/fstab`, writing `/etc/fail2ban/jail.local` whole over whatever an owner
+/// had there — saved none of it, and `server_rollback` afterwards answered that there was
+/// nothing to roll back to. FR-133 is the narrow requirement about upgrades and was met;
+/// FR-095 is not narrow and was met nowhere.
+///
+/// **Through the task runner, not through `deploy::run`.** The change is in `tasks::deploy`,
+/// and a check that called the server layer directly would pass whatever that runner did —
+/// which is exactly how the first version of this test proved nothing, and was caught by
+/// putting the defect back and watching it stay green.
+#[tokio::test]
+async fn a_first_deployment_copies_aside_what_it_is_about_to_change() {
+    use std::sync::Arc;
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::tasks::engine::TaskContext;
+
+    let target = DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
+    let made = keygen::make("vrcast-studio: the check").expect("no key was made");
+    let conn = by_password(&target).await;
+    let machine = machine::look(&conn).await.expect("no machine facts");
+
+    // Somebody else's fail2ban configuration, there before we arrive. This is the file the
+    // deployment writes whole, and the one thing a person would want back.
+    target
+        .exec_inside(
+            "mkdir -p /etc/fail2ban && printf 'the owner wrote this\n' > /etc/fail2ban/jail.local",
+        )
+        .expect("could not seed the jail configuration");
+
+    let key_proof =
+        || -> BoxFuture<'_, bool> { Box::pin(key_works(&target, &made.private_openssh)) };
+    let password_proof = || -> BoxFuture<'_, bool> { Box::pin(password_refused(&target)) };
+    let ctx = Context {
+        conn: &conn,
+        domain: "vrcast-container.invalid",
+        video_dir: VIDEO_DIR,
+        ipv6: Ipv6Choice::Keep,
+        server: ServerAddresses { v4: None, v6: None },
+        public_key: made.public_openssh.clone(),
+        machine,
+        already_ours: false,
+        proofs: Proofs {
+            key_works: &key_proof,
+            password_refused: &password_proof,
+        },
+    };
+    let steps: Vec<_> = deploy::all()
+        .into_iter()
+        .filter(|s| !matches!(s.id, StepId::DnsCheck | StepId::Verify))
+        .collect();
+
+    // A real task context, because that is what the runner takes and what the shipped path
+    // hands it.
+    let task = TaskContext::detached(Arc::new(Db::open_in_memory().unwrap()));
+
+    vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |_| {})
+        .await
+        .expect("the first deployment failed");
+
+    let kept = target
+        .exec_inside("cat /etc/vrcast/backup/latest/jail.local")
+        .expect(
+            "a first deployment left no backup of the fail2ban configuration it overwrote, so \
+             there is nothing to put back (T513, FR-095)",
+        );
+    assert!(
+        kept.contains("the owner wrote this"),
+        "the backup holds something other than what was there before the run: {kept}"
+    );
+}

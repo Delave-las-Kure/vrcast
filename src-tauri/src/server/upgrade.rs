@@ -23,13 +23,13 @@ const BACKUP_ROOT: &str = "/etc/vrcast/backup";
 /// The one a rollback restores: the last upgrade's copies.
 const LATEST: &str = "/etc/vrcast/backup/latest";
 
-/// Every file the application owns and may replace.
+/// Every file a deployment writes or changes, and therefore copies aside first.
 ///
 /// **The video directory and the catalogue are deliberately absent.** They are the person's
 /// work, not our configuration; an upgrade has no business copying them aside, and no line of
 /// this file may put them back either — a restore that "helpfully" reverted the catalogue
 /// would undo whatever was uploaded since (FR-131).
-const OWNED: [&str; 8] = [
+const OWNED: [&str; 11] = [
     "/etc/caddy/Caddyfile",
     "/etc/caddy/vrcast-limits.conf",
     "/etc/vrcast/state.json",
@@ -38,6 +38,22 @@ const OWNED: [&str; 8] = [
     "/etc/udev/rules.d/60-vrcast-readahead.rules",
     "/etc/systemd/system/caddy.service.d/10-restart.conf",
     "/etc/ssh/sshd_config.d/00-vrcast.conf",
+    // ⚠ **Four the application does not own and changes anyway** (T513, T520). The list above
+    // is what we write whole; these are somebody else's files that a deployment edits, and
+    // FR-095 asks for a copy of the settings files that are **changed**, not of the files that
+    // are ours. They were changed by every run and copied by none, so there was nothing to
+    // put back.
+    //
+    // `/etc/fail2ban/jail.local` is the sharpest of them: it is written whole, over whatever
+    // an owner had there. The other three are edited in place or appended to, which is gentler
+    // and no less irreversible without a copy.
+    //
+    // A file that is not there when the copy is taken is simply skipped — `back_up` guards
+    // each one with `[ -e "$f" ]` — so on a truly bare server this costs nothing and saves
+    // nothing, which is right: there was nothing to lose.
+    "/etc/default/ufw",
+    "/etc/fstab",
+    "/etc/fail2ban/jail.local",
 ];
 
 /// What an upgrade would do (FR-129).
@@ -117,6 +133,29 @@ pub async fn run<'a>(
     deploy::run(ctx, steps, cancelled, watch).await
 }
 
+/// Where each backed-up file goes back to, built from [`OWNED`].
+///
+/// ⚠ **This used to be a second list, written out by hand beside the first.** Eight paths in
+/// `OWNED` and eight arms of a `case`, kept in step by nobody: add a file to `OWNED` and
+/// forget the arm, and it is copied aside faithfully and never put back — a rollback that
+/// reports success having restored less than it saved. That is the loophole `str_enum!` was
+/// written to close for the enumerations, in a place where nothing closed it.
+///
+/// Made from the one list instead. The `mkdir -p` is unconditional rather than only for the
+/// one nested directory that needed it: a directory that already exists costs nothing, and an
+/// arm that forgets it is the same bug in miniature.
+pub fn restore_arms() -> String {
+    OWNED
+        .iter()
+        .map(|path| {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("/");
+            format!("    {name}) mkdir -p {dir} && cp -a \"$f\" {path} ;;")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Put the last backup back (FR-133).
 ///
 /// The services are reloaded afterwards rather than restarted: a restart drops every viewer,
@@ -138,20 +177,14 @@ for f in {LATEST}/*; do
   [ -e \"$f\" ] || continue
   name=$(basename \"$f\")
   case \"$name\" in
-    Caddyfile) cp -a \"$f\" /etc/caddy/Caddyfile ;;
-    vrcast-limits.conf) cp -a \"$f\" /etc/caddy/vrcast-limits.conf ;;
-    state.json) cp -a \"$f\" /etc/vrcast/state.json ;;
-    99-vrcast-net.conf) cp -a \"$f\" /etc/sysctl.d/99-vrcast-net.conf ;;
-    99-vrcast-ipv6.conf) cp -a \"$f\" /etc/sysctl.d/99-vrcast-ipv6.conf ;;
-    60-vrcast-readahead.rules) cp -a \"$f\" /etc/udev/rules.d/60-vrcast-readahead.rules ;;
-    10-restart.conf) mkdir -p /etc/systemd/system/caddy.service.d && cp -a \"$f\" /etc/systemd/system/caddy.service.d/10-restart.conf ;;
-    00-vrcast.conf) cp -a \"$f\" /etc/ssh/sshd_config.d/00-vrcast.conf ;;
+{arms}
   esac
 done
 systemctl daemon-reload 2>/dev/null || true
 systemctl reload caddy 2>/dev/null || true
 sshd -t && (systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null) || true
-echo done"
+echo done",
+            arms = restore_arms()
         ))
         .await?;
 

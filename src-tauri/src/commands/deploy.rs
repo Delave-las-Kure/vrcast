@@ -606,7 +606,7 @@ async fn start(
                     steps: settled.to_vec(),
                 });
             };
-            let outcome = crate::tasks::deploy::run(&ctx, &steps, kind, &task, &mut report).await;
+            let outcome = crate::tasks::deploy::run(&ctx, &steps, &task, &mut report).await;
             opened.conn.close().await;
 
             if let Some(private) = &made_private {

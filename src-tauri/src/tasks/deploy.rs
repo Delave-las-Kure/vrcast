@@ -14,7 +14,7 @@
 use crate::commands::error::{AppError, ErrorCode, Result};
 use crate::domain::deploy_steps::{PlannedStep, Status, StepId};
 use crate::domain::wording::{Detail, DetailCode};
-use crate::server::deploy::{self, Context, DeployError, Step};
+use crate::server::deploy::{Context, DeployError, Step};
 use crate::server::upgrade;
 use crate::tasks::engine::TaskContext;
 
@@ -33,7 +33,6 @@ pub enum Kind {
 pub async fn run<'a>(
     ctx: &Context<'a>,
     steps: &[Step<Context<'a>>],
-    kind: Kind,
     task: &TaskContext,
     report: &mut (dyn FnMut(&[PlannedStep]) + Send),
 ) -> Result<Vec<PlannedStep>> {
@@ -47,10 +46,19 @@ pub async fn run<'a>(
             task.report(settled.len() as f64 / total, DetailCode::StageDeploying);
             report(&settled);
         };
-        match kind {
-            Kind::Fresh => deploy::run(ctx, steps, &cancelled, &mut watch).await,
-            Kind::Upgrade => upgrade::run(ctx, steps, &cancelled, &mut watch).await,
-        }
+        // ⚠ **Both kinds copy aside first** (T513, FR-095). Only the upgrade did, and the
+        // requirement is not about upgrades: it asks for a copy of the server's settings files
+        // **that are changed**, and for the previous state to be recoverable — any file a
+        // deployment changes. A first run edits `/etc/default/ufw` in place, appends to
+        // `/etc/fstab` and writes `/etc/fail2ban/jail.local` whole over whatever was there,
+        // and none of it was recoverable, because the only backup there is was on the other
+        // branch. FR-133 is the narrower one and was met; FR-095 was met nowhere.
+        //
+        // On a bare server this copies nothing and costs a directory: `back_up` skips a file
+        // that is not there. That is the right outcome — there was nothing to lose — and it
+        // still leaves a `latest` to roll back to, so the answer to "put it back" stops being
+        // an internal error about a missing directory.
+        upgrade::run(ctx, steps, &cancelled, &mut watch).await
     };
 
     outcome.map_err(|e| failed(e, &settled))

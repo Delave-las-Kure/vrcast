@@ -202,3 +202,69 @@ fn nothing_found_means_everything_is_to_be_done() {
     // written the wrong way round would quietly do nothing at all and report success.
     assert_eq!(to_apply(&[]), ORDER.to_vec());
 }
+
+// ---------- what is copied aside, and where it goes back to (T513) ----------
+
+/// ⚠ **The backup is flat, so two files with one name would be one file.**
+///
+/// `back_up` copies every owned path into a timestamped directory by `cp -a "$f" {dir}/` —
+/// the basename and nothing else. Two entries sharing a basename would clobber each other
+/// there, and the restore would then put whichever survived into both places, quietly, on a
+/// server somebody was rolling back precisely because something had gone wrong.
+///
+/// Nothing checked it, and nothing about the list makes it obvious: eight paths in eight
+/// different directories, and the collision arrives on the day a ninth is added.
+#[test]
+fn no_two_backed_up_files_share_a_name() {
+    let owned = vrcast_studio_lib::server::upgrade::owned_files();
+    assert!(
+        owned.len() >= 8,
+        "the list of files copied aside has shrunk to {} — if that is deliberate, say so here",
+        owned.len()
+    );
+
+    let mut names: Vec<&str> = owned
+        .iter()
+        .map(|p| p.rsplit('/').next().unwrap_or(p))
+        .collect();
+    names.sort_unstable();
+    let before = names.len();
+    names.dedup();
+    assert_eq!(
+        names.len(),
+        before,
+        "two files copied aside share a name, so one overwrites the other in the backup \
+         directory and the restore puts the survivor in both places"
+    );
+}
+
+/// Everything copied aside has somewhere to go back to.
+///
+/// ⚠ **This was two lists until 2026-09-06**: eight paths in `OWNED` and eight arms of a
+/// hand-written `case` in the restore, kept in step by nobody. Add a file to the first and
+/// forget the second, and it is saved faithfully and never put back — a rollback that reports
+/// success having restored less than it saved. The arms are made from the list now, so the
+/// two cannot drift; this is what says the making still covers everything.
+#[test]
+fn every_backed_up_file_has_a_way_back() {
+    let owned = vrcast_studio_lib::server::upgrade::owned_files();
+    let arms = vrcast_studio_lib::server::upgrade::restore_arms();
+
+    for path in &owned {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        assert!(
+            arms.contains(&format!("    {name})")),
+            "{path} is copied aside and the restore has no arm for it, so a rollback would \
+             leave it as the failed upgrade left it"
+        );
+        assert!(
+            arms.contains(&format!("cp -a \"$f\" {path} ;;")),
+            "{path} has an arm that does not put it back where it came from"
+        );
+    }
+    assert_eq!(
+        arms.lines().count(),
+        owned.len(),
+        "the restore has arms for something that is not copied aside, or two for one file"
+    );
+}

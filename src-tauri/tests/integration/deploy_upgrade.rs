@@ -184,7 +184,26 @@ async fn a_rollback_puts_the_replaced_files_back() {
         .await
         .expect("laying the configuration down failed");
 
+    // ⚠ **A file the application does not own and changes anyway** (T513). `jail.local` is
+    // written whole by the fail2ban step, over whatever an owner had there, and until this it
+    // was in no backup at all — changed by every run and copied by none. Seeded with something
+    // recognisable before the copy is taken, so the assertion below is about this file and not
+    // about whatever the step happens to write.
+    target
+        .exec_inside(
+            "mkdir -p /etc/fail2ban && printf 'the owner wrote this\n' > /etc/fail2ban/jail.local",
+        )
+        .expect("could not seed the jail configuration");
+
     upgrade::back_up(&ctx).await.expect("the backup failed");
+
+    let kept = target
+        .exec_inside("cat /etc/vrcast/backup/latest/jail.local")
+        .expect("the owner's fail2ban configuration is in no backup (T513, FR-095)");
+    assert!(
+        kept.contains("the owner wrote this"),
+        "the backup holds something other than what was there: {kept}"
+    );
 
     // Something is replaced, the way an upgrade would replace it.
     target

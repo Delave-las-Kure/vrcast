@@ -127,6 +127,37 @@ pub struct TaskContext {
 }
 
 impl TaskContext {
+    /// A context attached to nothing, for checking work that takes one.
+    ///
+    /// **Why this exists at all.** The constitution counts logic that can only be exercised
+    /// through a server as unchecked, and the same applies to logic that can only be reached
+    /// through a private constructor. `tasks::deploy::run` takes a context, and what it does
+    /// with one — copying the server's settings aside before touching them (FR-095) — cannot
+    /// be seen from `server::deploy::run`, which is a layer below and does none of it. A check
+    /// written against that lower layer would pass whatever the runner did, and did: it was
+    /// written first, the defect was put back, and it stayed green.
+    ///
+    /// **It is not a task.** Nothing is in the engine's living map under this identifier, so
+    /// nothing here can be cancelled, paused, listed or persisted as a task — progress goes
+    /// into a channel with no listener and notices into a vector nobody reads. That is the
+    /// whole of what makes it safe to hand out: it cannot be mistaken for the real thing,
+    /// because it does not behave like one.
+    pub fn detached(db: std::sync::Arc<Db>) -> Self {
+        let (events, _) = broadcast::channel(1);
+        Self {
+            id: String::from("detached"),
+            cancel: CancellationToken::new(),
+            paused: Arc::new(Mutex::new(false)),
+            resume: Arc::new(Notify::new()),
+            throttle: Arc::new(ProgressThrottle::default()),
+            persist_throttle: Arc::new(ProgressThrottle::new(PROGRESS_PERSIST_INTERVAL)),
+            last_stage: Arc::new(Mutex::new(None)),
+            notices: Arc::new(Mutex::new(Vec::new())),
+            events,
+            db,
+        }
+    }
+
     /// Whether the task was cancelled. Check it where stopping does no harm.
     pub fn is_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
