@@ -448,6 +448,9 @@ export const ruCore: CatalogueCore = {
       "Запись {record} для имени «{name}» ведёт на {to}, а IPv6 будет отключён. Удалите её: иначе домен продолжит обещать адрес, который перестанет отвечать, и часть зрителей пойдёт туда первым делом.",
     DOMAIN_SERVER_HAS_NO_IPV6:
       "У сервера нет собственного адреса IPv6, а запись AAAA для имени «{name}» ведёт на {to}. Куда бы она ни вела, это не этот сервер — удалите её.",
+    DEPLOY_STOPPED_AT_STEP:
+      "Остановилось на шаге «{step|deployStep}». Успело пройти шагов: {done}.",
+    DEPLOY_STOPPED_AFTER: "Успело пройти шагов: {done}.",
     LADDER_NOT_ENOUGH_SPACE:
       "Набор не поместится: нужно примерно {needed|bytes}, свободно {free|bytes} — не хватает {short_by|bytes}. Ступеней в наборе {rungs}, и собирать все не обязательно.",
     OBJECTION_RUNG_ABOVE_SOURCE:

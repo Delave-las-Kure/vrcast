@@ -13,7 +13,7 @@
 
 use crate::commands::error::{AppError, ErrorCode, Result};
 use crate::domain::deploy_steps::{PlannedStep, Status, StepId};
-use crate::domain::wording::DetailCode;
+use crate::domain::wording::{Detail, DetailCode};
 use crate::server::deploy::{self, Context, DeployError, Step};
 use crate::server::upgrade;
 use crate::tasks::engine::TaskContext;
@@ -60,25 +60,54 @@ pub async fn run<'a>(
 ///
 /// The step is named in every case (FR-123). "The deployment failed" and "the firewall step
 /// failed" send a person to different places, and only one of them is somewhere to go.
-fn failed(e: DeployError, settled: &[PlannedStep]) -> AppError {
+/// Public so it can be checked without a server (constitution: logic reachable only through
+/// a server counts as unchecked). The whole of FR-123 lives in this function, and until
+/// 2026-09-06 nothing checked it — which is how the last line came to destroy what the arms
+/// above had set.
+pub fn failed(e: DeployError, settled: &[PlannedStep]) -> AppError {
+    let done = stopped_after(settled);
+
+    // Said first, so it is the first thing read: which step, and how far the deployment got.
+    //
+    // ⚠ **This used to be `.with_cause(format!("after {done} steps"))` on the whole `match`,
+    // and `with_cause` replaces** — so the step name set inside the arms was destroyed on the
+    // way out, in the one function whose doc comment promises to name it (T506, FR-123).
+    // "The deployment failed" and "the firewall step failed" send a person to different
+    // places, and only one of them is somewhere to go.
+    //
+    // A code with the step as a value, rather than English in `cause`: `deploySteps` holds all
+    // fifteen names in both languages already, and the screen shows the plan from that same
+    // set — so a failure names the step in the same words the plan did.
+    let where_it_stopped = |id: Option<StepId>| match id {
+        Some(id) => Detail::new(DetailCode::DeployStoppedAtStep)
+            .with("step", format!("{id:?}"))
+            .with("done", done as u64),
+        None => Detail::new(DetailCode::DeployStoppedAfter).with("done", done as u64),
+    };
+
     match e {
-        DeployError::Cancelled => AppError::new(ErrorCode::TaskCancelled),
-        DeployError::Ssh(inner) => inner.into(),
-        DeployError::NotTaken { id } => AppError::new(ErrorCode::DeployStepFailed).with_cause(
-            format!("{id:?}: it was applied and the check still says it was not"),
-        ),
+        DeployError::Cancelled => {
+            AppError::new(ErrorCode::TaskCancelled).with_detail(where_it_stopped(None))
+        }
+        // The link broke rather than a step refusing: the connection's own error says what
+        // happened, and no step owns the failure.
+        DeployError::Ssh(inner) => AppError::from(inner).with_detail(where_it_stopped(None)),
+        DeployError::NotTaken { id } => AppError::new(ErrorCode::DeployStepFailed)
+            .with_detail(where_it_stopped(Some(id)))
+            .with_cause("it was applied and the check still says it was not"),
         DeployError::Step { id, detail, advice } => {
+            let code = code_for(id);
+            let error = AppError::new(code)
+                .with_detail(where_it_stopped(Some(id)))
+                .with_cause(detail);
             // The step's own advice, when it has any. The domain check is the one that does:
             // which record to create, with what value, and where it leads now.
-            let code = code_for(id);
-            let error = AppError::new(code).with_cause(format!("{id:?}: {detail}"));
             match advice {
                 Some(detail) => error.with_detail(detail),
                 None => error,
             }
         }
     }
-    .with_cause(format!("after {} steps", stopped_after(settled)))
 }
 
 /// Which contract code a failing step answers with.

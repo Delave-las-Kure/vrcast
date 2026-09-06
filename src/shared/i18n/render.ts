@@ -9,6 +9,7 @@
  * - `{bps|bitrate}` — a bitrate, likewise
  * - `{n|plural:file}` — the word form matching the count
  * - `{name|encoder}` — the human name of a hardware encoder
+ * - `{id|deployStep}` — a deployment step by the name the plan gave it
  *
  * A missing value is left as the literal `{name}` rather than replaced with nothing:
  * a sentence with a visible gap gets reported, and a sentence quietly missing its
@@ -66,6 +67,15 @@ export function fill(
       case "encoder": {
         const key = String(value);
         return ENCODER_NAMES[lang][key] ?? key;
+      }
+      // A deployment step by the name the plan gave it (T506). Read from the same catalogue
+      // the deployment screen lists the steps from, so a failure and a plan cannot come to
+      // describe the same step two ways. An unknown id falls back to itself — searchable,
+      // where a blank would only look like nothing went wrong.
+      case "deployStep": {
+        const key = String(value);
+        const names = catalogue.ui.deploySteps as Record<string, string>;
+        return names[key] ?? key;
       }
       default:
         return String(value);

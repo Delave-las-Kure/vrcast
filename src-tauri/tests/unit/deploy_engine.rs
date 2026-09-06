@@ -302,3 +302,65 @@ fn the_assembled_deployment_is_every_step_exactly_once() {
     ordering_holds(&ids).expect("the assembled deployment is not the deployment");
     assert_eq!(ids, ORDER.to_vec());
 }
+
+// ---------- what the failure says about where it stopped (T506, FR-123) ----------
+
+/// ⚠ **The check the function's own doc comment claimed, and nothing made true.**
+///
+/// `failed`'s comment reads "The step is named in every case (FR-123)". It was not: the
+/// arms set `{id:?}: {detail}` as the cause, and the last line of the function hung
+/// `after N steps` on the whole `match` — and `with_cause` **replaces**. The step name was
+/// destroyed on the way out, in the one function that exists to carry it. Nothing checked
+/// this function at all, which is how a doc comment came to be the only thing asserting it.
+///
+/// Over **every** step rather than one: a rule stated about the one somebody picked is how
+/// T517 stayed hidden for months.
+#[test]
+fn a_failure_always_says_which_step_it_stopped_at() {
+    use vrcast_studio_lib::domain::wording::DetailCode;
+    use vrcast_studio_lib::server::deploy::DeployError;
+    use vrcast_studio_lib::tasks::deploy::failed;
+
+    for id in ORDER {
+        let broke = DeployError::Step {
+            id,
+            detail: String::from("the machine said no"),
+            advice: None,
+        };
+        let error = failed(broke, &[]);
+        let named = error
+            .details
+            .iter()
+            .find(|d| d.key == DetailCode::DeployStoppedAtStep)
+            .unwrap_or_else(|| panic!("{id:?} failed and the error does not say which step"));
+        assert_eq!(
+            named.params.get("step"),
+            Some(&serde_json::json!(format!("{id:?}"))),
+            "the detail names a different step from the one that failed"
+        );
+        // The particulars survive too: they are what a person pastes into a search.
+        assert_eq!(error.cause.as_deref(), Some("the machine said no"));
+
+        // And the same for the other failure that knows its step.
+        let untaken = failed(DeployError::NotTaken { id }, &[]);
+        assert!(
+            untaken.says(DetailCode::DeployStoppedAtStep),
+            "{id:?} was applied and did not take, and the error does not say which step"
+        );
+    }
+}
+
+/// A failure with no step still says how far it got — and does not claim a step it has not.
+#[test]
+fn a_failure_with_no_step_says_so_rather_than_naming_one() {
+    use vrcast_studio_lib::domain::wording::DetailCode;
+    use vrcast_studio_lib::server::deploy::DeployError;
+    use vrcast_studio_lib::tasks::deploy::failed;
+
+    let cancelled = failed(DeployError::Cancelled, &[]);
+    assert!(cancelled.says(DetailCode::DeployStoppedAfter));
+    assert!(
+        !cancelled.says(DetailCode::DeployStoppedAtStep),
+        "a cancellation blamed a step, and a person would go and look at it"
+    );
+}

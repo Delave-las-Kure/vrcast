@@ -263,6 +263,21 @@ detail_codes! {
     /// not it — the likeliest shape of a record left from the domain's previous life.
     DomainServerHasNoIpv6 => "DOMAIN_SERVER_HAS_NO_IPV6",
 
+    // --- deployment: where it stopped (T506, FR-123) ---
+    //
+    // ⚠ **The step used to be named in `cause`, and the next line wiped it.** `with_cause`
+    // REPLACES, and `tasks/deploy.rs` hung "after N steps" on the whole `match` — so the
+    // `{id:?}: {detail}` set two lines above never left the function. The doc comment right
+    // over it said "the step is named in every case".
+    //
+    // Named as a code with the step as a value, not as English in `cause`: `deploySteps`
+    // already holds all fifteen names in both languages, and the deployment screen reads them
+    // from there. One set of names, and a failure that says the same words as the plan did.
+    /// `step` — the step's own name, `done` — how many were settled before it.
+    DeployStoppedAtStep => "DEPLOY_STOPPED_AT_STEP",
+    /// `done`. For the two failures that carry no step: a cancellation and a broken link.
+    DeployStoppedAfter => "DEPLOY_STOPPED_AFTER",
+
     // --- transfer ---
     UploadFileUnreadable => "UPLOAD_FILE_UNREADABLE",
     UploadNotAFile => "UPLOAD_NOT_A_FILE",

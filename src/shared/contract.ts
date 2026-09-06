@@ -239,6 +239,9 @@ export type DetailCode =
   | "DOMAIN_FIX_RECORD"
   | "DOMAIN_REMOVE_RECORD"
   | "DOMAIN_SERVER_HAS_NO_IPV6"
+  // Which step a deployment stopped at, and how far it got (FR-123).
+  | "DEPLOY_STOPPED_AT_STEP"
+  | "DEPLOY_STOPPED_AFTER"
   | "NOT_ENOUGH_SPACE"
   | "LADDER_NOT_ENOUGH_SPACE"
   | "CHAIN_STOPPED_BY_OBJECTION"
