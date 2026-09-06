@@ -19,9 +19,28 @@ if [ -z "${FORBID_IP:-}" ] && [ -z "${FORBID_DOMAIN:-}" ]; then
   echo "Warning: FORBID_IP and FORBID_DOMAIN are not set — the server's address and domain are NOT checked." >&2
 fi
 
+# The zone the domain sits in, as well as the domain itself (T511).
+#
+# ⚠ **The needle used to be the whole string and nothing else, and a bare zone walked past
+# it.** A comment in `net/dns.rs` carried the owner's own second-level domain as an example
+# of what a refusal might say. The full `stream.<zone>` was not there, so `grep -F` on the
+# full domain found nothing and the check said "no hardcoded servers found" — truthfully, and
+# about a different question from the one FR-004 asks. The requirement says the application
+# must hold no predetermined addresses or domains, and a zone is a domain.
+#
+# Everything but the leftmost label. `stream.example.com` gives `example.com`; a domain that
+# is already a bare zone gives itself, which the deduplication below drops.
+FORBID_ZONE=""
+if [ -n "${FORBID_DOMAIN:-}" ]; then
+  case "$FORBID_DOMAIN" in
+    *.*.*) FORBID_ZONE="${FORBID_DOMAIN#*.}" ;;
+  esac
+fi
+
 NEEDLES=()
 [ -n "${FORBID_IP:-}" ]     && NEEDLES+=("$FORBID_IP")
 [ -n "${FORBID_DOMAIN:-}" ] && NEEDLES+=("$FORBID_DOMAIN")
+[ -n "$FORBID_ZONE" ]       && NEEDLES+=("$FORBID_ZONE")
 NEEDLES+=("/var/lib/vrcast/videos")   # the default path is allowed ONLY as a default in the settings
 
 # Where to search: the sources AND Tauri's packaging files — a server's address really does
@@ -46,6 +65,7 @@ TEST_SCOPE=()
 ADDRESS_NEEDLES=()
 [ -n "${FORBID_IP:-}" ]     && ADDRESS_NEEDLES+=("$FORBID_IP")
 [ -n "${FORBID_DOMAIN:-}" ] && ADDRESS_NEEDLES+=("$FORBID_DOMAIN")
+[ -n "$FORBID_ZONE" ]       && ADDRESS_NEEDLES+=("$FORBID_ZONE")
 
 # The one allowed exception: a line marked "FR-004-ok". It is needed for exactly one case —
 # a default value that goes into a new profile and is immediately there for a person to

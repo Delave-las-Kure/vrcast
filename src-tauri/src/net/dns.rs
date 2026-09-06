@@ -21,7 +21,7 @@
 //! sending the person's domain to somebody's public resolver — would be one.
 //!
 //! **What was tried and dropped.** The first shape of this also worked out which zone the
-//! name belongs to, so a refusal could say "add a record to remingston.ru" rather than name
+//! name belongs to, so a refusal could say "add a record to example.com" rather than name
 //! the whole domain. Two ways were tried and both failed on their own terms: an NS query
 //! through the recursor comes back as a referral rather than an answer, and the library's
 //! negative answer carries neither the SOA nor the authority section (`soa: None`,
