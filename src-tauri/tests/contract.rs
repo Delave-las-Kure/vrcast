@@ -52,3 +52,6 @@ mod convert;
 
 #[path = "contract/viewers.rs"]
 mod viewers;
+
+#[path = "contract/supplied.rs"]
+mod supplied;
