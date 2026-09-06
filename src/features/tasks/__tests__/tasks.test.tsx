@@ -157,6 +157,22 @@ it("shows what a finished task had to say", async () => {
   expect(screen.getByTestId("task-notices").textContent).toContain("3");
 });
 
+it("tells a failed task what to do about it, and not only what went wrong", async () => {
+  // T519. The list took `renderError(...).message` and dropped `.hint` — the half that says
+  // what to do. This is the one place a person meets a failed task, so the advice existed,
+  // was worded in both languages, and reached nobody. `both-halves.test.ts` is what stops it
+  // coming back on another screen; this is what says a person actually sees it on this one.
+  list = [
+    task({
+      state: "failed",
+      error: { code: "SSH_AUTH_FAILED", details: [] },
+    }),
+  ];
+  renderIn(<TasksPanel />);
+  await screen.findByText(ru.errors.SSH_AUTH_FAILED.message);
+  expect(screen.getByText(ru.errors.SSH_AUTH_FAILED.hint)).toBeTruthy();
+});
+
 it("says nothing where a task had nothing to say", async () => {
   // A row that always appears is a row nobody reads.
   list = [task({ state: "completed", progress: 1 })];

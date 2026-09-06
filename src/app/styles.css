@@ -300,8 +300,19 @@ h1 {
 
 .task__error {
   margin: 0;
-  color: var(--danger);
   font-size: 13px;
+}
+
+.task__error-message {
+  margin: 0;
+  color: var(--danger);
+}
+
+/* The advice is not the failure: read as ordinary text so the eye goes to the red line
+   first and then to what to do about it. */
+.task__error-hint {
+  margin: 4px 0 0;
+  color: var(--text-muted);
 }
 
 .task__actions {
@@ -915,8 +926,17 @@ button:focus-visible {
 
 .dialog__error {
   margin: 0;
-  color: var(--danger);
   font-size: 13px;
+}
+
+.dialog__error-message {
+  margin: 0;
+  color: var(--danger);
+}
+
+.dialog__error-hint {
+  margin: 4px 0 0;
+  color: var(--text-muted);
 }
 
 .notice--stale {

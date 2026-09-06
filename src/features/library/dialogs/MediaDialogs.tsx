@@ -16,6 +16,24 @@ import type { AppError, MediaView } from "../../../shared/contract";
 import { useLang, useT } from "../../../shared/i18n";
 import { fill, renderError } from "../../../shared/i18n/render";
 
+/**
+ * A refusal inside a dialog: what happened, and what to do about it.
+ *
+ * Both halves (T519). Two dialogs took only `.message` — a rename refused because the short
+ * name is taken said so and not what a free one looks like, which is the whole of the advice.
+ */
+function DialogError({ error }: { error: AppError }) {
+  const t = useT();
+  const { lang } = useLang();
+  const { message, hint } = renderError(error, t, lang);
+  return (
+    <div className="dialog__error">
+      <p className="dialog__error-message">{message}</p>
+      {hint && <p className="dialog__error-hint">{hint}</p>}
+    </div>
+  );
+}
+
 /** Creating a medium. The short name may be left out — the core makes one from the title. */
 export function CreateMediaDialog({
   onCreate,
@@ -31,7 +49,6 @@ export function CreateMediaDialog({
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState("");
   const t = useT();
-  const { lang } = useLang();
   const l = t.ui.library;
 
   return (
@@ -43,7 +60,7 @@ export function CreateMediaDialog({
       }}
     >
       <h3>{l.createHeading}</h3>
-      {error && <p className="dialog__error">{renderError(error, t, lang).message}</p>}
+      {error && <DialogError error={error} />}
 
       <label>
         <span>{l.fieldTitle}</span>
@@ -114,7 +131,7 @@ export function RenameMediaDialog({
       }}
     >
       <h3>{fill(l.renameHeading, { title: media.title }, t, lang)}</h3>
-      {error && <p className="dialog__error">{renderError(error, t, lang).message}</p>}
+      {error && <DialogError error={error} />}
 
       <div className="field">
         <label>

@@ -27,6 +27,27 @@ import { QueueOrder } from "./QueueOrder";
  * and a separator that differ between languages — and a number formatted one way here
  * and another way on the library screen is what stops people trusting either.
  */
+/**
+ * A failed task's error: what happened, and what to do about it.
+ *
+ * Separate from `ErrorNotice` on purpose rather than reused: that one is a dismissible
+ * banner for the screen as a whole, with its own role and close button. This one sits inside
+ * a row of a list and must not announce itself as an alert — thirty failed rows would speak
+ * thirty times. What the two share is `renderError`, which is where the wording is decided,
+ * so they cannot drift about what a code means.
+ */
+function TaskError({ error }: { error: AppError }) {
+  const t = useT();
+  const { lang } = useLang();
+  const { message, hint } = renderError(error, t, lang);
+  return (
+    <div className="task__error">
+      <p className="task__error-message">{message}</p>
+      {hint && <p className="task__error-hint">{hint}</p>}
+    </div>
+  );
+}
+
 function formatSpeed(bps: number | null, t: Catalogue, lang: Lang): string | null {
   if (bps === null || bps <= 0) return null;
   const mbit = (bps * 8) / 1_000_000;
@@ -258,9 +279,12 @@ export function TasksPanel() {
                 {formatEta(task.eta_s, t, lang) && <span>{formatEta(task.eta_s, t, lang)}</span>}
               </div>
 
-              {task.error && (
-                <p className="task__error">{renderError(task.error, t, lang).message}</p>
-              )}
+              {/* **What went wrong and what to do about it — both** (T519). This used to take
+                  only `.message` and drop `.hint`, and the hint is the half that says what to
+                  do: `renderError`'s own comment says so, and `ErrorNotice` has always shown
+                  both. So the one place a person meets a failed task was the one place the
+                  advice was thrown away. */}
+              {task.error && <TaskError error={task.error} />}
 
               {/* What the task worked out and is not a failure (T416): variants taken from
                   a previous run rather than made, a measurement that stopped short of the
