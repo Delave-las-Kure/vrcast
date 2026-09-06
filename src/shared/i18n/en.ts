@@ -458,6 +458,8 @@ export const en: Catalogue = {
     DEPLOY_STOPPED_AFTER: "Steps completed: {done}.",
     NOTICE_CANCELLED_AFTER_PUBLISH:
       "The stop arrived while \u201c{name}\u201d was already entering serving. It is on the server and being served \u2014 if it does not belong there, delete it in the library.",
+    NOTICE_NOT_FILED_UNDER_MEDIUM:
+      "“{name}” is uploaded and being served, but it could not be filed under the medium chosen for it — it is in the “not recognised” group, where it can be assigned by hand.",
     LADDER_NOT_ENOUGH_SPACE:
       "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
     OBJECTION_RUNG_ABOVE_SOURCE:

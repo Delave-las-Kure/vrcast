@@ -453,6 +453,8 @@ export const ruCore: CatalogueCore = {
     DEPLOY_STOPPED_AFTER: "Успело пройти шагов: {done}.",
     NOTICE_CANCELLED_AFTER_PUBLISH:
       "Остановка пришла, когда файл «{name}» уже входил в раздачу. Он на сервере и раздаётся — если он там не нужен, удалите его в библиотеке.",
+    NOTICE_NOT_FILED_UNDER_MEDIUM:
+      "Файл «{name}» залит и раздаётся, но отнести его к выбранному медиа не удалось — он в группе «не распознано», оттуда его можно приписать вручную.",
     LADDER_NOT_ENOUGH_SPACE:
       "Набор не поместится: нужно примерно {needed|bytes}, свободно {free|bytes} — не хватает {short_by|bytes}. Ступеней в наборе {rungs}, и собирать все не обязательно.",
     OBJECTION_RUNG_ABOVE_SOURCE:

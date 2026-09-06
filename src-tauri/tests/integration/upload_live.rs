@@ -864,3 +864,68 @@ pub(crate) fn sha256_of(path: &std::path::Path) -> String {
     hasher.update(&data);
     hex::encode(hasher.finalize())
 }
+
+/// ⚠ **T505 — the medium chosen at the upload screen used to be thrown away.**
+///
+/// `finish` ended with `let _ = request;`. The screen offered a choice, `media_id` was
+/// documented as "which medium to file it under", and it reached nothing: every uploaded file
+/// landed in "not recognised" and was assigned by hand. FR-019 asks for more than a tie — it
+/// asks for one that survives being read from another machine, and a tie that was never
+/// written survives nothing.
+///
+/// Checked against the catalogue **on the server**, read back through a fresh call rather than
+/// from anything this process remembers: that is the whole of what FR-019 promises.
+#[tokio::test]
+async fn the_medium_chosen_at_the_upload_is_what_the_file_ends_up_under() {
+    let (server, state, id) = setup().await;
+    let local = make_local_file("film_31.mp4", FILE_SIZE);
+
+    let media_id = vrcast_studio_lib::commands::library::api::media_create(
+        &state,
+        &id,
+        "The film it belongs to",
+        Some("belongs"),
+    )
+    .await
+    .expect("the medium was not created");
+
+    let mut req = request(&id, &local, "film_31.mp4");
+    req.media_id = Some(media_id.clone());
+    let task = upload::upload_start(&state, req)
+        .await
+        .expect("the upload would not submit");
+    assert_eq!(
+        wait_done(&state, &task, Duration::from_secs(120)).await,
+        TaskState::Completed,
+        "the upload did not finish successfully: {:?}",
+        state.tasks.get(&task).ok().flatten()
+    );
+
+    let view = vrcast_studio_lib::commands::library::api::library_list(&state, &id, true)
+        .await
+        .expect("the library would not read");
+    let medium = view
+        .media
+        .iter()
+        .find(|m| m.id == media_id)
+        .expect("the medium is gone from the catalogue");
+    assert!(
+        medium.files.iter().any(|f| f.path == "film_31.mp4"),
+        "the file was uploaded to this medium and is not under it: {:?}",
+        medium.files
+    );
+    assert!(
+        view.unrecognized.iter().all(|f| f.path != "film_31.mp4"),
+        "the file is filed under its medium and ALSO sitting in the unrecognised group"
+    );
+
+    // The catalogue on the server says so too, not only this application's reading of it.
+    let on_server = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/library.json'"))
+        .expect("the catalogue is not on the server");
+    assert!(
+        on_server.contains("film_31.mp4"),
+        "the catalogue on the server does not mention the file, so another machine would not \
+         see the tie either (FR-019)"
+    );
+}

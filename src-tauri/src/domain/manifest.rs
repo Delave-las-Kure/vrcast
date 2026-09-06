@@ -124,6 +124,41 @@ impl Manifest {
         next
     }
 
+    /// Put a path under one medium, taking it out of wherever else it was.
+    ///
+    /// **One path, one medium, and this is what keeps it so.** `FileClaimedTwice` is a
+    /// declared fault of a catalogue — one file belonging to two media, where deleting one
+    /// takes it from the other — and the only way to add a path without risking it is to
+    /// remove it first. Written once here because it was written twice before: `file_move`
+    /// and the end of an upload both did it, in copies that could drift.
+    ///
+    /// **Safe to repeat** (principle V): filing the same path under the same medium twice
+    /// leaves one entry, because the removal runs whether or not the addition finds a home.
+    ///
+    /// An unknown medium changes nothing and says so. It is not invented: somebody deleted it
+    /// between choosing it and the work finishing, and creating it again resurrects a thing
+    /// they got rid of.
+    #[must_use]
+    pub fn with_file_under(&self, media_id: &str, path: &str, is_ladder: bool) -> Option<Self> {
+        self.find_by_id(media_id)?;
+        let mut next = self.prepared_for_write();
+        for m in &mut next.media {
+            m.files.retain(|p| p != path);
+            m.ladders.retain(|p| p != path);
+        }
+        let target = next
+            .media
+            .iter_mut()
+            .find(|m| m.id == media_id)
+            .expect("the medium was found a moment ago");
+        if is_ladder {
+            target.ladders.push(path.to_owned());
+        } else {
+            target.files.push(path.to_owned());
+        }
+        Some(next)
+    }
+
     /// Whether writing is allowed: is the generation on the server still the one that
     /// was read.
     ///

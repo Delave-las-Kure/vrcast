@@ -263,6 +263,12 @@ detail_codes! {
     /// not it — the likeliest shape of a record left from the domain's previous life.
     DomainServerHasNoIpv6 => "DOMAIN_SERVER_HAS_NO_IPV6",
 
+    /// `name`. The file is on the server and serving, and could not be entered into the
+    /// catalogue under the medium chosen for it (T505). Said rather than reported as a
+    /// failure: the upload succeeded, and the file is where the library shows unrecognised
+    /// ones.
+    NoticeNotFiledUnderMedium => "NOTICE_NOT_FILED_UNDER_MEDIUM",
+
     /// `name`. A stop that arrived while the file was entering serving (T503). It is being
     /// served, and the task is written down as cancelled — both true, and neither on its own
     /// tells a person what is on the server now.

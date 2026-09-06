@@ -696,18 +696,13 @@ pub mod api {
             return Err(AppError::new(ErrorCode::FileMissingOnServer).with_cause(path));
         }
 
-        let mut next = manifest.prepared_for_write();
-        for m in &mut next.media {
-            m.files.retain(|p| p != path);
-            m.ladders.retain(|p| p != path);
-        }
-        if let Some(target) = next.media.iter_mut().find(|m| m.id == to_media_id) {
-            if path.ends_with(".m3u8") {
-                target.ladders.push(path.to_owned());
-            } else {
-                target.files.push(path.to_owned());
-            }
-        }
+        // The same transformation the end of an upload uses (T505). It used to be written
+        // out here and again there, in two copies of one rule about a catalogue's soundness.
+        let Some(next) = manifest.with_file_under(to_media_id, path, path.ends_with(".m3u8"))
+        else {
+            conn.close().await;
+            return Err(no_such_media(to_media_id));
+        };
 
         manifest_io::write(&conn, &profile.video_dir, &next, manifest.generation).await?;
         conn.close().await;

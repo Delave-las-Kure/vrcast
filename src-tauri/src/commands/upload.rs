@@ -500,7 +500,16 @@ pub mod api {
 
             match upload::transfer_once(&conn, &ctx, &plan, &mut estimate).await {
                 Ok(sent) => {
-                    let outcome = finish(&conn, &ctx, &plan, sent, &clean_name, &request).await;
+                    let outcome = finish(
+                        &conn,
+                        &ctx,
+                        &plan,
+                        sent,
+                        &clean_name,
+                        &request,
+                        &profile.video_dir,
+                    )
+                    .await;
                     conn.close().await;
                     return outcome;
                 }
@@ -546,6 +555,7 @@ pub mod api {
         sent: u64,
         clean_name: &str,
         request: &UploadRequest,
+        video_dir: &str,
     ) -> std::result::Result<(), AppError> {
         if sent != plan.total_bytes {
             return Err(AppError::new(ErrorCode::Internal).with_detail(
@@ -606,8 +616,61 @@ pub mod api {
             );
         }
 
+        // **The medium the person chose, written into the catalogue** (T505, FR-019).
+        //
+        // ⚠ **This used to be `let _ = request;`** — the upload screen offered a choice of
+        // medium, `media_id` was documented as "which medium to file it under", and it went
+        // nowhere at all. Every uploaded file landed in "not recognised" and had to be
+        // assigned by hand, which is also half of what FR-019 asks for: the tie must survive
+        // being read from another machine, and a tie that was never written survives nothing.
+        //
+        // **After the rename, not before.** The catalogue may only ever claim files that are
+        // there: an entry written first and a rename that then failed would leave the library
+        // pointing at nothing, and `exists_on_server` false is what a person reads as "the
+        // file was deleted behind my back" (FR-018).
+        //
+        // **Failing to file it is not a failed upload.** The bytes are across and the film is
+        // serving; refusing here would report a failure about work that succeeded and invite
+        // a repeat that has nothing left to do. It is said instead, as a notice, and the file
+        // shows up unrecognised — which is exactly where it used to land every time.
+        if let Some(media_id) = request.media_id.as_deref() {
+            if let Err(e) = file_it_under(conn, video_dir, media_id, clean_name).await {
+                tracing::warn!(error = %e, media_id, "the file was not filed under its medium");
+                ctx.add_notice(
+                    Detail::new(DetailCode::NoticeNotFiledUnderMedium).with("name", clean_name),
+                );
+            }
+        }
+
         ctx.report_important(1.0, DetailCode::StageDone);
-        let _ = request;
+        Ok(())
+    }
+
+    /// Put a file into the catalogue under the medium it belongs to.
+    ///
+    /// **Safe to repeat** (principle V). The path is removed from wherever it was before it is
+    /// added, so a second run of the same upload leaves one entry and not two — and a file
+    /// moved by hand since is not silently moved back by a retry, because a retry of an upload
+    /// that already finished does not reach this at all.
+    ///
+    /// A missing medium is not invented: somebody deleted it between the choice and the end of
+    /// the transfer, and creating it again would resurrect a thing they got rid of. The file
+    /// stays unrecognised, which is a state the library shows plainly.
+    async fn file_it_under(
+        conn: &crate::ssh::Connection,
+        video_dir: &str,
+        media_id: &str,
+        name: &str,
+    ) -> std::result::Result<(), AppError> {
+        let manifest = crate::server::manifest_io::read(conn, video_dir).await?;
+        let next = manifest
+            .with_file_under(media_id, name, false)
+            .ok_or_else(|| {
+                AppError::new(ErrorCode::InvalidInput)
+                    .detail(DetailCode::MediaNotFound)
+                    .with_cause(media_id)
+            })?;
+        crate::server::manifest_io::write(conn, video_dir, &next, manifest.generation).await?;
         Ok(())
     }
 

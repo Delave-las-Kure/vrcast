@@ -244,6 +244,7 @@ export type DetailCode =
   | "DEPLOY_STOPPED_AFTER"
   // A stop that arrived while the file was already entering serving (T503).
   | "NOTICE_CANCELLED_AFTER_PUBLISH"
+  | "NOTICE_NOT_FILED_UNDER_MEDIUM"
   | "NOT_ENOUGH_SPACE"
   | "LADDER_NOT_ENOUGH_SPACE"
   | "CHAIN_STOPPED_BY_OBJECTION"

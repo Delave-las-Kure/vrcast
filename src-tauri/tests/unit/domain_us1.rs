@@ -533,3 +533,93 @@ fn the_suggested_title_is_readable() {
         "the short name must stay fit for a file name"
     );
 }
+
+// ---------- filing a path under a medium (T505) ----------
+
+/// ⚠ **One path, one medium — the rule the catalogue declares and nothing enforced.**
+///
+/// `FileClaimedTwice` is a named fault of a catalogue: one file belonging to two media, where
+/// deleting one takes it from the other. Two places added a path to a medium — `file_move` and
+/// the end of an upload — in copies of one rule, and neither could be checked without a
+/// server. It is one function now, and this is what says it holds.
+#[test]
+fn filing_a_path_under_a_medium_takes_it_out_of_wherever_it_was() {
+    let before = Manifest {
+        media: vec![
+            media_entry("m1", "first", &["film.mp4"]),
+            media_entry("m2", "second", &[]),
+        ],
+        ..Manifest::empty()
+    };
+    assert!(
+        before.validate().is_ok(),
+        "the starting catalogue is already faulty, so nothing below would mean anything"
+    );
+
+    let after = before
+        .with_file_under("m2", "film.mp4", false)
+        .expect("the medium is right there");
+
+    assert_eq!(
+        after.validate(),
+        Ok(()),
+        "the file ended up claimed by two media, which is the fault this exists to prevent"
+    );
+    assert!(after.media[0].files.is_empty(), "it was left where it was");
+    assert_eq!(after.media[1].files, vec![String::from("film.mp4")]);
+    assert_eq!(
+        after.generation,
+        before.generation + 1,
+        "the write would be refused: the generation did not advance"
+    );
+}
+
+/// Doing it twice is doing it once (principle V).
+#[test]
+fn filing_the_same_path_under_the_same_medium_twice_leaves_one_entry() {
+    let before = Manifest {
+        media: vec![media_entry("m1", "first", &[])],
+        ..Manifest::empty()
+    };
+    let once = before.with_file_under("m1", "film.mp4", false).unwrap();
+    let twice = once.with_file_under("m1", "film.mp4", false).unwrap();
+
+    assert_eq!(twice.media[0].files, vec![String::from("film.mp4")]);
+    assert_eq!(
+        twice.validate(),
+        Ok(()),
+        "a repeat left the catalogue faulty"
+    );
+}
+
+/// A medium deleted between the choice and the finish is not brought back to life.
+#[test]
+fn a_medium_that_is_gone_is_not_invented_to_receive_the_file() {
+    let before = Manifest {
+        media: vec![media_entry("m1", "first", &[])],
+        ..Manifest::empty()
+    };
+    assert!(
+        before
+            .with_file_under("m-gone", "film.mp4", false)
+            .is_none(),
+        "a medium somebody deleted was recreated to hold a file"
+    );
+}
+
+/// A quality set is filed as a set, not as an ordinary file.
+#[test]
+fn a_ladder_goes_among_the_ladders() {
+    let before = Manifest {
+        media: vec![media_entry("m1", "first", &[])],
+        ..Manifest::empty()
+    };
+    let after = before
+        .with_file_under("m1", "film/master.m3u8", true)
+        .unwrap();
+    assert!(after.media[0].files.is_empty());
+    assert_eq!(
+        after.media[0].ladders,
+        vec![String::from("film/master.m3u8")]
+    );
+}
