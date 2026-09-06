@@ -11,7 +11,7 @@
  * quietly take them out of everything else.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { PlacesTables } from "./PlacesTables";
@@ -22,9 +22,27 @@ import type { AppError, LibraryView, Viewer } from "../../shared/contract";
 import { LimitDialog } from "./LimitDialog";
 import { ViewerRow } from "./ViewerRow";
 
-/** What the library calls a medium, so the list can name what is being watched. */
-function useMediaTitles(serverId: string | null): Record<string, string> {
-  const [titles, setTitles] = useState<Record<string, string>>({});
+/** A medium, in the two forms this screen needs it in. */
+type Named = { id: string; slug: string; title: string };
+
+/**
+ * The media of this server, so the list can name what is being watched and the cap dialog
+ * can say which set it applies to.
+ *
+ * ⚠ **The list, and not a map, because the map was keyed by the wrong thing** (T501). This
+ * used to hand back `{ [media.id]: title }`, and the cap dialog then read those entries as
+ * `([slug, title]) => ({ slug, title })` — renaming an identifier to a slug and nothing more.
+ * Identifiers are `m_<uuid>`; the core builds `{video_dir}/{slug}/master.m3u8`, so the answer
+ * was `NoLadderForMedia` every time, the preview stayed empty and the confirm button was
+ * disabled for good. Capping a viewer's quality could not be done from this screen at all —
+ * FR-060 and FR-061 both.
+ *
+ * The two readers want different keys: a viewer record names the medium by `media_id`, while
+ * a quality set is found by `slug`. Handing over the media themselves lets each take what it
+ * needs, and there is nothing left to rename in passing.
+ */
+function useMedia(serverId: string | null): Named[] {
+  const [media, setMedia] = useState<Named[]>([]);
 
   useEffect(() => {
     if (!serverId) return;
@@ -33,9 +51,7 @@ function useMediaTitles(serverId: string | null): Record<string, string> {
       .libraryList(serverId)
       .then((view: LibraryView) => {
         if (!alive) return;
-        const next: Record<string, string> = {};
-        for (const media of view.media) next[media.id] = media.title;
-        setTitles(next);
+        setMedia(view.media.map((m) => ({ id: m.id, slug: m.slug, title: m.title })));
       })
       // A library that will not load is not a reason to hide the viewers: they are still
       // there, and their addresses and speeds are the point. They simply show up under
@@ -46,7 +62,7 @@ function useMediaTitles(serverId: string | null): Record<string, string> {
     };
   }, [serverId]);
 
-  return titles;
+  return media;
 }
 
 export function ViewersScreen() {
@@ -63,7 +79,9 @@ export function ViewersScreen() {
   useEffect(() => {
     void reloadServers();
   }, [reloadServers]);
-  const titles = useMediaTitles(serverId);
+  const media = useMedia(serverId);
+  // By identifier, which is how a viewer record names what it is watching.
+  const titleById = useMemo(() => Object.fromEntries(media.map((m) => [m.id, m.title])), [media]);
 
   const [viewers, setViewers] = useState<Viewer[] | null>(null);
   // Whom the person is about to cap, if anybody. The dialogue is opened from the row
@@ -147,7 +165,7 @@ export function ViewersScreen() {
               <ViewerRow
                 key={viewer.ip}
                 viewer={viewer}
-                mediaTitle={viewer.media_id ? titles[viewer.media_id] : undefined}
+                mediaTitle={viewer.media_id ? titleById[viewer.media_id] : undefined}
                 onLimit={() => setCapping(viewer.ip)}
                 limitLabel={t.ui.limits.title}
               />
@@ -160,7 +178,7 @@ export function ViewersScreen() {
         <LimitDialog
           serverId={serverId}
           ip={capping}
-          media={Object.entries(titles).map(([slug, title]) => ({ slug, title }))}
+          media={media}
           onDone={() => setCapping(null)}
           onCancel={() => setCapping(null)}
         />

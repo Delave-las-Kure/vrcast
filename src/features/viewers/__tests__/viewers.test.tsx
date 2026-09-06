@@ -21,6 +21,22 @@ const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockWatchStart = vi.fn(async () => undefined);
 const mockWatchStop = vi.fn(async () => undefined);
 const mockLibraryList = vi.fn();
+const mockLimitPreview = vi.fn(async (_request: { slug: string }) => ({
+  kept: [
+    {
+      path: "backrooms_6.mp4",
+      bandwidth: 6_000_000,
+      average_bandwidth: 6_000_000,
+      width: 1920,
+      height: 1080,
+      fps: 24,
+      codecs: "avc1",
+    },
+  ],
+  warnings: [],
+  below_lightest: false,
+}));
+const mockLimitSet = vi.fn(async () => undefined);
 
 /** What the core would send. Held so a test can push an update whenever it likes. */
 let send: ((update: ViewersUpdateEvent) => void) | null = null;
@@ -51,6 +67,9 @@ vi.mock("../../../shared/ipc", async () => {
       viewersHistory: vi.fn(),
       geoStatus: () => mockGeoStatus(),
       geoUpdate: () => mockGeoUpdate(),
+      limitPreview: (...a: unknown[]) => mockLimitPreview(...(a as [{ slug: string }])),
+      limitSet: (...a: unknown[]) => mockLimitSet(...(a as [])),
+      limitsList: () => Promise.resolve([]),
     }),
     onLibraryChanged: vi.fn(async () => () => {}),
     onViewersUpdate: vi.fn(async (handler: (u: ViewersUpdateEvent) => void) => {
@@ -231,5 +250,42 @@ describe("the tables of places", () => {
 
     fireEvent.click(screen.getByText(ru.ui.viewers.placesFetch));
     await waitFor(() => expect(mockGeoUpdate).toHaveBeenCalled());
+  });
+
+  /**
+   * ⚠ **T501 — the cap dialog was handed identifiers where the core wanted slugs.**
+   *
+   * `useMediaTitles` returned `{ [media.id]: title }` and the screen read those entries as
+   * `([slug, title]) => ({ slug, title })`: an identifier renamed to a slug, nothing more.
+   * Identifiers are `m_<uuid>`; the core builds `{video_dir}/{slug}/master.m3u8`, so the
+   * answer was `NoLadderForMedia` every time, the preview never filled and the confirm
+   * button stayed disabled. FR-060 and FR-061 could not be reached from this screen at all.
+   *
+   * **Why nothing caught it.** `limits.test.tsx` renders `LimitDialog` on its own and hands
+   * it `[{ slug: "demo", title: "Demo film" }]` — written by hand, correct, and therefore
+   * silent about where the screen gets that value. The stand and the real screen diverged at
+   * exactly the point of the defect. So this one goes through the screen, with a medium whose
+   * identifier and slug differ, which is the ordinary case and the only one that can tell
+   * them apart.
+   */
+  it("asks the core about the medium by its slug, not by its identifier", async () => {
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalledWith("s1"));
+    send?.(update([viewer()]));
+
+    // The row names the film first, and by the identifier the viewer record carries — the
+    // other half of the same confusion, and nothing checked it either: breaking this on
+    // purpose passed every test there was.
+    expect(await screen.findByText("Backrooms")).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: ru.ui.limits.title }));
+
+    await waitFor(() => expect(mockLimitPreview).toHaveBeenCalled());
+    const asked = mockLimitPreview.mock.calls[0][0];
+    expect(
+      asked.slug,
+      "the dialog asked the core about the medium by something that is not its slug, so the " +
+        "core looks for a quality set at a path that does not exist",
+    ).toBe("backrooms");
   });
 });

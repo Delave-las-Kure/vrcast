@@ -71,6 +71,25 @@ summary() {
 LOGS="${TMPDIR:-/tmp}/vrcast-check-$$"
 mkdir -p "$LOGS"
 
+# ⚠ **Which steps are allowed to answer "partly", and why it is a list and not a rule.**
+#
+# Code 2 means "it ran, and could not look at everything" — see `check-no-hardcoded-server`.
+# It was read from EVERY step, and that was wrong within a day of being written: `tsc` exits 2
+# for ordinary type errors, so a broken interface was reported as "partly checked, nothing
+# failed" and the run went green. A check that turns a failure into a shrug is worse than no
+# check, which is the very thing the third answer was added to avoid.
+#
+# So the third answer belongs to the three scripts that were written to give it, and to
+# nothing else. Anything not named here that exits 2 has failed.
+THIRD_ANSWER=' Hardcoded servers (FR-004) | Isolation (principle VII) | The carried-over formulas agree '
+
+may_say_partly() {
+  case "$THIRD_ANSWER" in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 step() {
   local name="$1"; shift
   local log="$LOGS/$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '-')".log
@@ -83,7 +102,7 @@ step() {
   set -e
   if [ "$code" -eq 0 ]; then
     printf '\033[32m  passed: %s\033[0m\n' "$name"
-  elif [ "$code" -eq 2 ]; then
+  elif [ "$code" -eq 2 ] && may_say_partly "$name"; then
     printf '\033[33m  partly: %s — see above for what was not looked at\033[0m\n' "$name"
     PARTLY="$PARTLY \"$name\""
   else
