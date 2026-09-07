@@ -268,3 +268,86 @@ fn every_backed_up_file_has_a_way_back() {
         "the restore has arms for something that is not copied aside, or two for one file"
     );
 }
+
+// ---------- what a step says it will change (T507, FR-122) ----------
+
+/// Every change says which it is, and the ones that carry values carry them.
+///
+/// ⚠ **The values were the whole point and the easiest thing to lose.** A step that says
+/// "installs packages" and not *which* packages has told a person nothing they could not have
+/// guessed from its name — and its name is what the screen showed for years while these values
+/// were computed and thrown away. Breaking the packages arm to drop its values on purpose was
+/// what showed this test was missing: everything else passed.
+#[test]
+fn every_change_says_which_it_is_and_carries_its_values() {
+    use vrcast_studio_lib::domain::deploy_steps::Change;
+    use vrcast_studio_lib::domain::wording::DetailCode;
+
+    let every: Vec<Change> = vec![
+        Change::LooksOnly,
+        Change::InstallsPackages {
+            names: vec![String::from("ffmpeg"), String::from("caddy")],
+        },
+        Change::CreatesSwapFile { megabytes: 2048 },
+        Change::CreatesSystemUser {
+            name: String::from("vrcast"),
+        },
+        Change::CreatesDirectory {
+            path: String::from("/opt/vrcast"),
+        },
+        Change::WritesFile {
+            path: String::from("/etc/caddy/Caddyfile"),
+        },
+        Change::EnablesService {
+            name: String::from("caddy"),
+        },
+        Change::OpensPorts {
+            ports: vec![String::from("80/tcp"), String::from("443/tcp")],
+        },
+        Change::ClosesEverythingElse,
+        Change::AddsSshKey,
+        Change::TurnsPasswordLoginOff,
+        Change::TurnsIpv6Off,
+        Change::SetsKernelSettings,
+    ];
+
+    // Distinct codes, or two different changes read as one thing on screen.
+    let mut codes: Vec<DetailCode> = every.iter().map(|c| c.detail().key).collect();
+    let before = codes.len();
+    codes.sort_by_key(|c| c.as_str());
+    codes.dedup();
+    assert_eq!(
+        codes.len(),
+        before,
+        "two changes share a code, so a person is shown the same sentence for different work"
+    );
+
+    let packages = every[1].detail();
+    assert_eq!(
+        packages.params.get("names"),
+        Some(&serde_json::json!("ffmpeg, caddy")),
+        "a step that installs packages does not name them, which is the whole of what a \
+         person could not have guessed from the step's own title"
+    );
+    assert_eq!(packages.params.get("count"), Some(&serde_json::json!(2)));
+
+    let ports = every[7].detail();
+    assert_eq!(
+        ports.params.get("ports"),
+        Some(&serde_json::json!("80/tcp, 443/tcp")),
+        "the firewall step does not say which ports it opens"
+    );
+    assert_eq!(ports.params.get("count"), Some(&serde_json::json!(2)));
+
+    assert_eq!(
+        every[2].detail().params.get("megabytes"),
+        Some(&serde_json::json!(2048)),
+        "the swap step does not say how large a file it will make"
+    );
+    for (which, key) in [(3usize, "name"), (4, "path"), (5, "path"), (6, "name")] {
+        assert!(
+            every[which].detail().params.contains_key(key),
+            "a change carrying a {key} lost it on the way to being said"
+        );
+    }
+}

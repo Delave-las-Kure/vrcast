@@ -11,7 +11,8 @@
  * gets believed, and that is the whole of the trouble.
  */
 
-import { useT } from "../../shared/i18n";
+import { useLang, useT } from "../../shared/i18n";
+import { renderDetail } from "../../shared/i18n/render";
 import type { DeployStepStatus, PlannedStep } from "../../shared/contract";
 
 /** What to call the state a step is in. */
@@ -37,6 +38,7 @@ function detailOf(status: DeployStepStatus): string | null {
 
 export function StepList({ steps }: { steps: PlannedStep[] }) {
   const t = useT();
+  const { lang } = useLang();
   const words = t.ui.deploy as unknown as Record<string, string>;
   const names = t.ui.deploySteps as unknown as Record<string, string>;
 
@@ -51,6 +53,21 @@ export function StepList({ steps }: { steps: PlannedStep[] }) {
             {/* The reason beside its step rather than at the end of the list: by the end of
                 the list there is nothing left to attach it to. */}
             {detail && <small>{detail}</small>}
+            {/* ⚠ **What this step will actually do** (T507, FR-122). The core has always
+                worked it out — the packages by name, the ports, the files, the size of the
+                swap file — and the interface typed the field `unknown[]` and read it nowhere,
+                showing fifteen general headings instead. That is precisely what this file's
+                own comment says a person is not owed.
+                Only where there is something to say: a step that only looks says so, and a
+                step whose changes are empty (keeping IPv6, or swap that is not needed) says
+                nothing rather than showing an empty list. */}
+            {step.changes.length > 0 && (
+              <ul className="step__changes">
+                {step.changes.map((change, i) => (
+                  <li key={i}>{renderDetail(change, t, lang)}</li>
+                ))}
+              </ul>
+            )}
           </li>
         );
       })}

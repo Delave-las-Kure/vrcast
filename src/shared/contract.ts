@@ -243,6 +243,20 @@ export type DetailCode =
   | "DOMAIN_REMOVE_RECORD"
   | "DOMAIN_SERVER_HAS_NO_IPV6"
   // Which step a deployment stopped at, and how far it got (FR-123).
+  // What each step of a deployment will change (FR-122).
+  | "CHANGE_LOOKS_ONLY"
+  | "CHANGE_INSTALLS_PACKAGES"
+  | "CHANGE_CREATES_SWAP_FILE"
+  | "CHANGE_CREATES_SYSTEM_USER"
+  | "CHANGE_CREATES_DIRECTORY"
+  | "CHANGE_WRITES_FILE"
+  | "CHANGE_ENABLES_SERVICE"
+  | "CHANGE_OPENS_PORTS"
+  | "CHANGE_CLOSES_EVERYTHING_ELSE"
+  | "CHANGE_ADDS_SSH_KEY"
+  | "CHANGE_TURNS_PASSWORD_LOGIN_OFF"
+  | "CHANGE_TURNS_IPV6_OFF"
+  | "CHANGE_SETS_KERNEL_SETTINGS"
   | "DEPLOY_STOPPED_AT_STEP"
   | "DEPLOY_STOPPED_AFTER"
   // A stop that arrived while the file was already entering serving (T503).
@@ -600,8 +614,11 @@ export type DeployStepStatus =
 /** One step, as it is shown before agreement and while it runs (FR-122, FR-123). */
 export interface PlannedStep {
   id: string;
-  /** What it will change: codes with values, never a made-up sentence. */
-  changes: unknown[];
+  /** What it will change: codes with values, never a made-up sentence.
+   *
+   *  Typed `unknown[]` until 2026-09-07, which is to say typed out of reach: the core
+   *  filled it for every step and nothing here could read into it (T507). */
+  changes: Detail[];
   /** A blocking step that failed stops the deployment. */
   blocking: boolean;
   status: DeployStepStatus;

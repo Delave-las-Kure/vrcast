@@ -200,6 +200,51 @@ pub enum Change {
     SetsKernelSettings,
 }
 
+impl Change {
+    /// What this change is, as a code with its values (T507, FR-122).
+    ///
+    /// **The same shape `Objection::detail` uses**, and for the same reason: the core knows
+    /// what it will do and the interface knows how to say it, in whichever language is chosen.
+    /// A sentence built here would be one the catalogues could not translate and the
+    /// both-languages check could not see.
+    ///
+    /// Lists are joined here rather than in the interface so that the count travels with them:
+    /// "seven packages" and their names are one thing to say, and a template that had only the
+    /// list would have to count it in every language separately.
+    pub fn detail(&self) -> crate::domain::wording::Detail {
+        use crate::domain::wording::{Detail, DetailCode as C};
+        match self {
+            Self::LooksOnly => Detail::new(C::ChangeLooksOnly),
+            Self::InstallsPackages { names } => Detail::new(C::ChangeInstallsPackages)
+                .with("names", names.join(", "))
+                .with("count", names.len() as u64),
+            Self::CreatesSwapFile { megabytes } => {
+                Detail::new(C::ChangeCreatesSwapFile).with("megabytes", u64::from(*megabytes))
+            }
+            Self::CreatesSystemUser { name } => {
+                Detail::new(C::ChangeCreatesSystemUser).with("name", name.clone())
+            }
+            Self::CreatesDirectory { path } => {
+                Detail::new(C::ChangeCreatesDirectory).with("path", path.clone())
+            }
+            Self::WritesFile { path } => {
+                Detail::new(C::ChangeWritesFile).with("path", path.clone())
+            }
+            Self::EnablesService { name } => {
+                Detail::new(C::ChangeEnablesService).with("name", name.clone())
+            }
+            Self::OpensPorts { ports } => Detail::new(C::ChangeOpensPorts)
+                .with("ports", ports.join(", "))
+                .with("count", ports.len() as u64),
+            Self::ClosesEverythingElse => Detail::new(C::ChangeClosesEverythingElse),
+            Self::AddsSshKey => Detail::new(C::ChangeAddsSshKey),
+            Self::TurnsPasswordLoginOff => Detail::new(C::ChangeTurnsPasswordLoginOff),
+            Self::TurnsIpv6Off => Detail::new(C::ChangeTurnsIpv6Off),
+            Self::SetsKernelSettings => Detail::new(C::ChangeSetsKernelSettings),
+        }
+    }
+}
+
 /// Why a step was skipped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SkipReason {
@@ -245,10 +290,19 @@ pub enum Checked {
 }
 
 /// One step of a plan, as a person is shown it (FR-122, FR-123).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Eq`: a change carries its values, and one of them is a number of megabytes that
+/// arrives as JSON, where numbers are not totally ordered. `PartialEq` is what the checks
+/// need and all that can honestly be given.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlannedStep {
     pub id: StepId,
-    pub changes: Vec<Change>,
+    /// What it will change, as codes with their values (FR-122, T507).
+    ///
+    /// `Detail` and not `Change`: the interface has to word these, and everything else that
+    /// crosses this boundary crosses as a code the catalogues know. Typed `unknown[]` and
+    /// read by nothing until 2026-09-07.
+    pub changes: Vec<crate::domain::wording::Detail>,
     pub blocking: bool,
     pub status: Status,
 }
@@ -290,7 +344,7 @@ pub fn plan(
                 .unwrap_or(Status::NotApplied);
             PlannedStep {
                 id: *id,
-                changes: changes_of(*id),
+                changes: changes_of(*id).iter().map(Change::detail).collect(),
                 blocking: blocking(*id),
                 status,
             }

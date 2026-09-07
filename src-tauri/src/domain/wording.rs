@@ -282,6 +282,34 @@ detail_codes! {
     /// tells a person what is on the server now.
     NoticeCancelledAfterPublish => "NOTICE_CANCELLED_AFTER_PUBLISH",
 
+    // --- deployment: what a step will change (T507, FR-122) ---
+    //
+    // ⚠ **The values were worked out and shown to nobody.** `domain::deploy_steps` fills a
+    // `Change` for every step — the packages, the ports, the files, the size of the swap file
+    // — and the interface typed the field `unknown[]` and read it nowhere. The screen showed
+    // fifteen general headings instead, which is the very thing its own comment says not to
+    // do. Said as codes with values, like everything else that crosses this boundary.
+    ChangeLooksOnly => "CHANGE_LOOKS_ONLY",
+    /// `names` — the packages, comma-separated, `count`.
+    ChangeInstallsPackages => "CHANGE_INSTALLS_PACKAGES",
+    /// `megabytes`.
+    ChangeCreatesSwapFile => "CHANGE_CREATES_SWAP_FILE",
+    /// `name`.
+    ChangeCreatesSystemUser => "CHANGE_CREATES_SYSTEM_USER",
+    /// `path`.
+    ChangeCreatesDirectory => "CHANGE_CREATES_DIRECTORY",
+    /// `path`.
+    ChangeWritesFile => "CHANGE_WRITES_FILE",
+    /// `name`.
+    ChangeEnablesService => "CHANGE_ENABLES_SERVICE",
+    /// `ports` — comma-separated, `count`.
+    ChangeOpensPorts => "CHANGE_OPENS_PORTS",
+    ChangeClosesEverythingElse => "CHANGE_CLOSES_EVERYTHING_ELSE",
+    ChangeAddsSshKey => "CHANGE_ADDS_SSH_KEY",
+    ChangeTurnsPasswordLoginOff => "CHANGE_TURNS_PASSWORD_LOGIN_OFF",
+    ChangeTurnsIpv6Off => "CHANGE_TURNS_IPV6_OFF",
+    ChangeSetsKernelSettings => "CHANGE_SETS_KERNEL_SETTINGS",
+
     // --- deployment: where it stopped (T506, FR-123) ---
     //
     // ⚠ **The step used to be named in `cause`, and the next line wiped it.** `with_cause`

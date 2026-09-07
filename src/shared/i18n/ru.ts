@@ -454,6 +454,19 @@ export const ruCore: CatalogueCore = {
       "Запись {record} для имени «{name}» ведёт на {to}, а IPv6 будет отключён. Удалите её: иначе домен продолжит обещать адрес, который перестанет отвечать, и часть зрителей пойдёт туда первым делом.",
     DOMAIN_SERVER_HAS_NO_IPV6:
       "У сервера нет собственного адреса IPv6, а запись AAAA для имени «{name}» ведёт на {to}. Куда бы она ни вела, это не этот сервер — удалите её.",
+    CHANGE_LOOKS_ONLY: "только смотрит, ничего не меняет",
+    CHANGE_INSTALLS_PACKAGES: "поставит {count|plural:package}: {names}",
+    CHANGE_CREATES_SWAP_FILE: "создаст файл подкачки на {megabytes} МБ",
+    CHANGE_CREATES_SYSTEM_USER: "заведёт системного пользователя «{name}»",
+    CHANGE_CREATES_DIRECTORY: "создаст каталог {path}",
+    CHANGE_WRITES_FILE: "запишет файл {path}",
+    CHANGE_ENABLES_SERVICE: "включит службу «{name}» и запустит её",
+    CHANGE_OPENS_PORTS: "откроет наружу {count|plural:port}: {ports}",
+    CHANGE_CLOSES_EVERYTHING_ELSE: "закроет наружу все остальные порты",
+    CHANGE_ADDS_SSH_KEY: "добавит ключ приложения в authorized_keys",
+    CHANGE_TURNS_PASSWORD_LOGIN_OFF: "отключит вход по паролю — останется только по ключу",
+    CHANGE_TURNS_IPV6_OFF: "отключит IPv6",
+    CHANGE_SETS_KERNEL_SETTINGS: "изменит сетевые и дисковые настройки ядра",
     DEPLOY_STOPPED_AT_STEP:
       "Остановилось на шаге «{step|deployStep}». Успело пройти шагов: {done}.",
     DEPLOY_STOPPED_AFTER: "Успело пройти шагов: {done}.",
@@ -574,6 +587,8 @@ export const ruCore: CatalogueCore = {
     time: { one: "раз", few: "раза", many: "раз" },
     task: { one: "задача", few: "задачи", many: "задач" },
     track: { one: "дорожка", few: "дорожки", many: "дорожек" },
+    package: { one: "пакет", few: "пакета", many: "пакетов" },
+    port: { one: "порт", few: "порта", many: "портов" },
   },
 };
 

@@ -54,8 +54,12 @@ const DOMAIN_WRONG: DomainAnswer = {
   },
 };
 
-function step(id: string, status: PlannedStep["status"]): PlannedStep {
-  return { id, changes: [], blocking: true, status };
+function step(
+  id: string,
+  status: PlannedStep["status"],
+  changes: PlannedStep["changes"] = [],
+): PlannedStep {
+  return { id, changes, blocking: true, status };
 }
 
 const PREVIEW: DeployPreview = {
@@ -145,5 +149,48 @@ describe("deployment", () => {
     const asked = mockDnsCheck.mock.calls.length;
     fireEvent.click(screen.getByLabelText(/IPv6/i, { selector: "input[value='Keep']" }));
     await waitFor(() => expect(mockDnsCheck.mock.calls.length).toBeGreaterThan(asked));
+  });
+});
+
+describe("what a step says it will do", () => {
+  /**
+   * ⚠ **T507, FR-122.** The core has always worked out what each step changes — the packages
+   * by name, the ports, the files, the size of the swap file — and `changes` was typed
+   * `unknown[]` in the contract and read by nothing at all. The screen showed fifteen general
+   * headings, which is the very thing `StepList`'s own comment says a person is not owed.
+   *
+   * The test that would have caught it has to look at the sentence, not at the shape: every
+   * check there was passed a `changes: []` from the builder above, so the field could have
+   * held anything or nothing.
+   */
+  it("names the packages it will install rather than saying only what the step is called", async () => {
+    mockPlan.mockResolvedValue({
+      ...PREVIEW,
+      steps: [
+        step("Packages", "NotApplied", [
+          { key: "CHANGE_INSTALLS_PACKAGES", params: { names: "ffmpeg, caddy", count: 2 } },
+        ]),
+      ],
+    });
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+
+    await screen.findByText(ru.ui.deploySteps.Packages);
+    expect(
+      await screen.findByText(/ffmpeg, caddy/),
+      "the plan says which step will run and not what it will do",
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing at all for a step that changes nothing", async () => {
+    // A step that only looks, and one whose changes are empty — keeping IPv6, or swap that is
+    // not needed. An empty list under a heading reads as "something, but we are not saying".
+    mockPlan.mockResolvedValue({
+      ...PREVIEW,
+      steps: [step("Ipv6", "Skipped" as unknown as PlannedStep["status"], [])],
+    });
+    const { container } = renderIn(<DeployScreen serverId="s1" />, "ru");
+
+    await screen.findByText(ru.ui.deploySteps.Ipv6);
+    expect(container.querySelector(".step__changes")).toBeNull();
   });
 });

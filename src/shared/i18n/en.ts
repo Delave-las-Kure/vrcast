@@ -459,6 +459,19 @@ export const en: Catalogue = {
       "The {record} record for “{name}” leads to {to}, and IPv6 is to be turned off. Remove it: otherwise the domain goes on promising an address that will stop answering, and some viewers will try it first.",
     DOMAIN_SERVER_HAS_NO_IPV6:
       "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
+    CHANGE_LOOKS_ONLY: "only looks; changes nothing",
+    CHANGE_INSTALLS_PACKAGES: "installs {count|plural:package}: {names}",
+    CHANGE_CREATES_SWAP_FILE: "creates a {megabytes} MB swap file",
+    CHANGE_CREATES_SYSTEM_USER: "creates the system user \u201c{name}\u201d",
+    CHANGE_CREATES_DIRECTORY: "creates the directory {path}",
+    CHANGE_WRITES_FILE: "writes the file {path}",
+    CHANGE_ENABLES_SERVICE: "enables the \u201c{name}\u201d service and starts it",
+    CHANGE_OPENS_PORTS: "opens {count|plural:port} to the outside: {ports}",
+    CHANGE_CLOSES_EVERYTHING_ELSE: "closes every other port to the outside",
+    CHANGE_ADDS_SSH_KEY: "adds the application\u2019s key to authorized_keys",
+    CHANGE_TURNS_PASSWORD_LOGIN_OFF: "turns password logins off \u2014 only the key will work",
+    CHANGE_TURNS_IPV6_OFF: "turns IPv6 off",
+    CHANGE_SETS_KERNEL_SETTINGS: "changes the kernel\u2019s network and disk settings",
     DEPLOY_STOPPED_AT_STEP:
       "It stopped at the step \u201c{step|deployStep}\u201d. Steps completed: {done}.",
     DEPLOY_STOPPED_AFTER: "Steps completed: {done}.",
@@ -582,6 +595,8 @@ export const en: Catalogue = {
     time: { one: "time", few: "times", many: "times" },
     task: { one: "task", few: "tasks", many: "tasks" },
     track: { one: "track", few: "tracks", many: "tracks" },
+    package: { one: "package", few: "packages", many: "packages" },
+    port: { one: "port", few: "ports", many: "ports" },
   },
 
   ui: {

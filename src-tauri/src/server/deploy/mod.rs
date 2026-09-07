@@ -402,7 +402,10 @@ fn changes_of<C>(steps: &[Step<C>], id: StepId, ctx: &C) -> Vec<Change> {
 fn settled<C>(steps: &[Step<C>], id: StepId, ctx: &C, status: &Status) -> PlannedStep {
     PlannedStep {
         id,
-        changes: changes_of(steps, id, ctx),
+        changes: changes_of(steps, id, ctx)
+            .iter()
+            .map(deploy_steps::Change::detail)
+            .collect(),
         blocking: deploy_steps::blocking(id),
         status: status.clone(),
     }
