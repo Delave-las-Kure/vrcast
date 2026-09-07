@@ -12,7 +12,7 @@
 
 use super::support::{state, valid_input};
 use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
-use vrcast_studio_lib::commands::library::{api, FileView, LibraryView, MediaView};
+use vrcast_studio_lib::commands::library::{api, FileView, LadderSetView, LibraryView, MediaView};
 use vrcast_studio_lib::commands::servers::api as servers_api;
 
 const SECRET: &str = "server-password-for-the-test-9f3a";
@@ -157,7 +157,17 @@ fn a_library_s_completeness_is_counted_over_every_visible_file() {
             title: String::from("Film"),
             slug: String::from("film"),
             files: vec![file_view("film_22.mp4"), file_view("film_10.mp4")],
-            ladders: vec![String::from("film/master.m3u8")],
+            ladders: vec![LadderSetView {
+                path: String::from("film/master.m3u8"),
+                size_bytes: 5_000_000,
+                width: Some(1920),
+                height: Some(1080),
+                bitrate_bps: Some(4_000_000),
+                duration_s: Some(3600.0),
+                exists_on_server: true,
+                origin_url: String::from("https://stream.example.com/videos/film/master.m3u8"),
+                cdn_url: None,
+            }],
             total_bytes: 2048,
             created_at: String::from("2026-08-01T10:00:00Z"),
         }],

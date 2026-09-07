@@ -464,12 +464,27 @@ export interface FileView {
   cdn_url: string | null;
 }
 
+export interface LadderSetView {
+  /** The description's path, relative to the video directory: `{slug}/master.m3u8`. */
+  path: string;
+  /** The whole directory's size — every rung together. */
+  size_bytes: number;
+  width: number | null;
+  height: number | null;
+  bitrate_bps: number | null;
+  duration_s: number | null;
+  /** False = the directory was deleted or renamed outside the application (FR-018). */
+  exists_on_server: boolean;
+  origin_url: string;
+  cdn_url: string | null;
+}
+
 export interface MediaView {
   id: string;
   title: string;
   slug: string;
   files: FileView[];
-  ladders: string[];
+  ladders: LadderSetView[];
   total_bytes: number;
   created_at: string;
 }

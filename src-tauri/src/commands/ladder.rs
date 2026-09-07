@@ -330,25 +330,16 @@ pub mod api {
                     };
                     let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;
                     // **The built set's own medium, found while the connection is still
-                    // open** (T519(3)). Best effort and only on success: the slug may
-                    // match no medium at all — a build run before its medium was created,
-                    // or a slug T528 has not finished tidying up — and a result that
-                    // pointed at nothing would be worse than none. A catalogue that will
-                    // not read is treated the same way: the build already succeeded, and
-                    // failing it now over a result nobody asked to see would be wrong.
+                    // open** (T519(3)), and now attached to it in the catalogue itself
+                    // (T528). Best effort and only on success: the slug may match no
+                    // medium at all — a build run before its medium was created, or a
+                    // slug T528 has not finished tidying up — and a result that pointed
+                    // at nothing would be worse than none.
                     if outcome.is_ok() {
-                        match crate::server::manifest_io::read(&conn, &profile.video_dir).await {
-                            Ok(manifest) => {
-                                if let Some(media) = manifest.find_by_slug(&request.slug) {
-                                    ctx.set_result(crate::tasks::store::TaskResult {
-                                        media_id: media.id.clone(),
-                                    });
-                                }
-                            }
-                            Err(e) => tracing::debug!(
-                                error = %e,
-                                "could not read the catalogue to find the built set's medium"
-                            ),
+                        if let Some(media_id) =
+                            attach_built_set(&conn, &profile.video_dir, &request.slug).await
+                        {
+                            ctx.set_result(crate::tasks::store::TaskResult { media_id });
                         }
                     }
                     conn.close().await;
@@ -429,6 +420,52 @@ pub mod api {
             &request.source,
         ))
     }
+}
+
+/// Attach a just-built quality set to its medium in the catalogue (T528).
+///
+/// `slug` is looked up against the catalogue's own `slug`s, exactly as `LadderPreview`'s
+/// `T519(3)` lookup already does — this reuses that same matching rather than repeating it.
+/// When a medium is found, the set's master playlist is filed under it as `{slug}/master.m3u8`
+/// — the nested path `Manifest::with_file_under` needs to recognise it as a quality ladder
+/// rather than an ordinary file, and the one a viewer actually opens. Handed the bare slug
+/// instead, the set would land in neither `files` nor `ladders` of any medium and surface as
+/// an unrecognised top-level directory.
+///
+/// Best effort throughout and `None` on anything that keeps the tie from being made — no
+/// matching medium, an unreadable catalogue, a write that lost the race with another writer.
+/// A build that already succeeded on the server must not be reported as failed over a
+/// bookkeeping step nobody asked to see the result of.
+pub async fn attach_built_set(
+    conn: &crate::ssh::Connection,
+    video_dir: &str,
+    slug: &str,
+) -> Option<String> {
+    let manifest = match crate::server::manifest_io::read(conn, video_dir).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "could not read the catalogue to find the built set's medium"
+            );
+            return None;
+        }
+    };
+    let media_id = manifest.find_by_slug(slug)?.id.clone();
+
+    let ladder_path = format!("{slug}/master.m3u8");
+    if let Some(next) = manifest.with_file_under(&media_id, &ladder_path, true) {
+        if let Err(e) =
+            crate::server::manifest_io::write(conn, video_dir, &next, manifest.generation).await
+        {
+            tracing::warn!(
+                error = %e,
+                media_id,
+                "the built set could not be attached to its medium in the catalogue"
+            );
+        }
+    }
+    Some(media_id)
 }
 
 /// The measured ladder for this material, when there is one.

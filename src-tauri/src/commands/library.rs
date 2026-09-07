@@ -38,6 +38,33 @@ pub struct FileView {
     pub cdn_url: Option<String>,
 }
 
+/// A quality set in the form the interface shows it (FR-012, T529).
+///
+/// **Not a bare path.** A file served directly carries its resolution, bitrate and length
+/// (`FileView`); a set is the same kind of thing — a viewer plays it the same way — and
+/// showing it as a string that merely names a directory answered none of the same
+/// questions. The particulars come from what the set itself already records: the master
+/// playlist's own numbers for the heaviest rung (`server::ladder_probe`), never a guess and
+/// never the ladder that was *asked* for — an encoder does not deliver exactly what it was
+/// told (see `domain::hls_master`'s own doc comment).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LadderSetView {
+    /// The description's path, relative to the video directory: `{slug}/master.m3u8`.
+    pub path: String,
+    /// The whole directory's size — every rung together, which is what a deletion frees.
+    pub size_bytes: u64,
+    /// The heaviest rung's own numbers. `None` when the master could not be read or
+    /// parsed — an older set, or one this application did not build.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub bitrate_bps: Option<u64>,
+    pub duration_s: Option<f64>,
+    /// False means the directory was deleted or renamed outside the application (FR-018).
+    pub exists_on_server: bool,
+    pub origin_url: String,
+    pub cdn_url: Option<String>,
+}
+
 /// A medium with all of its files.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaView {
@@ -45,8 +72,8 @@ pub struct MediaView {
     pub title: String,
     pub slug: String,
     pub files: Vec<FileView>,
-    /// The quality-ladder descriptions.
-    pub ladders: Vec<String>,
+    /// The quality sets built for this medium.
+    pub ladders: Vec<LadderSetView>,
     /// How much the medium's files take up in all — what a deletion would free.
     pub total_bytes: u64,
     pub created_at: String,
@@ -234,6 +261,40 @@ fn file_view(
     }
 }
 
+/// Gather what is known about a quality set, for showing (T529).
+///
+/// `path` is `{slug}/master.m3u8` as the catalogue records it; the slug is the top-level
+/// directory the whole set lives under, and that is what `ladder_probe::top_rung` is asked
+/// about. Reading fails silently into blanks rather than losing the set from view: a build
+/// from before `.facts` existed, or one this application did not make, still deserves to be
+/// seen and deleted like any other entry.
+async fn ladder_view(
+    profile: &crate::domain::server_profile::ServerProfile,
+    conn: &crate::ssh::Connection,
+    path: &str,
+    size_bytes: u64,
+    exists_on_server: bool,
+) -> LadderSetView {
+    let links = crate::domain::links::for_path(&profile.domain, profile.cdn_base.as_deref(), path);
+    let top = if exists_on_server {
+        let slug = path.split('/').next().unwrap_or(path);
+        crate::server::ladder_probe::top_rung(conn, &profile.video_dir, slug).await
+    } else {
+        None
+    };
+    LadderSetView {
+        path: path.to_owned(),
+        size_bytes,
+        width: top.as_ref().map(|t| t.width),
+        height: top.as_ref().map(|t| t.height),
+        bitrate_bps: top.as_ref().map(|t| t.bitrate_bps),
+        duration_s: top.as_ref().and_then(|t| t.duration_s),
+        exists_on_server,
+        origin_url: links.origin,
+        cdn_url: links.cdn,
+    }
+}
+
 pub mod api {
     use super::*;
     use crate::domain::links::Links;
@@ -349,12 +410,17 @@ pub mod api {
             // A quality ladder counts towards the medium's size: deleting frees it too.
             total += files.ladders.iter().map(|l| l.size_bytes).sum::<u64>();
 
+            let mut ladders = Vec::with_capacity(files.ladders.len());
+            for l in &files.ladders {
+                ladders.push(ladder_view(profile, &conn, &l.path, l.size_bytes, l.exists).await);
+            }
+
             media_views.push(MediaView {
                 id: media.id.clone(),
                 title: media.title.clone(),
                 slug: media.slug.clone(),
                 files: views,
-                ladders: files.ladders.iter().map(|l| l.path.clone()).collect(),
+                ladders,
                 total_bytes: total,
                 created_at: media.created_at.clone(),
             });
