@@ -1232,6 +1232,7 @@ export const en: Catalogue = {
       missingOnServer: " · {n} not found on the server",
       shortName: "Short name:",
       ladders: "Quality ladders: {list}",
+      laddersHeading: "Quality ladders",
       renameMedia: "Rename",
       deleteMedia: "Delete the medium",
       diskFree: "Free",

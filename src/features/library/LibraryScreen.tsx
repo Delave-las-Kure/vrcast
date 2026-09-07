@@ -17,13 +17,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import type { AppError, LibraryView, MediaView } from "../../shared/contract";
+import type { AppError, LadderSetView, LibraryView, MediaView } from "../../shared/contract";
 import { ipc, onLibraryChanged, onViewersUpdate, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
-import { formatBytes, usedFraction } from "../../shared/i18n/format";
+import { formatBitrate, formatBytes, formatDuration, formatResolution, usedFraction } from "../../shared/i18n/format";
 import { fill, renderError } from "../../shared/i18n/render";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { CopyLink } from "./CopyLink";
 import { FileRow } from "./FileRow";
 import { StaleBanner } from "./StaleBanner";
 import { UnrecognizedGroup } from "./UnrecognizedGroup";
@@ -384,9 +385,14 @@ function MediaCard({
           </ul>
 
           {media.ladders.length > 0 && (
-            <p className="muted media__note">
-              {fill(t.ui.library.ladders, { list: media.ladders.join(", ") }, t, lang)}
-            </p>
+            <div className="ladder-sets" data-testid={`ladder-sets-${media.id}`}>
+              <p className="muted media__note">{t.ui.library.laddersHeading}</p>
+              <ul className="file-list">
+                {media.ladders.map((set) => (
+                  <LadderSetRow key={set.path} set={set} t={t} lang={lang} />
+                ))}
+              </ul>
+            </div>
           )}
 
           <div className="media__actions">
@@ -400,6 +406,63 @@ function MediaCard({
         </>
       )}
     </section>
+  );
+}
+
+/** T529 — one variant of a built quality set, shown the same way a `FileRow` is: a name,
+ *  what is actually known about it, and a way to copy its link. Unlike a `FileView`, a
+ *  `LadderSetView` carries no codec information — that column is simply left off rather
+ *  than shown as a dash, which would claim the core looked and found nothing rather than
+ *  never having asked. */
+function LadderSetRow({ set, t, lang }: { set: LadderSetView; t: Catalogue; lang: Lang }) {
+  const l = t.ui.library;
+  return (
+    <li className={`file ${set.exists_on_server ? "" : "file--missing"}`}>
+      <div className="file__head">
+        <span className="file__name">{set.path}</span>
+        <span className="file__size">{formatBytes(set.size_bytes, lang)}</span>
+      </div>
+
+      {/* Honest absence rather than a made-up value: a set not built by this application,
+          or one whose `.facts` could not be read, says nothing about its resolution,
+          bitrate or duration instead of showing a zero or a dash that looks measured. */}
+      <div className="file__meta">
+        {set.width !== null && set.height !== null && (
+          <span title={l.resolution}>{formatResolution(set.width, set.height)}</span>
+        )}
+        {set.duration_s !== null && (
+          <span title={l.duration}>{formatDuration(set.duration_s)}</span>
+        )}
+        {set.bitrate_bps !== null && (
+          <span title={l.bitrate}>{formatBitrate(set.bitrate_bps, lang)}</span>
+        )}
+      </div>
+
+      {!set.exists_on_server && <p className="file__warning">{l.missingWarning}</p>}
+
+      <div className="file__actions">
+        {/* `CopyLink` asks for a `FileView`; a `LadderSetView` is missing the codec fields
+            it never reads, so a minimal object carrying only what it actually uses is
+            built here rather than widening `CopyLink`'s own type for a screen that does
+            not need the rest. */}
+        <CopyLink
+          file={{
+            path: set.path,
+            size_bytes: set.size_bytes,
+            duration_s: set.duration_s,
+            width: set.width,
+            height: set.height,
+            bitrate_bps: set.bitrate_bps,
+            video_codec: null,
+            audio_codec: null,
+            faststart_ok: null,
+            exists_on_server: set.exists_on_server,
+            origin_url: set.origin_url,
+            cdn_url: set.cdn_url,
+          }}
+        />
+      </div>
+    </li>
   );
 }
 

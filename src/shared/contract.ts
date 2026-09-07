@@ -456,12 +456,34 @@ export interface FileView {
   cdn_url: string | null;
 }
 
+/**
+ * A single quality-set variant of a medium (T529 backend addendum, `agent/backend`
+ * commit `e6dfe76`). Replaces the bare `string[]` `MediaView.ladders` used to be:
+ * a path alone said nothing about what the variant actually is, while this is
+ * everything `.facts` found about it, when it was found at all.
+ *
+ * Kept to exactly the shape the core sends: no field added, none removed. It is
+ * *almost* `FileView` but not quite — no `video_codec`/`audio_codec`/`faststart_ok`,
+ * which is why it is its own interface rather than a reuse of that one.
+ */
+export interface LadderSetView {
+  path: string;
+  size_bytes: number;
+  width: number | null;
+  height: number | null;
+  bitrate_bps: number | null;
+  duration_s: number | null;
+  exists_on_server: boolean;
+  origin_url: string;
+  cdn_url: string | null;
+}
+
 export interface MediaView {
   id: string;
   title: string;
   slug: string;
   files: FileView[];
-  ladders: string[];
+  ladders: LadderSetView[];
   total_bytes: number;
   created_at: string;
 }

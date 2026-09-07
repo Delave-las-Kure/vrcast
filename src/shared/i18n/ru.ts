@@ -1220,6 +1220,7 @@ const ui = {
     missingOnServer: " · {n} не найдено на сервере",
     shortName: "Короткое имя:",
     ladders: "Наборы качеств: {list}",
+    laddersHeading: "Наборы качеств",
     renameMedia: "Переименовать",
     deleteMedia: "Удалить медиа",
     diskFree: "Свободно",
