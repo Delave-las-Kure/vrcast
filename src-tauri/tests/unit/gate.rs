@@ -315,3 +315,64 @@ fn every_place_that_may_skip_the_gate_carries_its_reason() {
         );
     }
 }
+
+// ---------- a fingerprint nobody confirmed (T510) ----------
+
+/// Where a fingerprint may be taken from the wire, and the one reason for it.
+///
+/// ⚠ **Learning a fingerprint and expecting one are opposite acts, and the code read the
+/// same.** `fingerprint::probe` asks a machine who it is. That answer is worth having exactly
+/// once: to show a person, so they can compare it with what their provider says and confirm
+/// it (FR-092). Handed to `Connection::connect` as the *expected* value it becomes a
+/// comparison that cannot fail — the machine is asked who it is and then checked against its
+/// own answer.
+///
+/// Both deployment proofs did that. `password_refused` decided on that footing whether
+/// password logins might be turned off, and `key_works` **sent the private key** to whatever
+/// answered on the address. The promise FR-092 makes is the exact opposite: credentials are
+/// never sent to a server whose fingerprint has not been confirmed.
+///
+/// The rule is put where it cannot be argued with: one prober, named here, and its reason
+/// written beside it. Anything else that wants to know who a machine is wants the fingerprint
+/// the profile confirmed, which is where `connect_raw` gets it.
+const MAY_PROBE_A_FINGERPRINT: &[(&str, &str)] = &[(
+    "commands/mod.rs",
+    "`server_probe_fingerprint` — the one act this is for: learning a fingerprint to put in \
+     front of a person, before anything at all has been sent. Its own doc says so: \"without \
+     presenting it anything\".",
+)];
+
+#[test]
+fn only_one_place_asks_a_machine_who_it_is() {
+    let allowed: std::collections::HashSet<&str> =
+        MAY_PROBE_A_FINGERPRINT.iter().map(|(f, _)| *f).collect();
+    // The same walker the session count uses, so the two questions are asked of one set of
+    // files and cannot come to disagree about what the core is.
+    let found = where_a_server_is_reached("fingerprint::probe(");
+
+    assert!(
+        !found.is_empty(),
+        "nothing in the core probes a fingerprint at all — either the reader stopped matching          how it is written, or the one place that should has gone"
+    );
+    let probing: Vec<&String> = found
+        .keys()
+        .filter(|path| !allowed.contains(path.as_str()))
+        .collect();
+    assert!(
+        probing.is_empty(),
+        "these ask a machine who it is, outside the one place that exists to: {probing:?}
+         A probed fingerprint is not an expected one. What you want is the fingerprint the          profile confirmed — `connect_raw` reads it, and so must you."
+    );
+}
+
+/// An excuse for a file that no longer probes is a comment pretending to be a check.
+#[test]
+fn every_prober_named_here_still_probes() {
+    let found = where_a_server_is_reached("fingerprint::probe(");
+    for (path, _) in MAY_PROBE_A_FINGERPRINT {
+        assert!(
+            found.contains_key(*path),
+            "{path} is named as the one place that probes and does not probe"
+        );
+    }
+}

@@ -20,7 +20,7 @@ use crate::net::dns;
 use crate::server::deploy::{self, machine, Context, Machine, Proofs};
 use crate::server::gate::{self, Intent};
 use crate::server::upgrade;
-use crate::ssh::{fingerprint, Connection, Credentials, ServerAddress};
+use crate::ssh::{Connection, Credentials, ServerAddress};
 use crate::store::secrets::{SecretRef, SecretStore};
 
 use super::error::{AppError, ErrorCode, Result};
@@ -125,10 +125,17 @@ pub mod api {
         };
         let where_it_is = ServerAddress::new(&profile.host, profile.port);
         let as_whom = profile.user.clone();
+        // The confirmed fingerprint (T510). The gate above would not have opened without one,
+        // so this cannot be reached with nothing; it is a refusal rather than an `unwrap`
+        // because "no confirmation, no connection" is a rule and not an assumption.
+        let Some(known_host) = profile.host_fingerprint.clone() else {
+            return Err(AppError::new(ErrorCode::HostKeyUnconfirmed).with_cause(&profile.host));
+        };
         let password_now = move || -> futures::future::BoxFuture<'_, bool> {
             let where_it_is = where_it_is.clone();
             let as_whom = as_whom.clone();
-            Box::pin(async move { passwords_are_off(where_it_is, as_whom).await })
+            let known_host = known_host.clone();
+            Box::pin(async move { passwords_are_off(where_it_is, as_whom, known_host).await })
         };
         let ctx = Context {
             conn: &opened.conn,
@@ -203,10 +210,17 @@ pub mod api {
         };
         let where_it_is = ServerAddress::new(&profile.host, profile.port);
         let as_whom = profile.user.clone();
+        // The confirmed fingerprint (T510). The gate above would not have opened without one,
+        // so this cannot be reached with nothing; it is a refusal rather than an `unwrap`
+        // because "no confirmation, no connection" is a rule and not an assumption.
+        let Some(known_host) = profile.host_fingerprint.clone() else {
+            return Err(AppError::new(ErrorCode::HostKeyUnconfirmed).with_cause(&profile.host));
+        };
         let password_now = move || -> futures::future::BoxFuture<'_, bool> {
             let where_it_is = where_it_is.clone();
             let as_whom = as_whom.clone();
-            Box::pin(async move { passwords_are_off(where_it_is, as_whom).await })
+            let known_host = known_host.clone();
+            Box::pin(async move { passwords_are_off(where_it_is, as_whom, known_host).await })
         };
         let ctx = Context {
             conn: &opened.conn,
@@ -530,6 +544,22 @@ async fn start(
                 .ok()
                 .filter(|s| !s.is_empty());
 
+            // ⚠ **The fingerprint the profile confirmed, and never one taken on the spot**
+            // (T510). Both proofs used to call `fingerprint::probe` and hand the answer
+            // straight back as the expected value — a comparison that cannot fail, made
+            // against whatever machine answered on that address. `key_works` then sent it the
+            // private key. FR-092 promises the opposite in as many words: credentials are
+            // never sent to a server whose fingerprint has not been confirmed.
+            //
+            // The confirmed one is right here, and is the same one `connect_raw` uses for the
+            // connection this task is already holding. Absent means the gate would not have
+            // opened above, so this cannot be reached with nothing — but it is written as a
+            // refusal rather than an `unwrap`, because "no confirmation, no connection" is a
+            // rule and not an assumption.
+            let Some(expected_host) = profile.host_fingerprint.clone() else {
+                return Err(AppError::new(ErrorCode::HostKeyUnconfirmed).with_cause(&profile.host));
+            };
+
             // The two proofs, each on a connection of its own. The one we are holding would
             // go on working whatever we did to the settings — which is exactly what makes it
             // the wrong witness (T274).
@@ -539,12 +569,14 @@ async fn start(
                 let key_path = key_path.clone();
                 let passphrase = passphrase.clone();
                 let made_private = made_private.clone();
+                let expected_host = expected_host.clone();
                 move || -> futures::future::BoxFuture<'_, bool> {
                     let address = address.clone();
                     let user = user.clone();
                     let key_path = key_path.clone();
                     let passphrase = passphrase.clone();
                     let made_private = made_private.clone();
+                    let expected_host = expected_host.clone();
                     Box::pin(async move {
                         let credentials = match (&made_private, &key_path) {
                             (Some(openssh), _) => Credentials::KeyText {
@@ -560,10 +592,7 @@ async fn start(
                             // there it can say why.
                             (None, None) => return false,
                         };
-                        let Ok(fp) = fingerprint::probe(&address).await else {
-                            return false;
-                        };
-                        Connection::connect(address, user, credentials, &fp)
+                        Connection::connect(address, user, credentials, &expected_host)
                             .await
                             .is_ok()
                     })
@@ -572,10 +601,12 @@ async fn start(
             let password_refused = {
                 let address = address.clone();
                 let user = user.clone();
+                let expected_host = expected_host.clone();
                 move || -> futures::future::BoxFuture<'_, bool> {
                     let address = address.clone();
                     let user = user.clone();
-                    Box::pin(async move { passwords_are_off(address, user).await })
+                    let expected_host = expected_host.clone();
+                    Box::pin(async move { passwords_are_off(address, user, expected_host).await })
                 }
             };
 
@@ -629,18 +660,23 @@ async fn start(
 /// **Not "did a password fail"** — a wrong password fails too, and the two look the same from
 /// outside. What settles it is the list of methods the server names when it turns an attempt
 /// down: a server that still allows passwords names `Password` among them.
-async fn passwords_are_off(address: ServerAddress, user: String) -> bool {
+async fn passwords_are_off(address: ServerAddress, user: String, expected_host: String) -> bool {
     use crate::ssh::SshError;
 
-    let Ok(fp) = fingerprint::probe(&address).await else {
-        return false;
-    };
-    // A password that will not be right. What is being read is the refusal, not the attempt.
+    // ⚠ **The confirmed fingerprint, handed in** (T510). This used to probe the address and
+    // pass the answer back as the expected value, which is a comparison that cannot fail — and
+    // it decides whether password logins may be turned off. A machine that had taken the
+    // address over would be asked whether *it* refuses passwords, would say yes, and the
+    // hardening step would take that for the real server's answer.
+    //
+    // Nothing secret goes out on this connection either way — the password is a made-up one —
+    // but the answer is read as being about a particular server, so it has to come from that
+    // server. `key_works`, which does send the private key, had the same shape.
     match Connection::connect(
         address,
         user,
         Credentials::Password(String::from("vrcast-checking-whether-passwords-are-off")),
-        &fp,
+        &expected_host,
     )
     .await
     {
