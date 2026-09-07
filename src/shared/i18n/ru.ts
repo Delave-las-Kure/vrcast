@@ -1225,6 +1225,7 @@ const ui = {
       BITRATE_VARIANTS: "варианты одного файла по битрейту",
     },
     assignTo: "Отнести к медиа",
+    moveTo: "Перенести в",
     assignChoose: "— выберите —",
     createHeading: "Новое медиа",
     fieldTitle: "Название",

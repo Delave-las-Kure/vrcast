@@ -262,6 +262,12 @@ export function LibraryScreen() {
               onRename={() => setDialog({ kind: "rename", media: m })}
               onDelete={() => void askBeforeDelete(m)}
               onDeleteFile={(path) => void askBeforeDeleteFile(path)}
+              onMoveFile={(path, mediaId) =>
+                void act(() => ipc.fileMove(active.id, path, mediaId, true))
+              }
+              elsewhere={view.media
+                .filter((other) => other.id !== m.id)
+                .map((other) => ({ id: other.id, title: other.title }))}
             />
           ))}
           {view && (
@@ -288,6 +294,8 @@ function MediaCard({
   onRename,
   onDelete,
   onDeleteFile,
+  onMoveFile,
+  elsewhere,
   watching,
   t,
   lang,
@@ -299,6 +307,11 @@ function MediaCard({
   onRename: () => void;
   onDelete: () => void;
   onDeleteFile: (path: string) => void;
+  onMoveFile: (path: string, toMediaId: string) => void;
+  /** The other media this file could go to. This one is left out: moving a file to where it
+   *  already is asks for work that changes nothing, and offering it invites the question of
+   *  what it would do. */
+  elsewhere: { id: string; title: string }[];
   t: Catalogue;
   lang: Lang;
 }) {
@@ -338,7 +351,35 @@ function MediaCard({
 
           <ul className="file-list">
             {media.files.map((f) => (
-              <FileRow key={f.path} file={f} onDelete={disabled ? undefined : onDeleteFile} />
+              <div key={f.path} className="media-card__file">
+                <FileRow file={f} onDelete={disabled ? undefined : onDeleteFile} />
+                {/* ⚠ **Moving a file to another medium** (T530, FR-013). The command has
+                    existed all along and was reachable from one place only — assigning a file
+                    the catalogue had never heard of. From one medium to another there was no
+                    way at all, which is half of what the requirement asks for and the half a
+                    person needs after choosing the wrong medium at upload.
+                    The same control as the unrecognised group's, and deliberately so: it is
+                    the same act, and two ways of doing one thing is how they come to behave
+                    differently. */}
+                {elsewhere.length > 0 && !disabled && (
+                  <label className="media-card__move">
+                    <span>{t.ui.library.moveTo}</span>
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) onMoveFile(f.path, e.target.value);
+                      }}
+                    >
+                      <option value="">{t.ui.library.assignChoose}</option>
+                      {elsewhere.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
             ))}
           </ul>
 

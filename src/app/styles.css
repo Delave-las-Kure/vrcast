@@ -874,13 +874,22 @@ button:focus-visible {
   gap: 6px;
 }
 
-.unrecognized__assign {
+/* Moving a file between media, and assigning one the catalogue never knew: the same act,
+   so the same look (T530). Written as one rule rather than two, because two would drift. */
+.unrecognized__assign,
+.media-card__move {
   display: flex;
   gap: 8px;
   align-items: center;
   font-size: 12px;
   color: var(--text-muted);
   padding-left: 12px;
+}
+
+.media-card__file {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* ---------- dialogues ---------- */

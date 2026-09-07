@@ -1237,6 +1237,7 @@ export const en: Catalogue = {
         BITRATE_VARIANTS: "bitrate variants of one file",
       },
       assignTo: "Assign to a medium",
+  moveTo: "Move to",
       assignChoose: "— choose —",
       createHeading: "New medium",
       fieldTitle: "Title",

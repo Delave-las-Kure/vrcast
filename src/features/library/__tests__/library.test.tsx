@@ -274,6 +274,47 @@ describe("what was not recognised", () => {
     expect(mockFileMove).not.toHaveBeenCalled();
   });
 
+  it("lets a file be moved from one medium to another", async () => {
+    // ⚠ **T530, FR-013.** `file_move` has always existed and was reachable from one place:
+    // assigning a file the catalogue had never heard of. From one medium to another there was
+    // no way at all — which is the half a person needs after choosing the wrong medium at
+    // upload, and by T505 that used to happen every single time.
+    mockLibraryList.mockResolvedValue(
+      view({
+        media: [
+          media({ id: "m1", title: "The first", files: [file({ path: "film.mp4" })] }),
+          media({ id: "m2", title: "The second", slug: "second", files: [] }),
+        ],
+      }),
+    );
+    draw();
+
+    // The files of a medium open inside it, so the card is opened first — the same step a
+    // person takes.
+    fireEvent.click(await screen.findByText("The first"));
+    const select = await screen.findByLabelText(ru.ui.library.moveTo);
+    expect(mockFileMove).not.toHaveBeenCalled();
+
+    fireEvent.change(select, { target: { value: "m2" } });
+    await waitFor(() =>
+      expect(mockFileMove).toHaveBeenCalledWith("srv_1", "film.mp4", "m2", true),
+    );
+  });
+
+  it("does not offer to move a file to the medium it is already in", async () => {
+    // Work that changes nothing, offered as though it were a choice. With one medium there is
+    // nowhere to move to and the control is not there at all.
+    mockLibraryList.mockResolvedValue(
+      view({ media: [media({ files: [file({ path: "film.mp4" })] })] }),
+    );
+    draw();
+
+    fireEvent.click(await screen.findByText("Название фильма"));
+    // The file is there, so the card really is open and the absence below means something.
+    expect(await screen.findByText("film.mp4")).toBeInTheDocument();
+    expect(screen.queryByLabelText(ru.ui.library.moveTo)).toBeNull();
+  });
+
   it("lets a file be tied to a medium without touching its name", async () => {
     mockLibraryList.mockResolvedValue(view({ unrecognized: [file({ path: "чужой.mp4" })] }));
     draw();
