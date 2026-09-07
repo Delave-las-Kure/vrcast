@@ -29,6 +29,7 @@ const mockLadderRecomputeRung = vi.fn<(...a: unknown[]) => Promise<Rung>>();
 const mockMeasurePreview = vi.fn<() => Promise<MeasurePreview>>();
 const mockMeasureStart = vi.fn<() => Promise<string>>();
 const mockBuild = vi.fn<(...a: unknown[]) => Promise<string>>();
+const mockLibraryList = vi.fn<(...a: unknown[]) => Promise<{ media: unknown[] }>>();
 
 /** What the core would send when a task ends. Held so a test can end one when it likes.
  *
@@ -58,6 +59,7 @@ vi.mock("../../../shared/ipc", async () => {
       qualityMeasurePreview: () => mockMeasurePreview(),
       qualityMeasureStart: () => mockMeasureStart(),
       ladderBuild: (...a: unknown[]) => mockBuild(...a),
+      libraryList: (...a: unknown[]) => mockLibraryList(...a),
     }),
     onTaskDone: async (handler: (e: unknown) => void) => {
       const mine = handler as typeof finish;
@@ -154,6 +156,7 @@ beforeEach(() => {
   );
   mockMeasureStart.mockResolvedValue("task-1");
   mockBuild.mockResolvedValue("build-1");
+  mockLibraryList.mockResolvedValue({ media: [] });
   // **Every stub gets an answer here, not only the ones a given test reads.**
   // `clearAllMocks` takes the implementation away, so a stub left without one returns
   // `undefined`, and whatever calls it does `.then` on nothing. Which caller, and when,
@@ -975,6 +978,81 @@ describe("what the set is called", () => {
       server_id: "s1",
       slug: "blue-eye-s01e01",
     });
+  });
+});
+
+describe("attaching the set to an existing medium (T528)", () => {
+  function mediaView(id: string, title: string, slug: string) {
+    return { id, title, slug, files: [], ladders: [], total_bytes: 0, created_at: "" };
+  }
+
+  it("says to choose a server first when none is chosen", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "ru");
+
+    await waitFor(() => expect(screen.getByTestId("attach-no-server")).toBeTruthy());
+    expect(screen.queryByLabelText(ru.ui.ladder.attachToExisting)).toBeNull();
+  });
+
+  it("offers the server's own library once a server is chosen", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLibraryList.mockResolvedValue({
+      media: [mediaView("m1", "Название фильма", "nazvanie-filma")],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "ru");
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.ladder.attachToExisting)).toBeInTheDocument(),
+    );
+    expect(mockLibraryList).toHaveBeenCalledWith("s1");
+    expect(screen.getByText(/Название фильма/)).toBeTruthy();
+  });
+
+  it("sends the selected medium's own slug when building, not a guess from the file name", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLibraryList.mockResolvedValue({
+      media: [mediaView("m1", "Название фильма", "nazvanie-filma")],
+    });
+    renderIn(<LadderScreen path="F:/films/film_22.mp4" serverId="s1" />, "ru");
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.ladder.attachToExisting)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(ru.ui.ladder.attachToExisting), {
+      target: { value: "m1" },
+    });
+
+    // The free-text name field is replaced by a statement of what will happen — there is
+    // nothing left to type once an existing medium has been chosen explicitly.
+    expect(screen.queryByLabelText(ru.ui.ladder.setName)).toBeNull();
+    expect(screen.getByTestId("attach-slug")).toHaveTextContent("nazvanie-filma");
+
+    fireEvent.click(screen.getByTestId("build"));
+    await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(1));
+    expect(mockBuild.mock.calls[0][0]).toMatchObject({ slug: "nazvanie-filma" });
+  });
+
+  it("falls back to the typed name once 'new set' is chosen again", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLibraryList.mockResolvedValue({
+      media: [mediaView("m1", "Название фильма", "nazvanie-filma")],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "ru");
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.ladder.attachToExisting)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(ru.ui.ladder.attachToExisting), {
+      target: { value: "m1" },
+    });
+    fireEvent.change(screen.getByLabelText(ru.ui.ladder.attachToExisting), {
+      target: { value: "" },
+    });
+
+    expect(screen.getByLabelText(ru.ui.ladder.setName)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("build"));
+    await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(1));
+    expect(mockBuild.mock.calls[0][0]).toMatchObject({ slug: "film" });
   });
 });
 

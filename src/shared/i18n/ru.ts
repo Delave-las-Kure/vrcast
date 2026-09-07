@@ -676,6 +676,10 @@ const ui = {
     measureRunning: "Замер идёт — можно закрыть окно, работа не потеряется",
 
     setName: "Имя набора на сервере",
+    attachToExisting: "Привязать к существующему медиа",
+    attachToNewSet: "Новый набор",
+    attachSlug: "Набор будет привязан к медиа «{slug}» на сервере.",
+    attachChooseServer: "Сначала выберите сервер — привязать пока не к чему.",
     rungs: "Ступени",
     columnBitrate: "Битрейт",
     columnSize: "Кадр",

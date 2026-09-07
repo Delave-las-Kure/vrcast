@@ -32,6 +32,7 @@ import type {
   LadderPreview,
   MachineSpeed,
   MeasurePreview,
+  MediaView,
   Detail,
   Rung,
   SourceMeasured,
@@ -282,6 +283,14 @@ export function LadderScreen({
   const [leftOut, setLeftOut] = useState<ReadonlySet<number>>(new Set());
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  // T528 — media already on this server's library, offered explicitly instead of leaving
+  // the link between "this set" and "that medium" to a guessed slug (`slugOf(path)`)
+  // matching by accident. Empty while `serverId` is unknown: there is nothing to list.
+  const [existingMedia, setExistingMedia] = useState<MediaView[]>([]);
+  // "" means "new set" — the field below works exactly as it always did, driven by
+  // `name`. Anything else names a medium in `existingMedia` whose `slug` is sent as-is.
+  const [selectedMediaId, setSelectedMediaId] = useState<string>("");
+  const selectedMedia = existingMedia.find((m) => m.id === selectedMediaId) ?? null;
 
   useEffect(() => {
     alive.current = true;
@@ -294,6 +303,26 @@ export function LadderScreen({
       alive.current = false;
     };
   }, [path]);
+
+  // T528 — the library of the server this set would be built on, fetched only when a
+  // server is actually known: without one there is nothing to list, and asking would be
+  // asking about a server nobody picked.
+  useEffect(() => {
+    if (!serverId) {
+      setExistingMedia([]);
+      return;
+    }
+    let alive2 = true;
+    ipc
+      .libraryList(serverId)
+      .then((view) => {
+        if (alive2) setExistingMedia(Array.isArray(view?.media) ? view.media : []);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive2 = false;
+    };
+  }, [serverId]);
 
   /**
    * Ask the core for the ladder and put its answer on screen.
@@ -517,15 +546,49 @@ export function LadderScreen({
         which is not what anybody meant and is not obvious until the set is somewhere
         nobody expected.
       */}
-      <label>
-        {words.setName}
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          aria-label={words.setName}
-        />
-      </label>
+      {/*
+        T528 — an explicit link to an existing medium, instead of leaving it to a slug
+        guessed from the file name that happens (or does not) to match one already there.
+        Shown only once a server is known and its library actually has something to offer;
+        with no server chosen the pattern already used below for the build button applies
+        here too — a hint instead of silently omitting a control.
+      */}
+      {serverId && existingMedia.length > 0 && (
+        <label>
+          {words.attachToExisting}
+          <select
+            value={selectedMediaId}
+            onChange={(e) => setSelectedMediaId(e.target.value)}
+            aria-label={words.attachToExisting}
+          >
+            <option value="">{words.attachToNewSet}</option>
+            {existingMedia.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.title} ({m.slug})
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {!serverId && (
+        <p className="muted" data-testid="attach-no-server">
+          {words.attachChooseServer}
+        </p>
+      )}
+
+      {selectedMedia ? (
+        <p data-testid="attach-slug">{fill(words.attachSlug, { slug: selectedMedia.slug }, t, lang)}</p>
+      ) : (
+        <label>
+          {words.setName}
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            aria-label={words.setName}
+          />
+        </label>
+      )}
 
       {/*
         T522 — two fields the core already reads off `LadderRequest` and this screen never
@@ -573,7 +636,12 @@ export function LadderScreen({
             .ladderBuild({
               server_id: serverId,
               path,
-              slug: name.trim() || slugOf(path),
+              // T528 — an explicit choice from the library wins outright: its slug is
+              // exactly what the medium already answers to, and sending anything else
+              // would be the very guesswork this exists to remove. Only when nothing was
+              // picked does the typed name (or, failing that, a guess from the file name)
+              // apply, unchanged from before.
+              slug: selectedMedia?.slug ?? (name.trim() || slugOf(path)),
               // Only what was asked for. The core names each variant by its own megabits
               // (`film_22.mp4`), not by its place in the list, so a gap in the numbering
               // costs nothing.

@@ -677,6 +677,10 @@ export const en: Catalogue = {
       measureRunning: "Measuring — you can close this: the work is not lost",
 
       setName: "What the set is called on the server",
+      attachToExisting: "Attach to an existing medium",
+      attachToNewSet: "New set",
+      attachSlug: "The set will be attached to the medium “{slug}” on the server.",
+      attachChooseServer: "Choose a server first — there is nothing to attach to yet.",
       rungs: "Rungs",
       columnBitrate: "Bitrate",
       columnSize: "Frame",
