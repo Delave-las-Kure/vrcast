@@ -25,6 +25,7 @@ const mockMeasureResult = vi.fn<() => Promise<MeasurementView>>();
 const mockLadderPlan = vi.fn<(...a: unknown[]) => Promise<LadderPreview>>();
 const mockLadderMeasure = vi.fn<() => Promise<SourceMeasured>>();
 const mockLadderValidate = vi.fn<() => Promise<LadderVerdict>>();
+const mockLadderRecomputeRung = vi.fn<(...a: unknown[]) => Promise<Rung>>();
 const mockMeasurePreview = vi.fn<() => Promise<MeasurePreview>>();
 const mockMeasureStart = vi.fn<() => Promise<string>>();
 const mockBuild = vi.fn<(...a: unknown[]) => Promise<string>>();
@@ -53,6 +54,7 @@ vi.mock("../../../shared/ipc", async () => {
       qualityMeasureResult: () => mockMeasureResult(),
       ladderMeasure: () => mockLadderMeasure(),
       ladderValidate: () => mockLadderValidate(),
+      ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
       qualityMeasurePreview: () => mockMeasurePreview(),
       qualityMeasureStart: () => mockMeasureStart(),
       ladderBuild: (...a: unknown[]) => mockBuild(...a),
@@ -118,6 +120,23 @@ function preview(
 const MEASURED = [rung(0, 22, 2160, 96.1), rung(1, 12, 1440, 92.0), rung(2, 6, 1080, 87.4)];
 const GUESSED = [rung(0, 22, 2160, null), rung(1, 12, 1440, null)];
 
+/** What `ladderRecomputeRung` answers for a hand edit (T523): a fresh ceiling and frame for
+ *  the new bitrate, not the old rung's numbers, and the one reason that means "typed in by
+ *  hand". */
+function editedRung(index: number, mbps: number, height: number): Rung {
+  return {
+    index,
+    bitrate_bps: mbps * 1_000_000,
+    maxrate_bps: Math.round(mbps * 1_100_000),
+    bufsize_bps: Math.round(mbps * 1_100_000),
+    width: Math.round((height * 16) / 9),
+    height,
+    level: "5.1",
+    reasons: ["edited_by_hand"],
+    quality: { state: "not_measured" },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockLadderMeasure.mockResolvedValue({
@@ -127,6 +146,12 @@ beforeEach(() => {
     seconds: 3600,
   });
   mockLadderValidate.mockResolvedValue({ objections: [], not_buildable: null });
+  // The index in the answer always matches the index that was asked about — as the real
+  // command does — so a test that never looks at `ladderRecomputeRung` itself still finds
+  // its rungs at the `data-testid` their position implies.
+  mockLadderRecomputeRung.mockImplementation((index: unknown, bitrateBps: unknown) =>
+    Promise.resolve(editedRung(index as number, (bitrateBps as number) / 1_000_000, 1080)),
+  );
   mockMeasureStart.mockResolvedValue("task-1");
   mockBuild.mockResolvedValue("build-1");
   // **Every stub gets an answer here, not only the ones a given test reads.**
@@ -372,6 +397,60 @@ describe("what a rung is worth", () => {
     await waitFor(() =>
       expect(screen.getByTestId("rung-1")).toHaveTextContent(en.ui.ladder.notMeasured),
     );
+  });
+
+  it("recomputes the ceiling, frame and reason from the core rather than patching the old rung (T523)", async () => {
+    // The bug this closes: before T523, editing the bitrate kept the *old* rung's
+    // `maxrate_bps`/`bufsize_bps`/`height`/`width`/`reasons` — a 15→3 Mbit/s edit kept a
+    // ~16.5 Mbit/s ceiling (no peak control at all) and stayed encoded at the old height.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLadderRecomputeRung.mockResolvedValue(editedRung(1, 3, 720));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("92.00"));
+
+    fireEvent.change(screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`), {
+      target: { value: "3" },
+    });
+
+    // The whole recomputed rung lands on screen — size from the answer, not carried over
+    // from the 1440p/12 Mbit/s rung that was there before.
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("1280×720"));
+    expect(mockLadderRecomputeRung).toHaveBeenCalledWith(1, 3_000_000, SOURCE);
+    // "edited_by_hand" is a reason of its own, distinct from whatever the rung said before.
+    const why = screen.getByTestId("why-1");
+    expect(why.textContent).toContain("typed in by hand");
+  });
+
+  it("keeps the freshest edit when two recompute answers arrive out of order (T523)", async () => {
+    // Typing a second digit fires a second call before the first settles. Whichever answer
+    // is asked for LAST has to win — not whichever happens to resolve first — or a fast
+    // keystroke gets silently rolled back by a slow answer to an earlier one.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    let resolveFirst: (r: Rung) => void = () => {};
+    const first = new Promise<Rung>((resolve) => {
+      resolveFirst = resolve;
+    });
+    mockLadderRecomputeRung
+      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => Promise.resolve(editedRung(1, 5, 1080)));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("92.00"));
+
+    const input = screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`);
+    fireEvent.change(input, { target: { value: "9" } }); // first call — left pending
+    fireEvent.change(input, { target: { value: "5" } }); // second call — resolves first
+
+    // The second edit's answer (720p→1080p at 5 Mbit/s) lands.
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("1920×1080"));
+    expect(screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`)).toHaveValue(5);
+
+    // The slow, stale answer for the first keystroke lands after the second already won.
+    resolveFirst(editedRung(1, 9, 2160));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Still what the second edit set — not rolled back to the stale answer's 2160p/9.
+    expect(screen.getByTestId("rung-1")).toHaveTextContent("1920×1080");
+    expect(screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`)).toHaveValue(5);
   });
 
   it("shows an objection as soon as an edit makes one, without waiting for a build", async () => {

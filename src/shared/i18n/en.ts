@@ -720,6 +720,8 @@ export const en: Catalogue = {
         borrowed_measurement: "The measurement behind this rung was taken on another file.",
         filled_a_gap:
           "This rung is here to break the fall: the step from the one above to the next one down was too big, and a player cannot make that jump. Its {mbps} Mbit/s is a real measured point, but it was picked for the ladder rather than for the picture.",
+        edited_by_hand:
+          "The bitrate — {mbps} Mbit/s — was typed in by hand. The frame and the ceiling have been reworked to match it, but nobody has measured how it actually looks yet.",
       },
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",
