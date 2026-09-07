@@ -14,9 +14,19 @@
 //! **What this deliberately does not remove: the webview's own cache.** It sits under the
 //! identifier — under LOCALAPPDATA, 276 files on the machine this was written
 //! on — and it holds no profiles and no secrets, only what a browser engine keeps. On Windows
-//! the uninstaller's checkbox already clears it, and on the others it is a cache the system
-//! may clear itself. Named here rather than left unsaid: an omission with no reason beside it
-//! reads as an oversight, and the next person to look adds it without knowing why it was out.
+//! the uninstaller's checkbox already clears it (`uninstall.nsh`), on `.deb` a purge does not
+//! touch it either (`scripts/deb-postrm.sh` only clears the data directory this module also
+//! clears, not the cache), and on the others it is a cache the system may clear itself. Named
+//! here rather than left unsaid: an omission with no reason beside it reads as an oversight,
+//! and the next person to look adds it without knowing why it was out.
+//!
+//! **This module's directory removal is what a `.deb` purge relies on too, indirectly — not
+//! by calling it.** `scripts/deb-postrm.sh` (T497) removes the same on-disk data directory
+//! this deletes, from dpkg's `postrm purge` hook, because a package's maintainer scripts
+//! cannot call into the application (it is already gone by the time they run) and cannot
+//! reach the OS secret store either — the same secrets gap this module's own doc-comment
+//! above describes for the general case. A `.deb` purge, like the Windows uninstaller's
+//! checkbox, clears the data directory and leaves the keyring entries behind.
 //!
 //! **The key the application made for itself is a special case, and a dangerous one.** A
 //! server deployed by this application has password logins turned off (the `ssh-hardening`

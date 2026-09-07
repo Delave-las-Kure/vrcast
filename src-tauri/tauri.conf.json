@@ -50,7 +50,8 @@
     ],
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1 | libappindicator3-1"]
+        "depends": ["libayatana-appindicator3-1 | libappindicator3-1"],
+        "postRemoveScript": "scripts/deb-postrm.sh"
       }
     },
     "windows": {
