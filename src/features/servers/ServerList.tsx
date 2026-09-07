@@ -18,6 +18,7 @@ import type { ServerProfile, TestStep } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useT } from "../../shared/i18n";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { EditServerDialog } from "./EditServerDialog";
 import { ServerStateCard } from "./ServerStateCard";
 import { SetupWizard, TestSteps } from "./SetupWizard";
 import { isReady, useServers } from "./store";
@@ -81,6 +82,7 @@ function ServerCard({
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<ReturnType<typeof toAppError> | null>(null);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+  const [editing, setEditing] = useState(false);
   const t = useT();
 
   const runTest = async () => {
@@ -103,6 +105,20 @@ function ServerCard({
       setError(toAppError(e));
     }
   };
+
+  if (editing) {
+    return (
+      <li className={`server ${profile.is_active ? "server--active" : ""}`}>
+        <EditServerDialog
+          profile={profile}
+          onClose={() => {
+            setEditing(false);
+            onChanged();
+          }}
+        />
+      </li>
+    );
+  }
 
   return (
     <li className={`server ${profile.is_active ? "server--active" : ""}`}>
@@ -156,6 +172,7 @@ function ServerCard({
         <button onClick={() => void runTest()} disabled={testing}>
           {testing ? t.ui.servers.testing : t.ui.servers.test}
         </button>
+        <button onClick={() => setEditing(true)}>{t.ui.servers.edit}</button>
         {confirmingRemoval ? (
           <>
             <span className="server__confirm">{t.ui.servers.confirmRemoval}</span>

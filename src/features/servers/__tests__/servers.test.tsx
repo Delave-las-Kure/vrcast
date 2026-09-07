@@ -20,6 +20,7 @@ import type { ServerProfile, TestStep } from "../../../shared/contract";
 
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockServerAdd = vi.fn();
+const mockServerUpdate = vi.fn();
 const mockServerTest = vi.fn<() => Promise<TestStep[]>>();
 const mockProbeFingerprint = vi.fn<() => Promise<string>>();
 const mockConfirmFingerprint = vi.fn();
@@ -40,7 +41,7 @@ vi.mock("../../../shared/ipc", async () => {
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       serversList: () => mockServersList(),
       serverAdd: (...a: unknown[]) => mockServerAdd(...a),
-      serverUpdate: vi.fn(),
+      serverUpdate: (...a: unknown[]) => mockServerUpdate(...a),
       serverRemove: (...a: unknown[]) => mockServerRemove(...a),
       serverSetActive: (...a: unknown[]) => mockSetActive(...a),
       serverTest: (...a: unknown[]) => mockServerTest(...(a as [])),
@@ -272,5 +273,80 @@ describe("the setup wizard", () => {
     await waitFor(() =>
       expect(screen.getByLabelText(ru.ui.wizard.fieldHost)).toHaveValue("203.0.113.10"),
     );
+  });
+});
+
+describe("editing a server profile", () => {
+  it("opens the edit form filled with the profile's current values", async () => {
+    // The secret is never sent back from the core: the passphrase field must stay empty
+    // rather than showing something that only looks like the saved one.
+    mockServersList.mockResolvedValue([makeProfile()]);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+
+    expect(await screen.findByLabelText(ru.ui.wizard.fieldName)).toHaveValue("Мой сервер");
+    expect(screen.getByLabelText(ru.ui.wizard.fieldHost)).toHaveValue("203.0.113.10");
+    expect(screen.getByLabelText(ru.ui.wizard.fieldDomain)).toHaveValue("stream.example.com");
+    expect(screen.getByLabelText(ru.ui.wizard.fieldKeyPath)).toHaveValue(
+      "/home/u/.ssh/id_ed25519",
+    );
+    expect(screen.getByLabelText(ru.ui.wizard.fieldPassphrase)).toHaveValue("");
+  });
+
+  it("saves without re-probing the fingerprint when the address did not change", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldName), {
+      target: { value: "Мой сервер 2" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ name: "Мой сервер 2", host: "203.0.113.10", port: 22 }),
+        null,
+      ),
+    );
+    // The fingerprint from before is still confirmed — the core guarantees that — so
+    // re-probing it would ask a question already answered.
+    expect(mockProbeFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("re-probes and requires confirming the fingerprint when the host changes", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    mockProbeFingerprint.mockResolvedValue("SHA256:НовыйАдрес");
+    mockServerTest.mockResolvedValue(steps());
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldHost), {
+      target: { value: "203.0.113.99" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ host: "203.0.113.99" }),
+        null,
+      ),
+    );
+
+    // The new address's fingerprint is on screen, and nothing has connected yet.
+    expect(await screen.findByText("SHA256:НовыйАдрес")).toBeInTheDocument();
+    expect(mockConfirmFingerprint).not.toHaveBeenCalled();
+    expect(mockServerTest).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText(ru.ui.wizard.fingerprintOk));
+    await waitFor(() =>
+      expect(mockConfirmFingerprint).toHaveBeenCalledWith("srv_1", "SHA256:НовыйАдрес"),
+    );
+    await waitFor(() => expect(mockServerTest).toHaveBeenCalledWith("srv_1"));
   });
 });

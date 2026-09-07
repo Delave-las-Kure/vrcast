@@ -1302,6 +1302,14 @@ export const en: Catalogue = {
         domain: "Serving answers on the domain",
       },
       stepStatus: { ok: "passed", failed: "failed", skipped: "not checked" },
+      edit: "Edit",
+      editHeading: "Edit the server “{name}”",
+      editSecretHint:
+        "Leave this empty to keep the stored password or key as it is — it is never handed back from the store.",
+      editAddressChanged:
+        "The address or port changed — the server has to be recognised again before connecting to it.",
+      save: "Save",
+      saving: "Saving…",
     },
 
     tasks: {
