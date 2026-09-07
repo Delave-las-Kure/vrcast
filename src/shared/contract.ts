@@ -544,6 +544,10 @@ export interface Task {
   can_resume: boolean;
   created_at: string;
   updated_at: string;
+  /** What this task produced, for a person to go and look at (T519(3)). Filled only for
+   *  an `upload` or a `build_ladder` that finished with its medium known — see the note
+   *  below on why it can stay null even then. */
+  result: { media_id: string } | null;
 }
 
 /** What becomes of a task if the application is closed (FR-086). */

@@ -122,6 +122,7 @@ function makeTask(over: Partial<Task> = {}): Task {
     queue_order: 1,
     created_at: "2026-08-25T10:00:00Z",
     updated_at: "2026-08-25T10:05:00Z",
+    result: null,
     ...over,
   };
 }

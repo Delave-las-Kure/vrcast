@@ -312,6 +312,7 @@ describe("the queue", () => {
       queue_order: order,
       created_at: "2026-08-25T10:00:00Z",
       updated_at: "2026-08-25T10:00:00Z",
+      result: null,
     };
   }
 

@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import type { AppError, Task, TaskKind } from "../../shared/contract";
 import type { TaskOnClose } from "../../shared/contract";
 import { ipc, onTaskDone, onTaskProgress, toAppError } from "../../shared/ipc";
@@ -300,6 +301,19 @@ export function TasksPanel() {
                     </li>
                   ))}
                 </ul>
+              )}
+
+              {/* What the task produced, for a person to go and look at (T519(3)). Only
+                  when `result` is not null — an upload or a build_ladder that finished
+                  without its medium known (or any other kind) leaves it null, and no
+                  link belongs where there is nowhere to send anyone. The library screen
+                  cannot yet jump to or highlight one particular medium by id, so this is
+                  plain navigation to the section as a whole rather than a promise this
+                  screen cannot keep. */}
+              {task.result !== null && (
+                <p className="task__result">
+                  <Link to="/library">{t.ui.tasks.viewResult}</Link>
+                </p>
               )}
 
               <div className="task__actions">

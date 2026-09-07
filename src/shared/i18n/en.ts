@@ -1347,6 +1347,7 @@ export const en: Catalogue = {
       pause: "Pause",
       resume: "Resume",
       stop: "Cancel",
+      viewResult: "See it in the library",
       kinds: {
         probe: "examining the source",
         convert: "preparing the file",
