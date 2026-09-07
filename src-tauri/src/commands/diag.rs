@@ -162,9 +162,14 @@ pub mod api {
     /// **before** an upload, which is when it is most useful.
     pub async fn diag_bitrate(path: &str) -> Result<Peaks> {
         let path = PathBuf::from(path);
-        measure::peaks_of(&path)
-            .await
-            .map_err(|e| AppError::new(ErrorCode::FfmpegBroken).with_cause(e))
+        measure::peaks_of(&path).await.map_err(|e| match e {
+            crate::media::ffmpeg::FfmpegError::NoVideoTrack => {
+                AppError::new(ErrorCode::InvalidInput)
+                    .detail(crate::domain::wording::DetailCode::ProbeNoVideo)
+                    .with_cause(path.display().to_string())
+            }
+            other => AppError::new(ErrorCode::FfmpegBroken).with_cause(other),
+        })
     }
 
     fn since(minutes: u32) -> OffsetDateTime {

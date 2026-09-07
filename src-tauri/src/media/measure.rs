@@ -68,7 +68,22 @@ pub async fn measure(path: &Path) -> Result<Measured, ffmpeg::FfmpegError> {
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
     }
-    Ok(from_packets(&String::from_utf8_lossy(&output.stdout)))
+    let result = from_packets(&String::from_utf8_lossy(&output.stdout));
+    require_a_track(result.seconds)?;
+    Ok(result)
+}
+
+/// The check shared by [`measure`] and [`peaks_of`]: zero seconds counted means no packet
+/// at all carried a usable time stamp, which means no video stream was there to read
+/// packets from — not a short film, which would still have counted at least one second
+/// (T527(2)). Kept as one function so the two async wrappers cannot drift into checking
+/// this two different ways, and so it can be exercised by a test without a real ffprobe.
+fn require_a_track(seconds: usize) -> std::result::Result<(), ffmpeg::FfmpegError> {
+    if seconds == 0 {
+        Err(ffmpeg::FfmpegError::NoVideoTrack)
+    } else {
+        Ok(())
+    }
 }
 
 /// Add the packets up into seconds.
@@ -331,5 +346,59 @@ pub fn peaks(second_bytes: &[u64]) -> Peaks {
 
 /// Read a file and work out where its peaks are.
 pub async fn peaks_of(path: &Path) -> Result<Peaks, ffmpeg::FfmpegError> {
-    Ok(peaks(&seconds_of(path).await?))
+    let second_bytes = seconds_of(path).await?;
+    let result = peaks(&second_bytes);
+    require_a_track(result.seconds)?;
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // T527(2): a file without a video stream must not come back as a quiet zero.
+    //
+    // `measure()` and `peaks_of()` cannot be run here without a real ffprobe process —
+    // there is none in continuous integration, by the same reasoning `ffmpeg.rs`
+    // documents for its own parsing tests. What is checked instead is the exact guard
+    // both async wrappers call, `require_a_track`, against the exact input a video-less
+    // file produces: `from_packets`/`peaks` on a CSV with no packet carrying a usable
+    // time stamp, which is precisely what ffprobe's `-select_streams v:0` gives back
+    // for a file that has no video stream to select.
+
+    #[test]
+    fn from_packets_on_a_videoless_file_counts_zero_seconds() {
+        // ffprobe's own answer for an audio-only file: nothing at all, since there was
+        // no `v:0` stream for `-select_streams` to pick packets from.
+        let measured = from_packets("");
+        assert_eq!(measured.seconds, 0);
+        assert!(require_a_track(measured.seconds).is_err());
+    }
+
+    #[test]
+    fn peaks_on_a_videoless_file_counts_zero_seconds() {
+        let found = peaks(&[]);
+        assert_eq!(found.seconds, 0);
+        assert!(require_a_track(found.seconds).is_err());
+    }
+
+    #[test]
+    fn require_a_track_rejects_zero_and_only_zero() {
+        assert!(matches!(
+            require_a_track(0),
+            Err(ffmpeg::FfmpegError::NoVideoTrack)
+        ));
+        // A short clip that still produced one real second of packets is a different
+        // case entirely (a short film, not a missing track) and must not be rejected.
+        assert!(require_a_track(1).is_ok());
+    }
+
+    #[test]
+    fn from_packets_with_a_real_packet_is_not_mistaken_for_videoless() {
+        // One packet, with a time stamp and a size: exactly what a real video stream
+        // produces, and the case `require_a_track` must let through.
+        let measured = from_packets("0.000000,0.000000,1024\n");
+        assert_eq!(measured.seconds, 1);
+        assert!(require_a_track(measured.seconds).is_ok());
+    }
 }

@@ -149,7 +149,12 @@ pub mod api {
     pub async fn ladder_measure(path: &str) -> Result<measure::Measured> {
         measure::measure(std::path::Path::new(path))
             .await
-            .map_err(|e| AppError::new(ErrorCode::FfmpegBroken).with_cause(e))
+            .map_err(|e| match e {
+                ffmpeg::FfmpegError::NoVideoTrack => AppError::new(ErrorCode::InvalidInput)
+                    .detail(DetailCode::ProbeNoVideo)
+                    .with_cause(path),
+                other => AppError::new(ErrorCode::FfmpegBroken).with_cause(other),
+            })
     }
 
     /// Work out a ladder for this film.
