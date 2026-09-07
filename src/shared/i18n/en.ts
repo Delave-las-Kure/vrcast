@@ -273,6 +273,19 @@ export const en: Catalogue = {
     PROFILE_NOT_FOUND: "There is no such server — its profile may have been deleted.",
     FINGERPRINT_EMPTY: "The fingerprint is empty — there is nothing to confirm.",
 
+    // --- what the single door says when it stays shut (T519(1)) ---
+    SERVER_FOREIGN_WEB_SERVER_RUNNING:
+      "Something called {name} is already running on this server — it is not our own serving.",
+    SERVER_FOREIGN_CONFIG_WITHOUT_STATE:
+      "There is a web-server configuration on this server with no state file of ours beside it — it looks set up by hand, or by another tool.",
+    SERVER_FOREIGN_STATE_UNREADABLE:
+      "Our own state file is on this server but could not be read ({problem}).",
+    SERVER_FOREIGN_UNKNOWN:
+      "The server was judged foreign, but no reason was given.",
+    SERVER_NOT_DEPLOYED: "Nothing is deployed on this server yet.",
+    SERVER_ALREADY_DEPLOYED:
+      "The server is already deployed and at a version this application is happy with.",
+
     // --- domain field ---
     DOMAIN_EMPTY:
       "Enter the domain you serve from — without it there is no viewer link to hand out and no way to check that serving works.",

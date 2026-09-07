@@ -70,6 +70,29 @@ detail_codes! {
     ProfileNotFound => "PROFILE_NOT_FOUND",
     FingerprintEmpty => "FINGERPRINT_EMPTY",
 
+    // --- what the single door says when it stays shut (T519(1), server::gate::Refusal) ---
+    //
+    // The refusal used to carry the reason as raw Rust Debug text (`format!("{reason:?}")`)
+    // or as an English sentence inside `cause` — both meant a person reading `cause` saw
+    // words that were never meant for them. Named here instead, the same discipline as
+    // everything else that crosses this boundary.
+    /// Somebody else's process is already serving on this machine. `name` — what it is.
+    ServerForeignWebServerRunning => "SERVER_FOREIGN_WEB_SERVER_RUNNING",
+    /// A main web-server configuration with no state file of ours beside it — the shape of a
+    /// server set up by hand, or by an older tool.
+    ServerForeignConfigWithoutState => "SERVER_FOREIGN_CONFIG_WITHOUT_STATE",
+    /// Our own state file is there and could not be believed. `problem` — what was wrong
+    /// with it, kept short and technical (not the raw parser text) rather than prose.
+    ServerForeignStateUnreadable => "SERVER_FOREIGN_STATE_UNREADABLE",
+    /// A machine judged foreign without a reason attached — should not happen in practice
+    /// (`judge` always names one), kept as the honest fallback rather than a panic.
+    ServerForeignUnknown => "SERVER_FOREIGN_UNKNOWN",
+    /// Nothing is deployed on this server yet, so there is nothing to change.
+    ServerNotDeployed => "SERVER_NOT_DEPLOYED",
+    /// Already deployed and at a version this application is happy with — not a fault, an
+    /// answer to a request to set it up again.
+    ServerAlreadyDeployed => "SERVER_ALREADY_DEPLOYED",
+
     // --- domain field ---
     DomainEmpty => "DOMAIN_EMPTY",
     DomainHasSpaces => "DOMAIN_HAS_SPACES",

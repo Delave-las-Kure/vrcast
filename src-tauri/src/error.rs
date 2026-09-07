@@ -276,7 +276,34 @@ impl From<crate::server::gate::Refusal> for AppError {
         match e {
             R::Ssh(inner) => inner.into(),
             R::Foreign { reason } => {
-                AppError::new(ErrorCode::ServerForeign).with_cause(format!("{reason:?}"))
+                use crate::domain::server_state::{ForeignReason, StateFileProblem};
+                match reason {
+                    Some(ForeignReason::WebServerRunning { name }) => {
+                        AppError::new(ErrorCode::ServerForeign).with_detail(
+                            Detail::new(DetailCode::ServerForeignWebServerRunning)
+                                .with("name", name),
+                        )
+                    }
+                    Some(ForeignReason::ConfigWithoutState) => {
+                        AppError::new(ErrorCode::ServerForeign)
+                            .detail(DetailCode::ServerForeignConfigWithoutState)
+                    }
+                    Some(ForeignReason::StateFileUnreadable { problem }) => {
+                        // The particulars stay technical, not prose: a short code for which
+                        // kind of problem it was, not the parser's own sentence — that is
+                        // exactly the raw text this fix exists to keep out of `cause`.
+                        let problem_code = match problem {
+                            StateFileProblem::Unreadable { .. } => "unreadable",
+                            StateFileProblem::NoVersion => "no_version",
+                        };
+                        AppError::new(ErrorCode::ServerForeign).with_detail(
+                            Detail::new(DetailCode::ServerForeignStateUnreadable)
+                                .with("problem", problem_code),
+                        )
+                    }
+                    None => AppError::new(ErrorCode::ServerForeign)
+                        .detail(DetailCode::ServerForeignUnknown),
+                }
             }
             R::TooNew {
                 server,
@@ -285,12 +312,14 @@ impl From<crate::server::gate::Refusal> for AppError {
                 .with_cause(format!("server {server}, application {app_expects}")),
             R::NeedsUpgrade { server, app_min } => AppError::new(ErrorCode::ServerNeedsUpgrade)
                 .with_cause(format!("server {server}, at least {app_min}")),
-            R::NotDeployed => AppError::new(ErrorCode::ServerForeign)
-                .with_cause("nothing is deployed on this server"),
-            // Not a failure of anything. The screen turns it into "already set up",
-            // and until it does, at least the words are the right way round.
-            R::AlreadyDeployed => AppError::new(ErrorCode::InvalidInput)
-                .with_cause("this server is already deployed and up to date"),
+            R::NotDeployed => {
+                AppError::new(ErrorCode::ServerForeign).detail(DetailCode::ServerNotDeployed)
+            }
+            // Not a failure of anything. The screen turns it into "already set up", and
+            // until it does, at least the words are the right way round.
+            R::AlreadyDeployed => {
+                AppError::new(ErrorCode::InvalidInput).detail(DetailCode::ServerAlreadyDeployed)
+            }
         }
     }
 }

@@ -105,6 +105,14 @@ export type DetailCode =
   | "PROFILE_NOT_FOUND"
   | "FINGERPRINT_EMPTY"
 
+  // what the single door says when it stays shut (T519(1), server::gate::Refusal)
+  | "SERVER_FOREIGN_WEB_SERVER_RUNNING"
+  | "SERVER_FOREIGN_CONFIG_WITHOUT_STATE"
+  | "SERVER_FOREIGN_STATE_UNREADABLE"
+  | "SERVER_FOREIGN_UNKNOWN"
+  | "SERVER_NOT_DEPLOYED"
+  | "SERVER_ALREADY_DEPLOYED"
+
   // domain field
   | "DOMAIN_EMPTY"
   | "DOMAIN_HAS_SPACES"
