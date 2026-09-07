@@ -260,6 +260,15 @@ export function LadderScreen({
   // put away or asked about another file, and at no other moment.
   const alive = useRef(true);
   const [name, setName] = useState(slug ?? "");
+  // T522 — the two fields the core already reads off `LadderRequest` and the screen never
+  // gave anyone a way to fill in. Kept as strings on screen and turned into the request's
+  // shape only when they hold something: `native_height` is an `Option<u32>` in the core,
+  // and `declared_layout` an `Option<Layout>` — leaving either blank must mean "unknown",
+  // not "flat" or "not stretched", which are both claims about the file, not silence.
+  const [nativeHeightInput, setNativeHeightInput] = useState("");
+  const [declaredLayout, setDeclaredLayout] = useState<
+    "" | "Flat" | "SideBySide" | "OverUnder"
+  >("");
   // Which rungs the person has left out. By the rung's own index rather than by position,
   // so that editing a bitrate — which rebuilds the array — does not silently move the
   // choice onto a different rung.
@@ -284,7 +293,19 @@ export function LadderScreen({
   const loadPlan = useCallback(async (): Promise<LadderPreview | null> => {
     setWorking(true);
     try {
-      const answer = await ipc.ladderPlan({ path });
+      // T522 — the two "Advanced" fields, sent along on every call. Blank means unknown to
+      // the core, not "flat" or "not stretched": `native_height` is left off rather than
+      // sent as some default, and `declared_layout` likewise — the core's `Option` already
+      // distinguishes "not told" from a value, and turning a blank field into a guess here
+      // would be making up an answer nobody gave.
+      const trimmedHeight = nativeHeightInput.trim();
+      const nativeHeight = trimmedHeight === "" ? undefined : Number(trimmedHeight);
+      const answer = await ipc.ladderPlan({
+        path,
+        native_height:
+          nativeHeight !== undefined && Number.isFinite(nativeHeight) ? nativeHeight : undefined,
+        declared_layout: declaredLayout === "" ? undefined : declaredLayout,
+      });
       if (!alive.current) return null;
       setPreview(answer);
       setRungs(answer.plan.rungs);
@@ -296,7 +317,7 @@ export function LadderScreen({
     } finally {
       if (alive.current) setWorking(false);
     }
-  }, [path]);
+  }, [path, nativeHeightInput, declaredLayout]);
 
   useEffect(() => {
     if (!path) return;
@@ -479,6 +500,41 @@ export function LadderScreen({
           aria-label={words.setName}
         />
       </label>
+
+      {/*
+        T522 — two fields the core already reads off `LadderRequest` and this screen never
+        gave anyone a way to fill in. Folded away, following `ServerForm.tsx`'s pattern for
+        the rarely-needed: most files need neither, and both mostly matter for material
+        that was upscaled or shot stereoscopic, which is not the common case.
+      */}
+      <details className="form__extra" data-testid="ladder-advanced">
+        <summary>{words.advanced}</summary>
+        <label>
+          {words.nativeHeight}
+          <input
+            type="number"
+            value={nativeHeightInput}
+            onChange={(e) => setNativeHeightInput(e.target.value)}
+            placeholder={words.nativeHeightPlaceholder}
+            aria-label={words.nativeHeight}
+          />
+        </label>
+        <label>
+          {words.declaredLayout}
+          <select
+            value={declaredLayout}
+            onChange={(e) =>
+              setDeclaredLayout(e.target.value as "" | "Flat" | "SideBySide" | "OverUnder")
+            }
+            aria-label={words.declaredLayout}
+          >
+            <option value="">{words.declaredLayoutUnknown}</option>
+            <option value="Flat">{words.declaredLayoutFlat}</option>
+            <option value="SideBySide">{words.declaredLayoutSideBySide}</option>
+            <option value="OverUnder">{words.declaredLayoutOverUnder}</option>
+          </select>
+        </label>
+      </details>
 
       <button
         type="button"

@@ -22,7 +22,7 @@ import type {
 } from "../../../shared/contract";
 
 const mockMeasureResult = vi.fn<() => Promise<MeasurementView>>();
-const mockLadderPlan = vi.fn<() => Promise<LadderPreview>>();
+const mockLadderPlan = vi.fn<(...a: unknown[]) => Promise<LadderPreview>>();
 const mockLadderMeasure = vi.fn<() => Promise<SourceMeasured>>();
 const mockLadderValidate = vi.fn<() => Promise<LadderVerdict>>();
 const mockMeasurePreview = vi.fn<() => Promise<MeasurePreview>>();
@@ -49,7 +49,7 @@ vi.mock("../../../shared/ipc", async () => {
     // is named below is what this file is about; everything else answers and gets out of
     // the way.
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
-      ladderPlan: () => mockLadderPlan(),
+      ladderPlan: (...a: unknown[]) => mockLadderPlan(...a),
       qualityMeasureResult: () => mockMeasureResult(),
       ladderMeasure: () => mockLadderMeasure(),
       ladderValidate: () => mockLadderValidate(),
@@ -896,5 +896,58 @@ describe("what the set is called", () => {
       server_id: "s1",
       slug: "blue-eye-s01e01",
     });
+  });
+});
+
+describe("the advanced fields the core already reads (T522)", () => {
+  it("sends only path on a plain plan, until something is filled in", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalled());
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({
+      path: "F:/films/film.mp4",
+      native_height: undefined,
+      declared_layout: undefined,
+    });
+  });
+
+  it("sends the native height once it is filled in", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("ladder-advanced")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.nativeHeight), {
+      target: { value: "1080" },
+    });
+
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith({
+        path: "F:/films/film.mp4",
+        native_height: 1080,
+        declared_layout: undefined,
+      }),
+    );
+  });
+
+  it("sends the declared layout under its Rust name once one is chosen", async () => {
+    // Checked against `Layout` in `src-tauri/src/domain/ladder.rs`: no
+    // `#[serde(rename_all = ...)]` above the enum, so each variant serialises as its own
+    // Rust name — PascalCase, not snake_case.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("ladder-advanced")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.declaredLayout), {
+      target: { value: "SideBySide" },
+    });
+
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith({
+        path: "F:/films/film.mp4",
+        native_height: undefined,
+        declared_layout: "SideBySide",
+      }),
+    );
   });
 });

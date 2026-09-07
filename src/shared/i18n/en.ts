@@ -683,6 +683,18 @@ export const en: Catalogue = {
       columnQuality: "Quality",
       columnWhy: "Why",
 
+      // T522 — fields the core already accepts (`LadderRequest` in
+      // `src-tauri/src/commands/ladder.rs`) but the screen never filled in: a collapsible
+      // "Advanced" block, following the pattern in `ServerForm.tsx`.
+      advanced: "Advanced",
+      nativeHeight: "The material's real height, if it was stretched",
+      nativeHeightPlaceholder: "e.g. 1080",
+      declaredLayout: "What kind of picture",
+      declaredLayoutUnknown: "Not stated",
+      declaredLayoutFlat: "Ordinary",
+      declaredLayoutSideBySide: "Side by side (SBS)",
+      declaredLayoutOverUnder: "One above the other (OU)",
+
       // Why a rung looks the way it does (T418). The keys are the core's `Reason` variants,
       // and `every_reason_a_rung_can_give_has_words` holds them to it. Each wording carries
       // the number it is about: a bare "a step down" is true of every rung but the top and

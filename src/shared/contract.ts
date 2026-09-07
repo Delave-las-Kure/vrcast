@@ -996,6 +996,15 @@ export interface LadderPlanRequest {
   codec?: string;
   /** The height the material really has, when it was upscaled. Told by the person. */
   native_height?: number | null;
+  /**
+   * What the person says the picture is, when they know better than a guess (T522).
+   *
+   * `Option<Layout>` on the Rust side (`src-tauri/src/commands/ladder.rs::LadderRequest`),
+   * and `Layout` (`src-tauri/src/domain/ladder.rs`) derives `Serialize`/`Deserialize` with
+   * no `#[serde(rename_all = ...)]` above it — checked in that file, not guessed — so each
+   * variant serialises under its own Rust name, in PascalCase.
+   */
+  declared_layout?: "Flat" | "SideBySide" | "OverUnder" | null;
   prefer_hardware?: boolean;
 }
 

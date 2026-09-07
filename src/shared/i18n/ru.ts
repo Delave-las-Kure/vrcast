@@ -682,6 +682,18 @@ const ui = {
     columnQuality: "Качество",
     columnWhy: "Почему",
 
+    // T522 — поля, которые ядро уже принимает (`LadderRequest` в `src-tauri/src/commands/
+    // ladder.rs`), но экран никогда не заполнял: сворачиваемый блок «Дополнительно», по
+    // образцу `ServerForm.tsx`.
+    advanced: "Дополнительно",
+    nativeHeight: "Настоящая высота материала, если он был растянут",
+    nativeHeightPlaceholder: "например, 1080",
+    declaredLayout: "Что за картинка",
+    declaredLayoutUnknown: "Не указано",
+    declaredLayoutFlat: "Обычная",
+    declaredLayoutSideBySide: "Бок о бок (SBS)",
+    declaredLayoutOverUnder: "Одна над другой (OU)",
+
     // Почему ступень такая, какая она есть (T418). Ключи совпадают с `Reason` в ядре, и
     // за этим следит сверка `every_reason_a_rung_can_give_has_words`. Каждая формулировка
     // несёт число, о котором она говорит: голое «шаг вниз» верно для любой ступени кроме
