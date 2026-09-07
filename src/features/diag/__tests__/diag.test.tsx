@@ -11,15 +11,17 @@
  *    "all is well" or as the application being broken, and both are untrue.
  */
 
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderIn, ru } from "../../../test-utils";
-import type { Health, Logs, Stalls } from "../../../shared/contract";
+import type { Health, Logs, Peaks, Stalls } from "../../../shared/contract";
 
 const mockHealth = vi.fn<() => Promise<Health>>();
 const mockLogs = vi.fn<() => Promise<Logs>>();
-const mockStalls = vi.fn<() => Promise<Stalls>>();
+const mockStalls = vi.fn<(...a: unknown[]) => Promise<Stalls>>();
+const mockBitrate = vi.fn<() => Promise<Peaks>>();
+const mockOpen = vi.fn<() => Promise<string | null>>();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -31,13 +33,13 @@ vi.mock("../../../shared/ipc", async () => {
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       diagHealth: () => mockHealth(),
       diagLogs: () => mockLogs(),
-      diagExplainStalls: () => mockStalls(),
-      diagBitrate: () => Promise.reject(new Error("not asked for in these checks")),
+      diagExplainStalls: (...a: unknown[]) => mockStalls(...a),
+      diagBitrate: () => mockBitrate(),
     }),
   };
 });
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => Promise.resolve(null) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
 const { DiagScreen } = await import("../DiagScreen");
 
@@ -170,6 +172,7 @@ describe("the diagnosis screen", () => {
     mockHealth.mockResolvedValue(HEALTH);
     mockLogs.mockResolvedValue(LOGS);
     mockStalls.mockResolvedValue(STALLS);
+    mockOpen.mockResolvedValue(null);
   });
 
   it("marks every reading with its own rating, not one badge for the lot", async () => {
@@ -250,5 +253,37 @@ describe("the diagnosis screen", () => {
     await waitFor(() => expect(screen.queryByTestId("diag-asking")).not.toBeInTheDocument());
     expect(screen.queryByTestId("reading-serving")).not.toBeInTheDocument();
     expect(document.body.textContent?.trim().length ?? 0).toBeGreaterThan(0);
+  });
+
+  it("re-asks why a viewer stalls with the file's shape once it is measured", async () => {
+    // T500. `diag_explain_stalls` reaches `Cause::TheFileItself` and `Cause::ThePlayer`
+    // only with `Some(file)` — without it every stalling viewer falls into the general
+    // "not enough channel" verdict. `BitratePeaks` already measures the file; this screen
+    // used to never pass what it found along.
+    mockOpen.mockResolvedValue("F:/films/film.mp4");
+    mockBitrate.mockResolvedValue({
+      average_bps: 8_000_000,
+      median_bps: 7_500_000,
+      one_second: { at_s: 10, length_s: 1, bitrate_bps: 20_000_000 },
+      wide: { at_s: 100, length_s: 10, bitrate_bps: 41_000_000 },
+      worst_wide: [],
+      seconds: 3600,
+    });
+    renderIn(<DiagScreen serverId="s1" />);
+
+    // The first, automatic call — before anything has been measured — carries no file.
+    await waitFor(() => expect(mockStalls).toHaveBeenCalledTimes(1));
+    expect(mockStalls.mock.calls[0]).toEqual(["s1", 30, undefined]);
+
+    fireEvent.click(await screen.findByText(ru.ui.diag.bitratePick));
+
+    // Measuring the file re-runs the stall reading, this time with its shape — converted
+    // from bits/s to megabits, as `LadderScreen.tsx`'s `bitrate()` already does.
+    await waitFor(() => expect(mockStalls).toHaveBeenCalledTimes(2));
+    expect(mockStalls.mock.calls[1]).toEqual([
+      "s1",
+      30,
+      { average_mbit: 8, peak_10s_mbit: 41 },
+    ]);
   });
 });
