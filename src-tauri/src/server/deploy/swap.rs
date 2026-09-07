@@ -39,7 +39,12 @@ fn wanted(ctx: &Context<'_>) -> Swap {
 
 fn changes(ctx: &Context<'_>) -> Vec<Change> {
     match wanted(ctx) {
-        Swap::Make { megabytes } => vec![Change::CreatesSwapFile { megabytes }],
+        Swap::Make { megabytes } => vec![
+            Change::CreatesSwapFile { megabytes },
+            Change::WritesFile {
+                path: String::from("/etc/fstab"),
+            },
+        ],
         // Nothing will be done, so nothing is promised. A plan that listed a change it will
         // not make teaches people that the plan is approximate.
         Swap::NotNeeded | Swap::NoRoom { .. } => Vec::new(),

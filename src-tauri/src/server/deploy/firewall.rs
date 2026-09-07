@@ -34,6 +34,9 @@ fn changes(_: &Context<'_>) -> Vec<Change> {
             ports: PORTS.iter().map(|p| String::from(*p)).collect(),
         },
         Change::ClosesEverythingElse,
+        Change::WritesFile {
+            path: String::from("/etc/default/ufw"),
+        },
     ]
 }
 
