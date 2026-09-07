@@ -117,6 +117,14 @@ pub struct LadderCheck {
     pub source: SourceFacts,
 }
 
+/// What the interface sends after a person retypes one rung's bitrate by hand (T523).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecomputeRungRequest {
+    pub index: usize,
+    pub bitrate_bps: u64,
+    pub source: SourceFacts,
+}
+
 /// Everything wrong with a ladder, in two kinds.
 ///
 /// **The two are kept apart because they mean different things.** An objection says the
@@ -399,6 +407,28 @@ pub mod api {
     pub async fn ladder_validate(check: &LadderCheck) -> Result<LadderVerdict> {
         Ok(LadderVerdict::of(&check.rungs, &check.source))
     }
+
+    /// Rebuild one rung after a person retypes its bitrate by hand (T523, FR-025).
+    ///
+    /// **Why this has to be a round trip through the core and not a screen editing the
+    /// numbers itself.** The screen knows one new number — the bitrate — and nothing about
+    /// what it decides. The ceiling, the buffer and the height are all worked out from the
+    /// bitrate by rules that live here (`height_for`, `peak_control`); asking the screen to
+    /// carry them along unchanged is exactly the bug this command exists to close (a rung
+    /// retyped from 15 Mbit/s to 3 kept a ceiling near 18 — no ceiling at all at 3 — and
+    /// stayed at the old rung's 2160p).
+    ///
+    /// A pure function, like [`ladder_validate`], and meant to be called the same way: on
+    /// every edit, not only when the person is done. It does not check the result against
+    /// its neighbours — that is still `ladder_validate`'s job, run straight after on the
+    /// rung this returns swapped into the list.
+    pub async fn ladder_recompute_rung(request: &RecomputeRungRequest) -> Result<Rung> {
+        Ok(ladder::recompute_rung(
+            request.index,
+            request.bitrate_bps,
+            &request.source,
+        ))
+    }
 }
 
 /// The measured ladder for this material, when there is one.
@@ -567,5 +597,10 @@ pub mod ipc {
     #[tauri::command]
     pub async fn ladder_validate(check: LadderCheck) -> Result<LadderVerdict> {
         api::ladder_validate(&check).await
+    }
+
+    #[tauri::command]
+    pub async fn ladder_recompute_rung(request: RecomputeRungRequest) -> Result<Rung> {
+        api::ladder_recompute_rung(&request).await
     }
 }

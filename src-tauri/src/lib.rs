@@ -250,6 +250,7 @@ pub fn run() {
             commands::ladder::ipc::ladder_build,
             commands::ladder::ipc::ladder_verify,
             commands::ladder::ipc::ladder_validate,
+            commands::ladder::ipc::ladder_recompute_rung,
             commands::quality::ipc::quality_measure_preview,
             commands::quality::ipc::quality_measure_start,
             commands::quality::ipc::quality_measure_result,

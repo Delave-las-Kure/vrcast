@@ -837,3 +837,53 @@ fn the_cap_is_a_cap_and_not_a_target() {
     assert_eq!(source_cap_mbps(&source_bps(400_000, false)), 0);
     assert_eq!(source_cap_mbps(&source_bps(0, true)), 0);
 }
+
+#[test]
+fn a_hand_edited_bitrate_gets_its_own_ceiling_height_and_reason() {
+    // T523: editing one rung's bitrate on screen used to leave everything else about it
+    // untouched — the ceiling and buffer worked out for the *old* bitrate, and the height
+    // the *old* bitrate's density had earned. `recompute_rung` is the fix: given only the
+    // new bitrate and the source, it works out a rung from scratch, exactly as `plan` would.
+    use vrcast_studio_lib::domain::ladder::recompute_rung;
+
+    let src = source(3840, 2160, 24, 24);
+    let laid = plan(Some(15_000_000), &src, None).expect("a sound source was refused");
+    let old = &laid.rungs[0];
+    assert_eq!(old.bitrate_bps, 15_000_000);
+    // The old rung's ceiling sits around 15 Mbit/s (+10 %) — nowhere near a real ceiling
+    // for 3 Mbit/s, which is the whole bug this closes.
+    assert!(old.maxrate_bps > 16_000_000);
+
+    // A person retypes it down to 3 Mbit/s.
+    let edited = recompute_rung(old.index, 3_000_000, &src);
+
+    assert_eq!(edited.index, old.index);
+    assert_eq!(edited.bitrate_bps, 3_000_000);
+
+    // The ceiling and buffer are worked out fresh for 3 Mbit/s, not inherited from 15.
+    assert_eq!(edited.maxrate_bps, 3_300_000, "3 Mbit/s + 10 % ceiling");
+    assert_eq!(edited.bufsize_bps, edited.maxrate_bps);
+    assert!(
+        edited.maxrate_bps < old.maxrate_bps,
+        "the old rung's ~16.5 Mbit/s ceiling must not survive onto a 3 Mbit/s rung"
+    );
+
+    // The height comes from `height_for` run again on the new bitrate — 3 Mbit/s over a
+    // 4K frame at 24 fps is far too thin to hold full resolution — not the old rung's 2160p.
+    assert!(
+        edited.height < old.height,
+        "a rung retyped down to 3 Mbit/s must not stay at the old rung's height"
+    );
+    assert_eq!(
+        edited.width,
+        vrcast_studio_lib::domain::ladder::width_for(edited.height, &src)
+    );
+
+    // The reason says plainly that a person moved it, and nothing else — the old reasons
+    // (`ProbedAnchor`, `FullResolution`, ...) described numbers that no longer hold.
+    assert_eq!(edited.reasons, vec![Reason::EditedByHand]);
+
+    // Nobody has measured what this bitrate is actually worth on this material.
+    assert!(!edited.quality.is_enough_to_build_on());
+}
+

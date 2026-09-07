@@ -179,6 +179,18 @@ pub enum Reason {
     BorrowedMeasurement,
     /// Put in to break a fall the other rungs left too steep (T389).
     FilledAGap,
+    /// A person typed a new bitrate for this rung by hand (T523).
+    ///
+    /// **Why this exists instead of carrying the old reasons forward.** Editing the
+    /// bitrate leaves every reason that produced the rung's *previous* numbers false: a
+    /// screen that kept showing "the top of the ladder" or "the density held" after the
+    /// person had just overridden the number those sentences were about would be showing
+    /// them a lie, and `{height}`/`{width}` filled in from the recomputed rung would not
+    /// even match what the sentence was originally about. A rung this reason is on has
+    /// left the ground every other reason stands on — it is no longer where the probe, the
+    /// measurement or the formula put it, only where a person moved it — and the honest
+    /// thing to say is exactly that, not a stale story about where it used to be.
+    EditedByHand,
 }
 
 /// What is known about how good this rung actually looks.
@@ -560,6 +572,36 @@ fn build_rung(
         reasons,
         quality,
     }
+}
+
+/// Rebuild one rung from a bitrate a person just typed in (T523).
+///
+/// **What edited it wrong before this existed.** A screen changing one rung's bitrate had
+/// nowhere to send the new number but back into the old `Rung` unchanged apart from that
+/// one field — so `maxrate_bps`/`bufsize_bps` stayed the ceiling and buffer worked out for
+/// the *old* bitrate (a cut from 15 Mbit/s to 3 kept a ceiling near 18, which is no ceiling
+/// at all at 3, FR-025), and `height`/`width` stayed whatever the old bitrate's density had
+/// earned, so a rung retyped down to 3 Mbit/s went on being encoded at 2160p. Both numbers
+/// come from the bitrate; changing the bitrate and not the numbers it decides is the bug.
+///
+/// **Everything here is [`build_rung`], the same function [`plan`] and
+/// [`from_measurement`] use** — [`height_for`] decides the height fresh, exactly as it
+/// would for a rung the formula was planning from scratch, and [`build_rung`] works the
+/// width, the ceiling and the buffer out from that. Nothing about a hand-edited rung is
+/// special to the arithmetic; only its reason is.
+///
+/// The reason is always [`Reason::EditedByHand`], and only that — see its own doc comment
+/// for why replacing rather than keeping the old reasons is the honest choice here.
+pub fn recompute_rung(index: usize, bitrate_bps: u64, source: &SourceFacts) -> Rung {
+    let (height, _) = height_for(bitrate_bps, source);
+    build_rung(
+        index,
+        bitrate_bps,
+        height,
+        source,
+        vec![Reason::EditedByHand],
+        Quality::NotMeasured,
+    )
 }
 
 /// Turn what the measurement chose into a ladder.

@@ -957,7 +957,8 @@ export type RungReason =
   | "single_rung_only"
   | "measured_optimum"
   | "borrowed_measurement"
-  | "filled_a_gap";
+  | "filled_a_gap"
+  | "edited_by_hand";
 
 export interface Rung {
   index: number;
