@@ -321,6 +321,28 @@ pub mod api {
                         work_dir: &work_dir,
                     };
                     let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;
+                    // **The built set's own medium, found while the connection is still
+                    // open** (T519(3)). Best effort and only on success: the slug may
+                    // match no medium at all — a build run before its medium was created,
+                    // or a slug T528 has not finished tidying up — and a result that
+                    // pointed at nothing would be worse than none. A catalogue that will
+                    // not read is treated the same way: the build already succeeded, and
+                    // failing it now over a result nobody asked to see would be wrong.
+                    if outcome.is_ok() {
+                        match crate::server::manifest_io::read(&conn, &profile.video_dir).await {
+                            Ok(manifest) => {
+                                if let Some(media) = manifest.find_by_slug(&request.slug) {
+                                    ctx.set_result(crate::tasks::store::TaskResult {
+                                        media_id: media.id.clone(),
+                                    });
+                                }
+                            }
+                            Err(e) => tracing::debug!(
+                                error = %e,
+                                "could not read the catalogue to find the built set's medium"
+                            ),
+                        }
+                    }
                     conn.close().await;
                     // ⚠ **The build says what it has to say as it happens, and this no
                     // longer carries it** (T524). The first shape of this fixed T416 —

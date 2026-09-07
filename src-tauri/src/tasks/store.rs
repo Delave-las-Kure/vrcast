@@ -23,6 +23,22 @@ pub struct Batch {
     pub label: String,
 }
 
+/// What a task produced, for a person to go and look at (T519(3)).
+///
+/// Filled only for the two kinds of task that end with something browsable: `Upload`
+/// (a file filed under a medium) and `BuildLadder` (a quality set finished for one).
+/// Every other kind — `Deploy`, `UpgradeServer`, `MeasureQuality`, `Probe`, and so on —
+/// changes nothing a person browses to, and leaves this `None`.
+///
+/// Written only once the tie to the medium is known to hold, never as a guess: an upload
+/// can finish and still fail to be filed under its medium (T505), and a build's slug may
+/// not resolve to any medium at all. In either case this stays `None` rather than pointing
+/// at something that leads nowhere.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskResult {
+    pub media_id: String,
+}
+
 /// A task in the form it is stored and shown in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
@@ -55,6 +71,8 @@ pub struct TaskRecord {
     /// tasks, and without this the list is thirty rows that do not say which film they are
     /// about — so watching a batch means watching a wall, and stopping one is a guess.
     pub batch: Option<Batch>,
+    /// What the task produced, for a person to go and look at (T519(3)). See [`TaskResult`].
+    pub result: Option<TaskResult>,
     /// Place in the queue: lower runs sooner.
     ///
     /// Kept apart from the creation time, because reordering (FR-083) has to change
@@ -93,6 +111,7 @@ impl TaskRecord {
             error: None,
             notices: Vec::new(),
             batch: None,
+            result: None,
             queue_order: 0,
             created_at: now.clone(),
             updated_at: now,
@@ -141,6 +160,9 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRecord> {
                 .flatten()
                 .unwrap_or_default(),
         }),
+        result: row
+            .get::<_, Option<String>>("result_media_id")?
+            .map(|media_id| TaskResult { media_id }),
         queue_order: row.get("queue_order")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -153,9 +175,9 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
         c.execute(
             "INSERT INTO tasks
                 (id, kind, server_id, state, progress, stage, speed_bps, eta_s,
-                 resume_token, error, notices, batch_id, batch_label,
+                 resume_token, error, notices, batch_id, batch_label, result_media_id,
                  queue_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT (id) DO UPDATE SET
                 state = excluded.state,
                 progress = excluded.progress,
@@ -182,6 +204,7 @@ pub fn upsert(db: &Db, task: &TaskRecord) -> Result<(), DbError> {
                 notices_json(&task.notices),
                 task.batch.as_ref().map(|b| b.id.clone()),
                 task.batch.as_ref().map(|b| b.label.clone()),
+                task.result.as_ref().map(|r| r.media_id.clone()),
                 task.queue_order,
                 task.created_at,
                 task.updated_at,
@@ -270,6 +293,24 @@ pub fn save_notices(db: &Db, id: &str, notices: &[Detail]) -> Result<(), DbError
         c.execute(
             "UPDATE tasks SET notices = ?2, updated_at = ?3 WHERE id = ?1",
             rusqlite::params![id, json, now_rfc3339()],
+        )?;
+        Ok(())
+    })
+}
+
+/// Write what the task produced, once it is known to have produced anything (T519(3)).
+///
+/// Not withheld from finished records, for the same reason as [`save_notices`]: this is
+/// written as the task ends, or — for an upload — a moment after, once the file is known
+/// to have been filed under its medium. Nothing is written for a `None` result: a task
+/// that made nothing browsable is not distinguished from one whose result is still
+/// unknown, but nothing ever asks that question, and `TaskRecord::new`'s `None` is already
+/// the right answer for every row until this is called.
+pub fn save_result(db: &Db, id: &str, result: &TaskResult) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET result_media_id = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, result.media_id, now_rfc3339()],
         )?;
         Ok(())
     })

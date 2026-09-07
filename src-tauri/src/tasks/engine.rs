@@ -238,6 +238,24 @@ impl TaskContext {
             .push(notice);
     }
 
+    /// Say what this task produced, for a person to go and look at (T519(3)).
+    ///
+    /// Written to the database at once rather than held until the task ends, unlike
+    /// [`Self::add_notice`]: only `Upload` and `BuildLadder` ever call this, each exactly
+    /// once, near the very end of their own work, and by the time they do the tie to the
+    /// medium is already known to hold. There is nothing later to wait for, and holding it
+    /// in memory would only risk losing it if the process were killed between here and
+    /// `finish`.
+    ///
+    /// Failures are swallowed and logged, the same choice as `note_stage`: a result is a
+    /// link to somewhere else, and a task that otherwise succeeded must not be reported as
+    /// failed for the sake of one write that could not land.
+    pub fn set_result(&self, result: super::store::TaskResult) {
+        if let Err(e) = store::save_result(&self.db, &self.id, &result) {
+            tracing::warn!(id = %self.id, error = %e, "the task's result was not written down");
+        }
+    }
+
     /// A message that must get through regardless of the rate cap: a change of stage, the
     /// end of the work.
     pub fn report_important(&self, progress: f64, stage: DetailCode) {

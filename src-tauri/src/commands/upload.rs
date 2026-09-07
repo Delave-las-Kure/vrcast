@@ -639,6 +639,14 @@ pub mod api {
                 ctx.add_notice(
                     Detail::new(DetailCode::NoticeNotFiledUnderMedium).with("name", clean_name),
                 );
+            } else {
+                // The tie is now known to hold: a person watching this task may go and
+                // look at what it filed (T519(3)). Recorded only on this branch — a
+                // failure to file leaves nothing to point at, and the notice above already
+                // says so.
+                ctx.set_result(crate::tasks::store::TaskResult {
+                    media_id: media_id.to_owned(),
+                });
             }
         }
 
