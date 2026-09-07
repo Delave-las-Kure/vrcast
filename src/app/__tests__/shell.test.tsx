@@ -13,7 +13,7 @@
 
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppError, Settings, Task, TaskOnClose } from "../../shared/contract";
+import type { AppError, Settings, Task, TaskOnClose, ServerProfile } from "../../shared/contract";
 import { en, renderIn, ru } from "../../test-utils";
 import { fill } from "../../shared/i18n/render";
 
@@ -24,6 +24,7 @@ const mockTasksReorder = vi.fn<(ids: string[]) => Promise<number>>();
 const mockAppVersions = vi.fn();
 const mockSettingsGet = vi.fn<() => Promise<Settings>>();
 const mockSettingsSet = vi.fn<(s: unknown) => Promise<Settings>>();
+const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 
 /** What the core answers about settings until a test says otherwise. */
 const SETTINGS: Settings = {
@@ -64,6 +65,7 @@ vi.mock("../../shared/ipc", async () => {
       // does not happen.
       tasksOnClose: () => mockTasksOnClose(),
       serverProbeFingerprint: vi.fn(),
+      serversList: () => mockServersList(),
     }),
     onTaskProgress: vi.fn(async () => () => {}),
     onTaskDone: vi.fn(async () => () => {}),
@@ -77,6 +79,28 @@ const { default: App } = await import("../App");
 const { ThemeProvider } = await import("../theme");
 const { SettingsProvider } = await import("../settings");
 const { ErrorNotice } = await import("../../features/shared/ErrorNotice");
+const { useServers } = await import("../../features/servers/store");
+
+/** A server profile, for tests that only care that one exists. */
+function makeProfile(over: Partial<ServerProfile> = {}): ServerProfile {
+  return {
+    id: "s1",
+    name: "Боевой",
+    host: "203.0.113.10",
+    port: 22,
+    user: "root",
+    auth_kind: "key",
+    secret_ref: "server/s1",
+    key_path: "/home/u/.ssh/id_ed25519",
+    domain: "stream.example.com",
+    video_dir: "/srv/video",
+    cdn_base: null,
+    host_fingerprint: "SHA256:aaa",
+    ipv6_mode: null,
+    is_active: true,
+    ...over,
+  };
+}
 
 function makeTask(over: Partial<Task> = {}): Task {
   return {
@@ -110,6 +134,14 @@ beforeEach(() => {
   mockTasksList.mockResolvedValue([]);
   mockTasksOnClose.mockResolvedValue([]);
   mockTasksReorder.mockResolvedValue(0);
+  // T509: `/` now depends on whether any server profile exists. The store is shared
+  // across the module and outlives unmounting (see servers.test.tsx for the same
+  // note) — without a reset here, one test's profiles would leak into the next.
+  // Defaulted to one profile so every test written before T509 keeps landing on
+  // `/tasks`, exactly as it did when `/` redirected there unconditionally; the
+  // empty-profile behaviour gets its own tests below.
+  useServers.setState({ profiles: [], loading: true, error: null });
+  mockServersList.mockResolvedValue([makeProfile()]);
   document.documentElement.dataset.theme = "";
   localStorage.clear();
   // The application picks its language from the system when the core has nothing stored,
@@ -179,6 +211,26 @@ describe("the shell", () => {
   it("opens the task section by default", async () => {
     renderIn(<App />);
     expect(await screen.findByText(ru.ui.tasks.empty)).toBeInTheDocument();
+  });
+});
+
+describe("the first-run redirect (T509)", () => {
+  it("sends someone with no server profile to the servers screen, not an empty task panel", async () => {
+    mockServersList.mockResolvedValue([]);
+    renderIn(<App />);
+
+    // The servers screen explains the emptiness and offers "Add server" (ServerList.tsx
+    // already does this); the point checked here is only that `/` actually lands there.
+    expect(await screen.findByText(ru.ui.servers.empty)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.tasks.empty)).not.toBeInTheDocument();
+  });
+
+  it("still opens the task section when a server profile already exists", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    renderIn(<App />);
+
+    expect(await screen.findByText(ru.ui.tasks.empty)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.servers.empty)).not.toBeInTheDocument();
   });
 });
 

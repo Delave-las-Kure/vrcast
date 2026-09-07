@@ -15,7 +15,7 @@ import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { DeployPage } from "../features/deploy/DeployPage";
 import { LadderPage } from "../features/ladder/LadderScreen";
 import { BatchScreen } from "../features/batch/BatchScreen";
-import { useActiveServer } from "../features/servers/store";
+import { useActiveServer, useServers } from "../features/servers/store";
 import { LimitsList } from "../features/viewers/LimitsList";
 import { Appearance } from "../features/settings/Appearance";
 import { DiagPage } from "../features/diag/DiagPage";
@@ -38,6 +38,20 @@ function AppShell() {
   // looks like "nothing is capped".
   const activeServer = useActiveServer()?.id ?? null;
   const location = useLocation();
+  // T509 — whether there is a first-run wizard to send somebody to. `profiles.length === 0`
+  // means "nobody has a server profile yet", and that is only trustworthy once the initial
+  // load has actually finished (`!loading`): during the load itself the list reads as
+  // empty regardless of what is really on disk, and sending a person to `/servers` on that
+  // basis would flash the wizard at everyone for a moment, on every start.
+  const { profiles, loading: profilesLoading, reload: reloadServers } = useServers();
+
+  useEffect(() => {
+    // Read early enough that `profiles`/`loading` are settled by the time `/` is first
+    // decided. `ServerList.tsx` already calls this on its own mount, but that is too late
+    // here: the redirect below has to know the answer before that screen ever renders.
+    void reloadServers();
+  }, [reloadServers]);
+
   // Until the settings have been read, movement is on: that is the default, and one stray
   // flicker is better than looking dead to somebody who left it turned on.
   const motion = useSettings().settings?.animations !== false;
@@ -103,7 +117,30 @@ function AppShell() {
        */}
       <main className="content">
         <Routes key={location.pathname}>
-          <Route path="/" element={<Navigate to="/tasks" replace />} />
+          <Route
+            path="/"
+            element={
+              // T509 — nobody with zero server profiles has any business landing on an
+              // empty task panel with no hint at all of what to do next. `/servers`
+              // already shows `t.ui.servers.empty` and the "Add server" button that opens
+              // `SetupWizard` (`ServerList.tsx`) — nothing there needs fixing, only this
+              // redirect needed pointing at it.
+              //
+              // While the very first load is still in flight nothing is rendered here at
+              // all — not even a guess at `/tasks`. `<Route path="/">` only re-evaluates
+              // its element while the address is still exactly "/"; a guessed redirect to
+              // `/tasks` would move the address away and this decision would never run a
+              // second time once the real answer came in, leaving a first-time person
+              // stranded on the empty task panel this exists to route them away from.
+              // Waiting here costs one blank instant behind the (already mounted) sidebar,
+              // not a flicker between two screens.
+              profilesLoading ? null : profiles.length === 0 ? (
+                <Navigate to="/servers" replace />
+              ) : (
+                <Navigate to="/tasks" replace />
+              )
+            }
+          />
           <Route path="/tasks" element={<TasksPanel />} />
           <Route path="/servers" element={<ServerList />} />
           <Route path="/library" element={<LibraryScreen />} />
