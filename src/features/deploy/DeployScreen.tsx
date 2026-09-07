@@ -24,6 +24,8 @@ import { DomainCheck } from "./DomainCheck";
 import { Ipv6Choice } from "./Ipv6Choice";
 import { StepList } from "./StepList";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { toInput } from "../servers/EditServerDialog";
+import { useServerById } from "../servers/store";
 import { useT } from "../../shared/i18n";
 import { ipc, onDeployProgress, onTaskDone } from "../../shared/ipc";
 import type {
@@ -31,12 +33,23 @@ import type {
   DeployPreview,
   DomainAnswer,
   Ipv6Choice as Choice,
+  Ipv6Mode,
   PlannedStep,
 } from "../../shared/contract";
+
+/** `Choice` (this screen, `"Keep" | "Disable"`) to `Ipv6Mode` (the profile,
+ *  `"keep" | "disable"`) — two different serialisations of the same two-way decision,
+ *  kept apart deliberately (T525(3)): the deploy command and the profile are different
+ *  parts of the contract, and reading one field's exact spelling off the other would be
+ *  the guess the core's own comment warns against. */
+function choiceToMode(choice: Choice): Ipv6Mode {
+  return choice === "Keep" ? "keep" : "disable";
+}
 
 export function DeployScreen({ serverId }: { serverId: string }) {
   const t = useT();
   const words = t.ui.deploy;
+  const profile = useServerById(serverId);
 
   // **`null` means nobody has chosen yet** (T525(1)). `deploy/ipv6.rs` in the core says it
   // plainly in its own header: two paths, and neither of them is a default — a default here
@@ -59,6 +72,28 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   // — impossible today since `DomainCheck` only runs once `ipv6` is chosen, but the
   // condition says the real rule rather than leaning on that ordering.
   const readyToStart = ipv6 !== null && domainOk;
+
+  // **The choice is remembered, not just used for this run** (T525(3)). Without this, the
+  // profile keeps `ipv6_mode: null` forever — `SetupWizard` rightly writes `null` at
+  // creation time, since nobody has seen this screen yet, but from here on a person who
+  // reopens this screen (or restarts the application) should not be asked the same question
+  // with no memory of the last answer. A failed write is not allowed to block the
+  // deployment itself: it is a side effect of the choice, not a precondition for using it —
+  // so it is attempted silently and its failure does not surface as an `ErrorNotice`,
+  // exactly as it would not stop `start` below from running with the in-memory `ipv6`.
+  const chooseIpv6 = useCallback(
+    (choice: Choice) => {
+      setIpv6(choice);
+      if (!profile) return;
+      const input = { ...toInput(profile), ipv6_mode: choiceToMode(choice) };
+      void ipc.serverUpdate(serverId, input, null).catch(() => {
+        // Silent: see the comment above `chooseIpv6`. The person's choice still drives
+        // this run of the deploy screen either way.
+      });
+    },
+    [profile, serverId],
+  );
+
 
   // The plan is asked for only once the domain is right. Asking earlier is possible, but a
   // list of changes that cannot be applied reads as an offer — a person agrees to it, and
@@ -126,7 +161,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
       {error && <ErrorNotice error={error} />}
 
       {/* The choice comes first: which DNS record has to exist depends on it. */}
-      <Ipv6Choice value={ipv6} onChange={setIpv6} disabled={running !== null} />
+      <Ipv6Choice value={ipv6} onChange={chooseIpv6} disabled={running !== null} />
 
       {/* Nothing to check the domain against until a choice is made: which record has to
           exist is exactly what the choice decides. */}

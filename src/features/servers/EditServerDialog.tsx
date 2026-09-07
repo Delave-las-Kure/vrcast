@@ -37,7 +37,11 @@ import { useServers } from "./store";
 
 type Stage = "form" | "fingerprint" | "test";
 
-function toInput(profile: ServerProfile): ServerInput {
+/** `ServerProfile → ServerInput`, keeping every field but the ones the core never hands
+ *  back (the secret) or manages itself (`id`, `is_active`, `host_fingerprint`). Shared
+ *  with `DeployScreen` (T525(3)), which saves a single field this same way rather than
+ *  inventing a second conversion. */
+export function toInput(profile: ServerProfile): ServerInput {
   return {
     name: profile.name,
     host: profile.host,
