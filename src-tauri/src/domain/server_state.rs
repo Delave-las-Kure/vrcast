@@ -45,6 +45,24 @@ pub struct StateFile {
     pub video_dir: String,
     #[serde(default)]
     pub domain: String,
+    /// Whether `Verify` actually confirmed the serving over the domain, from this run
+    /// (T526).
+    ///
+    /// **False only in a container**, where `Verify` cannot ask anything — there is no
+    /// domain of its own and no certificate — and answers `Checked::NotPossibleHere`
+    /// rather than being skipped as not needed. Before this field existed the file was
+    /// written the same way regardless, so on a real server (never a container, the one
+    /// place this differs) a deployment saying "done" always meant serving really was
+    /// confirmed — which is why an old file missing this key defaults to `true`
+    /// (`default_serving_verified`) rather than to the more cautious `false`: defaulting
+    /// to `false` would call every server deployed before this field existed "unverified",
+    /// which is not true of a single one of them.
+    #[serde(default = "default_serving_verified")]
+    pub serving_verified: bool,
+}
+
+fn default_serving_verified() -> bool {
+    true
 }
 
 /// Why a state file could not be believed.

@@ -44,6 +44,10 @@ mod deploy_fixture;
 #[path = "integration/deploy_clean.rs"]
 mod deploy_clean;
 
+/// T526 — the `serving_verified` flag the state file carries.
+#[path = "integration/deploy_state_verify.rs"]
+mod deploy_state_verify;
+
 #[path = "integration/deploy_versions.rs"]
 mod deploy_versions;
 

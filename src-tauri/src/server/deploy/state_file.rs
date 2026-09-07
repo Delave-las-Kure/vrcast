@@ -35,6 +35,14 @@ fn changes(_: &Context<'_>) -> Vec<Change> {
 /// `steps_applied` lists the whole deployment rather than only what this run did: the file
 /// describes the server's state, not the history of how it got there, and a repeat that had
 /// nothing left to do would otherwise write an empty list over a full one.
+///
+/// **`serving_verified` (T526).** In a container `Verify` cannot ask anything at all — no
+/// domain of its own, no certificate — and answers `Checked::NotPossibleHere` rather than
+/// confirming the serving. Writing this file unconditionally afterwards claimed "all of
+/// this was done here", including the one thing that was never checked. Asked the same way
+/// `verify::check` asks (`ctx.machine.is_container()`) rather than by threading the run's
+/// settled steps through, because that is the one and only condition under which `Verify`
+/// answers `NotPossibleHere` — the check above has no other branch that skips it.
 fn body(ctx: &Context<'_>, now: &str) -> String {
     let file = StateFile {
         vrcast_server_version: APP_EXPECTS,
@@ -43,6 +51,7 @@ fn body(ctx: &Context<'_>, now: &str) -> String {
         steps_applied: ORDER.iter().map(|id| format!("{id:?}")).collect(),
         video_dir: ctx.video_dir.to_owned(),
         domain: ctx.domain.to_owned(),
+        serving_verified: !ctx.machine.is_container(),
     };
     serde_json::to_string_pretty(&file).unwrap_or_default()
 }
