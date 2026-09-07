@@ -122,7 +122,21 @@ fn the_close_button_asks_the_settings_and_tells_the_person_once() {
     let at = text
         .find("WindowEvent::CloseRequested")
         .expect("the close button is no longer intercepted at all");
-    let handler = &text[at..(at + 1400).min(text.len())];
+    // ⚠ **To the next builder call, not a fixed number of bytes.** This used to take the 1400
+    // characters after the landmark, and on 2026-09-07 a comment added inside the handler
+    // pushed `say_where_the_window_went` past the end of that window: the check failed about
+    // something that was still there, and the message it printed was about the wrong thing
+    // entirely. A reader that measures in bytes is measuring the wrong quantity — what bounds
+    // the handler is the next thing the builder is told to do.
+    let ends = text[at..]
+        .find(".setup(")
+        .expect("the builder no longer sets anything up after the close handler");
+    let handler = &text[at..at + ends];
+    assert!(
+        handler.len() > 200,
+        "the close handler read as {} characters, which is not a handler — the landmarks have          moved and everything below would be checking a fragment",
+        handler.len()
+    );
 
     assert!(
         handler.contains("settings.close_to_tray"),
@@ -308,5 +322,88 @@ fn not_being_able_to_count_the_cost_is_treated_as_a_cost() {
         body.contains("unwrap_or(1)") && body.contains("None => 1"),
         "a tray \"Exit\" that cannot reach the core now falls through to leaving. Both ways of \
          failing to count must read as \"something is at stake\":\n{body}"
+    );
+}
+
+/// ⚠ **The close button asks whether there is an icon, not whether there could be** (T518).
+///
+/// `probe` answers about the system — on Windows, always yes. Whether an icon is actually up
+/// is a different question, and there are three ways for the answer to be no: the window has
+/// no icon of its own, so `install` puts nothing there and returns `Ok`; the builder fails and
+/// `tray_labels` logs a warning and answers `Ok`; or the interface has not called it yet,
+/// which is every moment between the window appearing and React running its first effects —
+/// and the window is shown from `setup`, so that moment is real.
+///
+/// In all three the button hid the window into nothing: the application still running, still
+/// holding encodes, nothing on screen to say so and no way back. The tray module's own opening
+/// paragraph calls that the worst outcome available, and the decision written to avoid it was
+/// the way to reach it.
+///
+/// Read out of the source for the reason the test above gives: the handler is a closure Tauri
+/// calls with a window, and there is no window here. What can be stated exactly is which
+/// question it asks.
+#[test]
+fn the_close_button_asks_whether_an_icon_is_there_rather_than_whether_one_could_be() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+    let text = std::fs::read_to_string(&path).expect("lib.rs would not read");
+
+    let at = text
+        .find("WindowEvent::CloseRequested")
+        .expect("the close button is no longer intercepted at all");
+    let ends = text[at..]
+        .find(".setup(")
+        .expect("the builder no longer sets anything up after the close handler");
+    let handler = &text[at..at + ends];
+
+    assert!(
+        handler.contains("where_the_window_would_go"),
+        "the close button decides where the window goes without asking whether the icon is \
+         actually there"
+    );
+    // The comment above may name `probe` while explaining why it is not used; the code must
+    // not call it.
+    let code: String = handler
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !code.contains("tray::probe()"),
+        "the close button still asks the system what it could show, which on Windows is \
+         always yes and says nothing about whether an icon went up"
+    );
+}
+
+/// Both halves of "is there somewhere to go", and neither answers on its own (T518).
+///
+/// The system saying it could show an icon is not an icon being up — on Windows it says so
+/// always, and the icon is put there by the interface, which may not have run yet, may have
+/// found no window icon to use, or may have been told the builder failed and gone quietly on.
+/// And an icon this process created on a session with no panel to draw it is not somewhere to
+/// go either, which is what the probe is for.
+#[test]
+fn somewhere_to_go_needs_the_system_and_the_icon_both() {
+    use vrcast_studio_lib::tray::{somewhere_to_go, TrayState};
+
+    assert_eq!(
+        somewhere_to_go(TrayState::Installed, true),
+        TrayState::Installed,
+        "a system that can show one and an icon that is up is the one case there is"
+    );
+    assert_eq!(
+        somewhere_to_go(TrayState::Installed, false),
+        TrayState::Unavailable,
+        "the system could show an icon and none is up — hiding the window here is hiding it \
+         into nothing, which this module calls the worst outcome available"
+    );
+    assert_eq!(
+        somewhere_to_go(TrayState::Unavailable, true),
+        TrayState::Unavailable,
+        "an icon was created on a session with nothing to draw it: it exists to us and to \
+         nobody else"
+    );
+    assert_eq!(
+        somewhere_to_go(TrayState::Unavailable, false),
+        TrayState::Unavailable
     );
 }

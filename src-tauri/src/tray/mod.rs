@@ -114,6 +114,42 @@ extern "C" {
     fn dlclose(handle: *mut std::os::raw::c_void) -> i32;
 }
 
+/// Whether there is somewhere to minimise to **right now**.
+///
+/// ⚠ **Not the same question as `probe`, and asking the wrong one is the worst outcome this
+/// module names** (T518). `probe` answers "could this system show a tray icon" — on Windows,
+/// always. Whether one is actually up is a different matter, and there are three ways for it
+/// not to be: the window has no icon of its own, in which case `install` returns without
+/// putting anything there; `TrayIconBuilder::build` fails, and `tray_labels` logs a warning
+/// and answers `Ok`; or the interface has simply not called it yet, which is every moment
+/// between the window appearing and React running its first effects.
+///
+/// In all three the close button hid the window into nothing — the application still running,
+/// still holding encodes, nothing on screen to say so and no way back. This module's opening
+/// paragraph calls that the worst outcome available; it was reachable through the very
+/// decision written to avoid it.
+///
+/// So this asks the icon. `tray_by_id` answers about the thing itself rather than about the
+/// platform, and a `None` from it is the honest "there is nowhere to go".
+#[cfg(desktop)]
+pub fn where_the_window_would_go<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> TrayState {
+    somewhere_to_go(probe(), app.tray_by_id(ID).is_some())
+}
+
+/// The rule itself: both halves, and both are necessary.
+///
+/// Pure and separate for the same reason as [`close_action`] — it is the whole of the
+/// decision, and the only part of it that can be checked without a desktop session. Neither
+/// half answers on its own: the system saying it could show an icon is not one being up, and
+/// an icon this process put up on a session with no panel to draw it is not somewhere to go
+/// either.
+pub fn somewhere_to_go(system: TrayState, icon_is_up: bool) -> TrayState {
+    match (system, icon_is_up) {
+        (TrayState::Installed, true) => TrayState::Installed,
+        (TrayState::Installed, false) | (TrayState::Unavailable, _) => TrayState::Unavailable,
+    }
+}
+
 // ---------- putting the icon there (T395) ----------
 
 /// The labels the tray menu shows, handed in by the interface.

@@ -135,8 +135,15 @@ pub fn run() {
                     .and_then(|s| crate::store::settings::load(&s.db).ok())
                     .unwrap_or_default();
 
-                if crate::tray::close_action(crate::tray::probe(), settings.close_to_tray)
-                    == crate::tray::CloseAction::Hide
+                // **Whether there is an icon, not whether there could be** (T518). `probe`
+                // answers about the system and says yes on Windows always; the icon is put up
+                // by the interface, and until it has been there is nowhere for this window to
+                // go. Hiding it then is the outcome the tray module's own opening paragraph
+                // calls the worst available.
+                if crate::tray::close_action(
+                    crate::tray::where_the_window_would_go(app),
+                    settings.close_to_tray,
+                ) == crate::tray::CloseAction::Hide
                 {
                     api.prevent_close();
                     let _ = window.hide();
