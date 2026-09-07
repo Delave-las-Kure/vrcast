@@ -45,6 +45,18 @@ pub enum BuildError {
         rungs: usize,
     },
 
+    /// A variant came out of the encoder and does not decode (principle II, T499).
+    ///
+    /// **Named separately from a failure to prepare**, because it is a different afternoon:
+    /// the encoder said it had finished, and the file it finished is broken. The decoder's own
+    /// words are carried — "Invalid NAL unit size" is cryptic and searchable, and "the file is
+    /// broken" is neither.
+    #[error("the variant {variant} does not decode: {}", .problems.join("; "))]
+    VariantBroken {
+        variant: String,
+        problems: Vec<String>,
+    },
+
     /// The **local** disk cannot hold one variant (T452).
     ///
     /// Kept apart from the one above, and not merged with a "which disk" field: the two are
@@ -475,6 +487,29 @@ async fn prepare_and_send(
             crate::media::convert::ConvertError::Cancelled => BuildError::Cancelled,
             other => BuildError::Prepare(other.to_string()),
         })?;
+
+    // ⚠ **Nothing unchecked reaches viewers** (constitution, principle II; FR-027). Between
+    // the encode and the send there used to be nothing at all: `media::validate` was called
+    // from the single-file path and from a command no screen calls, and every rung of every
+    // ladder went to the server on the strength of ffmpeg having exited zero. A variant is not
+    // a lesser file — it is what a viewer is actually served, and the whole point of the set
+    // is that the player switches to it without asking anybody.
+    //
+    // **The cost is real and is not a reason.** A decode pass is a fraction of the encode that
+    // just happened, and the alternative is a broken rung that nobody meets until a person is
+    // watching. It is reported as its own stage so the time is accounted for rather than
+    // looking like a stall.
+    ctx.report_important(0.0, DetailCode::StageValidating);
+    let verdict = crate::media::validate::validate(&out_path)
+        .await
+        .map_err(|e| BuildError::Prepare(e.to_string()))?;
+    if !verdict.ok {
+        let _ = std::fs::remove_file(&out_path);
+        return Err(BuildError::VariantBroken {
+            variant: variant.file.clone(),
+            problems: verdict.problems,
+        });
+    }
 
     let sent = send(job, &out_path, &variant.file).await;
     // The local copy goes whether the sending worked or not: it is gigabytes, and a failed

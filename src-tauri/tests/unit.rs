@@ -169,6 +169,9 @@ mod keygen;
 #[path = "unit/cancelling.rs"]
 mod cancelling;
 
+#[path = "unit/nothing_unchecked.rs"]
+mod nothing_unchecked;
+
 #[path = "unit/spawn_hygiene.rs"]
 mod spawn_hygiene;
 

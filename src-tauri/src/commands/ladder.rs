@@ -475,6 +475,12 @@ fn build_error(e: crate::tasks::ladder_build::BuildError) -> AppError {
                     .with("at", at.clone()),
             )
             .with_cause(format!("short_by={short_by} at={at}")),
+        // The code that already exists for exactly this, rather than the catch-all below: a
+        // file that came out of the encoder and does not decode is not an internal fault, it
+        // is the answer principle II exists to get. The decoder's own words go in the cause —
+        // cryptic and searchable beats "the file is broken", which is neither.
+        E::VariantBroken { variant, problems } => AppError::new(ErrorCode::DecodeValidationFailed)
+            .with_cause(format!("{variant}: {}", problems.join("; "))),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }
