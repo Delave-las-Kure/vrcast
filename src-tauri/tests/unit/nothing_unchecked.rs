@@ -11,12 +11,18 @@
 //! each rung with the same call and sent it on the strength of ffmpeg having exited zero. A
 //! variant is not a lesser file. It is precisely what a viewer is served.
 //!
-//! **Why a source check.** Producing a file that encodes cleanly and decodes badly needs a
-//! broken encoder or a corrupted disk; a test cannot arrange one honestly, and a fixture that
-//! pretended to would be checking the fixture. What can be stated exactly is the shape: every
-//! path that sends a prepared file to a server decodes it first, and the decode stands between
-//! the encode and the send rather than anywhere else. `spawn_hygiene` makes the same trade and
-//! gives the same reason.
+//! **Why a source check, and what is checked by behaviour instead.** Producing a file that
+//! encodes cleanly and decodes badly needs a broken encoder or a corrupted disk; a test cannot
+//! arrange one honestly, and a fixture that pretended to would be checking the fixture. So the
+//! **refusal** is guarded here, at the source, where the shape is exactly stateable: every path
+//! that sends a prepared file decodes it first, and the decode stands between the encode and
+//! the send. `spawn_hygiene` makes the same trade and gives the same reason.
+//!
+//! The other half **is** behavioural and is not here:
+//! `integration/seams.rs::building_a_ladder_runs_from_the_refusal_to_the_verdict` runs the real
+//! task through the real engine against a real server, on a film it makes itself, and the
+//! decode of every rung happens inside it. That is what says the check does not break a build
+//! that ought to succeed — which a source scan cannot say at all.
 
 use std::path::{Path, PathBuf};
 
