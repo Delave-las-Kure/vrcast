@@ -260,6 +260,13 @@ export function LadderScreen({
   // put away or asked about another file, and at no other moment.
   const alive = useRef(true);
   const [name, setName] = useState(slug ?? "");
+  // The most recent answer, read by `loadPlan` itself rather than by adding `preview` to its
+  // own dependency list (T522). `preview` is *set* by `loadPlan`, so making the callback
+  // depend on it would give it a new identity every time it succeeds — and every effect that
+  // depends on `loadPlan` (there are two below) would fire again, calling it again, setting a
+  // new `preview` object again, forever. A ref sidesteps that: it is always current when
+  // `loadPlan` runs, and updating it changes nothing about the callback's own identity.
+  const previewRef = useRef<LadderPreview | null>(null);
   // T522 — the two fields the core already reads off `LadderRequest` and the screen never
   // gave anyone a way to fill in. Kept as strings on screen and turned into the request's
   // shape only when they hold something: `native_height` is an `Option<u32>` in the core,
@@ -278,6 +285,11 @@ export function LadderScreen({
 
   useEffect(() => {
     alive.current = true;
+    // A different file was never measured under any codec, so there is nothing yet to ask
+    // a repeat `ladderPlan` call to keep asking under (see `loadPlan` below) — reset only
+    // when the file itself changes, not on every edit of the advanced fields, or a codec
+    // this file was measured under would be forgotten the moment somebody typed a height.
+    previewRef.current = null;
     return () => {
       alive.current = false;
     };
@@ -302,11 +314,25 @@ export function LadderScreen({
       const nativeHeight = trimmedHeight === "" ? undefined : Number(trimmedHeight);
       const answer = await ipc.ladderPlan({
         path,
+        // Consistent with `ConvertScreen`, which sends `prefer_hardware: true` without
+        // asking (see the note at the top of that file): the encoder already decides for
+        // itself whether hardware helps, and nothing here gives a person grounds to
+        // second-guess it that `ConvertScreen` doesn't equally have.
+        prefer_hardware: true,
+        // `codec` asks for a plan for the codec a measurement was already made under — so
+        // that measurement is not thrown away by asking for a different codec's plan by
+        // accident. There is nothing to ask for on the very first call for a file: no
+        // measurement has happened yet, so `previewRef` is still null and the field is
+        // left off. The core then falls back to its own default (`h264`,
+        // `#[serde(default = "h264")]`), which is right for a file nobody has measured
+        // anything about yet.
+        codec: previewRef.current?.codec,
         native_height:
           nativeHeight !== undefined && Number.isFinite(nativeHeight) ? nativeHeight : undefined,
         declared_layout: declaredLayout === "" ? undefined : declaredLayout,
       });
       if (!alive.current) return null;
+      previewRef.current = answer;
       setPreview(answer);
       setRungs(answer.plan.rungs);
       if (answer.from !== "formula") setOffer(null);

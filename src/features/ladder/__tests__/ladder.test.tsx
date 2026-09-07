@@ -924,6 +924,8 @@ describe("the advanced fields the core already reads (T522)", () => {
     await waitFor(() =>
       expect(mockLadderPlan).toHaveBeenLastCalledWith({
         path: "F:/films/film.mp4",
+        prefer_hardware: true,
+        codec: undefined,
         native_height: 1080,
         declared_layout: undefined,
       }),
@@ -945,9 +947,59 @@ describe("the advanced fields the core already reads (T522)", () => {
     await waitFor(() =>
       expect(mockLadderPlan).toHaveBeenLastCalledWith({
         path: "F:/films/film.mp4",
+        prefer_hardware: true,
+        codec: undefined,
         native_height: undefined,
         declared_layout: "SideBySide",
       }),
+    );
+  });
+
+  it("always tells the core to prefer hardware, without asking — consistent with ConvertScreen", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalled());
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ prefer_hardware: true });
+
+    // And still true once something else about the request changes — this is not a
+    // one-off sent by accident on the first call alone.
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.nativeHeight), {
+      target: { value: "1080" },
+    });
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith(
+        expect.objectContaining({ prefer_hardware: true }),
+      ),
+    );
+  });
+
+  it("asks nothing about the codec on the first plan for a file nobody has measured yet", async () => {
+    // No measurement has happened yet, so there is no codec on screen to ask the core to
+    // keep planning under — the core falls back to its own default (h264) instead.
+    mockLadderPlan.mockResolvedValue(preview("formula", GUESSED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalled());
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ codec: undefined });
+  });
+
+  it("asks for the same codec a finished measurement answered under, on the next plan", async () => {
+    // Once `preview.codec` is known — the plan's own answer names it — a later call (here,
+    // filling in the native height triggers one) asks for a plan under that same codec
+    // rather than silently falling back to the core's default and losing the measurement.
+    mockLadderPlan.mockResolvedValue({ ...preview("measured", MEASURED), codec: "hevc" });
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("ladder-advanced")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.nativeHeight), {
+      target: { value: "1080" },
+    });
+
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith(
+        expect.objectContaining({ codec: "hevc" }),
+      ),
     );
   });
 });
