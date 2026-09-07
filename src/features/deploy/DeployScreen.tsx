@@ -38,7 +38,12 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   const t = useT();
   const words = t.ui.deploy;
 
-  const [ipv6, setIpv6] = useState<Choice>("Disable");
+  // **`null` means nobody has chosen yet** (T525(1)). `deploy/ipv6.rs` in the core says it
+  // plainly in its own header: two paths, and neither of them is a default — a default here
+  // would be a silent decision about somebody else's viewers. There used to be one
+  // ("Disable"), which is exactly the decision the core's comment warns against making for
+  // a person.
+  const [ipv6, setIpv6] = useState<Choice | null>(null);
   const [domain, setDomain] = useState<DomainAnswer | null>(null);
   const [preview, setPreview] = useState<DeployPreview | null>(null);
   const [live, setLive] = useState<PlannedStep[] | null>(null);
@@ -49,12 +54,17 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   const [error, setError] = useState<AppError | null>(null);
 
   const domainOk = domain !== null && domain.advice === null;
+  // **The button waits on both** (T525(1)). `domainOk` alone would still let a person start
+  // with no IPv6 choice made at all if the domain happened to check out before one is picked
+  // — impossible today since `DomainCheck` only runs once `ipv6` is chosen, but the
+  // condition says the real rule rather than leaning on that ordering.
+  const readyToStart = ipv6 !== null && domainOk;
 
   // The plan is asked for only once the domain is right. Asking earlier is possible, but a
   // list of changes that cannot be applied reads as an offer — a person agrees to it, and
   // still nothing can start.
   useEffect(() => {
-    if (!domainOk || running) return;
+    if (ipv6 === null || !domainOk || running) return;
     let alive = true;
     setError(null);
     ipc
@@ -91,6 +101,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   }, [running, serverId]);
 
   const start = useCallback(() => {
+    if (ipv6 === null) return;
     setError(null);
     setLive(null);
     ipc
@@ -117,7 +128,9 @@ export function DeployScreen({ serverId }: { serverId: string }) {
       {/* The choice comes first: which DNS record has to exist depends on it. */}
       <Ipv6Choice value={ipv6} onChange={setIpv6} disabled={running !== null} />
 
-      <DomainCheck serverId={serverId} ipv6={ipv6} onAnswer={setDomain} />
+      {/* Nothing to check the domain against until a choice is made: which record has to
+          exist is exactly what the choice decides. */}
+      {ipv6 !== null && <DomainCheck serverId={serverId} ipv6={ipv6} onAnswer={setDomain} />}
 
       {running !== null && (
         <>
@@ -133,7 +146,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
               and a person has a right to know such a file will appear on their server. */}
           <p>{words.machine(preview.memory_mb, preview.disk)}</p>
           <StepList steps={preview.steps} />
-          <button type="button" onClick={start} disabled={!domainOk}>
+          <button type="button" onClick={start} disabled={!readyToStart}>
             {words.agreeAndStart}
           </button>
         </>

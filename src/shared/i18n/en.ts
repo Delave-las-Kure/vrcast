@@ -765,6 +765,8 @@ export const en: Catalogue = {
         `${memoryMb} MB of memory, system disk ${disk}. On a machine with little memory installing packages is killed without a swap file — one will be made.`,
 
       ipv6Question: "What should happen to IPv6 on this server?",
+      ipv6NotChosen:
+        "Choose one of the two options below — neither is assumed by default, because each decides the fate of viewers on an IPv6 connection differently.",
       ipv6Keep: "Keep it",
       ipv6KeepMeans:
         "The protection will cover IPv6 as fully as IPv4. The domain must then have an AAAA record pointing at this server’s IPv6 address — otherwise viewers whose connection prefers IPv6 go nowhere, and the complaint arrives not as “the server is broken” but as “it doesn’t open for me”.",
