@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::deploy_steps::PlannedStep;
 use crate::domain::dns_verdict::{self, Ipv6Choice, Records, ServerAddresses, Verdict};
-use crate::domain::server_profile::{AuthKind, ServerProfile};
+use crate::domain::server_profile::{AuthKind, Ipv6Mode, ServerProfile};
 use crate::domain::server_state::ServerState;
 use crate::domain::wording::Detail;
 use crate::net::dns;
@@ -226,7 +226,7 @@ pub mod api {
             conn: &opened.conn,
             domain: &profile.domain,
             video_dir: &profile.video_dir,
-            ipv6: Ipv6Choice::Keep,
+            ipv6: ipv6_choice_of(&profile),
             server: addresses_of(&profile, &facts),
             public_key,
             machine: facts,
@@ -253,10 +253,17 @@ pub mod api {
         if !confirmed {
             return Err(AppError::new(ErrorCode::ConfirmationRequired));
         }
+        // **The choice made at deployment, not a re-guessed one** (T525). `start` looks
+        // the profile up again for its own purposes, but the IPv6 choice has to be known
+        // here, before the task exists, because it is `start`'s own `ipv6` parameter — the
+        // same one a fresh deployment gets from the person on `DeployScreen`. An upgrade has
+        // nobody on that screen to ask, so it is read back from what was decided the one
+        // time somebody was there to answer.
+        let profile = super::super::library::api::profile_of(state, server_id)?;
         start(
             state,
             server_id,
-            Ipv6Choice::Keep,
+            ipv6_choice_of(&profile),
             crate::tasks::deploy::Kind::Upgrade,
         )
         .await
@@ -278,7 +285,7 @@ pub mod api {
             conn: &opened.conn,
             domain: &profile.domain,
             video_dir: &profile.video_dir,
-            ipv6: Ipv6Choice::Keep,
+            ipv6: ipv6_choice_of(&profile),
             server: addresses_of(&profile, &facts),
             public_key,
             machine: facts,
@@ -412,6 +419,30 @@ fn make_key_for(profile: &ServerProfile) -> Result<crate::ssh::keygen::MadeKey> 
         "vrcast-studio: {}",
         profile.name
     ))?)
+}
+
+/// What the profile decided about IPv6, turned into what a deploy step actually executes
+/// (T525).
+///
+/// **Why `None` becomes `Keep` and not a refusal.** `Ipv6Mode` on the profile is an
+/// `Option` on purpose — its own doc comment says a silent default is not acceptable when a
+/// person is asked to choose, and that is the choice made once, at first deployment, on
+/// `DeployScreen`. This function is not that screen: it runs for `server_upgrade_plan`,
+/// `server_upgrade_run` and `server_rollback`, which touch a server that is *already
+/// running* with whatever IPv6 state it already has. A profile with `None` here is not one
+/// where nobody has decided — the deployment predates the field existing at all, back when
+/// there was no `ipv6.rs` step and no choice to record. For that server, "keep whatever it
+/// already has" changes nothing; it is the same safe, inert answer every other
+/// `NotPossibleHere`/`NotNeeded` outcome in this deploy layer gives when there is nothing
+/// to act on, not a guess dressed up as a decision. Silently switching such a server's IPv6
+/// off during a routine upgrade — because nobody ever explicitly re-confirmed a setting
+/// that predates the setting — would be the actual silent default this comment's sibling
+/// warns against, aimed at a person who is not even looking at the deploy screen right now.
+pub fn ipv6_choice_of(profile: &ServerProfile) -> Ipv6Choice {
+    match profile.ipv6_mode {
+        Some(Ipv6Mode::Keep) | None => Ipv6Choice::Keep,
+        Some(Ipv6Mode::Disable) => Ipv6Choice::Disable,
+    }
 }
 
 /// The public key a deployment works against, whatever the profile signs in with.
