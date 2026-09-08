@@ -54,6 +54,12 @@ pub const TARGET_DENSITY: f64 = 0.05;
 ///
 /// H.264 needs more bits for the same picture, so a cap taken from an HEVC source's
 /// bitrate would cut the ladder off far below where the detail actually runs out.
+///
+/// ⚠ **Shares its numeric value with [`UPSCALE_HEADROOM`] below by coincidence only** —
+/// found by an independent QA audit (round 3, T557, 2026-09-08). The two constants come
+/// from unrelated domains (codec bitrate equivalence vs. upscale detection) and are not
+/// meant to move together. A search-and-replace on `1.6` that touches this constant
+/// without meaning to is the exact mistake this comment exists to catch.
 const HEVC_TO_H264: f64 = 1.6;
 
 /// How far above an upscaled source's native height there is anything left to encode.
@@ -61,6 +67,12 @@ const HEVC_TO_H264: f64 = 1.6;
 /// Measured on 2026-08-07 on material upscaled from 1080 to 2160: the best height by VMAF
 /// settled at 1728 and **stayed there** at 4, 8 and 14 Mbit/s, while the density formula
 /// was calling for 2160 and 1936. 1728/1080 is 1.6.
+///
+/// ⚠ **Shares its numeric value with [`HEVC_TO_H264`] above by coincidence only** — found
+/// by an independent QA audit (round 3, T557, 2026-09-08). The two constants come from
+/// unrelated domains (upscale detection vs. codec bitrate equivalence) and are not meant
+/// to move together. A search-and-replace on `1.6` that touches this constant without
+/// meaning to is the exact mistake this comment exists to catch.
 pub const UPSCALE_HEADROOM: f64 = 1.6;
 
 /// How the two eyes of a stereoscopic frame are laid out.
