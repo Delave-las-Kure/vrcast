@@ -534,6 +534,12 @@ export interface Batch {
   label: string;
 }
 
+/** What a task produced, for a person to go and look at (T519(3)). Filled only for
+ *  Upload and BuildLadder — every other kind leaves this null. */
+export interface TaskResult {
+  media_id: string;
+}
+
 export interface Task {
   id: string;
   kind: TaskKind;
@@ -555,6 +561,9 @@ export interface Task {
   /** Which batch this belongs to and what to call it (T445). Null for anything a person
    *  started on its own. */
   batch: Batch | null;
+  /** What the task produced, for a person to go and look at (T519(3)). Null for every
+   *  kind except Upload and BuildLadder. */
+  result: TaskResult | null;
   /** Place in the queue: lower runs sooner. Changed by reordering (FR-083). */
   queue_order: number;
   /** Whether pressing "carry on" would do anything (T515).
@@ -566,10 +575,6 @@ export interface Task {
   can_resume: boolean;
   created_at: string;
   updated_at: string;
-  /** What this task produced, for a person to go and look at (T519(3)). Filled only for
-   *  an `upload` or a `build_ladder` that finished with its medium known — see the note
-   *  below on why it can stay null even then. */
-  result: { media_id: string } | null;
 }
 
 /** What becomes of a task if the application is closed (FR-086). */
