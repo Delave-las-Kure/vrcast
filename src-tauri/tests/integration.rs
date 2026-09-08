@@ -54,6 +54,9 @@ mod deploy_versions;
 #[path = "integration/deploy_resume.rs"]
 mod deploy_resume;
 
+#[path = "integration/deploy_network_cut.rs"]
+mod deploy_network_cut;
+
 #[path = "integration/deploy_stand.rs"]
 mod deploy_stand;
 
