@@ -1313,7 +1313,7 @@ export const en: Catalogue = {
       testing: "Checking…",
       test: "Check the connection",
       confirmRemoval:
-        "Delete this profile? The password or key for this server will be forgotten too.",
+        "Delete this profile? The password or key for this server will be forgotten, and its local media library records will be lost too.",
       removeYes: "Yes, delete",
       remove: "Delete",
       steps: {
