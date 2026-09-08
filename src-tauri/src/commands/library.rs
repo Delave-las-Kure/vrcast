@@ -181,6 +181,7 @@ pub mod ipc {
         media_id: String,
         title: Option<String>,
         slug: Option<String>,
+        confirmed: Option<bool>,
     ) -> Result<()> {
         api::media_rename(
             &state,
@@ -188,6 +189,7 @@ pub mod ipc {
             &media_id,
             title.as_deref(),
             slug.as_deref(),
+            confirmed.unwrap_or(false),
         )
         .await
     }
@@ -558,13 +560,17 @@ pub mod api {
     /// Rename a medium.
     ///
     /// Changing the short name renames the files and **breaks the old links**: the
-    /// interface must warn about that before calling.
+    /// interface must warn about that before calling. When somebody is watching right now,
+    /// the rename is refused with `FILE_IN_USE` unless `confirmed` (FR-019a) — the same
+    /// mechanism `media_delete` already has for the same reason: a `mv` on the server
+    /// would drop an active download without warning.
     pub async fn media_rename(
         state: &AppState,
         server_id: &str,
         media_id: &str,
         title: Option<&str>,
         slug: Option<&str>,
+        confirmed: bool,
     ) -> Result<()> {
         let profile = profile_of(state, server_id)?;
 
@@ -605,6 +611,14 @@ pub mod api {
         if let Some(s) = new_slug {
             let old = media.slug.clone();
             if s != old {
+                if !confirmed {
+                    let connections = active_connections(&conn).await;
+                    if connections > 0 {
+                        conn.close().await;
+                        return Err(AppError::new(ErrorCode::FileInUse)
+                            .with_cause(format!("connections={connections}")));
+                    }
+                }
                 rename_entries(&conn, &profile.video_dir, media, &old, s).await?;
                 media.slug = s.to_owned();
             }
@@ -737,6 +751,12 @@ pub mod api {
     /// The file stays where it is — only which medium it belongs to changes. Renaming it to
     /// follow the new short name will not do: that would break working links, which nobody
     /// asked for.
+    ///
+    /// `confirmed` is accepted for the shape of the contract to match `media_rename` and
+    /// `media_delete`, but is not acted on: FILE_IN_USE exists to warn before an operation
+    /// that can drop an active download (a `mv` or an `rm` on the server). This one issues
+    /// neither — the file's bytes and its path are untouched, only a JSON record of which
+    /// medium owns it changes — so there is nothing an active viewer could be cut off from.
     pub async fn file_move(
         state: &AppState,
         server_id: &str,

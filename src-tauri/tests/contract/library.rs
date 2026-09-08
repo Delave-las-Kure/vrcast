@@ -117,7 +117,7 @@ async fn a_rename_with_not_one_new_value_is_rejected() {
     // A call that changes nothing yet writes the catalogue is a needless generation and a
     // needless chance to diverge from another copy of the application.
     let (s, id) = state_with_server();
-    let err = api::media_rename(&s, &id, "m1", None, None)
+    let err = api::media_rename(&s, &id, "m1", None, None, false)
         .await
         .expect_err("a rename into nothing was accepted");
     assert_eq!(err.code, ErrorCode::InvalidInput);
