@@ -4,7 +4,13 @@ import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
-  { ignores: ["dist", "src-tauri/target"] },
+  {
+    // Git worktree исполнителей (backend/frontend/qa) физически лежат внутри дерева
+    // репозитория, каждый со своим node_modules и собранным кодом. Без этой записи
+    // голый `eslint .` спускается внутрь них и линтит чужой сборочный вывод, а не
+    // исходники этого проекта (T549: 2517 ложных ошибок на объединённом main).
+    ignores: ["dist", "src-tauri/target", ".worktrees"],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
