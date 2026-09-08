@@ -294,6 +294,7 @@ pub mod api {
                 native_height: measured.native_height,
                 prefer_hardware: measured.prefer_hardware,
                 declared_layout: None,
+                measured_peak_bps: None,
             },
         )
         .await?;

@@ -31,6 +31,11 @@ pub struct LadderRequest {
     pub native_height: Option<u32>,
     /// What the person says the picture is, when they know better than a guess.
     pub declared_layout: Option<Layout>,
+    /// The peak `ladder_measure` found on this file, when it has finished in time. Always
+    /// wins over the complexity probe's own estimate when present — a full read of every
+    /// packet is a better anchor than a few seconds of trial encodes (T522). `None` when
+    /// the measurement has not landed yet: the probe's own estimate is the fallback.
+    pub measured_peak_bps: Option<u64>,
     #[serde(default = "yes")]
     pub prefer_hardware: bool,
 }
@@ -198,20 +203,25 @@ pub mod api {
         .await;
         notices.extend(probe.notice.clone());
 
-        let plan = ladder::plan(probe.measured_bps, &source, request.declared_layout).map_err(
-            |refusal| match refusal {
+        // The measured peak wins over the probe's own estimate whenever it has landed in
+        // time (T522, решение владельца 2026-09-08, правило 1) — a full read of every
+        // packet beats a few seconds of trial encodes. Falls back to the probe's estimate
+        // when the measurement has not arrived yet, exactly as before.
+        let effective_measured_bps = request.measured_peak_bps.or(probe.measured_bps);
+
+        let plan = ladder::plan(effective_measured_bps, &source, request.declared_layout)
+            .map_err(|refusal| match refusal {
                 ladder::Refusal::SourceBitrateTooLow { .. } => {
                     AppError::new(ErrorCode::InvalidInput).with_cause(refusal_text(refusal))
                 }
-            },
-        )?;
+            })?;
 
         Ok(LadderPreview {
             verdict: LadderVerdict::of(&plan.rungs, &source),
             plan,
             from: LadderSource::Formula,
             source,
-            anchor_mbps: probe.measured_bps.map(|bps| (bps / 1_000_000).max(1)),
+            anchor_mbps: effective_measured_bps.map(|bps| (bps / 1_000_000).max(1)),
             codec: request.codec.clone(),
             borrowed_from: None,
             // Nothing was measured, so there is nothing to look into.
@@ -268,6 +278,9 @@ pub mod api {
                 codec: h264(),
                 native_height: None,
                 declared_layout: None,
+                // This path only reads `.from`, never `.rungs` — no measured peak to feed
+                // in here, and none is needed (T522).
+                measured_peak_bps: None,
                 prefer_hardware: request.prefer_hardware,
             },
         )
