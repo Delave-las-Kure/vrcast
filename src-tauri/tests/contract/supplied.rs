@@ -40,40 +40,7 @@ fn frontend(rel: &str) -> PathBuf {
 /// **This list is the point of the check, and it must shrink.** An entry says "the core can
 /// take this, deliberately nobody sends it yet, because —". An entry with no reason is a
 /// screen somebody forgot to finish, which is what this is here to find.
-const NOT_SENT_YET: &[(&str, &str, &str)] = &[
-    (
-        "LadderRequest",
-        "native_height",
-        "Found by this guard on its first run, 2026-09-06, and it is a real gap rather than a \
-         deferred one: an upscaled master — 1080p stretched to 2160p — is planned as genuine \
-         4K, so every rung is sized for detail that is not in the file. The core has always taken \
-         it; what is missing is the control that asks for it. Closed by T492's edit \
-         screen or by an ask on the ladder screen.",
-    ),
-    (
-        "MeasureRequest",
-        "native_height",
-        "The same gap one layer down, and the pair is why it matters: the measurement and the \
-         ladder must agree about what the material is, and today both guess. Closed with the \
-         entry above, by the same control.",
-    ),
-    (
-        "LadderRequest",
-        "declared_layout",
-        "Side-by-side and over-under material: 3580x1080 is a 4K load and reads as FHD, which \
-         is measured and recorded in the project's own notes. The core takes the person's \
-         word for it and no screen offers the word. Closed by the same control.",
-    ),
-    (
-        "LadderRequest",
-        "measured_peak_bps",
-        "T522, backend half only (2026-09-08): `ladder_plan` now lets an already-finished \
-         `ladder_measure` peak win over the complexity probe's own estimate when the caller \
-         supplies it — but no screen supplies it yet. `LadderScreen.tsx` already calls \
-         `ladderMeasure` alongside `ladderPlan`; wiring its result into this field is the \
-         frontend half of T522, a separate round. Closed then.",
-    ),
-];
+const NOT_SENT_YET: &[(&str, &str, &str)] = &[];
 
 /// Wrapper parameters that may be left out, each with the reason and what closes it.
 ///
@@ -350,9 +317,8 @@ fn the_scan_reaches_both_sides() {
         written.contains("ladderPlan"),
         "the interface was scanned and `ladderPlan` is not among its words — src/ was not read"
     );
-    assert!(
-        !written.contains("declared_layout"),
-        "`declared_layout` now appears in the interface: if a screen sends it, delete its \
-         entry from NOT_SENT_YET"
-    );
+    // The check that `declared_layout` was still missing from the interface lived here while
+    // the gap was open (T531/T522). T492 closed it — `LadderScreen.tsx` now sends the field —
+    // and the NOT_SENT_YET entry for it is gone (T544). Keeping an assertion that the field
+    // stays absent would just re-open the gap this guard exists to close.
 }

@@ -89,6 +89,9 @@ mod ladder_attach;
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 
+#[path = "integration/lane_overlap_bench.rs"]
+mod lane_overlap_bench;
+
 #[path = "integration/live_readonly.rs"]
 mod live_readonly;
 
