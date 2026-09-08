@@ -185,6 +185,10 @@ async fn scenario_5_a_ladder_measured_built_and_served_whole() {
         codec: String::from("h264"),
         native_height: None,
         declared_layout: None,
+        // T522(1): the peak this scenario just measured two lines up is exactly what
+        // `measured_peak_bps` exists to carry — a full read of the file, not the
+        // complexity probe's own few-second estimate.
+        measured_peak_bps: Some(measured.peak_bps),
         prefer_hardware: true,
     };
     let preview = ladder::ladder_plan(&state, &request)
