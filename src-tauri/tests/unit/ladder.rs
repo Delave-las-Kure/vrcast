@@ -549,7 +549,12 @@ fn halves_go_to_the_even_number_as_the_script_has_always_done() {
     };
 
     for (anchor, expected) in [
-        (15u64, vec![15u64, 8, 4, 3]),
+        // T522, rule (2): 4 over 3 is 1.33×, below MIN_STEP=1.5 — an indistinguishable
+        // duplicate by this file's own definition of the constant, and nothing follows the
+        // 3, so folding it into the 4 opens no new hole. This is rule (2) doing exactly
+        // what it exists for, not a rounding regression — the even-number rounding this
+        // test checks is unchanged; only the fold at the tail is new.
+        (15u64, vec![15u64, 8, 4]),
         (30, vec![30, 16, 9, 5]),
         (35, vec![35, 19, 10, 6]),
         (50, vec![50, 28, 15, 8]),
@@ -563,6 +568,69 @@ fn halves_go_to_the_even_number_as_the_script_has_always_done() {
             expected,
             "anchor {anchor}: the rungs are not the ones the script emits"
         );
+    }
+}
+
+#[test]
+fn a_fold_that_would_open_a_hole_the_checker_refuses_does_not_happen() {
+    // T522, rule (2), the defended case. Anchor 5's raw steps are 5, 3, 2, 1. The pair
+    // (5, 3) is 2 Mbit/s apart — within the literal rule's limit — but dropping 3 would
+    // leave 5 facing 2, a step of 2.5×, past MAX_STEP=2.0 and exactly the hole
+    // `step_is_allowable` exists to refuse. So (5, 3) must not fold: 3 stays.
+    //
+    // The pair (3, 2) is checked next and is also close (1 Mbit/s apart), but here
+    // dropping 2 would leave 3 facing 1 — a step of 3×, also outside the allowable range —
+    // so (3, 2) is refused as well, and 2 stays too.
+    //
+    // Only the last pair, (2, 1), has nothing after the candidate 1, so it folds
+    // unconditionally. The result is 5, 3, 2 — not 5, 3, 2, 1 and not the literal rule's
+    // 5, 1.
+    let src = source(3840, 2160, 24, 200);
+    let laid = plan(Some(5_000_000), &src, None).expect("a sound source was refused");
+    let rungs: Vec<u64> = laid
+        .rungs
+        .iter()
+        .map(|r| r.bitrate_bps / 1_000_000)
+        .collect();
+    assert_eq!(rungs, vec![5u64, 3, 2], "anchor 5: unexpected fold outcome");
+}
+
+#[test]
+fn a_fold_that_stays_within_the_allowable_step_happens() {
+    // T522, rule (2), the positive case. Anchor 4's raw steps are 4, 2, 1. The pair
+    // (2, 1) has nothing after the candidate 1 — folding it is unconditionally safe, since
+    // nothing shortens for anyone but the tail of the list. The result is 4, 2: not
+    // 4, 2, 1 (no rule 2 at all), and not 4, 1 (the literal rule without the guard, which
+    // is exactly the step_is_allowable-breaking hole the guard exists to prevent).
+    let src = source(3840, 2160, 24, 200);
+    let laid = plan(Some(4_000_000), &src, None).expect("a sound source was refused");
+    let rungs: Vec<u64> = laid
+        .rungs
+        .iter()
+        .map(|r| r.bitrate_bps / 1_000_000)
+        .collect();
+    assert_eq!(rungs, vec![4u64, 2], "anchor 4: unexpected fold outcome");
+}
+
+#[test]
+fn none_of_the_anchors_the_literal_rule_broke_produce_a_bad_step() {
+    // T522, rule (2): 4, 5, 7, 8, 9 are the anchors where the literal rule (no guard, no
+    // exception list) produced a step outside step_is_allowable. With the guard in place
+    // none of them may raise BadStep — or any other objection — for any of the shapes this
+    // planner is used for.
+    for (w, h, fps) in [(3840, 2160, 24), (3840, 1080, 60), (1920, 1080, 48)] {
+        for anchor_mbps in [4u64, 5, 7, 8, 9] {
+            let src = source(w, h, fps, 60);
+            let laid = plan(Some(anchor_mbps * 1_000_000), &src, None)
+                .expect("a sound source was refused");
+            let objections = validate(&laid.rungs, &src, fps);
+            assert!(
+                objections.is_empty(),
+                "the planner's own ladder for {w}×{h}@{fps} at anchor {anchor_mbps} was \
+                 objected to: {objections:?} — rungs {:?}",
+                laid.rungs.iter().map(|r| r.bitrate_bps).collect::<Vec<_>>()
+            );
+        }
     }
 }
 

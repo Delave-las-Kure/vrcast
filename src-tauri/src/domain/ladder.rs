@@ -406,19 +406,74 @@ fn top_rung(measured_bps: Option<u64>, source: &SourceFacts) -> (u64, Vec<Reason
 /// The floor is **one megabit**, not one of anything smaller. Below that there is no
 /// quality worth serving, and the ladder would be planning rungs no measurement this project
 /// owns has ever looked at.
+///
+/// **T522, rule (2), owner's decision 2026-09-08: near-duplicates fold too, not only exact
+/// ones — but only when folding cannot open a hole `step_is_allowable` would already refuse.**
+/// The literal reading of the rule — collapse any neighbour within 2 Mbit/s of the one kept
+/// before it, no further check — was rejected: at an anchor of 4 the raw steps are
+/// `[4, 2, 1]`; 2 and 1 are 1 Mbit/s apart, so the literal rule drops the 1 and leaves
+/// `[4, 2]`... except it also drops the 2 first (4 and 2 are exactly 2 Mbit/s apart), which
+/// leaves `[4, 1]` — a step of 4×, a hole `step_is_allowable` exists to refuse. A fixed list
+/// of anchors to exempt was rejected too: it protects the anchors somebody happened to try
+/// and nothing else, which is exactly the kind of guard this file's own history (see
+/// [`step_is_allowable`]'s doc comment) says not to write.
+///
+/// So folding needs a second look before it happens: not just "is this candidate close to
+/// the rung I'm keeping", but "if I drop this candidate, is the rung I'm keeping still an
+/// allowable step from whatever comes after it". That is the raw, un-deduplicated list one
+/// step ahead — the fold only ever removes the *middle* of three, never leaves a kept rung
+/// facing a neighbour nobody checked.
 fn steps_from(top_mbps: u64) -> Vec<u64> {
-    let mut out: Vec<u64> = Vec::new();
-    for m in MULTIPLIERS {
-        // **Halves go to the even number, not away from zero.** The rungs have always
-        // been produced by Python's `round`, which breaks a tie towards even; Rust's
-        // `round` breaks it away from zero. They disagree on eight anchors between 1 and
-        // 100 — and one of them is 35, the constant this falls back on, where the script
-        // gives a rung of 10 and away-from-zero gives 11. Ten is a point this project has
-        // measured and named files after; eleven is not.
-        let mbps = ((top_mbps as f64 * m).round_ties_even() as u64).max(1);
-        if !out.contains(&mbps) {
-            out.push(mbps);
+    // **Halves go to the even number, not away from zero.** The rungs have always been
+    // produced by Python's `round`, which breaks a tie towards even; Rust's `round` breaks
+    // it away from zero. They disagree on eight anchors between 1 and 100 — and one of them
+    // is 35, the constant this falls back on, where the script gives a rung of 10 and
+    // away-from-zero gives 11. Ten is a point this project has measured and named files
+    // after; eleven is not.
+    //
+    // Computed for every multiplier up front, deliberately without deduplication yet — the
+    // fold below needs to see the whole raw sequence to look one step past its candidate.
+    let raw: Vec<u64> = MULTIPLIERS
+        .iter()
+        .map(|m| ((top_mbps as f64 * m).round_ties_even() as u64).max(1))
+        .collect();
+
+    let mut out: Vec<u64> = vec![raw[0]];
+    let mut i = 1;
+    while i < raw.len() {
+        let candidate = raw[i];
+        let kept = *out.last().unwrap();
+
+        // An exact match is the old rule and always folds, unconditionally: two identical
+        // numbers cannot open any new hole, whatever their neighbours are.
+        if candidate == kept {
+            i += 1;
+            continue;
         }
+
+        // Within 2 Mbit/s is "close" — but close is not enough on its own. The danger is
+        // not the pair (kept, candidate); it is the pair that would be left behind, (kept,
+        // whatever follows candidate), once candidate is gone. At anchor 5 the raw steps
+        // are `[5, 3, 2, 1]`: 5 and 3 are 2 Mbit/s apart, within the limit, but dropping the
+        // 3 would leave 5 facing 2 — a step of 2.5×, past `MAX_STEP` and exactly the hole
+        // `step_is_allowable` exists to refuse. So the fold is only safe once that next
+        // neighbour has been checked, not merely the gap that triggered the question.
+        if kept - candidate <= 2 {
+            let collapse_is_safe = match raw.get(i + 1) {
+                // Nothing follows the candidate — folding it away shortens the list from
+                // the end and touches no other neighbour. Whatever gap already sits before
+                // `kept` is untouched by this fold, so there is nothing left to check.
+                None => true,
+                Some(&next) => step_is_allowable(kept * MBIT, next * MBIT),
+            };
+            if collapse_is_safe {
+                i += 1;
+                continue;
+            }
+        }
+
+        out.push(candidate);
+        i += 1;
     }
     out
 }
