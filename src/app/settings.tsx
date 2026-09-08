@@ -78,7 +78,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       // Applied at once, saved after. Waiting for the database before repainting puts a lag
       // on the switch, which a person reads as "it did not take" — and they press it again.
       setError(null);
-      ipc.settingsSet(merged).catch((e: AppError) => setError(e));
+      ipc
+        .settingsSet(merged)
+        // T546: the core may not save what was sent — `concurrent_heavy_tasks` is clamped
+        // to a ceiling this side of the contract never sees. Dropping the answer here would
+        // leave the screen showing the number somebody typed rather than the one that was
+        // actually kept, until the next reload quietly corrected it.
+        .then((saved) => setSettings(saved))
+        .catch((e: AppError) => setError(e));
       return merged;
     });
   }, []);

@@ -904,6 +904,10 @@ export const en: Catalogue = {
       animationsMeans:
         "Transitions between sections and the mascot's movement. Turned off here or by the system's \u00abreduce motion\u00bb setting \u2014 what the system has turned off cannot be turned back on here.",
 
+      heavyTasks: "Concurrent heavy tasks",
+      heavyTasksMeans:
+        "Limits how many conversions, uploads, quality-ladder builds and deployments run at once. More runs the total faster but slows each one down and loads the disk and network harder; fewer means they queue up but stay out of each other's way.",
+
       mascotIdle: "The mascot is resting",
       mascotWorking: "The mascot is busy working",
       mascotSuccess: "The mascot is pleased: it worked",

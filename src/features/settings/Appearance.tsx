@@ -14,6 +14,7 @@ import { ErrorNotice } from "../shared/ErrorNotice";
 import { Forget } from "./Forget";
 import { CloseButton } from "./CloseButton";
 import { WorkDir } from "./WorkDir";
+import { HeavyTasks } from "./HeavyTasks";
 import { useSettings } from "../../app/settings";
 import { useLang, useT, LANGUAGES } from "../../shared/i18n";
 import { useTheme, type ThemeChoice } from "../../app/theme";
@@ -108,6 +109,10 @@ export function Appearance() {
       {/* Not about appearance either, and here for the same reason: this is the only
           settings section there is. */}
       <WorkDir />
+
+      {/* Also not about appearance (T546): how many heavy tasks — conversions, uploads,
+          quality builds, deployments — may run at once. */}
+      <HeavyTasks />
 
       {/* Not about appearance — but this is the only settings section there is, and there is
           nowhere deeper to hide "remove my data": here is where people will look for it. */}
