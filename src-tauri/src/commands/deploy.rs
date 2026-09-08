@@ -68,6 +68,10 @@ pub mod api {
         let profile = super::super::library::api::profile_of(state, server_id)?;
         let opened = gate::open(state.secrets.as_ref(), &profile, Intent::Read).await?;
         opened.conn.close().await;
+        // "At connection" (`contracts/ipc-commands.md`): this is the one place every path
+        // that reaches a server passes through, so it is where the event belongs rather
+        // than in each caller.
+        state.notify_server_state(server_id, opened.state.clone());
         Ok(opened.state)
     }
 
@@ -297,6 +301,12 @@ pub mod api {
         };
         let outcome = upgrade::roll_back(&ctx).await.map_err(step_error);
         opened.conn.close().await;
+        if outcome.is_ok() {
+            // "At change" (`contracts/ipc-commands.md`): a rollback moves the server side
+            // back to the version before the upgrade. `server_detect` is what reads the new
+            // state and sends the event — the same connection a fresh read would need anyway.
+            let _ = server_detect(state, server_id).await;
+        }
         outcome
     }
 }
@@ -679,6 +689,13 @@ async fn start(
                 if key_is_in {
                     switch_to_managed_key(&inner, &profile, private)?;
                 }
+            }
+            if outcome.is_ok() {
+                // "At change" (`contracts/ipc-commands.md`): a deployment or an upgrade
+                // that finished may have moved the server's version. `server_detect` reads
+                // the fresh state and sends the event itself — the same read a screen
+                // opening this server afterwards would trigger anyway.
+                let _ = api::server_detect(&inner, &server_id).await;
             }
             outcome.map(|_| ())
         })

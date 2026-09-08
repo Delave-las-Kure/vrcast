@@ -182,6 +182,7 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                 Ok(event) => {
                     let name = match &event {
                         AppEvent::LibraryChanged { .. } => names::LIBRARY_CHANGED,
+                        AppEvent::ServerState { .. } => names::SERVER_STATE,
                         AppEvent::ViewersUpdate(_) => names::VIEWERS_UPDATE,
                         AppEvent::DeployProgress { .. } => names::DEPLOY_PROGRESS,
                     };

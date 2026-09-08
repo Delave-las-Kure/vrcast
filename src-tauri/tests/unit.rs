@@ -145,6 +145,9 @@ mod work_dir;
 #[path = "unit/server_state.rs"]
 mod server_state;
 
+#[path = "unit/server_state_event.rs"]
+mod server_state_event;
+
 #[path = "unit/deploy_steps.rs"]
 mod deploy_steps;
 
