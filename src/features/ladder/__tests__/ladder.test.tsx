@@ -1085,6 +1085,10 @@ describe("the advanced fields the core already reads (T522)", () => {
         codec: undefined,
         native_height: 1080,
         declared_layout: undefined,
+        // The default `ladderMeasure` stub (see `beforeEach`) has already resolved by the
+        // time this fires, so the reload it triggers (T522) has folded its peak into every
+        // call made after — including this one.
+        measured_peak_bps: 41_000_000,
       }),
     );
   });
@@ -1108,6 +1112,7 @@ describe("the advanced fields the core already reads (T522)", () => {
         codec: undefined,
         native_height: undefined,
         declared_layout: "SideBySide",
+        measured_peak_bps: 41_000_000,
       }),
     );
   });
@@ -1158,5 +1163,51 @@ describe("the advanced fields the core already reads (T522)", () => {
         expect.objectContaining({ codec: "hevc" }),
       ),
     );
+  });
+});
+
+describe("the measured peak reaching the shown ladder (T522)", () => {
+  // `loadPlan`'s first call for a freshly opened file always goes out before
+  // `ladderMeasure` — which reads every packet in the file — can possibly have answered.
+  // The only way the real peak it eventually finds ever influences what is on screen is a
+  // second `ladderPlan` call, made once the measurement is in, carrying the peak along.
+
+  it("sends nothing yet while the measurement has not finished", async () => {
+    let resolveMeasure: (m: SourceMeasured) => void = () => {};
+    mockLadderMeasure.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMeasure = resolve;
+        }),
+    );
+    mockLadderPlan.mockResolvedValue(preview("formula", GUESSED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(1));
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ measured_peak_bps: undefined });
+
+    // Left pending on purpose — never resolved in this test — so the assertion above is
+    // checked at the one moment it is about: before any measurement exists at all.
+    void resolveMeasure;
+  });
+
+  it("asks again with the measured peak once ladderMeasure finishes", async () => {
+    let resolveMeasure: (m: SourceMeasured) => void = () => {};
+    mockLadderMeasure.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMeasure = resolve;
+        }),
+    );
+    mockLadderPlan.mockResolvedValue(preview("formula", GUESSED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(1));
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ measured_peak_bps: undefined });
+
+    resolveMeasure({ average_bps: 8_000_000, peak_bps: 55_000_000, worst: [], seconds: 3600 });
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(2));
+    expect(mockLadderPlan.mock.calls[1][0]).toMatchObject({ measured_peak_bps: 55_000_000 });
   });
 });

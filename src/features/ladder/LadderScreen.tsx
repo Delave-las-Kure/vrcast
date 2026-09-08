@@ -268,6 +268,13 @@ export function LadderScreen({
   // new `preview` object again, forever. A ref sidesteps that: it is always current when
   // `loadPlan` runs, and updating it changes nothing about the callback's own identity.
   const previewRef = useRef<LadderPreview | null>(null);
+  // The peak `ladderMeasure` last found for this file, read by `loadPlan` the same way as
+  // `previewRef` above and for the same reason (T522): `loadPlan` must not depend on it, or
+  // the reload the measurement's own handler triggers below would give `loadPlan` a new
+  // identity, re-running the effects that depend on it, without end. Reset alongside
+  // `previewRef` when the file itself changes — a past file's peak has nothing to say about
+  // this one's ladder.
+  const measuredPeakRef = useRef<number | null>(null);
   // T522 — the two fields the core already reads off `LadderRequest` and the screen never
   // gave anyone a way to fill in. Kept as strings on screen and turned into the request's
   // shape only when they hold something: `native_height` is an `Option<u32>` in the core,
@@ -299,6 +306,7 @@ export function LadderScreen({
     // when the file itself changes, not on every edit of the advanced fields, or a codec
     // this file was measured under would be forgotten the moment somebody typed a height.
     previewRef.current = null;
+    measuredPeakRef.current = null;
     return () => {
       alive.current = false;
     };
@@ -359,6 +367,14 @@ export function LadderScreen({
         native_height:
           nativeHeight !== undefined && Number.isFinite(nativeHeight) ? nativeHeight : undefined,
         declared_layout: declaredLayout === "" ? undefined : declaredLayout,
+        // The peak the last completed `ladderMeasure` found for this file, when there is
+        // one (T522). Left off — not sent as `null` or `0` — until a measurement has
+        // actually finished: the very first call for a freshly opened file always makes
+        // this call before `ladderMeasure` can possibly have answered (it reads every
+        // packet in the file, far slower than the complexity probe this call itself
+        // uses), and sending nothing here is exactly what lets the core fall back to its
+        // own probe-based anchor, which is the correct old behaviour for that moment.
+        measured_peak_bps: measuredPeakRef.current ?? undefined,
       });
       if (!alive.current) return null;
       previewRef.current = answer;
@@ -398,7 +414,17 @@ export function LadderScreen({
     ipc
       .ladderMeasure(path)
       .then((m) => {
-        if (alive.current) setSource(m);
+        if (!alive.current) return;
+        setSource(m);
+        // T522 — the measured peak reaches the shown ladder only if it is actually sent
+        // back to the core: the first `loadPlan()` above started before this measurement
+        // could possibly have finished (see the comment on `measured_peak_bps` in
+        // `loadPlan`), so it went out anchored on the complexity probe's guess. Asking
+        // again, now that the real peak is known, is the only way it ever influences what
+        // is on screen — leaving it in the ref for some later manual refresh would strand
+        // it for a file that, in the ordinary case, nobody re-opens.
+        measuredPeakRef.current = m.peak_bps;
+        void loadPlan();
       })
       .catch(() => undefined);
   }, [path, loadPlan]);

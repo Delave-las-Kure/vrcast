@@ -1038,6 +1038,9 @@ export interface LadderPlanRequest {
    */
   declared_layout?: "Flat" | "SideBySide" | "OverUnder" | null;
   prefer_hardware?: boolean;
+  /** The peak `ladder_measure` found, when it has finished in time (T522). Always
+   *  overrides the complexity probe's own anchor when present. */
+  measured_peak_bps?: number | null;
 }
 
 /** Build the quality set on a server. */
