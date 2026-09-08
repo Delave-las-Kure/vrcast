@@ -427,6 +427,41 @@ fn a_ladder_this_code_planned_has_nothing_wrong_with_it() {
     }
 }
 
+#[test]
+fn a_heavier_codec_ladder_this_code_planned_has_nothing_wrong_with_it() {
+    // T558: the exact coupling the task exists to guard. `plan()` caps its top rung
+    // through `source_cap_mbps()`, and `validate()` computes its own `RungAboveSource`
+    // ceiling straight from `HEVC_TO_H264`. The self-consistency sweep above never once
+    // sets `heavier_codec = true` — `source()` always leaves it `false` — so it could not
+    // have caught the two formulas drifting apart on the one path where they used to
+    // (`source_cap_mbps` held a bare `kbit * 16 / 10` literal until T558 replaced it with
+    // `HEVC_TO_H264`). This sweep exercises exactly that path: an HEVC-flagged source, a
+    // wide anchor range, and both whole- and fractional-megabit bitrates — the fractional
+    // ones being the only inputs able to show the two arithmetics disagreeing at all (see
+    // `the_allowance_is_not_thrown_away_by_rounding_the_source_first` above).
+    for (w, h, fps) in [(3840, 2160, 24), (3840, 1080, 60), (1920, 1080, 48)] {
+        for anchor_mbps in 1..=40u64 {
+            for extra_bps in [0u64, 400_000, 842_000] {
+                let mut src = source(w, h, fps, 60);
+                src.heavier_codec = true;
+                src.bitrate_bps = anchor_mbps * 1_000_000 + extra_bps;
+                let laid = plan(Some(anchor_mbps * 1_000_000), &src, None)
+                    .expect("a sound source was refused");
+                let objections = validate(&laid.rungs, &src, fps);
+                assert!(
+                    objections.is_empty(),
+                    "the planner's own HEVC ladder for {w}×{h}@{fps} at anchor \
+                     {anchor_mbps} (source {} bps) was objected to: {objections:?} — \
+                     rungs {:?} — source_cap_mbps() = {}",
+                    src.bitrate_bps,
+                    laid.rungs.iter().map(|r| r.bitrate_bps).collect::<Vec<_>>(),
+                    source_cap_mbps(&src)
+                );
+            }
+        }
+    }
+}
+
 // ---------- the description of the set ----------
 
 #[test]

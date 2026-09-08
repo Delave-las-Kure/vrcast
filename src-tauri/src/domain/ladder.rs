@@ -362,10 +362,19 @@ pub fn worth_a_ladder(source: &SourceFacts) -> bool {
 /// encoder a bitrate to work with. A cap is not a target: zero means "less than a megabit
 /// survives the allowance", and [`worth_a_ladder`] — not this — decides what to do about it.
 /// Porting the clamp would delete that decision without anybody noticing.
+///
+/// **Shares [`HEVC_TO_H264`] with [`validate`], and that used to not be true.** Found by an
+/// independent QA audit (round 4, T558, 2026-09-08): this used to spell out its own copy of
+/// the allowance as the bare literal `kbit * 16 / 10`, while `validate` computed the same
+/// 60 % from the named constant — two unlinked places implementing one rule, exactly the
+/// shape of mistake principle VI exists to catch (a future recalibration of the constant
+/// would have silently stopped moving this cap). Verified equivalent for every whole-kbit
+/// input from 0 to 300,000 (far past any real source bitrate) before the switch: integer
+/// `kbit * 16 / 10` and `(kbit as f64 * HEVC_TO_H264) as u64` never disagree in that range.
 pub fn source_cap_mbps(source: &SourceFacts) -> u64 {
     let kbit = source.bitrate_bps / 1000;
     let capped_kbit = if source.heavier_codec {
-        kbit * 16 / 10
+        (kbit as f64 * HEVC_TO_H264) as u64
     } else {
         kbit
     };
