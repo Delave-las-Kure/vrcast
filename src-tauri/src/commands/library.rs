@@ -305,8 +305,10 @@ pub mod api {
     use crate::domain::server_profile::ServerProfile;
     use crate::server::gate::{self, Intent};
     use crate::server::{disk, listing, manifest_io, probe_moov, reconcile, SERVICE_ENTRIES};
+    use crate::ssh::connection::BRIEF_CHANNELS;
     use crate::ssh::Connection;
     use crate::store::{library_cache, profiles};
+    use futures::stream::{self, StreamExt};
 
     /// The profile behind an identifier, or a refusal naming it.
     ///
@@ -400,22 +402,68 @@ pub mod api {
             }
         };
 
-        let mut media_views = Vec::with_capacity(manifest.media.len());
-        for (media, files) in manifest.media.iter().zip(matched.media_files.iter()) {
-            let mut views = Vec::with_capacity(files.files.len());
-            let mut total = 0u64;
-            for f in &files.files {
-                total += f.size_bytes;
-                let params = probed(state, &conn, profile, &f.path, f.size_bytes, f.exists).await;
-                views.push(file_view(profile, &f.path, f.size_bytes, params, f.exists));
-            }
-            // A quality ladder counts towards the medium's size: deleting frees it too.
-            total += files.ladders.iter().map(|l| l.size_bytes).sum::<u64>();
+        // Every file across every medium is probed concurrently, capped at as many
+        // channels as the connection sets aside for ordinary work
+        // (`ssh::connection::BRIEF_CHANNELS` — the two of `MAX_CONCURRENT_CHANNELS` that
+        // stay held for watching viewers are left alone). `buffered`, not
+        // `buffer_unordered`: it starts that many probes at once but still hands results
+        // back in the order they were queued, not the order they finish — a slow file
+        // must not jump the queue, or the list would read differently from one refresh to
+        // the next although nothing on the server changed. Reassembled per medium below
+        // purely by count, from `matched.media_files`, which already carries the
+        // catalogue's order — no result is matched to the wrong file by a race between
+        // futures.
+        //
+        // The list of what to probe is collected into an owned `Vec` first, rather than
+        // chaining `.flat_map()` straight into `stream::iter()`: the latter hits a known
+        // rustc closure-inference limitation ("implementation of `FnOnce` is not general
+        // enough") once it sits inside a `#[tauri::command]` async fn, because the
+        // higher-ranked lifetime the macro-generated handler needs cannot be inferred
+        // through that particular chain. Plain ownership sidesteps it entirely.
+        let file_jobs: Vec<(String, u64, bool)> = matched
+            .media_files
+            .iter()
+            .flat_map(|files| files.files.iter())
+            .map(|f| (f.path.clone(), f.size_bytes, f.exists))
+            .collect();
+        let probed_files: Vec<FileView> =
+            stream::iter(file_jobs.into_iter().map(|(path, size_bytes, exists)| {
+                let conn = conn.clone();
+                async move {
+                    let params = probed(state, &conn, profile, &path, size_bytes, exists).await;
+                    file_view(profile, &path, size_bytes, params, exists)
+                }
+            }))
+            .buffered(BRIEF_CHANNELS)
+            .collect()
+            .await;
 
-            let mut ladders = Vec::with_capacity(files.ladders.len());
-            for l in &files.ladders {
-                ladders.push(ladder_view(profile, &conn, &l.path, l.size_bytes, l.exists).await);
-            }
+        let ladder_jobs: Vec<(String, u64, bool)> = matched
+            .media_files
+            .iter()
+            .flat_map(|files| files.ladders.iter())
+            .map(|l| (l.path.clone(), l.size_bytes, l.exists))
+            .collect();
+        let probed_ladders: Vec<LadderSetView> =
+            stream::iter(ladder_jobs.into_iter().map(|(path, size_bytes, exists)| {
+                let conn = conn.clone();
+                async move { ladder_view(profile, &conn, &path, size_bytes, exists).await }
+            }))
+            .buffered(BRIEF_CHANNELS)
+            .collect()
+            .await;
+
+        let mut media_views = Vec::with_capacity(manifest.media.len());
+        let mut probed_files = probed_files.into_iter();
+        let mut probed_ladders = probed_ladders.into_iter();
+        for (media, files) in manifest.media.iter().zip(matched.media_files.iter()) {
+            let views: Vec<FileView> = probed_files.by_ref().take(files.files.len()).collect();
+            let ladders: Vec<LadderSetView> =
+                probed_ladders.by_ref().take(files.ladders.len()).collect();
+
+            // A quality ladder counts towards the medium's size: deleting frees it too.
+            let total: u64 = files.files.iter().map(|f| f.size_bytes).sum::<u64>()
+                + files.ladders.iter().map(|l| l.size_bytes).sum::<u64>();
 
             media_views.push(MediaView {
                 id: media.id.clone(),
@@ -428,23 +476,30 @@ pub mod api {
             });
         }
 
-        let mut unrecognized = Vec::with_capacity(matched.unrecognized.len());
-        for entry in &matched.unrecognized {
-            // We do not look inside a directory: a directory has no header, and going
-            // through its contents for who knows what is needless network round trips.
-            let params = if entry.is_dir {
-                probe_moov::FileParams::default()
-            } else {
-                probed(state, &conn, profile, &entry.name, entry.size_bytes, true).await
-            };
-            unrecognized.push(file_view(
-                profile,
-                &entry.name,
-                entry.size_bytes,
-                params,
-                true,
-            ));
-        }
+        // Same reasoning for whatever the catalogue does not claim (FR-015): concurrent,
+        // order-preserving. A directory is skipped without a network round trip — it has
+        // no header, and looking inside it for who knows what would only add more.
+        let unrecognized_jobs: Vec<(String, u64, bool)> = matched
+            .unrecognized
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.size_bytes, entry.is_dir))
+            .collect();
+        let unrecognized: Vec<FileView> = stream::iter(unrecognized_jobs.into_iter().map(
+            |(name, size_bytes, is_dir)| {
+                let conn = conn.clone();
+                async move {
+                    let params = if is_dir {
+                        probe_moov::FileParams::default()
+                    } else {
+                        probed(state, &conn, profile, &name, size_bytes, true).await
+                    };
+                    file_view(profile, &name, size_bytes, params, true)
+                }
+            },
+        ))
+        .buffered(BRIEF_CHANNELS)
+        .collect()
+        .await;
 
         conn.close().await;
 
