@@ -341,6 +341,15 @@ impl DeployTarget {
         ))
     }
 
+    /// The container's name, for `docker` commands this module does not already wrap —
+    /// fault injection (T560) being the reason one exists: `docker network disconnect`
+    /// needs a name or an id, and there is no way to sever a container's networking
+    /// through SSH commands run *inside* it (the very last command to run would be the one
+    /// cutting its own connection off).
+    pub fn container_name(&self) -> &str {
+        &self.name
+    }
+
     /// The address to reach the container at — and the only way to obtain it, so the guard
     /// is unavoidable.
     pub fn address(&self) -> (String, u16) {

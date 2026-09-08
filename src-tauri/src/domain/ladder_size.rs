@@ -36,6 +36,8 @@
 //! Playlists are not counted: about forty bytes a segment, some seventy kilobytes for a
 //! two-hour set, against gigabytes.
 
+use super::convert_plan;
+
 /// What the segments weigh against the MP4 they were cut from.
 ///
 /// The heavier of the two measurements above. Held down at build time in
@@ -45,9 +47,15 @@ pub const SEGMENTS_OVER_MP4: f64 = 1.046;
 
 /// The audio budget a re-encoded track is held to, in bits per second.
 ///
-/// The same 256 kbit/s `convert_plan` gives it. A copied track can be heavier, and the
-/// caller passes what it actually is.
-pub const AUDIO_BUDGET_BPS: u64 = 256_000;
+/// **The same number [`convert_plan::AUDIO_KBPS`] gives it — computed from it, not
+/// retyped.** Found duplicated as an independent literal by an independent QA audit
+/// (round 4, T559, 2026-09-08): this constant used to spell out `256_000` on its own,
+/// while a comment right above it already said in words that it was "the same 256 kbit/s
+/// `convert_plan` gives it" — the connection was known and written down in prose, but not
+/// enforced, so a future re-tuning of the target audio bitrate in one module would not
+/// have moved this one. A copied track can be heavier than the budget; the caller passes
+/// what it actually is.
+pub const AUDIO_BUDGET_BPS: u64 = convert_plan::AUDIO_KBPS as u64 * 1000;
 
 /// What one variant leaves on the server, in bytes.
 ///
