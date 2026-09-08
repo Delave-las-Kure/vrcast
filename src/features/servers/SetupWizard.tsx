@@ -17,13 +17,12 @@
  */
 
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { homeDir, join } from "@tauri-apps/api/path";
 import type { AppError, ImportSuggestion, ServerInput, TestStep } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { ServerForm } from "./ServerForm";
 import { useServers } from "./store";
 
 type Stage = "form" | "fingerprint" | "test" | "done";
@@ -73,9 +72,6 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
       cancelled = true;
     };
   }, []);
-
-  const field = <K extends keyof ServerInput>(key: K, value: ServerInput[K]) =>
-    setInput((prev) => ({ ...prev, [key]: value }));
 
   /** Step 1 to 2: create the profile and learn the fingerprint. */
   const submitForm = async () => {
@@ -132,28 +128,6 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
-  /**
-   * Find the private key in the file browser.
-   *
-   * **No filters.** A private key has no extension, and a filter is built from extensions
-   * on both platforms this application runs on — `*.pem` on Windows, `*.pem` through GTK on
-   * Linux — so any filter at all would hide `id_ed25519` from the person looking for it.
-   *
-   * The dialogue opens in `~/.ssh` where the keys are. If that directory is not there the
-   * dialogue opens at home rather than refusing, which is the right answer for somebody who
-   * keeps their keys elsewhere.
-   */
-  const pickKey = async () => {
-    let start: string | undefined;
-    try {
-      start = await join(await homeDir(), ".ssh");
-    } catch {
-      start = undefined;
-    }
-    const chosen = await open({ multiple: false, directory: false, defaultPath: start });
-    if (typeof chosen === "string") field("key_path", chosen);
-  };
-
   return (
     <div className="wizard" role="dialog" aria-label={w.dialogLabel}>
       <header className="wizard__head">
@@ -193,154 +167,18 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          <form
-            className="form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submitForm();
-            }}
-          >
-            <label>
-              <span>{w.fieldName}</span>
-              <input
-                value={input.name}
-                onChange={(e) => field("name", e.target.value)}
-                placeholder={w.fieldNamePlaceholder}
-                required
-              />
-            </label>
-
-            <div className="form__row">
-              <label className="form__grow">
-                <span>{w.fieldHost}</span>
-                <input
-                  value={input.host}
-                  onChange={(e) => field("host", e.target.value)}
-                  placeholder={w.fieldHostPlaceholder}
-                  required
-                />
-              </label>
-              <label className="form__narrow">
-                <span>{w.fieldPort}</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={input.port}
-                  onChange={(e) => field("port", Number(e.target.value))}
-                />
-              </label>
-            </div>
-
-            {/* The explanation sits beside the field and NOT inside the label:
-                inside, it becomes part of the field's name and a screen reader
-                reads the whole thing aloud on every visit. */}
-            <div className="field">
-              <label>
-                <span>{w.fieldDomain}</span>
-                <input
-                  value={input.domain}
-                  onChange={(e) => field("domain", e.target.value)}
-                  placeholder="stream.example.com"
-                  required
-                />
-              </label>
-              <small className="muted">{w.fieldDomainHint}</small>
-            </div>
-
-            <div className="form__row">
-              <label className="form__grow">
-                <span>{w.fieldUser}</span>
-                <input
-                  value={input.user}
-                  onChange={(e) => field("user", e.target.value)}
-                  required
-                />
-              </label>
-              <label className="form__grow">
-                <span>{w.fieldAuth}</span>
-                <select
-                  value={input.auth_kind}
-                  onChange={(e) =>
-                    setInput((prev) => ({
-                      ...prev,
-                      auth_kind: e.target.value as ServerInput["auth_kind"],
-                      key_path: e.target.value === "key" ? prev.key_path : null,
-                    }))
-                  }
-                >
-                  <option value="key">{w.authKey}</option>
-                  <option value="password">{w.authPassword}</option>
-                </select>
-              </label>
-            </div>
-
-            {input.auth_kind === "key" && (
-              <div className="form__inline">
-                {/*
-                  The field stays, and stays editable: a path is as often pasted from
-                  somewhere as it is found by hand. The button sits **outside** the label
-                  on purpose — a button is a labelable element, so inside it would become
-                  the label's control and "Path to the private key" would point at the
-                  button instead of the field, for a screen reader and for every test that
-                  finds the field by its label.
-                */}
-                <label>
-                  <span>{w.fieldKeyPath}</span>
-                  <input
-                    value={input.key_path ?? ""}
-                    onChange={(e) => field("key_path", e.target.value || null)}
-                    required
-                  />
-                </label>
-                <button type="button" onClick={() => void pickKey()}>
-                  {w.pickKey}
-                </button>
-              </div>
-            )}
-
-            <div className="field">
-              <label>
-                <span>{input.auth_kind === "key" ? w.fieldPassphrase : w.fieldPassword}</span>
-                <input
-                  type="password"
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  autoComplete="off"
-                />
-              </label>
-              <small className="muted">{w.secretHint}</small>
-            </div>
-
-            <details className="form__extra">
-              <summary>{w.optional}</summary>
-              <label>
-                <span>{w.fieldVideoDir}</span>
-                <input
-                  value={input.video_dir ?? ""}
-                  onChange={(e) => field("video_dir", e.target.value || null)}
-                  placeholder={w.fieldVideoDirPlaceholder}
-                />
-              </label>
-              <label>
-                <span>{w.fieldCdn}</span>
-                <input
-                  value={input.cdn_base ?? ""}
-                  onChange={(e) => field("cdn_base", e.target.value || null)}
-                  placeholder={w.fieldCdnPlaceholder}
-                />
-              </label>
-            </details>
-
-            <div className="form__actions">
-              <button type="button" onClick={onClose} disabled={busy}>
-                {t.ui.common.cancel}
-              </button>
-              <button type="submit" disabled={busy}>
-                {busy ? w.checking : w.next}
-              </button>
-            </div>
-          </form>
+          <ServerForm
+            input={input}
+            onFieldChange={(key, value) => setInput((prev) => ({ ...prev, [key]: value }))}
+            secret={secret}
+            onSecretChange={setSecret}
+            secretHint={w.secretHint}
+            busy={busy}
+            submitLabel={w.next}
+            busyLabel={w.checking}
+            onSubmit={() => void submitForm()}
+            onCancel={onClose}
+          />
         </>
       )}
 

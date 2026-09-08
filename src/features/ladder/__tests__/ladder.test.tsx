@@ -22,12 +22,14 @@ import type {
 } from "../../../shared/contract";
 
 const mockMeasureResult = vi.fn<() => Promise<MeasurementView>>();
-const mockLadderPlan = vi.fn<() => Promise<LadderPreview>>();
+const mockLadderPlan = vi.fn<(...a: unknown[]) => Promise<LadderPreview>>();
 const mockLadderMeasure = vi.fn<() => Promise<SourceMeasured>>();
 const mockLadderValidate = vi.fn<() => Promise<LadderVerdict>>();
+const mockLadderRecomputeRung = vi.fn<(...a: unknown[]) => Promise<Rung>>();
 const mockMeasurePreview = vi.fn<() => Promise<MeasurePreview>>();
 const mockMeasureStart = vi.fn<() => Promise<string>>();
 const mockBuild = vi.fn<(...a: unknown[]) => Promise<string>>();
+const mockLibraryList = vi.fn<(...a: unknown[]) => Promise<{ media: unknown[] }>>();
 
 /** What the core would send when a task ends. Held so a test can end one when it likes.
  *
@@ -49,13 +51,15 @@ vi.mock("../../../shared/ipc", async () => {
     // is named below is what this file is about; everything else answers and gets out of
     // the way.
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
-      ladderPlan: () => mockLadderPlan(),
+      ladderPlan: (...a: unknown[]) => mockLadderPlan(...a),
       qualityMeasureResult: () => mockMeasureResult(),
       ladderMeasure: () => mockLadderMeasure(),
       ladderValidate: () => mockLadderValidate(),
+      ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
       qualityMeasurePreview: () => mockMeasurePreview(),
       qualityMeasureStart: () => mockMeasureStart(),
       ladderBuild: (...a: unknown[]) => mockBuild(...a),
+      libraryList: (...a: unknown[]) => mockLibraryList(...a),
     }),
     onTaskDone: async (handler: (e: unknown) => void) => {
       const mine = handler as typeof finish;
@@ -118,6 +122,23 @@ function preview(
 const MEASURED = [rung(0, 22, 2160, 96.1), rung(1, 12, 1440, 92.0), rung(2, 6, 1080, 87.4)];
 const GUESSED = [rung(0, 22, 2160, null), rung(1, 12, 1440, null)];
 
+/** What `ladderRecomputeRung` answers for a hand edit (T523): a fresh ceiling and frame for
+ *  the new bitrate, not the old rung's numbers, and the one reason that means "typed in by
+ *  hand". */
+function editedRung(index: number, mbps: number, height: number): Rung {
+  return {
+    index,
+    bitrate_bps: mbps * 1_000_000,
+    maxrate_bps: Math.round(mbps * 1_100_000),
+    bufsize_bps: Math.round(mbps * 1_100_000),
+    width: Math.round((height * 16) / 9),
+    height,
+    level: "5.1",
+    reasons: ["edited_by_hand"],
+    quality: { state: "not_measured" },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockLadderMeasure.mockResolvedValue({
@@ -127,8 +148,15 @@ beforeEach(() => {
     seconds: 3600,
   });
   mockLadderValidate.mockResolvedValue({ objections: [], not_buildable: null });
+  // The index in the answer always matches the index that was asked about — as the real
+  // command does — so a test that never looks at `ladderRecomputeRung` itself still finds
+  // its rungs at the `data-testid` their position implies.
+  mockLadderRecomputeRung.mockImplementation((index: unknown, bitrateBps: unknown) =>
+    Promise.resolve(editedRung(index as number, (bitrateBps as number) / 1_000_000, 1080)),
+  );
   mockMeasureStart.mockResolvedValue("task-1");
   mockBuild.mockResolvedValue("build-1");
+  mockLibraryList.mockResolvedValue({ media: [] });
   // **Every stub gets an answer here, not only the ones a given test reads.**
   // `clearAllMocks` takes the implementation away, so a stub left without one returns
   // `undefined`, and whatever calls it does `.then` on nothing. Which caller, and when,
@@ -372,6 +400,60 @@ describe("what a rung is worth", () => {
     await waitFor(() =>
       expect(screen.getByTestId("rung-1")).toHaveTextContent(en.ui.ladder.notMeasured),
     );
+  });
+
+  it("recomputes the ceiling, frame and reason from the core rather than patching the old rung (T523)", async () => {
+    // The bug this closes: before T523, editing the bitrate kept the *old* rung's
+    // `maxrate_bps`/`bufsize_bps`/`height`/`width`/`reasons` — a 15→3 Mbit/s edit kept a
+    // ~16.5 Mbit/s ceiling (no peak control at all) and stayed encoded at the old height.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLadderRecomputeRung.mockResolvedValue(editedRung(1, 3, 720));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("92.00"));
+
+    fireEvent.change(screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`), {
+      target: { value: "3" },
+    });
+
+    // The whole recomputed rung lands on screen — size from the answer, not carried over
+    // from the 1440p/12 Mbit/s rung that was there before.
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("1280×720"));
+    expect(mockLadderRecomputeRung).toHaveBeenCalledWith(1, 3_000_000, SOURCE);
+    // "edited_by_hand" is a reason of its own, distinct from whatever the rung said before.
+    const why = screen.getByTestId("why-1");
+    expect(why.textContent).toContain("typed in by hand");
+  });
+
+  it("keeps the freshest edit when two recompute answers arrive out of order (T523)", async () => {
+    // Typing a second digit fires a second call before the first settles. Whichever answer
+    // is asked for LAST has to win — not whichever happens to resolve first — or a fast
+    // keystroke gets silently rolled back by a slow answer to an earlier one.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    let resolveFirst: (r: Rung) => void = () => {};
+    const first = new Promise<Rung>((resolve) => {
+      resolveFirst = resolve;
+    });
+    mockLadderRecomputeRung
+      .mockImplementationOnce(() => first)
+      .mockImplementationOnce(() => Promise.resolve(editedRung(1, 5, 1080)));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("92.00"));
+
+    const input = screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`);
+    fireEvent.change(input, { target: { value: "9" } }); // first call — left pending
+    fireEvent.change(input, { target: { value: "5" } }); // second call — resolves first
+
+    // The second edit's answer (720p→1080p at 5 Mbit/s) lands.
+    await waitFor(() => expect(screen.getByTestId("rung-1")).toHaveTextContent("1920×1080"));
+    expect(screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`)).toHaveValue(5);
+
+    // The slow, stale answer for the first keystroke lands after the second already won.
+    resolveFirst(editedRung(1, 9, 2160));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Still what the second edit set — not rolled back to the stale answer's 2160p/9.
+    expect(screen.getByTestId("rung-1")).toHaveTextContent("1920×1080");
+    expect(screen.getByLabelText(`${en.ui.ladder.columnBitrate} 2`)).toHaveValue(5);
   });
 
   it("shows an objection as soon as an edit makes one, without waiting for a build", async () => {
@@ -896,5 +978,236 @@ describe("what the set is called", () => {
       server_id: "s1",
       slug: "blue-eye-s01e01",
     });
+  });
+});
+
+describe("attaching the set to an existing medium (T528)", () => {
+  function mediaView(id: string, title: string, slug: string) {
+    return { id, title, slug, files: [], ladders: [], total_bytes: 0, created_at: "" };
+  }
+
+  it("says to choose a server first when none is chosen", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "ru");
+
+    await waitFor(() => expect(screen.getByTestId("attach-no-server")).toBeTruthy());
+    expect(screen.queryByLabelText(ru.ui.ladder.attachToExisting)).toBeNull();
+  });
+
+  it("offers the server's own library once a server is chosen", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLibraryList.mockResolvedValue({
+      media: [mediaView("m1", "Название фильма", "nazvanie-filma")],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "ru");
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.ladder.attachToExisting)).toBeInTheDocument(),
+    );
+    expect(mockLibraryList).toHaveBeenCalledWith("s1");
+    expect(screen.getByText(/Название фильма/)).toBeTruthy();
+  });
+
+  it("sends the selected medium's own slug when building, not a guess from the file name", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLibraryList.mockResolvedValue({
+      media: [mediaView("m1", "Название фильма", "nazvanie-filma")],
+    });
+    renderIn(<LadderScreen path="F:/films/film_22.mp4" serverId="s1" />, "ru");
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.ladder.attachToExisting)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(ru.ui.ladder.attachToExisting), {
+      target: { value: "m1" },
+    });
+
+    // The free-text name field is replaced by a statement of what will happen — there is
+    // nothing left to type once an existing medium has been chosen explicitly.
+    expect(screen.queryByLabelText(ru.ui.ladder.setName)).toBeNull();
+    expect(screen.getByTestId("attach-slug")).toHaveTextContent("nazvanie-filma");
+
+    fireEvent.click(screen.getByTestId("build"));
+    await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(1));
+    expect(mockBuild.mock.calls[0][0]).toMatchObject({ slug: "nazvanie-filma" });
+  });
+
+  it("falls back to the typed name once 'new set' is chosen again", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockLibraryList.mockResolvedValue({
+      media: [mediaView("m1", "Название фильма", "nazvanie-filma")],
+    });
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "ru");
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.ladder.attachToExisting)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(ru.ui.ladder.attachToExisting), {
+      target: { value: "m1" },
+    });
+    fireEvent.change(screen.getByLabelText(ru.ui.ladder.attachToExisting), {
+      target: { value: "" },
+    });
+
+    expect(screen.getByLabelText(ru.ui.ladder.setName)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("build"));
+    await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(1));
+    expect(mockBuild.mock.calls[0][0]).toMatchObject({ slug: "film" });
+  });
+});
+
+describe("the advanced fields the core already reads (T522)", () => {
+  it("sends only path on a plain plan, until something is filled in", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalled());
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({
+      path: "F:/films/film.mp4",
+      native_height: undefined,
+      declared_layout: undefined,
+    });
+  });
+
+  it("sends the native height once it is filled in", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("ladder-advanced")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.nativeHeight), {
+      target: { value: "1080" },
+    });
+
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith({
+        path: "F:/films/film.mp4",
+        prefer_hardware: true,
+        codec: undefined,
+        native_height: 1080,
+        declared_layout: undefined,
+        // The default `ladderMeasure` stub (see `beforeEach`) has already resolved by the
+        // time this fires, so the reload it triggers (T522) has folded its peak into every
+        // call made after — including this one.
+        measured_peak_bps: 41_000_000,
+      }),
+    );
+  });
+
+  it("sends the declared layout under its Rust name once one is chosen", async () => {
+    // Checked against `Layout` in `src-tauri/src/domain/ladder.rs`: no
+    // `#[serde(rename_all = ...)]` above the enum, so each variant serialises as its own
+    // Rust name — PascalCase, not snake_case.
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("ladder-advanced")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.declaredLayout), {
+      target: { value: "SideBySide" },
+    });
+
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith({
+        path: "F:/films/film.mp4",
+        prefer_hardware: true,
+        codec: undefined,
+        native_height: undefined,
+        declared_layout: "SideBySide",
+        measured_peak_bps: 41_000_000,
+      }),
+    );
+  });
+
+  it("always tells the core to prefer hardware, without asking — consistent with ConvertScreen", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalled());
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ prefer_hardware: true });
+
+    // And still true once something else about the request changes — this is not a
+    // one-off sent by accident on the first call alone.
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.nativeHeight), {
+      target: { value: "1080" },
+    });
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith(
+        expect.objectContaining({ prefer_hardware: true }),
+      ),
+    );
+  });
+
+  it("asks nothing about the codec on the first plan for a file nobody has measured yet", async () => {
+    // No measurement has happened yet, so there is no codec on screen to ask the core to
+    // keep planning under — the core falls back to its own default (h264) instead.
+    mockLadderPlan.mockResolvedValue(preview("formula", GUESSED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalled());
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ codec: undefined });
+  });
+
+  it("asks for the same codec a finished measurement answered under, on the next plan", async () => {
+    // Once `preview.codec` is known — the plan's own answer names it — a later call (here,
+    // filling in the native height triggers one) asks for a plan under that same codec
+    // rather than silently falling back to the core's default and losing the measurement.
+    mockLadderPlan.mockResolvedValue({ ...preview("measured", MEASURED), codec: "hevc" });
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+    await waitFor(() => expect(screen.getByTestId("ladder-advanced")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(en.ui.ladder.nativeHeight), {
+      target: { value: "1080" },
+    });
+
+    await waitFor(() =>
+      expect(mockLadderPlan).toHaveBeenLastCalledWith(
+        expect.objectContaining({ codec: "hevc" }),
+      ),
+    );
+  });
+});
+
+describe("the measured peak reaching the shown ladder (T522)", () => {
+  // `loadPlan`'s first call for a freshly opened file always goes out before
+  // `ladderMeasure` — which reads every packet in the file — can possibly have answered.
+  // The only way the real peak it eventually finds ever influences what is on screen is a
+  // second `ladderPlan` call, made once the measurement is in, carrying the peak along.
+
+  it("sends nothing yet while the measurement has not finished", async () => {
+    let resolveMeasure: (m: SourceMeasured) => void = () => {};
+    mockLadderMeasure.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMeasure = resolve;
+        }),
+    );
+    mockLadderPlan.mockResolvedValue(preview("formula", GUESSED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(1));
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ measured_peak_bps: undefined });
+
+    // Left pending on purpose — never resolved in this test — so the assertion above is
+    // checked at the one moment it is about: before any measurement exists at all.
+    void resolveMeasure;
+  });
+
+  it("asks again with the measured peak once ladderMeasure finishes", async () => {
+    let resolveMeasure: (m: SourceMeasured) => void = () => {};
+    mockLadderMeasure.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMeasure = resolve;
+        }),
+    );
+    mockLadderPlan.mockResolvedValue(preview("formula", GUESSED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" />, "en");
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(1));
+    expect(mockLadderPlan.mock.calls[0][0]).toMatchObject({ measured_peak_bps: undefined });
+
+    resolveMeasure({ average_bps: 8_000_000, peak_bps: 55_000_000, worst: [], seconds: 3600 });
+
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(2));
+    expect(mockLadderPlan.mock.calls[1][0]).toMatchObject({ measured_peak_bps: 55_000_000 });
   });
 });

@@ -37,7 +37,19 @@ function Where({ window: w }: { window: BitrateWindow | null }) {
   );
 }
 
-export function BitratePeaks({ path }: { path?: string }) {
+export function BitratePeaks({
+  path,
+  onMeasured,
+}: {
+  path?: string;
+  /**
+   * Told once the peak is known, and told `null` the moment it stops being known — a file
+   * newly chosen, one that failed to measure, or one whose ten-second peak could not be
+   * worked out at all (T500). `DiagScreen` hands this straight to `diagExplainStalls`, and a
+   * stale shape left over from a previous file would blame the wrong material.
+   */
+  onMeasured?: (shape: { average_mbit: number; peak_10s_mbit: number } | null) => void;
+}) {
   const t = useT();
   const { lang } = useLang();
   const words = t.ui.diag;
@@ -53,11 +65,26 @@ export function BitratePeaks({ path }: { path?: string }) {
     setChosen(picked);
     setPeaks(null);
     setError(null);
+    // The file just changed, so whatever shape was known before is not this file's shape.
+    onMeasured?.(null);
     setAsking(true);
     try {
-      setPeaks(await ipc.diagBitrate(picked));
+      const found = await ipc.diagBitrate(picked);
+      setPeaks(found);
+      // Translated from bits/s to megabits the same way `LadderScreen.tsx`'s `bitrate()`
+      // does. Without a ten-second peak there is nothing to compare a viewer's link
+      // against, so the shape stays unknown rather than being sent half-filled.
+      if (found.wide) {
+        onMeasured?.({
+          average_mbit: found.average_bps / 1_000_000,
+          peak_10s_mbit: found.wide.bitrate_bps / 1_000_000,
+        });
+      } else {
+        onMeasured?.(null);
+      }
     } catch (e) {
       setError(e as AppError);
+      onMeasured?.(null);
     } finally {
       setAsking(false);
     }

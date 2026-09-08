@@ -19,7 +19,8 @@ export function Ipv6Choice({
   onChange,
   disabled,
 }: {
-  value: Choice;
+  /** `null` means nobody has chosen yet — neither option is the default (T525(1)). */
+  value: Choice | null;
   onChange: (choice: Choice) => void;
   disabled?: boolean;
 }) {
@@ -29,6 +30,11 @@ export function Ipv6Choice({
   return (
     <fieldset>
       <legend>{words.ipv6Question}</legend>
+
+      {/* Neither radio is checked while `value` is `null` — the reader has to say why the
+          start button below is disabled, because the fieldset alone looks like a choice was
+          simply left where it started. */}
+      {value === null && <p>{words.ipv6NotChosen}</p>}
 
       <label>
         <input

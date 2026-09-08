@@ -12,11 +12,12 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderIn, ru } from "../../../test-utils";
-import type { DeployPreview, DomainAnswer, PlannedStep } from "../../../shared/contract";
+import type { DeployPreview, DomainAnswer, PlannedStep, ServerProfile } from "../../../shared/contract";
 
 const mockDnsCheck = vi.fn<() => Promise<DomainAnswer>>();
 const mockPlan = vi.fn<() => Promise<DeployPreview>>();
 const mockRun = vi.fn<(...a: unknown[]) => Promise<string>>();
+const mockServerUpdate = vi.fn<(...a: unknown[]) => Promise<void>>();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -29,6 +30,7 @@ vi.mock("../../../shared/ipc", async () => {
       dnsCheck: () => mockDnsCheck(),
       deployPlan: () => mockPlan(),
       deployRun: (...a: unknown[]) => mockRun(...a),
+      serverUpdate: (...a: unknown[]) => mockServerUpdate(...a),
     }),
     onDeployProgress: () => Promise.resolve(() => {}),
     onTaskDone: () => Promise.resolve(() => {}),
@@ -36,6 +38,31 @@ vi.mock("../../../shared/ipc", async () => {
 });
 
 const { DeployScreen } = await import("../DeployScreen");
+const { useServers } = await import("../../servers/store");
+
+/** A profile for `serverId="s1"`, the id every test in this file renders `DeployScreen`
+ *  with. Needed only by the T525(3) tests below, which check that a choice on this
+ *  screen is written back into the profile. */
+function profile(over: Partial<ServerProfile> = {}): ServerProfile {
+  return {
+    id: "s1",
+    name: "Мой сервер",
+    host: "203.0.113.10",
+    port: 22,
+    user: "root",
+    auth_kind: "key",
+    secret_ref: "server/s1",
+    key_path: null,
+    domain: "stream.example.com",
+    video_dir: "/srv/video",
+    cdn_base: null,
+    host_fingerprint: "SHA256:x",
+    ipv6_mode: null,
+    is_active: true,
+    ...over,
+  };
+}
+
 
 const DOMAIN_OK: DomainAnswer = { verdict: "Ok", a: ["203.0.113.10"], aaaa: [], advice: null };
 
@@ -62,6 +89,11 @@ function step(
   return { id, changes, blocking: true, status };
 }
 
+/** Picks one of the two IPv6 options — nothing is chosen until this runs (T525(1)). */
+function chooseIpv6(choice: "Keep" | "Disable") {
+  fireEvent.click(screen.getByLabelText(/IPv6/i, { selector: `input[value='${choice}']` }));
+}
+
 const PREVIEW: DeployPreview = {
   domain: DOMAIN_OK,
   memory_mb: 961,
@@ -78,11 +110,41 @@ beforeEach(() => {
   mockDnsCheck.mockResolvedValue(DOMAIN_OK);
   mockPlan.mockResolvedValue(PREVIEW);
   mockRun.mockResolvedValue("task-1");
+  mockServerUpdate.mockResolvedValue(undefined);
+  useServers.setState({ profiles: [profile()], loading: false, error: null });
 });
 
 describe("deployment", () => {
+  it("chooses nothing by default, and the start button waits on a choice (T525(1))", async () => {
+    // deploy/ipv6.rs, in the core: two paths, and neither of them is a default — a default
+    // here would be a silent decision about somebody else's viewers.
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.ipv6NotChosen)).toBeTruthy());
+    expect(screen.getByLabelText(/IPv6/i, { selector: "input[value='Keep']" })).not.toBeChecked();
+    expect(
+      screen.getByLabelText(/IPv6/i, { selector: "input[value='Disable']" }),
+    ).not.toBeChecked();
+
+    // Nothing to check the domain against, and nothing to build a plan for, until a choice
+    // is made.
+    expect(mockDnsCheck).not.toHaveBeenCalled();
+    expect(mockPlan).not.toHaveBeenCalled();
+    expect(screen.queryByText(ru.ui.deploy.agreeAndStart)).toBeNull();
+  });
+
+  it("shows the plan and enables the start button once an IPv6 option is picked", async () => {
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.ipv6NotChosen)).toBeTruthy());
+
+    chooseIpv6("Disable");
+
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeEnabled());
+  });
+
   it("shows what will be done, and does not start of its own accord", async () => {
     renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
 
     await waitFor(() => expect(screen.getByText(ru.ui.deploy.willChange)).toBeTruthy());
 
@@ -96,6 +158,7 @@ describe("deployment", () => {
 
   it("starts only on agreement, and tells the core the agreement was given", async () => {
     renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
     await waitFor(() => expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeTruthy());
 
     fireEvent.click(screen.getByText(ru.ui.deploy.agreeAndStart));
@@ -110,6 +173,7 @@ describe("deployment", () => {
     // Folded into "ready", steps like these produce a report about a fully deployed server
     // that has neither swap nor tuning. Such a report gets believed.
     renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
     await waitFor(() => expect(screen.getByText(ru.ui.deploySteps.Tuning)).toBeTruthy());
 
     expect(screen.getByText(ru.ui.deploy.stepNotHere)).toBeTruthy();
@@ -119,6 +183,7 @@ describe("deployment", () => {
   it("stops the start when the domain leads elsewhere, and says what to do", async () => {
     mockDnsCheck.mockResolvedValue(DOMAIN_WRONG);
     renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
 
     // Where it leads now is what a person compares with their registrar's page.
     await waitFor(() => expect(screen.getByText("198.51.100.7")).toBeTruthy());
@@ -133,6 +198,7 @@ describe("deployment", () => {
   it("asks about the domain again when asked to — a record takes minutes to travel", async () => {
     mockDnsCheck.mockResolvedValue(DOMAIN_WRONG);
     renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
     await waitFor(() => expect(screen.getByText(ru.ui.deploy.domainAskAgain)).toBeTruthy());
 
     const asked = mockDnsCheck.mock.calls.length;
@@ -144,11 +210,44 @@ describe("deployment", () => {
     // The same domain gives two different verdicts under "keep" and under "turn off". Showing
     // yesterday's is worse than showing none.
     renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
     await waitFor(() => expect(mockDnsCheck).toHaveBeenCalled());
 
     const asked = mockDnsCheck.mock.calls.length;
-    fireEvent.click(screen.getByLabelText(/IPv6/i, { selector: "input[value='Keep']" }));
+    chooseIpv6("Keep");
     await waitFor(() => expect(mockDnsCheck.mock.calls.length).toBeGreaterThan(asked));
+  });
+
+  it("saves the IPv6 choice into the profile, so it is remembered next time (T525(3))", async () => {
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+
+    await waitFor(() => expect(mockServerUpdate).toHaveBeenCalled());
+    // The first argument is which profile, the second is the full ServerInput with the
+    // choice folded in, the third is `null` — the accepted way of saying "leave the secret
+    // alone" (EditServerDialog does the same when its secret field is left empty).
+    expect(mockServerUpdate.mock.calls[0]?.[0]).toBe("s1");
+    expect((mockServerUpdate.mock.calls[0]?.[1] as { ipv6_mode: string }).ipv6_mode).toBe(
+      "disable",
+    );
+    expect(mockServerUpdate.mock.calls[0]?.[2]).toBeNull();
+  });
+
+  it("saves the other IPv6 choice with its own value, not always the same one", async () => {
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Keep");
+
+    await waitFor(() => expect(mockServerUpdate).toHaveBeenCalled());
+    expect((mockServerUpdate.mock.calls[0]?.[1] as { ipv6_mode: string }).ipv6_mode).toBe("keep");
+  });
+
+  it("does not let a failed save of the IPv6 choice block starting the deployment", async () => {
+    mockServerUpdate.mockRejectedValue(new Error("offline"));
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+
+    // The choice still drives this run of the screen even though saving it failed.
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeEnabled());
   });
 });
 
@@ -173,6 +272,7 @@ describe("what a step says it will do", () => {
       ],
     });
     renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
 
     await screen.findByText(ru.ui.deploySteps.Packages);
     expect(
@@ -189,6 +289,7 @@ describe("what a step says it will do", () => {
       steps: [step("Ipv6", "Skipped" as unknown as PlannedStep["status"], [])],
     });
     const { container } = renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
 
     await screen.findByText(ru.ui.deploySteps.Ipv6);
     expect(container.querySelector(".step__changes")).toBeNull();

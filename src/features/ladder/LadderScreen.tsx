@@ -32,6 +32,7 @@ import type {
   LadderPreview,
   MachineSpeed,
   MeasurePreview,
+  MediaView,
   Detail,
   Rung,
   SourceMeasured,
@@ -260,19 +261,76 @@ export function LadderScreen({
   // put away or asked about another file, and at no other moment.
   const alive = useRef(true);
   const [name, setName] = useState(slug ?? "");
+  // The most recent answer, read by `loadPlan` itself rather than by adding `preview` to its
+  // own dependency list (T522). `preview` is *set* by `loadPlan`, so making the callback
+  // depend on it would give it a new identity every time it succeeds — and every effect that
+  // depends on `loadPlan` (there are two below) would fire again, calling it again, setting a
+  // new `preview` object again, forever. A ref sidesteps that: it is always current when
+  // `loadPlan` runs, and updating it changes nothing about the callback's own identity.
+  const previewRef = useRef<LadderPreview | null>(null);
+  // The peak `ladderMeasure` last found for this file, read by `loadPlan` the same way as
+  // `previewRef` above and for the same reason (T522): `loadPlan` must not depend on it, or
+  // the reload the measurement's own handler triggers below would give `loadPlan` a new
+  // identity, re-running the effects that depend on it, without end. Reset alongside
+  // `previewRef` when the file itself changes — a past file's peak has nothing to say about
+  // this one's ladder.
+  const measuredPeakRef = useRef<number | null>(null);
+  // T522 — the two fields the core already reads off `LadderRequest` and the screen never
+  // gave anyone a way to fill in. Kept as strings on screen and turned into the request's
+  // shape only when they hold something: `native_height` is an `Option<u32>` in the core,
+  // and `declared_layout` an `Option<Layout>` — leaving either blank must mean "unknown",
+  // not "flat" or "not stretched", which are both claims about the file, not silence.
+  const [nativeHeightInput, setNativeHeightInput] = useState("");
+  const [declaredLayout, setDeclaredLayout] = useState<
+    "" | "Flat" | "SideBySide" | "OverUnder"
+  >("");
   // Which rungs the person has left out. By the rung's own index rather than by position,
   // so that editing a bitrate — which rebuilds the array — does not silently move the
   // choice onto a different rung.
   const [leftOut, setLeftOut] = useState<ReadonlySet<number>>(new Set());
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  // T528 — media already on this server's library, offered explicitly instead of leaving
+  // the link between "this set" and "that medium" to a guessed slug (`slugOf(path)`)
+  // matching by accident. Empty while `serverId` is unknown: there is nothing to list.
+  const [existingMedia, setExistingMedia] = useState<MediaView[]>([]);
+  // "" means "new set" — the field below works exactly as it always did, driven by
+  // `name`. Anything else names a medium in `existingMedia` whose `slug` is sent as-is.
+  const [selectedMediaId, setSelectedMediaId] = useState<string>("");
+  const selectedMedia = existingMedia.find((m) => m.id === selectedMediaId) ?? null;
 
   useEffect(() => {
     alive.current = true;
+    // A different file was never measured under any codec, so there is nothing yet to ask
+    // a repeat `ladderPlan` call to keep asking under (see `loadPlan` below) — reset only
+    // when the file itself changes, not on every edit of the advanced fields, or a codec
+    // this file was measured under would be forgotten the moment somebody typed a height.
+    previewRef.current = null;
+    measuredPeakRef.current = null;
     return () => {
       alive.current = false;
     };
   }, [path]);
+
+  // T528 — the library of the server this set would be built on, fetched only when a
+  // server is actually known: without one there is nothing to list, and asking would be
+  // asking about a server nobody picked.
+  useEffect(() => {
+    if (!serverId) {
+      setExistingMedia([]);
+      return;
+    }
+    let alive2 = true;
+    ipc
+      .libraryList(serverId)
+      .then((view) => {
+        if (alive2) setExistingMedia(Array.isArray(view?.media) ? view.media : []);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive2 = false;
+    };
+  }, [serverId]);
 
   /**
    * Ask the core for the ladder and put its answer on screen.
@@ -284,8 +342,42 @@ export function LadderScreen({
   const loadPlan = useCallback(async (): Promise<LadderPreview | null> => {
     setWorking(true);
     try {
-      const answer = await ipc.ladderPlan({ path });
+      // T522 — the two "Advanced" fields, sent along on every call. Blank means unknown to
+      // the core, not "flat" or "not stretched": `native_height` is left off rather than
+      // sent as some default, and `declared_layout` likewise — the core's `Option` already
+      // distinguishes "not told" from a value, and turning a blank field into a guess here
+      // would be making up an answer nobody gave.
+      const trimmedHeight = nativeHeightInput.trim();
+      const nativeHeight = trimmedHeight === "" ? undefined : Number(trimmedHeight);
+      const answer = await ipc.ladderPlan({
+        path,
+        // Consistent with `ConvertScreen`, which sends `prefer_hardware: true` without
+        // asking (see the note at the top of that file): the encoder already decides for
+        // itself whether hardware helps, and nothing here gives a person grounds to
+        // second-guess it that `ConvertScreen` doesn't equally have.
+        prefer_hardware: true,
+        // `codec` asks for a plan for the codec a measurement was already made under — so
+        // that measurement is not thrown away by asking for a different codec's plan by
+        // accident. There is nothing to ask for on the very first call for a file: no
+        // measurement has happened yet, so `previewRef` is still null and the field is
+        // left off. The core then falls back to its own default (`h264`,
+        // `#[serde(default = "h264")]`), which is right for a file nobody has measured
+        // anything about yet.
+        codec: previewRef.current?.codec,
+        native_height:
+          nativeHeight !== undefined && Number.isFinite(nativeHeight) ? nativeHeight : undefined,
+        declared_layout: declaredLayout === "" ? undefined : declaredLayout,
+        // The peak the last completed `ladderMeasure` found for this file, when there is
+        // one (T522). Left off — not sent as `null` or `0` — until a measurement has
+        // actually finished: the very first call for a freshly opened file always makes
+        // this call before `ladderMeasure` can possibly have answered (it reads every
+        // packet in the file, far slower than the complexity probe this call itself
+        // uses), and sending nothing here is exactly what lets the core fall back to its
+        // own probe-based anchor, which is the correct old behaviour for that moment.
+        measured_peak_bps: measuredPeakRef.current ?? undefined,
+      });
       if (!alive.current) return null;
+      previewRef.current = answer;
       setPreview(answer);
       setRungs(answer.plan.rungs);
       if (answer.from !== "formula") setOffer(null);
@@ -296,7 +388,7 @@ export function LadderScreen({
     } finally {
       if (alive.current) setWorking(false);
     }
-  }, [path]);
+  }, [path, nativeHeightInput, declaredLayout]);
 
   useEffect(() => {
     if (!path) return;
@@ -322,7 +414,17 @@ export function LadderScreen({
     ipc
       .ladderMeasure(path)
       .then((m) => {
-        if (alive.current) setSource(m);
+        if (!alive.current) return;
+        setSource(m);
+        // T522 — the measured peak reaches the shown ladder only if it is actually sent
+        // back to the core: the first `loadPlan()` above started before this measurement
+        // could possibly have finished (see the comment on `measured_peak_bps` in
+        // `loadPlan`), so it went out anchored on the complexity probe's guess. Asking
+        // again, now that the real peak is known, is the only way it ever influences what
+        // is on screen — leaving it in the ref for some later manual refresh would strand
+        // it for a file that, in the ordinary case, nobody re-opens.
+        measuredPeakRef.current = m.peak_bps;
+        void loadPlan();
       })
       .catch(() => undefined);
   }, [path, loadPlan]);
@@ -470,15 +572,84 @@ export function LadderScreen({
         which is not what anybody meant and is not obvious until the set is somewhere
         nobody expected.
       */}
-      <label>
-        {words.setName}
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          aria-label={words.setName}
-        />
-      </label>
+      {/*
+        T528 — an explicit link to an existing medium, instead of leaving it to a slug
+        guessed from the file name that happens (or does not) to match one already there.
+        Shown only once a server is known and its library actually has something to offer;
+        with no server chosen the pattern already used below for the build button applies
+        here too — a hint instead of silently omitting a control.
+      */}
+      {serverId && existingMedia.length > 0 && (
+        <label>
+          {words.attachToExisting}
+          <select
+            value={selectedMediaId}
+            onChange={(e) => setSelectedMediaId(e.target.value)}
+            aria-label={words.attachToExisting}
+          >
+            <option value="">{words.attachToNewSet}</option>
+            {existingMedia.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.title} ({m.slug})
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {!serverId && (
+        <p className="muted" data-testid="attach-no-server">
+          {words.attachChooseServer}
+        </p>
+      )}
+
+      {selectedMedia ? (
+        <p data-testid="attach-slug">{fill(words.attachSlug, { slug: selectedMedia.slug }, t, lang)}</p>
+      ) : (
+        <label>
+          {words.setName}
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            aria-label={words.setName}
+          />
+        </label>
+      )}
+
+      {/*
+        T522 — two fields the core already reads off `LadderRequest` and this screen never
+        gave anyone a way to fill in. Folded away, following `ServerForm.tsx`'s pattern for
+        the rarely-needed: most files need neither, and both mostly matter for material
+        that was upscaled or shot stereoscopic, which is not the common case.
+      */}
+      <details className="form__extra" data-testid="ladder-advanced">
+        <summary>{words.advanced}</summary>
+        <label>
+          {words.nativeHeight}
+          <input
+            type="number"
+            value={nativeHeightInput}
+            onChange={(e) => setNativeHeightInput(e.target.value)}
+            placeholder={words.nativeHeightPlaceholder}
+            aria-label={words.nativeHeight}
+          />
+        </label>
+        <label>
+          {words.declaredLayout}
+          <select
+            value={declaredLayout}
+            onChange={(e) =>
+              setDeclaredLayout(e.target.value as "" | "Flat" | "SideBySide" | "OverUnder")
+            }
+            aria-label={words.declaredLayout}
+          >
+            <option value="">{words.declaredLayoutUnknown}</option>
+            <option value="Flat">{words.declaredLayoutFlat}</option>
+            <option value="SideBySide">{words.declaredLayoutSideBySide}</option>
+            <option value="OverUnder">{words.declaredLayoutOverUnder}</option>
+          </select>
+        </label>
+      </details>
 
       <button
         type="button"
@@ -491,7 +662,12 @@ export function LadderScreen({
             .ladderBuild({
               server_id: serverId,
               path,
-              slug: name.trim() || slugOf(path),
+              // T528 — an explicit choice from the library wins outright: its slug is
+              // exactly what the medium already answers to, and sending anything else
+              // would be the very guesswork this exists to remove. Only when nothing was
+              // picked does the typed name (or, failing that, a guess from the file name)
+              // apply, unchanged from before.
+              slug: selectedMedia?.slug ?? (name.trim() || slugOf(path)),
               // Only what was asked for. The core names each variant by its own megabits
               // (`film_22.mp4`), not by its place in the list, so a gap in the numbering
               // costs nothing.

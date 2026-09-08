@@ -42,6 +42,13 @@ export function DiagScreen({ serverId }: { serverId: string }) {
   const [stalls, setStalls] = useState<Stalls | null>(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  // What `BitratePeaks` found about the chosen file, if anything (T500). Without it, every
+  // stalling viewer falls into the general "not enough channel" verdict — `Cause::TheFileItself`
+  // and `Cause::ThePlayer` both require `Some(file)` to be reached at all.
+  const [fileShape, setFileShape] = useState<{
+    average_mbit: number;
+    peak_10s_mbit: number;
+  } | null>(null);
 
   const ask = useCallback(async () => {
     setAsking(true);
@@ -53,13 +60,13 @@ export function DiagScreen({ serverId }: { serverId: string }) {
       // measuring it while our own questions run alongside is measuring ourselves.
       setHealth(await ipc.diagHealth(serverId));
       setLogs(await ipc.diagLogs(serverId, minutes));
-      setStalls(await ipc.diagExplainStalls(serverId, minutes));
+      setStalls(await ipc.diagExplainStalls(serverId, minutes, fileShape ?? undefined));
     } catch (e) {
       setError(e as AppError);
     } finally {
       setAsking(false);
     }
-  }, [serverId, minutes]);
+  }, [serverId, minutes, fileShape]);
 
   useEffect(() => {
     void ask();
@@ -99,7 +106,7 @@ export function DiagScreen({ serverId }: { serverId: string }) {
       {logs && <LogsPanel logs={logs} />}
       {stalls && <StallsPanel stalls={stalls} />}
 
-      <BitratePeaks />
+      <BitratePeaks onMeasured={setFileShape} />
     </div>
   );
 }

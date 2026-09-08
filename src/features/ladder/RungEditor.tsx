@@ -18,7 +18,7 @@
  * the person is still looking at it, not after they have agreed to the work.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
@@ -147,6 +147,18 @@ export function RungEditor({
   const { lang } = useLang();
   const words = t.ui.ladder;
   const [verdict, setVerdict] = useState<LadderVerdict | null>(null);
+  // **One sequence number per rung, not one for the whole table** (T523). A person can be
+  // mid-edit on two rungs at once — nothing stops them — and a global counter would let a
+  // slow answer for rung 0 get thrown away just because rung 2 was typed into afterwards,
+  // even though rung 0's own edit was still the latest thing said about rung 0.
+  const editSeq = useRef<Record<number, number>>({});
+  // The freshest `rungs` prop, read inside `edit()`'s `.then` instead of the value closed
+  // over when the call was made. Otherwise a slow answer for one rung would overwrite
+  // whatever else changed on the table (another rung's own edit, a toggle) in the meantime.
+  const rungsRef = useRef(rungs);
+  useEffect(() => {
+    rungsRef.current = rungs;
+  }, [rungs]);
 
   // What will actually be built. The check has to be about these and not about the whole
   // list: leaving a rung out is what widens a gap, and a check that looked at the rungs
@@ -175,19 +187,33 @@ export function RungEditor({
 
   function edit(index: number, bitrateMbps: number) {
     if (!onChange) return;
-    const next = rungs.map((rung, i) =>
-      i === index
-        ? {
-            ...rung,
-            bitrate_bps: Math.max(1, Math.round(bitrateMbps)) * 1_000_000,
-            // **A rung moved by hand leaves the measured grid.** Nobody has looked at what
-            // it is worth at its new value, and saying otherwise would be the one lie this
-            // screen could tell that a person would believe.
-            quality: { state: "not_measured" } as Quality,
-          }
-        : rung,
-    );
-    onChange(next);
+    const bitrate_bps = Math.max(1, Math.round(bitrateMbps)) * 1_000_000;
+    // **The whole rung comes back from the core, not just the number that was typed**
+    // (T523). `maxrate_bps`/`bufsize_bps` are sized off the bitrate through `peak_control`,
+    // and `height`/`width` off its density through `height_for`/`width_for` — patching only
+    // `bitrate_bps` in place left every one of those at whatever the *old* bitrate had
+    // earned (a 15→3 Mbit/s edit kept a ~16.5 Mbit/s ceiling, no peak control at all, and
+    // 3 Mbit/s still encoded at 2160p). `reasons` comes back as `["edited_by_hand"]` too:
+    // every reason the old rung carried (`ProbedAnchor`, `LoweredForDensity`, ...) described
+    // numbers that no longer hold once the bitrate changed by hand.
+    editSeq.current[index] = (editSeq.current[index] ?? 0) + 1;
+    const mySeq = editSeq.current[index];
+    ipc
+      .ladderRecomputeRung(index, bitrate_bps, source)
+      .then((recomputed) => {
+        // **Only if this is still the latest edit of this same rung** (the same
+        // `alive`-style guard the `ladderValidate` effect above uses against its own stale
+        // answers). Typing a new digit fires another call before the first one resolves;
+        // without this, whichever answer lands last — not whichever was asked last — would
+        // win, and could silently roll a fresh keystroke back to an earlier one.
+        if (mySeq !== editSeq.current[index]) return;
+        onChange(rungsRef.current.map((rung, i) => (i === index ? recomputed : rung)));
+      })
+      .catch(() => {
+        // The command is pure — no file, no network — so this should not happen in
+        // practice. If it ever does, leave the rung as it was rather than tear the screen
+        // down with half an edit applied.
+      });
   }
 
   return (

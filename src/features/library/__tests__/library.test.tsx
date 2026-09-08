@@ -11,7 +11,7 @@
  * number formatting, which is the very thing they check.
  */
 
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
@@ -19,6 +19,7 @@ import type {
   AppError,
   FileView,
   GroupSuggestion,
+  LadderSetView,
   LibraryView,
   MediaView,
   ServerProfile,
@@ -111,6 +112,21 @@ function media(over: Partial<MediaView> = {}): MediaView {
     ladders: [],
     total_bytes: 1024 * 1024 * 1500,
     created_at: "2026-08-01T10:00:00Z",
+    ...over,
+  };
+}
+
+function ladderSet(over: Partial<LadderSetView> = {}): LadderSetView {
+  return {
+    path: "nazvanie-filma/master.m3u8",
+    size_bytes: 1024 * 1024 * 900,
+    width: 1920,
+    height: 1080,
+    bitrate_bps: 5_000_000,
+    duration_s: 3725,
+    exists_on_server: true,
+    origin_url: "https://stream.example.com/videos/nazvanie-filma/master.m3u8",
+    cdn_url: null,
     ...over,
   };
 }
@@ -224,6 +240,59 @@ describe("the library", () => {
 
     expect(await screen.findByText(ru.ui.library.linkFromServer)).toBeInTheDocument();
     expect(screen.getByText(ru.ui.library.linkViaCdn)).toBeInTheDocument();
+  });
+});
+
+describe("a medium's built quality sets (T529)", () => {
+  it("shows every parameter known about a set, and offers to copy its link", async () => {
+    mockLibraryList.mockResolvedValue(
+      view({ media: [media({ ladders: [ladderSet()] })] }),
+    );
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+
+    const list = await screen.findByTestId("ladder-sets-m1");
+    expect(list).toHaveTextContent("nazvanie-filma/master.m3u8");
+    expect(list).toHaveTextContent("1920×1080");
+    expect(list).toHaveTextContent("1:02:05");
+    expect(list).toHaveTextContent("5,0 Мбит/с");
+    expect(list.querySelector(`.copy-link`)).toBeTruthy();
+    expect(within(list).getByText(ru.ui.library.linkCopy)).toBeInTheDocument();
+  });
+
+  it("does not show a placeholder where a set's parameters are unknown", async () => {
+    // A set not built by this application, or one whose `.facts` could not be read: honest
+    // absence, not a made-up zero or dash that would look like a measurement.
+    mockLibraryList.mockResolvedValue(
+      view({
+        media: [
+          media({
+            ladders: [
+              ladderSet({ width: null, height: null, bitrate_bps: null, duration_s: null }),
+            ],
+          }),
+        ],
+      }),
+    );
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+
+    const list = await screen.findByTestId("ladder-sets-m1");
+    expect(list).not.toHaveTextContent("×");
+    expect(list).not.toHaveTextContent("Мбит/с");
+    // The link is still offered: an unmeasured set is still a real, servable file.
+    expect(within(list).getByText(ru.ui.library.linkCopy)).toBeInTheDocument();
+  });
+
+  it("marks a set missing on the server the same way a file is marked", async () => {
+    mockLibraryList.mockResolvedValue(
+      view({ media: [media({ ladders: [ladderSet({ exists_on_server: false })] })] }),
+    );
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+
+    const list = await screen.findByTestId("ladder-sets-m1");
+    expect(within(list).getByText(ru.ui.library.linkDead)).toBeInTheDocument();
   });
 });
 

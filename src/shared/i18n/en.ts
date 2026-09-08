@@ -690,11 +690,27 @@ export const en: Catalogue = {
       measureRunning: "Measuring — you can close this: the work is not lost",
 
       setName: "What the set is called on the server",
+      attachToExisting: "Attach to an existing medium",
+      attachToNewSet: "New set",
+      attachSlug: "The set will be attached to the medium “{slug}” on the server.",
+      attachChooseServer: "Choose a server first — there is nothing to attach to yet.",
       rungs: "Rungs",
       columnBitrate: "Bitrate",
       columnSize: "Frame",
       columnQuality: "Quality",
       columnWhy: "Why",
+
+      // T522 — fields the core already accepts (`LadderRequest` in
+      // `src-tauri/src/commands/ladder.rs`) but the screen never filled in: a collapsible
+      // "Advanced" block, following the pattern in `ServerForm.tsx`.
+      advanced: "Advanced",
+      nativeHeight: "The material's real height, if it was stretched",
+      nativeHeightPlaceholder: "e.g. 1080",
+      declaredLayout: "What kind of picture",
+      declaredLayoutUnknown: "Not stated",
+      declaredLayoutFlat: "Ordinary",
+      declaredLayoutSideBySide: "Side by side (SBS)",
+      declaredLayoutOverUnder: "One above the other (OU)",
 
       // Why a rung looks the way it does (T418). The keys are the core's `Reason` variants,
       // and `every_reason_a_rung_can_give_has_words` holds them to it. Each wording carries
@@ -768,6 +784,8 @@ export const en: Catalogue = {
         `${memoryMb} MB of memory, system disk ${disk}. On a machine with little memory installing packages is killed without a swap file — one will be made.`,
 
       ipv6Question: "What should happen to IPv6 on this server?",
+      ipv6NotChosen:
+        "Choose one of the two options below — neither is assumed by default, because each decides the fate of viewers on an IPv6 connection differently.",
       ipv6Keep: "Keep it",
       ipv6KeepMeans:
         "The protection will cover IPv6 as fully as IPv4. The domain must then have an AAAA record pointing at this server’s IPv6 address — otherwise viewers whose connection prefers IPv6 go nowhere, and the complaint arrives not as “the server is broken” but as “it doesn’t open for me”.",
@@ -1227,6 +1245,7 @@ export const en: Catalogue = {
       missingOnServer: " · {n} not found on the server",
       shortName: "Short name:",
       ladders: "Quality ladders: {list}",
+      laddersHeading: "Quality ladders",
       renameMedia: "Rename",
       deleteMedia: "Delete the medium",
       diskFree: "Free",
@@ -1307,7 +1326,7 @@ export const en: Catalogue = {
       testing: "Checking…",
       test: "Check the connection",
       confirmRemoval:
-        "Delete this profile? The password or key for this server will be forgotten too.",
+        "Delete this profile? The password or key for this server will be forgotten, and its local media library records will be lost too.",
       removeYes: "Yes, delete",
       remove: "Delete",
       steps: {
@@ -1317,6 +1336,14 @@ export const en: Catalogue = {
         domain: "Serving answers on the domain",
       },
       stepStatus: { ok: "passed", failed: "failed", skipped: "not checked" },
+      edit: "Edit",
+      editHeading: "Edit the server “{name}”",
+      editSecretHint:
+        "Leave this empty to keep the stored password or key as it is — it is never handed back from the store.",
+      editAddressChanged:
+        "The address or port changed — the server has to be recognised again before connecting to it.",
+      save: "Save",
+      saving: "Saving…",
     },
 
     tasks: {
@@ -1342,6 +1369,7 @@ export const en: Catalogue = {
       pause: "Pause",
       resume: "Resume",
       stop: "Cancel",
+      viewResult: "See it in the library",
       kinds: {
         probe: "examining the source",
         convert: "preparing the file",

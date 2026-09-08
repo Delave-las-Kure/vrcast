@@ -464,6 +464,16 @@ export interface FileView {
   cdn_url: string | null;
 }
 
+/**
+ * A single quality-set variant of a medium (T529 backend addendum, `agent/backend`
+ * commit `e6dfe76`). Replaces the bare `string[]` `MediaView.ladders` used to be:
+ * a path alone said nothing about what the variant actually is, while this is
+ * everything `.facts` found about it, when it was found at all.
+ *
+ * Kept to exactly the shape the core sends: no field added, none removed. It is
+ * *almost* `FileView` but not quite — no `video_codec`/`audio_codec`/`faststart_ok`,
+ * which is why it is its own interface rather than a reuse of that one.
+ */
 export interface LadderSetView {
   /** The description's path, relative to the video directory: `{slug}/master.m3u8`. */
   path: string;
@@ -535,6 +545,12 @@ export interface Batch {
   label: string;
 }
 
+/** What a task produced, for a person to go and look at (T519(3)). Filled only for
+ *  Upload and BuildLadder — every other kind leaves this null. */
+export interface TaskResult {
+  media_id: string;
+}
+
 export interface Task {
   id: string;
   kind: TaskKind;
@@ -556,6 +572,9 @@ export interface Task {
   /** Which batch this belongs to and what to call it (T445). Null for anything a person
    *  started on its own. */
   batch: Batch | null;
+  /** What the task produced, for a person to go and look at (T519(3)). Null for every
+   *  kind except Upload and BuildLadder. */
+  result: TaskResult | null;
   /** Place in the queue: lower runs sooner. Changed by reordering (FR-083). */
   queue_order: number;
   /** Whether pressing "carry on" would do anything (T515).
@@ -1020,7 +1039,19 @@ export interface LadderPlanRequest {
   codec?: string;
   /** The height the material really has, when it was upscaled. Told by the person. */
   native_height?: number | null;
+  /**
+   * What the person says the picture is, when they know better than a guess (T522).
+   *
+   * `Option<Layout>` on the Rust side (`src-tauri/src/commands/ladder.rs::LadderRequest`),
+   * and `Layout` (`src-tauri/src/domain/ladder.rs`) derives `Serialize`/`Deserialize` with
+   * no `#[serde(rename_all = ...)]` above it — checked in that file, not guessed — so each
+   * variant serialises under its own Rust name, in PascalCase.
+   */
+  declared_layout?: "Flat" | "SideBySide" | "OverUnder" | null;
   prefer_hardware?: boolean;
+  /** The peak `ladder_measure` found, when it has finished in time (T522). Always
+   *  overrides the complexity probe's own anchor when present. */
+  measured_peak_bps?: number | null;
 }
 
 /** Build the quality set on a server. */
@@ -1381,6 +1412,16 @@ export interface TaskNotifyRequest {
 export interface LibraryChangedEvent {
   event: "library_changed";
   server_id: string;
+}
+
+/**
+ * A server's detected state has changed — emitted on connection and again whenever it
+ * changes (deploy, upgrade, rollback). The same `ServerState` shape `server_detect` returns.
+ */
+export interface ServerStateEvent {
+  event: "server_state";
+  server_id: string;
+  state: ServerState;
 }
 
 // ---------- upload ----------

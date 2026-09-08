@@ -20,7 +20,8 @@
  */
 
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "../../../shared/contract";
 import { renderIn, ru } from "../../../test-utils";
 
@@ -84,6 +85,7 @@ function task(over: Partial<Task> = {}): Task {
     queue_order: 1,
     created_at: "2026-08-28T10:00:00Z",
     updated_at: "2026-08-28T10:00:00Z",
+    result: null,
     ...over,
   };
 }
@@ -246,4 +248,37 @@ it("says how many it stopped rather than asserting that something happened", asy
   fireEvent.click(screen.getByText(ru.ui.tasks.batchStop));
   const said = await screen.findByTestId("batch-stopped");
   expect(said.textContent).toContain("7");
+});
+
+describe("what a task produced, for a person to go and look at (T519(3))", () => {
+  it("offers a way to it when the core says where it landed", async () => {
+    list = [
+      task({
+        kind: "build_ladder",
+        state: "completed",
+        progress: 1,
+        result: { media_id: "m-1" },
+      }),
+    ];
+    renderIn(
+      <MemoryRouter>
+        <TasksPanel />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(ru.ui.tasks.viewResult)).toBeTruthy();
+  });
+
+  it("offers nothing where the core never says where it landed", async () => {
+    // Not only the failed and the not-yet-finished: an upload or a build that finished
+    // without its medium ever getting resolved leaves `result` null too (T519(3)), and
+    // a link to nowhere in particular is worse than no link.
+    list = [task({ kind: "upload", state: "completed", progress: 1, result: null })];
+    renderIn(
+      <MemoryRouter>
+        <TasksPanel />
+      </MemoryRouter>,
+    );
+    await screen.findByText(ru.ui.tasks.states.completed);
+    expect(screen.queryByText(ru.ui.tasks.viewResult)).toBeNull();
+  });
 });

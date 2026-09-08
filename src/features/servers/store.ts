@@ -52,6 +52,13 @@ export function useActiveServer(): ServerProfile | null {
   return useServers((s) => s.profiles.find((p) => p.is_active) ?? null);
 }
 
+/** A profile by id, for a screen that was handed a `serverId` rather than relying on
+ *  whichever one happens to be active (T525(3)). `null` while the list has not loaded
+ *  yet, or if the id names no profile at all. */
+export function useServerById(id: string): ServerProfile | null {
+  return useServers((s) => s.profiles.find((p) => p.id === id) ?? null);
+}
+
 /** Whether the profile is usable: without a confirmed fingerprint there is no connection. */
 export function isReady(profile: ServerProfile): boolean {
   return profile.host_fingerprint !== null;
