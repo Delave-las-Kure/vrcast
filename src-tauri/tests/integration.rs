@@ -85,6 +85,9 @@ mod hls_fixture;
 #[path = "integration/library_completeness.rs"]
 mod library_completeness;
 
+#[path = "integration/library_scale.rs"]
+mod library_scale;
+
 /// T528, T529 — a built set attached to its medium as a nested ladder with real particulars.
 #[path = "integration/ladder_attach.rs"]
 mod ladder_attach;
