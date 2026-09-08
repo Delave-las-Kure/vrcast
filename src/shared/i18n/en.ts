@@ -1302,6 +1302,7 @@ export const en: Catalogue = {
         "The files on the server will be renamed and every link handed out before will stop working. If you have already given them to viewers, you will have to give them out again.",
       renaming: "Renaming…",
       rename: "Rename",
+      renameAnyway: "Rename anyway",
       deleteHeading: "Delete “{what}”?",
       deleteLabel: "Delete {what}",
       deleteIrreversible: "There will be no undoing it.",
