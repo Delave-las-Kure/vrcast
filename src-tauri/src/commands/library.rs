@@ -38,6 +38,33 @@ pub struct FileView {
     pub cdn_url: Option<String>,
 }
 
+/// A quality set in the form the interface shows it (FR-012, T529).
+///
+/// **Not a bare path.** A file served directly carries its resolution, bitrate and length
+/// (`FileView`); a set is the same kind of thing — a viewer plays it the same way — and
+/// showing it as a string that merely names a directory answered none of the same
+/// questions. The particulars come from what the set itself already records: the master
+/// playlist's own numbers for the heaviest rung (`server::ladder_probe`), never a guess and
+/// never the ladder that was *asked* for — an encoder does not deliver exactly what it was
+/// told (see `domain::hls_master`'s own doc comment).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LadderSetView {
+    /// The description's path, relative to the video directory: `{slug}/master.m3u8`.
+    pub path: String,
+    /// The whole directory's size — every rung together, which is what a deletion frees.
+    pub size_bytes: u64,
+    /// The heaviest rung's own numbers. `None` when the master could not be read or
+    /// parsed — an older set, or one this application did not build.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub bitrate_bps: Option<u64>,
+    pub duration_s: Option<f64>,
+    /// False means the directory was deleted or renamed outside the application (FR-018).
+    pub exists_on_server: bool,
+    pub origin_url: String,
+    pub cdn_url: Option<String>,
+}
+
 /// A medium with all of its files.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaView {
@@ -45,8 +72,8 @@ pub struct MediaView {
     pub title: String,
     pub slug: String,
     pub files: Vec<FileView>,
-    /// The quality-ladder descriptions.
-    pub ladders: Vec<String>,
+    /// The quality sets built for this medium.
+    pub ladders: Vec<LadderSetView>,
     /// How much the medium's files take up in all — what a deletion would free.
     pub total_bytes: u64,
     pub created_at: String,
@@ -154,6 +181,7 @@ pub mod ipc {
         media_id: String,
         title: Option<String>,
         slug: Option<String>,
+        confirmed: Option<bool>,
     ) -> Result<()> {
         api::media_rename(
             &state,
@@ -161,6 +189,7 @@ pub mod ipc {
             &media_id,
             title.as_deref(),
             slug.as_deref(),
+            confirmed.unwrap_or(false),
         )
         .await
     }
@@ -228,6 +257,40 @@ fn file_view(
         video_codec: params.params.video_codec,
         audio_codec: params.params.audio_codec,
         faststart_ok: params.faststart_ok,
+        exists_on_server,
+        origin_url: links.origin,
+        cdn_url: links.cdn,
+    }
+}
+
+/// Gather what is known about a quality set, for showing (T529).
+///
+/// `path` is `{slug}/master.m3u8` as the catalogue records it; the slug is the top-level
+/// directory the whole set lives under, and that is what `ladder_probe::top_rung` is asked
+/// about. Reading fails silently into blanks rather than losing the set from view: a build
+/// from before `.facts` existed, or one this application did not make, still deserves to be
+/// seen and deleted like any other entry.
+async fn ladder_view(
+    profile: &crate::domain::server_profile::ServerProfile,
+    conn: &crate::ssh::Connection,
+    path: &str,
+    size_bytes: u64,
+    exists_on_server: bool,
+) -> LadderSetView {
+    let links = crate::domain::links::for_path(&profile.domain, profile.cdn_base.as_deref(), path);
+    let top = if exists_on_server {
+        let slug = path.split('/').next().unwrap_or(path);
+        crate::server::ladder_probe::top_rung(conn, &profile.video_dir, slug).await
+    } else {
+        None
+    };
+    LadderSetView {
+        path: path.to_owned(),
+        size_bytes,
+        width: top.as_ref().map(|t| t.width),
+        height: top.as_ref().map(|t| t.height),
+        bitrate_bps: top.as_ref().map(|t| t.bitrate_bps),
+        duration_s: top.as_ref().and_then(|t| t.duration_s),
         exists_on_server,
         origin_url: links.origin,
         cdn_url: links.cdn,
@@ -349,12 +412,17 @@ pub mod api {
             // A quality ladder counts towards the medium's size: deleting frees it too.
             total += files.ladders.iter().map(|l| l.size_bytes).sum::<u64>();
 
+            let mut ladders = Vec::with_capacity(files.ladders.len());
+            for l in &files.ladders {
+                ladders.push(ladder_view(profile, &conn, &l.path, l.size_bytes, l.exists).await);
+            }
+
             media_views.push(MediaView {
                 id: media.id.clone(),
                 title: media.title.clone(),
                 slug: media.slug.clone(),
                 files: views,
-                ladders: files.ladders.iter().map(|l| l.path.clone()).collect(),
+                ladders,
                 total_bytes: total,
                 created_at: media.created_at.clone(),
             });
@@ -492,13 +560,17 @@ pub mod api {
     /// Rename a medium.
     ///
     /// Changing the short name renames the files and **breaks the old links**: the
-    /// interface must warn about that before calling.
+    /// interface must warn about that before calling. When somebody is watching right now,
+    /// the rename is refused with `FILE_IN_USE` unless `confirmed` (FR-019a) — the same
+    /// mechanism `media_delete` already has for the same reason: a `mv` on the server
+    /// would drop an active download without warning.
     pub async fn media_rename(
         state: &AppState,
         server_id: &str,
         media_id: &str,
         title: Option<&str>,
         slug: Option<&str>,
+        confirmed: bool,
     ) -> Result<()> {
         let profile = profile_of(state, server_id)?;
 
@@ -539,6 +611,14 @@ pub mod api {
         if let Some(s) = new_slug {
             let old = media.slug.clone();
             if s != old {
+                if !confirmed {
+                    let connections = active_connections(&conn).await;
+                    if connections > 0 {
+                        conn.close().await;
+                        return Err(AppError::new(ErrorCode::FileInUse)
+                            .with_cause(format!("connections={connections}")));
+                    }
+                }
                 rename_entries(&conn, &profile.video_dir, media, &old, s).await?;
                 media.slug = s.to_owned();
             }
@@ -671,6 +751,12 @@ pub mod api {
     /// The file stays where it is — only which medium it belongs to changes. Renaming it to
     /// follow the new short name will not do: that would break working links, which nobody
     /// asked for.
+    ///
+    /// `confirmed` is accepted for the shape of the contract to match `media_rename` and
+    /// `media_delete`, but is not acted on: FILE_IN_USE exists to warn before an operation
+    /// that can drop an active download (a `mv` or an `rm` on the server). This one issues
+    /// neither — the file's bytes and its path are untouched, only a JSON record of which
+    /// medium owns it changes — so there is nothing an active viewer could be cut off from.
     pub async fn file_move(
         state: &AppState,
         server_id: &str,

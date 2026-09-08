@@ -105,6 +105,14 @@ export type DetailCode =
   | "PROFILE_NOT_FOUND"
   | "FINGERPRINT_EMPTY"
 
+  // what the single door says when it stays shut (T519(1), server::gate::Refusal)
+  | "SERVER_FOREIGN_WEB_SERVER_RUNNING"
+  | "SERVER_FOREIGN_CONFIG_WITHOUT_STATE"
+  | "SERVER_FOREIGN_STATE_UNREADABLE"
+  | "SERVER_FOREIGN_UNKNOWN"
+  | "SERVER_NOT_DEPLOYED"
+  | "SERVER_ALREADY_DEPLOYED"
+
   // domain field
   | "DOMAIN_EMPTY"
   | "DOMAIN_HAS_SPACES"
@@ -456,12 +464,27 @@ export interface FileView {
   cdn_url: string | null;
 }
 
+export interface LadderSetView {
+  /** The description's path, relative to the video directory: `{slug}/master.m3u8`. */
+  path: string;
+  /** The whole directory's size — every rung together. */
+  size_bytes: number;
+  width: number | null;
+  height: number | null;
+  bitrate_bps: number | null;
+  duration_s: number | null;
+  /** False = the directory was deleted or renamed outside the application (FR-018). */
+  exists_on_server: boolean;
+  origin_url: string;
+  cdn_url: string | null;
+}
+
 export interface MediaView {
   id: string;
   title: string;
   slug: string;
   files: FileView[];
-  ladders: string[];
+  ladders: LadderSetView[];
   total_bytes: number;
   created_at: string;
 }
@@ -949,7 +972,8 @@ export type RungReason =
   | "single_rung_only"
   | "measured_optimum"
   | "borrowed_measurement"
-  | "filled_a_gap";
+  | "filled_a_gap"
+  | "edited_by_hand";
 
 export interface Rung {
   index: number;

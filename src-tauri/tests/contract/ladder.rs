@@ -17,7 +17,7 @@ use vrcast_studio_lib::commands::ladder::{
 use vrcast_studio_lib::domain::ladder::{
     plan, NotBuildable, Objection, Quality, Rung, SourceFacts,
 };
-use vrcast_studio_lib::media::ffmpeg;
+use vrcast_studio_lib::media::{encoders, ffmpeg, probe_complexity};
 
 use super::support::state;
 
@@ -83,6 +83,7 @@ async fn planning_a_missing_file_says_so_rather_than_offering_a_ladder() {
             codec: String::from("h264"),
             native_height: None,
             declared_layout: None,
+            measured_peak_bps: None,
             prefer_hardware: true,
         },
     )
@@ -92,6 +93,178 @@ async fn planning_a_missing_file_says_so_rather_than_offering_a_ladder() {
         matches!(err.code, ErrorCode::InvalidInput | ErrorCode::FfmpegBroken),
         "the wrong code came back: {:?}",
         err.code
+    );
+}
+
+/// A short, real clip to plan a ladder from (T522). Software x264 throughout — not
+/// hardware — so the probe's own answer is the same on every machine this runs on,
+/// which is exactly what `a_supplied_measured_peak_overrules_the_probe_s_own_reading`
+/// below needs to hold still while it changes the one thing T522 is about.
+async fn a_real_clip() -> std::path::PathBuf {
+    let ff = ffmpeg::locate("ffmpeg").expect("no bundled ffmpeg");
+    let dir = std::env::temp_dir().join("vrcast-t522-fixture");
+    std::fs::create_dir_all(&dir).expect("could not make a working directory");
+    let src = dir.join("source.mp4");
+    if src.is_file() {
+        return src;
+    }
+    let made = std::process::Command::new(&ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "mandelbrot=size=960x540:rate=24",
+            "-t",
+            "12",
+            "-c:v",
+            "libx264",
+            "-b:v",
+            "16M",
+            "-minrate",
+            "16M",
+            "-maxrate",
+            "16M",
+            "-bufsize",
+            "32M",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&src)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(made.status.success(), "could not prepare the fixture clip");
+    src
+}
+
+/// T522, rule 1: when `LadderRequest.measured_peak_bps` is supplied, it — not the
+/// complexity probe's own few-seconds-of-trial-encodes reading — determines
+/// `plan.anchor_bps`/`anchor_mbps`, unconditionally, no closeness threshold.
+///
+/// Against a real clip and a real probe (`probe_complexity::probe`), not an invented
+/// `Probed`: the whole point of T522 is that a real, honest measurement beats the
+/// probe's own guess, so the guess has to be real too or the comparison proves nothing.
+#[tokio::test]
+async fn a_supplied_measured_peak_overrules_the_probe_s_own_reading() {
+    if !has_ffmpeg() {
+        return;
+    }
+    let src = a_real_clip().await;
+    let path = src.to_string_lossy().into_owned();
+
+    // What the probe finds on its own, so the test can show the supplied peak actually
+    // changed the outcome rather than coincidentally landing on the same rung.
+    let state = state();
+    let baseline = ladder::ladder_plan(
+        &state,
+        &LadderRequest {
+            path: path.clone(),
+            codec: String::from("h264"),
+            native_height: None,
+            declared_layout: None,
+            measured_peak_bps: None,
+            prefer_hardware: false,
+        },
+    )
+    .await
+    .expect("the baseline ladder would not plan");
+    assert_eq!(
+        baseline.from,
+        LadderSource::Formula,
+        "an unmeasured file was not planned from the formula"
+    );
+
+    // Below `source_cap_mbps` for this clip (~16 Mbit/s average) so the supplied number
+    // is not silently trimmed back down to the cap — and deliberately unlike whatever
+    // the probe found above, so a passing test proves the override rather than a
+    // coincidence.
+    let supplied_peak_bps: u64 = 9_000_000;
+    assert_ne!(
+        baseline.anchor_mbps,
+        Some(supplied_peak_bps / 1_000_000),
+        "the fixture's probe reading collided with the test's supplied number by chance; \
+         change supplied_peak_bps so the two differ"
+    );
+
+    let overridden = ladder::ladder_plan(
+        &state,
+        &LadderRequest {
+            path,
+            codec: String::from("h264"),
+            native_height: None,
+            declared_layout: None,
+            measured_peak_bps: Some(supplied_peak_bps),
+            prefer_hardware: false,
+        },
+    )
+    .await
+    .expect("the overridden ladder would not plan");
+
+    assert_eq!(
+        overridden.anchor_mbps,
+        Some(supplied_peak_bps / 1_000_000),
+        "the supplied measured_peak_bps did not become the anchor: {:?}",
+        overridden.anchor_mbps
+    );
+    assert_eq!(
+        overridden.plan.anchor_bps,
+        (supplied_peak_bps / 1_000_000) * 1_000_000,
+        "plan.anchor_bps disagrees with anchor_mbps — the two were computed from \
+         different numbers, exactly the desync T522 exists to prevent"
+    );
+    let top = overridden
+        .plan
+        .rungs
+        .iter()
+        .map(|r| r.bitrate_bps)
+        .max()
+        .expect("the overridden plan chose no rungs at all");
+    assert_eq!(
+        top,
+        (supplied_peak_bps / 1_000_000) * 1_000_000,
+        "the top rung was not built from the supplied peak: {top}"
+    );
+}
+
+/// T522: `measured_peak_bps: None` leaves the old behaviour untouched — the anchor is
+/// still whatever the complexity probe itself found, exactly as before this change.
+#[tokio::test]
+async fn a_missing_measured_peak_leaves_the_probe_s_own_reading_in_charge() {
+    if !has_ffmpeg() {
+        return;
+    }
+    let src = a_real_clip().await;
+    let path = src.to_string_lossy().into_owned();
+    let state = state();
+
+    let request = LadderRequest {
+        path: path.clone(),
+        codec: String::from("h264"),
+        native_height: None,
+        declared_layout: None,
+        measured_peak_bps: None,
+        prefer_hardware: false,
+    };
+    let preview = ladder::ladder_plan(&state, &request)
+        .await
+        .expect("the ladder would not plan");
+
+    // Worked out the same way `ladder_plan` itself works it out, independently, so the
+    // assertion is against the probe's real answer and not a number copied from a
+    // previous run of this test.
+    let probed = vrcast_studio_lib::commands::api::source_probe(&path)
+        .await
+        .expect("the fixture clip would not probe");
+    let probe = probe_complexity::probe(&src, probed.duration_s, &encoders::Encoder::Software).await;
+
+    assert_eq!(
+        preview.anchor_mbps,
+        probe.measured_bps.map(|bps| (bps / 1_000_000).max(1)),
+        "with no measured_peak_bps supplied, the anchor no longer matches the probe's \
+         own reading — the fallback path changed behaviour"
     );
 }
 

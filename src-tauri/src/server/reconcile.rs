@@ -68,15 +68,23 @@ pub fn reconcile(manifest: &Manifest, entries: &[Entry]) -> Reconciled {
     let mut media_files = Vec::new();
 
     for media in &manifest.media {
-        let resolve = |path: &String| -> ResolvedFile {
+        let resolve = |path: &String, is_ladder: bool| -> ResolvedFile {
             let top = top_level(path);
-            // For a nested path the size of the top-level entry is the size of the
-            // whole quality ladder; it must not be attributed to one description.
             let entry = present.get(top);
             let nested = top != path.as_str();
             ResolvedFile {
                 path: path.clone(),
-                size_bytes: if nested {
+                // A quality ladder is a whole directory named by one path
+                // (`{slug}/master.m3u8`) — exactly the entry the top level already
+                // carries the total size of (`listing::directory_sizes`, one `du -sb`
+                // for every ladder at once). That total **is** the set's size, and there
+                // is only ever the one description line for it, so crediting it here
+                // does not double anything (T529).
+                //
+                // An ordinary file is never meant to be nested; if one somehow is, `0`
+                // stays the answer rather than guessing at a directory that is not its
+                // own.
+                size_bytes: if nested && !is_ladder {
                     0
                 } else {
                     entry.map_or(0, |e| e.size_bytes)
@@ -85,8 +93,8 @@ pub fn reconcile(manifest: &Manifest, entries: &[Entry]) -> Reconciled {
             }
         };
 
-        let files: Vec<ResolvedFile> = media.files.iter().map(&resolve).collect();
-        let ladders: Vec<ResolvedFile> = media.ladders.iter().map(&resolve).collect();
+        let files: Vec<ResolvedFile> = media.files.iter().map(|p| resolve(p, false)).collect();
+        let ladders: Vec<ResolvedFile> = media.ladders.iter().map(|p| resolve(p, true)).collect();
 
         for path in media.all_paths() {
             claimed.insert(top_level(path));

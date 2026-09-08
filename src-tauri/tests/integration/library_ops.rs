@@ -9,7 +9,9 @@
 //! itself.
 
 use super::fixture::{key_path, TestServer, KEY_PASSPHRASE};
+use super::viewer::Viewer;
 use std::sync::Arc;
+use std::time::Duration;
 use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
 use vrcast_studio_lib::commands::library::api as library;
 use vrcast_studio_lib::commands::servers::{api as servers, ServerInput};
@@ -224,7 +226,7 @@ async fn changing_the_short_name_renames_the_files() {
             .unwrap();
     }
 
-    library::media_rename(&state, &id, &media_id, None, Some("kino"))
+    library::media_rename(&state, &id, &media_id, None, Some("kino"), false)
         .await
         .expect("the renaming failed");
 
@@ -279,6 +281,7 @@ async fn renaming_only_the_title_leaves_the_files_alone() {
         &media_id,
         Some("A completely different title"),
         None,
+        false,
     )
     .await
     .expect("the renaming failed");
@@ -293,6 +296,60 @@ async fn renaming_only_the_title_leaves_the_files_alone() {
     let media = view.media.iter().find(|m| m.id == media_id).unwrap();
     assert_eq!(media.title, "A completely different title");
     assert_eq!(media.slug, "film");
+}
+
+#[tokio::test]
+async fn renaming_the_short_name_while_watched_is_refused_unless_confirmed() {
+    // FR-019a. Changing the short name renames the files on the server (a `mv`), and a
+    // viewer pulling the old name at that moment would have their download cut without
+    // warning. The mechanism is the one `media_delete` already has for the same reason.
+    let (server, state, id) = setup(&[]).await;
+    server
+        .exec_inside(&format!(
+            "head -c 20000000 /dev/urandom > '{VIDEO_DIR}/heavy.mp4'"
+        ))
+        .expect("the large file was not created");
+    let media_id = library::media_create(&state, &id, "The film", Some("heavy"))
+        .await
+        .unwrap();
+    library::file_move(&state, &id, "heavy.mp4", &media_id, true)
+        .await
+        .unwrap();
+
+    let viewer = Viewer::attach(&server).expect("the viewer would not attach");
+    viewer
+        .start_watching("/videos/heavy.mp4", Some("100k"))
+        .expect("the watching would not start");
+    viewer
+        .wait_until_watching(Duration::from_secs(10))
+        .expect("the viewer never began pulling");
+
+    let err = library::media_rename(&state, &id, &media_id, None, Some("kino"), false)
+        .await
+        .expect_err("the rename went through while somebody was watching");
+    assert_eq!(err.code, ErrorCode::FileInUse);
+
+    // Refused, so nothing moved.
+    assert!(
+        server
+            .exec_inside(&format!("test -e {VIDEO_DIR}/heavy.mp4"))
+            .is_ok(),
+        "the file was renamed despite the refusal"
+    );
+
+    // Confirmed, the same rename goes through — even with the viewer still pulling: the
+    // warning is the interface's to act on, not a bar the core enforces by itself.
+    library::media_rename(&state, &id, &media_id, None, Some("kino"), true)
+        .await
+        .expect("the confirmed rename was refused");
+    assert!(
+        server
+            .exec_inside(&format!("test -e {VIDEO_DIR}/kino.mp4"))
+            .is_ok(),
+        "the confirmed rename did not reach the server"
+    );
+
+    viewer.stop_watching().ok();
 }
 
 #[tokio::test]

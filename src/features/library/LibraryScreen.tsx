@@ -385,7 +385,12 @@ function MediaCard({
 
           {media.ladders.length > 0 && (
             <p className="muted media__note">
-              {fill(t.ui.library.ladders, { list: media.ladders.join(", ") }, t, lang)}
+              {fill(
+                t.ui.library.ladders,
+                { list: media.ladders.map((l) => l.path).join(", ") },
+                t,
+                lang,
+              )}
             </p>
           )}
 

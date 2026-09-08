@@ -25,6 +25,13 @@ pub enum FfmpegError {
 
     #[error("bundled FFmpeg answers with something other than it should: {0}")]
     Unexpected(String),
+
+    /// Every packet ffprobe read from `-select_streams v:0` had no time stamp — which
+    /// means there was no video stream to read one from, not that the film is short
+    /// (T527(2)). `probe.rs` already tells this apart as `ProbeError::NoVideo`; this is
+    /// the same fact, met while measuring rather than while examining.
+    #[error("the file has no video track to measure")]
+    NoVideoTrack,
 }
 
 pub type Result<T> = std::result::Result<T, FfmpegError>;

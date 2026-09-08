@@ -1,0 +1,22 @@
+-- T519(3) — a finished task can point at what it made.
+--
+-- **The gap this closes.** A task has always ended by saying whether it worked and, if
+-- not, why — but never what came of it. Two kinds actually produce something a person
+-- would want to look at: an upload files a medium, a ladder build finishes a quality set
+-- for one. Everything else — a deployment, an upgrade, a measurement, a probe — changes
+-- nothing a person browses to, and has nothing to point at.
+--
+-- **Why a plain column and not JSON**, unlike `error` and `notices` beside it: the result
+-- is one string, a medium's own id, not a composite shape that grows fields over time. A
+-- JSON blob for one string would ask every reader to parse it for nothing.
+--
+-- **Why it can stay empty even for the two kinds that fill it** (T505). Filing a finished
+-- upload under a medium is not the transfer itself, and it can fail on its own — the medium
+-- was deleted between the choice and the end, say. Reporting a result then would point at
+-- something that leads nowhere, which is worse than no link at all. So the column is
+-- written only once the tie is known to hold, and stays null otherwise.
+--
+-- Old rows have it null, which reads as "nothing to point at" — true of every task that
+-- finished before this existed.
+
+ALTER TABLE tasks ADD COLUMN result_media_id TEXT;

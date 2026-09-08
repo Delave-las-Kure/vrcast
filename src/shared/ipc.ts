@@ -245,6 +245,16 @@ export const ipc = {
    */
   ladderValidate: (rungs: Rung[], source: SourceFacts) =>
     call<LadderVerdict>("ladder_validate", { check: { rungs, source } }),
+  /**
+   * Rebuild one rung after a person retypes its bitrate by hand (T523, FR-025).
+   *
+   * The ceiling, buffer and height all come from the bitrate; asking for this instead of
+   * patching the old rung's fields locally is what keeps them from being carried over from
+   * whatever bitrate the rung used to have. Meant to be followed by `ladderValidate` on the
+   * rungs with this one swapped in, exactly as any other edit is.
+   */
+  ladderRecomputeRung: (index: number, bitrateBps: number, source: SourceFacts) =>
+    call<Rung>("ladder_recompute_rung", { request: { index, bitrate_bps: bitrateBps, source } }),
 
   // --- measuring quality ---
   qualityMeasurePreview: (request: QualityMeasureRequest) =>

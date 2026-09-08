@@ -16,6 +16,7 @@ pub mod gate;
 pub mod health;
 pub mod hls_package;
 pub mod hls_verify;
+pub mod ladder_probe;
 pub mod limits;
 pub mod listing;
 pub mod log_digest;

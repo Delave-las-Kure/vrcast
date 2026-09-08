@@ -56,6 +56,9 @@ fn changes(_: &Context<'_>) -> Vec<Change> {
         Change::EnablesService {
             name: String::from("fail2ban"),
         },
+        Change::WritesFile {
+            path: String::from(JAIL),
+        },
     ]
 }
 

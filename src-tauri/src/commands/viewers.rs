@@ -151,7 +151,7 @@ impl LibraryContext {
             // A ladder is recorded by the path of its description; what a viewer asks for
             // is named by the directory it sits in.
             for ladder in &media.ladders {
-                if let Some(slug) = ladder.split('/').next() {
+                if let Some(slug) = ladder.path.split('/').next() {
                     by_slug.insert(slug.to_owned(), media.id.clone());
                 }
             }

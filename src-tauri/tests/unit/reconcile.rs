@@ -165,15 +165,32 @@ fn no_catalogue_entry_is_lost_or_counted_twice() {
 }
 
 #[test]
-fn a_nested_path_is_not_credited_with_the_directory_size() {
-    // We do not know the size of `film/master.m3u8` itself: what is known is the size of
-    // the whole directory. Crediting it to the description would show a person a text file
-    // weighing five megabytes.
+fn a_ladders_size_is_the_directory_s_own_total_and_not_credited_to_an_ordinary_file() {
+    // T529: the whole point of a quality set weighing something in the library is that its
+    // one description line (`film/master.m3u8`) stands for the whole directory the segments
+    // live in — and `listing::directory_sizes` already gives the top-level entry the
+    // directory's real total (one `du -sb` for the lot, not per-segment guessing). Crediting
+    // that total to the ladder's own resolved entry is the fix; leaving it at zero is the
+    // hole this test used to guard, and the comment above `resolve` explains why it no
+    // longer does.
     let m = manifest_with(vec![media("m1", "film", &[], &["film/master.m3u8"])]);
     let entries = vec![dir("film", 5_000_000)];
 
     let r = reconcile(&m, &entries);
-    assert_eq!(r.media_files[0].ladders[0].size_bytes, 0);
+    assert_eq!(r.media_files[0].ladders[0].size_bytes, 5_000_000);
+}
+
+#[test]
+fn an_ordinary_file_nested_under_something_that_is_not_its_own_directory_stays_at_zero() {
+    // The other half of the same rule: nesting is only meaningful for a quality ladder,
+    // which really is a whole directory named by one path. An ordinary file is never meant
+    // to sit under a path with a slash in it, and crediting it with a directory's total
+    // would be guessing at a size that belongs to something else entirely.
+    let m = manifest_with(vec![media("m1", "film", &["film/oddly-nested.mp4"], &[])]);
+    let entries = vec![dir("film", 5_000_000)];
+
+    let r = reconcile(&m, &entries);
+    assert_eq!(r.media_files[0].files[0].size_bytes, 0);
 }
 
 #[test]

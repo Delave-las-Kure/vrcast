@@ -47,6 +47,13 @@ use std::sync::Arc;
 pub enum AppEvent {
     /// The server's library changed: read it again.
     LibraryChanged { server_id: String },
+    /// What a server turned out to be — sent when it is connected to (FR-120) and again
+    /// whenever a change may have moved it, so a screen showing this server never has to
+    /// ask again to notice (`contracts/ipc-commands.md`: "at connection and at change").
+    ServerState {
+        server_id: String,
+        state: crate::domain::server_state::ServerState,
+    },
     /// A deployment has got another step done (FR-123).
     ///
     /// The whole list goes out each time rather than the one step that moved: a screen that
@@ -169,6 +176,22 @@ impl AppState {
     pub fn notify_library_changed(&self, server_id: &str) {
         let _ = self.events.send(AppEvent::LibraryChanged {
             server_id: server_id.to_owned(),
+        });
+    }
+
+    /// Say what a server turned out to be.
+    ///
+    /// Sent at connection — the moment `server_detect` has an answer — and again after
+    /// anything that might have changed it (a deployment, an upgrade, a rollback), so a
+    /// screen already looking at this server learns of the change without polling for it.
+    pub fn notify_server_state(
+        &self,
+        server_id: &str,
+        state: crate::domain::server_state::ServerState,
+    ) {
+        let _ = self.events.send(AppEvent::ServerState {
+            server_id: server_id.to_owned(),
+            state,
         });
     }
 }

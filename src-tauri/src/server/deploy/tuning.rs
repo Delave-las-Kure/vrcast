@@ -70,6 +70,9 @@ fn changes(_: &Context<'_>) -> Vec<Change> {
         Change::WritesFile {
             path: String::from(CADDY_DROP_IN),
         },
+        Change::WritesFile {
+            path: String::from(BBR_MODULE),
+        },
     ]
 }
 

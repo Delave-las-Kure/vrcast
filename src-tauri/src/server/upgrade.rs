@@ -29,7 +29,7 @@ const LATEST: &str = "/etc/vrcast/backup/latest";
 /// work, not our configuration; an upgrade has no business copying them aside, and no line of
 /// this file may put them back either — a restore that "helpfully" reverted the catalogue
 /// would undo whatever was uploaded since (FR-131).
-const OWNED: [&str; 11] = [
+const OWNED: [&str; 12] = [
     "/etc/caddy/Caddyfile",
     "/etc/caddy/vrcast-limits.conf",
     "/etc/vrcast/state.json",
@@ -38,6 +38,7 @@ const OWNED: [&str; 11] = [
     "/etc/udev/rules.d/60-vrcast-readahead.rules",
     "/etc/systemd/system/caddy.service.d/10-restart.conf",
     "/etc/ssh/sshd_config.d/00-vrcast.conf",
+    "/etc/modules-load.d/bbr.conf",
     // ⚠ **Four the application does not own and changes anyway** (T513, T520). The list above
     // is what we write whole; these are somebody else's files that a deployment edits, and
     // FR-095 asks for a copy of the settings files that are **changed**, not of the files that

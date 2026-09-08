@@ -31,6 +31,11 @@ pub struct LadderRequest {
     pub native_height: Option<u32>,
     /// What the person says the picture is, when they know better than a guess.
     pub declared_layout: Option<Layout>,
+    /// The peak `ladder_measure` found on this file, when it has finished in time. Always
+    /// wins over the complexity probe's own estimate when present — a full read of every
+    /// packet is a better anchor than a few seconds of trial encodes (T522). `None` when
+    /// the measurement has not landed yet: the probe's own estimate is the fallback.
+    pub measured_peak_bps: Option<u64>,
     #[serde(default = "yes")]
     pub prefer_hardware: bool,
 }
@@ -117,6 +122,14 @@ pub struct LadderCheck {
     pub source: SourceFacts,
 }
 
+/// What the interface sends after a person retypes one rung's bitrate by hand (T523).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecomputeRungRequest {
+    pub index: usize,
+    pub bitrate_bps: u64,
+    pub source: SourceFacts,
+}
+
 /// Everything wrong with a ladder, in two kinds.
 ///
 /// **The two are kept apart because they mean different things.** An objection says the
@@ -149,7 +162,12 @@ pub mod api {
     pub async fn ladder_measure(path: &str) -> Result<measure::Measured> {
         measure::measure(std::path::Path::new(path))
             .await
-            .map_err(|e| AppError::new(ErrorCode::FfmpegBroken).with_cause(e))
+            .map_err(|e| match e {
+                ffmpeg::FfmpegError::NoVideoTrack => AppError::new(ErrorCode::InvalidInput)
+                    .detail(DetailCode::ProbeNoVideo)
+                    .with_cause(path),
+                other => AppError::new(ErrorCode::FfmpegBroken).with_cause(other),
+            })
     }
 
     /// Work out a ladder for this film.
@@ -185,20 +203,25 @@ pub mod api {
         .await;
         notices.extend(probe.notice.clone());
 
-        let plan = ladder::plan(probe.measured_bps, &source, request.declared_layout).map_err(
-            |refusal| match refusal {
+        // The measured peak wins over the probe's own estimate whenever it has landed in
+        // time (T522, решение владельца 2026-09-08, правило 1) — a full read of every
+        // packet beats a few seconds of trial encodes. Falls back to the probe's estimate
+        // when the measurement has not arrived yet, exactly as before.
+        let effective_measured_bps = request.measured_peak_bps.or(probe.measured_bps);
+
+        let plan = ladder::plan(effective_measured_bps, &source, request.declared_layout)
+            .map_err(|refusal| match refusal {
                 ladder::Refusal::SourceBitrateTooLow { .. } => {
                     AppError::new(ErrorCode::InvalidInput).with_cause(refusal_text(refusal))
                 }
-            },
-        )?;
+            })?;
 
         Ok(LadderPreview {
             verdict: LadderVerdict::of(&plan.rungs, &source),
             plan,
             from: LadderSource::Formula,
             source,
-            anchor_mbps: probe.measured_bps.map(|bps| (bps / 1_000_000).max(1)),
+            anchor_mbps: effective_measured_bps.map(|bps| (bps / 1_000_000).max(1)),
             codec: request.codec.clone(),
             borrowed_from: None,
             // Nothing was measured, so there is nothing to look into.
@@ -255,6 +278,9 @@ pub mod api {
                 codec: h264(),
                 native_height: None,
                 declared_layout: None,
+                // This path only reads `.from`, never `.rungs` — no measured peak to feed
+                // in here, and none is needed (T522).
+                measured_peak_bps: None,
                 prefer_hardware: request.prefer_hardware,
             },
         )
@@ -316,6 +342,19 @@ pub mod api {
                         work_dir: &work_dir,
                     };
                     let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;
+                    // **The built set's own medium, found while the connection is still
+                    // open** (T519(3)), and now attached to it in the catalogue itself
+                    // (T528). Best effort and only on success: the slug may match no
+                    // medium at all — a build run before its medium was created, or a
+                    // slug T528 has not finished tidying up — and a result that pointed
+                    // at nothing would be worse than none.
+                    if outcome.is_ok() {
+                        if let Some(media_id) =
+                            attach_built_set(&conn, &profile.video_dir, &request.slug).await
+                        {
+                            ctx.set_result(crate::tasks::store::TaskResult { media_id });
+                        }
+                    }
                     conn.close().await;
                     // ⚠ **The build says what it has to say as it happens, and this no
                     // longer carries it** (T524). The first shape of this fixed T416 —
@@ -372,6 +411,74 @@ pub mod api {
     pub async fn ladder_validate(check: &LadderCheck) -> Result<LadderVerdict> {
         Ok(LadderVerdict::of(&check.rungs, &check.source))
     }
+
+    /// Rebuild one rung after a person retypes its bitrate by hand (T523, FR-025).
+    ///
+    /// **Why this has to be a round trip through the core and not a screen editing the
+    /// numbers itself.** The screen knows one new number — the bitrate — and nothing about
+    /// what it decides. The ceiling, the buffer and the height are all worked out from the
+    /// bitrate by rules that live here (`height_for`, `peak_control`); asking the screen to
+    /// carry them along unchanged is exactly the bug this command exists to close (a rung
+    /// retyped from 15 Mbit/s to 3 kept a ceiling near 18 — no ceiling at all at 3 — and
+    /// stayed at the old rung's 2160p).
+    ///
+    /// A pure function, like [`ladder_validate`], and meant to be called the same way: on
+    /// every edit, not only when the person is done. It does not check the result against
+    /// its neighbours — that is still `ladder_validate`'s job, run straight after on the
+    /// rung this returns swapped into the list.
+    pub async fn ladder_recompute_rung(request: &RecomputeRungRequest) -> Result<Rung> {
+        Ok(ladder::recompute_rung(
+            request.index,
+            request.bitrate_bps,
+            &request.source,
+        ))
+    }
+}
+
+/// Attach a just-built quality set to its medium in the catalogue (T528).
+///
+/// `slug` is looked up against the catalogue's own `slug`s, exactly as `LadderPreview`'s
+/// `T519(3)` lookup already does — this reuses that same matching rather than repeating it.
+/// When a medium is found, the set's master playlist is filed under it as `{slug}/master.m3u8`
+/// — the nested path `Manifest::with_file_under` needs to recognise it as a quality ladder
+/// rather than an ordinary file, and the one a viewer actually opens. Handed the bare slug
+/// instead, the set would land in neither `files` nor `ladders` of any medium and surface as
+/// an unrecognised top-level directory.
+///
+/// Best effort throughout and `None` on anything that keeps the tie from being made — no
+/// matching medium, an unreadable catalogue, a write that lost the race with another writer.
+/// A build that already succeeded on the server must not be reported as failed over a
+/// bookkeeping step nobody asked to see the result of.
+pub async fn attach_built_set(
+    conn: &crate::ssh::Connection,
+    video_dir: &str,
+    slug: &str,
+) -> Option<String> {
+    let manifest = match crate::server::manifest_io::read(conn, video_dir).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "could not read the catalogue to find the built set's medium"
+            );
+            return None;
+        }
+    };
+    let media_id = manifest.find_by_slug(slug)?.id.clone();
+
+    let ladder_path = format!("{slug}/master.m3u8");
+    if let Some(next) = manifest.with_file_under(&media_id, &ladder_path, true) {
+        if let Err(e) =
+            crate::server::manifest_io::write(conn, video_dir, &next, manifest.generation).await
+        {
+            tracing::warn!(
+                error = %e,
+                media_id,
+                "the built set could not be attached to its medium in the catalogue"
+            );
+        }
+    }
+    Some(media_id)
 }
 
 /// The measured ladder for this material, when there is one.
@@ -540,5 +647,10 @@ pub mod ipc {
     #[tauri::command]
     pub async fn ladder_validate(check: LadderCheck) -> Result<LadderVerdict> {
         api::ladder_validate(&check).await
+    }
+
+    #[tauri::command]
+    pub async fn ladder_recompute_rung(request: RecomputeRungRequest) -> Result<Rung> {
+        api::ladder_recompute_rung(&request).await
     }
 }

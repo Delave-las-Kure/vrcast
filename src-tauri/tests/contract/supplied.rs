@@ -64,6 +64,15 @@ const NOT_SENT_YET: &[(&str, &str, &str)] = &[
          is measured and recorded in the project's own notes. The core takes the person's \
          word for it and no screen offers the word. Closed by the same control.",
     ),
+    (
+        "LadderRequest",
+        "measured_peak_bps",
+        "T522, backend half only (2026-09-08): `ladder_plan` now lets an already-finished \
+         `ladder_measure` peak win over the complexity probe's own estimate when the caller \
+         supplies it — but no screen supplies it yet. `LadderScreen.tsx` already calls \
+         `ladderMeasure` alongside `ladderPlan`; wiring its result into this field is the \
+         frontend half of T522, a separate round. Closed then.",
+    ),
 ];
 
 /// Wrapper parameters that may be left out, each with the reason and what closes it.

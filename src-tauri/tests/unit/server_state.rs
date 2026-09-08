@@ -18,6 +18,7 @@ fn state_file(version: u32) -> StateFile {
         steps_applied: vec![String::from("user-dirs")],
         video_dir: String::from("/var/lib/vrcast/videos"),
         domain: String::from("stream.example.com"),
+        serving_verified: true,
     }
 }
 
