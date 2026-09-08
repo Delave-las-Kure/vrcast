@@ -25,6 +25,7 @@ import {
   type ImportSuggestion,
   type LibraryChangedEvent,
   type LibraryView,
+  type ServerStateEvent,
   type Links,
   type Settings,
   type ServerInput,
@@ -454,5 +455,17 @@ export function onHiddenToTray(handler: () => void): Promise<UnlistenFn> {
 export function onLibraryChanged(handler: (serverId: string) => void): Promise<UnlistenFn> {
   return tauriListen<LibraryChangedEvent>(EVENTS.libraryChanged, (ev) =>
     handler(ev.payload.server_id),
+  );
+}
+
+/**
+ * A server's detected state changed (FR-120, FR-128, FR-130, FR-132) — emitted on connection
+ * and again whenever it changes, so a card showing it need not be remounted to stay current.
+ */
+export function onServerState(
+  handler: (serverId: string, state: ServerState) => void,
+): Promise<UnlistenFn> {
+  return tauriListen<ServerStateEvent>(EVENTS.serverState, (ev) =>
+    handler(ev.payload.server_id, ev.payload.state),
   );
 }

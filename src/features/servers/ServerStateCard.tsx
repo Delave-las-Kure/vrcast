@@ -22,7 +22,7 @@ import { Link } from "react-router-dom";
 import { UpgradeDialog } from "./UpgradeDialog";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useT } from "../../shared/i18n";
-import { ipc } from "../../shared/ipc";
+import { ipc, onServerState } from "../../shared/ipc";
 import type { AppError, ServerState } from "../../shared/contract";
 
 export function ServerStateCard({ serverId }: { serverId: string }) {
@@ -54,6 +54,28 @@ export function ServerStateCard({ serverId }: { serverId: string }) {
       alive = false;
     };
   }, [serverId, upgrading]);
+
+  // Kept current without a remount (T538): a deploy, upgrade or rollback sends this event
+  // from the core, and the card would otherwise show a version that stopped being true the
+  // moment the person left the screen and had no reason to come back.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    void onServerState((eventServerId, newState) => {
+      // Somebody else's server changing is not this card's business — filtering by id keeps
+      // a state meant for one server from repainting a different one.
+      if (eventServerId !== serverId) return;
+      setState(newState);
+      setError(null);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [serverId]);
 
   if (asking) return <p>{words.asking}</p>;
   if (error) return <ErrorNotice error={error} />;

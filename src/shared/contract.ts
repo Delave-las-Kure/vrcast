@@ -1395,6 +1395,16 @@ export interface LibraryChangedEvent {
   server_id: string;
 }
 
+/**
+ * A server's detected state has changed — emitted on connection and again whenever it
+ * changes (deploy, upgrade, rollback). The same `ServerState` shape `server_detect` returns.
+ */
+export interface ServerStateEvent {
+  event: "server_state";
+  server_id: string;
+  state: ServerState;
+}
+
 // ---------- upload ----------
 
 /** A request to upload (FR-030 to FR-039). */

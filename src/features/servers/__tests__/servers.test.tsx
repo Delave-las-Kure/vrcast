@@ -16,7 +16,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
 import { fill } from "../../../shared/i18n/render";
-import type { ServerProfile, TestStep } from "../../../shared/contract";
+import type { ServerProfile, ServerState, TestStep } from "../../../shared/contract";
 
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockServerAdd = vi.fn();
@@ -26,10 +26,15 @@ const mockProbeFingerprint = vi.fn<() => Promise<string>>();
 const mockConfirmFingerprint = vi.fn();
 const mockServerRemove = vi.fn();
 const mockSetActive = vi.fn();
-const mockServerDetect = vi.fn<() => Promise<never>>(() =>
+const mockServerDetect = vi.fn<() => Promise<ServerState>>(() =>
   Promise.reject({ code: "SSH_UNREACHABLE" }),
 );
 const mockImportSuggestion = vi.fn();
+
+/** What the core would send over `server:state`. Held so a test can push an update
+ *  whenever it likes, the same way the viewers screen's test captures `onViewersUpdate`. */
+let sendServerState: ((serverId: string, state: ServerState) => void) | null = null;
+const unlistenServerState = vi.fn();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -52,10 +57,15 @@ vi.mock("../../../shared/ipc", async () => {
       // — and that state is a real one: a silent server must not bring the list down.
       serverDetect: () => mockServerDetect(),
     }),
+    onServerState: vi.fn(async (handler: (serverId: string, state: ServerState) => void) => {
+      sendServerState = handler;
+      return unlistenServerState;
+    }),
   };
 });
 
 const { ServerList } = await import("../ServerList");
+const { ServerStateCard } = await import("../ServerStateCard");
 const { useServers } = await import("../store");
 
 function makeProfile(over: Partial<ServerProfile> = {}): ServerProfile {
@@ -106,6 +116,7 @@ beforeEach(() => {
   useServers.setState({ profiles: [], loading: true, error: null });
   mockServersList.mockResolvedValue([]);
   mockImportSuggestion.mockResolvedValue(null);
+  sendServerState = null;
 });
 
 describe("the list of servers", () => {
@@ -348,5 +359,57 @@ describe("editing a server profile", () => {
       expect(mockConfirmFingerprint).toHaveBeenCalledWith("srv_1", "SHA256:НовыйАдрес"),
     );
     await waitFor(() => expect(mockServerTest).toHaveBeenCalledWith("srv_1"));
+  });
+});
+
+function managedState(over: Partial<ServerState> = {}): ServerState {
+  return {
+    kind: "Managed",
+    server_version: 3,
+    app_expects: 3,
+    app_min_supported: 1,
+    compat: "Ok",
+    upgrade_available: false,
+    foreign_reason: null,
+    ...over,
+  };
+}
+
+describe("the server state card (T538)", () => {
+  it("subscribes to server:state on mount and unsubscribes on unmount", async () => {
+    mockServerDetect.mockResolvedValue(managedState());
+    const view = renderIn(<ServerStateCard serverId="srv_1" />, "ru");
+
+    await waitFor(() => expect(sendServerState).not.toBeNull());
+    expect(unlistenServerState).not.toHaveBeenCalled();
+
+    view.unmount();
+    await waitFor(() => expect(unlistenServerState).toHaveBeenCalled());
+  });
+
+  it("updates the shown state when the event's server_id matches", async () => {
+    mockServerDetect.mockResolvedValue(managedState({ server_version: 3, app_expects: 3 }));
+    renderIn(<ServerStateCard serverId="srv_1" />, "ru");
+
+    expect(await screen.findByText(ru.ui.serverState.versions(3, 3))).toBeInTheDocument();
+
+    sendServerState?.("srv_1", managedState({ server_version: 4, app_expects: 4 }));
+
+    expect(await screen.findByText(ru.ui.serverState.versions(4, 4))).toBeInTheDocument();
+  });
+
+  it("ignores a server:state event for a different server_id", async () => {
+    mockServerDetect.mockResolvedValue(managedState({ server_version: 3, app_expects: 3 }));
+    renderIn(<ServerStateCard serverId="srv_1" />, "ru");
+
+    expect(await screen.findByText(ru.ui.serverState.versions(3, 3))).toBeInTheDocument();
+
+    sendServerState?.("srv_OTHER", managedState({ server_version: 9, app_expects: 9 }));
+
+    // Given time to (not) re-render, the card still shows its own server's numbers.
+    await waitFor(() =>
+      expect(screen.getByText(ru.ui.serverState.versions(3, 3))).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(ru.ui.serverState.versions(9, 9))).not.toBeInTheDocument();
   });
 });
