@@ -134,6 +134,20 @@ describe("the list of servers", () => {
     expect(screen.getByText("stream.example.com")).toBeInTheDocument();
   });
 
+  it("shows a profile with a managed key the same way as any other (T548)", async () => {
+    // AuthKind grew a third value the interface never lets a person pick by hand
+    // (ServerForm's <select> still offers only "key"/"password") but that a
+    // deployment can assign on its own. The card must not choke on it or show
+    // "undefined" where the auth kind would otherwise be read.
+    mockServersList.mockResolvedValue([makeProfile({ auth_kind: "managed_key", key_path: null })]);
+    draw();
+
+    expect(await screen.findByText("Мой сервер")).toBeInTheDocument();
+    expect(screen.getByText("root@203.0.113.10")).toBeInTheDocument();
+    expect(screen.getByText("stream.example.com")).toBeInTheDocument();
+    expect(screen.queryByText("undefined")).not.toBeInTheDocument();
+  });
+
   it("marks a profile whose fingerprint has not been confirmed", async () => {
     // Such a profile exists and cannot be connected with. Saying nothing about that
     // leaves a person guessing why nothing works.

@@ -105,12 +105,20 @@ export function RenameMediaDialog({
   onCancel,
   busy,
   error,
+  fileInUse,
 }: {
   media: MediaView;
-  onRename: (title: string | null, slug: string | null) => void;
+  onRename: (title: string | null, slug: string | null, confirmed?: boolean) => void;
   onCancel: () => void;
   busy?: boolean;
   error?: AppError | null;
+  /** T545 — the previous attempt was refused because someone is watching the file
+   *  right now (`FILE_IN_USE`). The refusal names nothing specific to renew (unlike
+   *  `CONFIRMATION_REQUIRED`, its wording is fixed), so the dialog itself offers the
+   *  one thing there is to decide: go on regardless. The parent owns this flag —
+   *  it comes out of the last `onRename` attempt, not something the dialog invents
+   *  on its own. */
+  fileInUse?: boolean;
 }) {
   const [title, setTitle] = useState(media.title);
   const [slug, setSlug] = useState(media.slug);
@@ -122,12 +130,16 @@ export function RenameMediaDialog({
   const titleChanged = title.trim() !== media.title;
   const nothingChanged = !slugChanged && !titleChanged;
 
+  const submit = (confirmed: boolean) => {
+    onRename(titleChanged ? title.trim() : null, slugChanged ? slug.trim() : null, confirmed);
+  };
+
   return (
     <form
       className="dialog"
       onSubmit={(e) => {
         e.preventDefault();
-        onRename(titleChanged ? title.trim() : null, slugChanged ? slug.trim() : null);
+        submit(false);
       }}
     >
       <h3>{fill(l.renameHeading, { title: media.title }, t, lang)}</h3>
@@ -150,6 +162,16 @@ export function RenameMediaDialog({
         <p className="dialog__warning" role="status">
           {l.slugChangeWarning}
         </p>
+      )}
+
+      {/* The form stays open and what was typed stays put — reopening
+          `ConfirmDeleteDialog`-style would throw both away. */}
+      {fileInUse && (
+        <div className="form__actions">
+          <button type="button" onClick={() => submit(true)} disabled={busy}>
+            {l.renameAnyway}
+          </button>
+        </div>
       )}
 
       <div className="form__actions">

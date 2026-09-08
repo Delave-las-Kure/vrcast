@@ -473,6 +473,77 @@ describe("renaming", () => {
     });
     expect(await screen.findByText(warning)).toBeInTheDocument();
   });
+
+  it("submits the first attempt as not yet confirmed and closes on success", async () => {
+    // T545. Nobody has confirmed anything yet — an ordinary rename with a free slug
+    // goes straight through, and the dialog closes exactly as it always has.
+    mockMediaRename.mockResolvedValueOnce(undefined);
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
+
+    const dialog = (await screen.findByText(ru.ui.library.fieldSlug)).closest("form") as HTMLElement;
+
+    fireEvent.change(screen.getByLabelText(ru.ui.library.fieldSlug), {
+      target: { value: "drugoe" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: ru.ui.library.rename }));
+
+    await waitFor(() =>
+      expect(mockMediaRename).toHaveBeenCalledWith("srv_1", "m1", null, "drugoe", false),
+    );
+    await waitFor(() => expect(screen.queryByLabelText(ru.ui.library.fieldSlug)).toBeNull());
+  });
+
+  it("offers to rename anyway when the file is being watched, without losing what was typed", async () => {
+    // T545: media_rename refuses with FILE_IN_USE (a fixed warning, not one the core
+    // composes with numbers) when the slug changes on a medium with active viewers.
+    // The dialog must show a way to go on, and the title/slug typed so far must
+    // survive the round-trip rather than reopening as a fresh, empty form.
+    const refusal: AppError = { code: "FILE_IN_USE" };
+    mockMediaRename.mockRejectedValueOnce(refusal);
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
+
+    const dialog = (await screen.findByText(ru.ui.library.fieldSlug)).closest("form") as HTMLElement;
+
+    fireEvent.change(screen.getByLabelText(ru.ui.library.fieldTitle), {
+      target: { value: "Другое название" },
+    });
+    fireEvent.change(screen.getByLabelText(ru.ui.library.fieldSlug), {
+      target: { value: "drugoe" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: ru.ui.library.rename }));
+
+    await waitFor(() =>
+      expect(mockMediaRename).toHaveBeenCalledWith(
+        "srv_1",
+        "m1",
+        "Другое название",
+        "drugoe",
+        false,
+      ),
+    );
+
+    // The warning is visible and the form is still the rename form, values intact.
+    const anyway = await within(dialog).findByText(ru.ui.library.renameAnyway);
+    expect(screen.getByDisplayValue("Другое название")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("drugoe")).toBeInTheDocument();
+
+    mockMediaRename.mockResolvedValueOnce(undefined);
+    fireEvent.click(anyway);
+
+    await waitFor(() =>
+      expect(mockMediaRename).toHaveBeenCalledWith(
+        "srv_1",
+        "m1",
+        "Другое название",
+        "drugoe",
+        true,
+      ),
+    );
+  });
 });
 
 describe("a server out of reach", () => {

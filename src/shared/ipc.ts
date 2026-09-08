@@ -209,8 +209,13 @@ export const ipc = {
     call<LibraryView>("library_list", { serverId, refresh }),
   mediaCreate: (serverId: string, title: string, slug: string | null) =>
     call<string>("media_create", { serverId, title, slug }),
-  mediaRename: (serverId: string, mediaId: string, title: string | null, slug: string | null) =>
-    call<void>("media_rename", { serverId, mediaId, title, slug }),
+  mediaRename: (
+    serverId: string,
+    mediaId: string,
+    title: string | null,
+    slug: string | null,
+    confirmed: boolean,
+  ) => call<void>("media_rename", { serverId, mediaId, title, slug, confirmed }),
   mediaDelete: (serverId: string, mediaId: string, confirmed: boolean) =>
     call<string>("media_delete", { serverId, mediaId, confirmed }),
   fileMove: (serverId: string, path: string, toMediaId: string, confirmed: boolean) =>

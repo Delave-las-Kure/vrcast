@@ -49,6 +49,7 @@ export function LibraryScreen() {
   const [busy, setBusy] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [dialogError, setDialogError] = useState<AppError | null>(null);
+  const [renameFileInUse, setRenameFileInUse] = useState(false);
   const t = useT();
   const { lang } = useLang();
   const [watchers, setWatchers] = useState<Record<string, number>>({});
@@ -119,6 +120,41 @@ export function LibraryScreen() {
       await load(true);
     } catch (e) {
       setDialogError(toAppError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Rename a medium.
+   *
+   * Unlike a deletion, this is not a two-step "what would it cost" question — the
+   * form is already open and this is an ordinary submit that either goes through or
+   * is refused with `FILE_IN_USE` (someone is watching the file right now). That
+   * refusal carries no numbers of its own (T545), so there is nothing to compose —
+   * only a way to say "go on anyway" without losing what was typed, which is why
+   * this lives beside `act` rather than inside it: `act` always closes the dialog on
+   * success and always treats a caught error as final, and this path needs to stay
+   * open and retry once with `confirmed: true`.
+   */
+  const doRename = async (
+    media: MediaView,
+    title: string | null,
+    slug: string | null,
+    confirmed?: boolean,
+  ) => {
+    if (!active) return;
+    setBusy(true);
+    setDialogError(null);
+    try {
+      await ipc.mediaRename(active.id, media.id, title, slug, confirmed ?? false);
+      setRenameFileInUse(false);
+      setDialog(null);
+      await load(true);
+    } catch (e) {
+      const err = toAppError(e);
+      setDialogError(err);
+      setRenameFileInUse(err.code === "FILE_IN_USE");
     } finally {
       setBusy(false);
     }
@@ -223,9 +259,13 @@ export function LibraryScreen() {
           media={dialog.media}
           busy={busy}
           error={dialogError}
-          onCancel={() => setDialog(null)}
-          onRename={(title, slug) =>
-            void act(() => ipc.mediaRename(active.id, dialog.media.id, title, slug))
+          fileInUse={renameFileInUse}
+          onCancel={() => {
+            setDialog(null);
+            setRenameFileInUse(false);
+          }}
+          onRename={(title, slug, confirmed) =>
+            void doRename(dialog.media, title, slug, confirmed)
           }
         />
       )}
@@ -260,7 +300,11 @@ export function LibraryScreen() {
               t={t}
               lang={lang}
               disabled={busy || view.stale}
-              onRename={() => setDialog({ kind: "rename", media: m })}
+              onRename={() => {
+                setDialog({ kind: "rename", media: m });
+                setDialogError(null);
+                setRenameFileInUse(false);
+              }}
               onDelete={() => void askBeforeDelete(m)}
               onDeleteFile={(path) => void askBeforeDeleteFile(path)}
               onMoveFile={(path, mediaId) =>
