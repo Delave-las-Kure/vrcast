@@ -195,3 +195,6 @@ mod code_language;
 
 #[path = "unit/encoder_fallback.rs"]
 mod encoder_fallback;
+
+#[path = "unit/convert_broken_source.rs"]
+mod convert_broken_source;
