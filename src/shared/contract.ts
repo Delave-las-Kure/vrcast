@@ -362,7 +362,7 @@ export function isAppError(e: unknown): e is AppError {
 
 // ---------- servers ----------
 
-export type AuthKind = "key" | "password";
+export type AuthKind = "key" | "password" | "managed_key";
 export type Ipv6Mode = "keep" | "disable";
 
 /**
