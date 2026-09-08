@@ -31,7 +31,7 @@ use crate::domain::wording::Detail;
 use crate::store::db::Db;
 use crate::store::secrets::{OsSecretStore, SecretStore};
 use crate::tasks::engine::TaskEngine;
-use crate::tasks::state::PauseKind;
+use crate::tasks::state::{LaneLimits, PauseKind};
 use crate::tasks::store::TaskRecord;
 use error::{AppError, DetailCode, ErrorCode, Result};
 use serde::Serialize;
@@ -115,7 +115,23 @@ impl AppState {
 
     /// The same, but with the stores given — for tests.
     pub fn with_db(db: Arc<Db>, secrets: Arc<dyn SecretStore>) -> Result<Self> {
-        let tasks = TaskEngine::new(db.clone());
+        // The lane limits come from `Settings.concurrent_heavy_tasks` rather than a fixed
+        // default (T546): "heavy" here means `Compute` and `Network`, the two lanes the
+        // person's slider is meant to govern — `Light` (probing, diagnosing) stays at its
+        // own default, it was never part of what "heavy" means in this project.
+        //
+        // A settings read that fails does not stop the application from starting — the
+        // same reasoning as the sweep just below: a broken settings row is a reason to
+        // fall back to a safe default, not a reason to refuse to open at all.
+        let settings = crate::store::settings::load(&db).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not read the settings — using their defaults");
+            crate::store::settings::Settings::default()
+        });
+        let tasks = TaskEngine::new(db.clone()).with_limits(LaneLimits {
+            compute: settings.concurrent_heavy_tasks as usize,
+            network: settings.concurrent_heavy_tasks as usize,
+            light: LaneLimits::default().light,
+        });
 
         // The order matters. First the programs that survived the previous run are
         // finished off, and only then are the tasks sorted out: otherwise a task would be

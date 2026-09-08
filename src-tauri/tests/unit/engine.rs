@@ -1422,3 +1422,80 @@ fn only_the_kinds_that_really_come_back_are_promised_they_will() {
          collapsed back into one"
     );
 }
+
+/// ⚠ **`concurrent_heavy_tasks` reaches the engine that actually runs tasks** (T546).
+///
+/// `AppState::with_db` used to hand every `TaskEngine` a fixed `LaneLimits::default()`
+/// no matter what the person had set — the setting existed in the database and did
+/// nothing. This proves the wiring: a `Settings` row with `concurrent_heavy_tasks = 3`,
+/// read back through the same `AppState::with_db` the real application boots through, must
+/// leave the engine's `compute`/`network` lanes at 3 — not at the default of 1 — while
+/// `light` stays at its own default, untouched by this setting (per the task's contract:
+/// "heavy" means `Compute` and `Network`, not `Light`).
+#[test]
+fn heavy_task_settings_reach_the_engine_the_application_actually_runs() {
+    use vrcast_studio_lib::commands::AppState;
+    use vrcast_studio_lib::store::secrets::InMemorySecretStore;
+    use vrcast_studio_lib::store::settings::{self, Settings};
+
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let wanted = Settings {
+        concurrent_heavy_tasks: 3,
+        ..Settings::default()
+    };
+    settings::save(&db, &wanted).expect("the setting would not write");
+
+    let state = AppState::with_db(db, Arc::new(InMemorySecretStore::new()))
+        .expect("the application state would not assemble");
+    let limits = state.tasks.limits();
+
+    assert_eq!(
+        limits.compute, 3,
+        "the compute lane must carry the setting, not LaneLimits::default()'s 1"
+    );
+    assert_eq!(
+        limits.network, 3,
+        "the network lane must carry the setting, not LaneLimits::default()'s 1"
+    );
+    assert_eq!(
+        limits.light,
+        LaneLimits::default().light,
+        "the light lane is not governed by concurrent_heavy_tasks and must stay at its own \
+         default"
+    );
+}
+
+/// ⚠ **Changing the setting is seen without a restart, by handles already given out**
+/// (T546).
+///
+/// `TaskEngine` is `Clone` and handed to every command through `AppState`; if the lane
+/// limits were stored by value, a clone taken before the change would keep seeing the old
+/// number forever. `set_limits` on one clone must be visible through another — the same
+/// clone-sharing test as `AppState::with_db`'s single `tasks` field relies on already, for
+/// `live` and `events`.
+#[test]
+fn a_changed_limit_is_seen_by_a_task_engine_handle_already_given_out() {
+    let engine = TaskEngine::new(Arc::new(Db::open_in_memory().unwrap())).with_limits(LaneLimits {
+        compute: 1,
+        network: 1,
+        light: 4,
+    });
+    // A handle taken out before the change — the same situation `AppState.tasks` is in:
+    // every command holds a clone made when the state was assembled.
+    let already_handed_out = engine.clone();
+
+    assert_eq!(already_handed_out.limits().compute, 1);
+
+    engine.set_limits(LaneLimits {
+        compute: 5,
+        network: 2,
+        light: 4,
+    });
+
+    assert_eq!(
+        already_handed_out.limits().compute,
+        5,
+        "a clone taken before the change must see the new limit, not the one it started with"
+    );
+    assert_eq!(already_handed_out.limits().network, 2);
+}

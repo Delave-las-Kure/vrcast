@@ -359,7 +359,12 @@ enum ClaimOutcome {
 pub struct TaskEngine {
     db: Arc<Db>,
     live: Arc<Mutex<HashMap<String, LiveTask>>>,
-    limits: LaneLimits,
+    /// Behind a lock, and shared rather than owned by value, for the same reason as
+    /// `live`: `TaskEngine` is `Clone` and handed out to every command, so a limit changed
+    /// on one handle (T546 — `concurrent_heavy_tasks`, changed through `settings_set`
+    /// without a restart) must be seen by every other handle already given out, not just
+    /// the one that changed it.
+    limits: Arc<std::sync::RwLock<LaneLimits>>,
     events: broadcast::Sender<TaskEvent>,
     /// The place the next task submitted will get.
     next_position: Arc<std::sync::atomic::AtomicI64>,
@@ -378,15 +383,43 @@ impl TaskEngine {
         Self {
             db,
             live: Arc::new(Mutex::new(HashMap::new())),
-            limits: LaneLimits::default(),
+            limits: Arc::new(std::sync::RwLock::new(LaneLimits::default())),
             events,
             next_position: Arc::new(std::sync::atomic::AtomicI64::new(next)),
         }
     }
 
-    pub fn with_limits(mut self, limits: LaneLimits) -> Self {
-        self.limits = limits;
+    /// Set the per-lane limits at construction — used by `AppState::with_db` (T546) to
+    /// carry over `concurrent_heavy_tasks` from `Settings`, and by tests that want fixed,
+    /// small lanes to make contention easy to provoke.
+    pub fn with_limits(self, limits: LaneLimits) -> Self {
+        self.set_limits(limits);
         self
+    }
+
+    /// Change the per-lane limits on an engine already handed out (T546).
+    ///
+    /// Every clone of this `TaskEngine` shares the same `Arc<RwLock<..>>`, so this is seen
+    /// at once by every command holding one — no restart needed, the way `settings_set`
+    /// already tells a running viewer watch about a new threshold without one.
+    pub fn set_limits(&self, limits: LaneLimits) {
+        match self.limits.write() {
+            Ok(mut guard) => *guard = limits,
+            Err(e) => tracing::error!(error = %e, "the lane limits lock was poisoned"),
+        }
+    }
+
+    /// The limits currently in force.
+    ///
+    /// Not `#[cfg(test)]`: `tests/unit/engine.rs` is a separate integration-test crate that
+    /// links the library built without `cfg(test)`, so a test-gated method would not exist
+    /// for it to call. Read-only and harmless outside tests too — commands still go through
+    /// `has_room_for`/the claim path to actually use a limit.
+    pub fn limits(&self) -> LaneLimits {
+        self.limits.read().map(|g| *g).unwrap_or_else(|e| {
+            tracing::error!(error = %e, "the lane limits lock was poisoned — using defaults");
+            LaneLimits::default()
+        })
     }
 
     /// Subscribe to task events.
@@ -432,7 +465,7 @@ impl TaskEngine {
     /// Whether the lane has room for a task of this kind.
     pub fn has_room_for(&self, kind: TaskKind) -> bool {
         let lane = kind.lane();
-        self.running_in_lane(lane) < self.limits.for_lane(lane)
+        self.running_in_lane(lane) < self.limits().for_lane(lane)
     }
 
     /// Submit a task and start it once there is room in its lane.
@@ -854,7 +887,7 @@ impl TaskEngine {
                 other_id.as_str() != id && x.state.occupies_lane() && x.kind.lane() == lane
             })
             .count();
-        if used >= self.limits.for_lane(lane) {
+        if used >= self.limits().for_lane(lane) {
             return ClaimOutcome::Busy;
         }
 

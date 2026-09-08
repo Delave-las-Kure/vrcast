@@ -18,9 +18,19 @@ pub mod api {
     /// A running watch is told about the new threshold at once rather than at the next
     /// start. Otherwise a person moves the slider, nothing happens, and they conclude the
     /// setting does nothing — which, until they restarted, would be true.
+    ///
+    /// The same holds for `concurrent_heavy_tasks` (T546): every `TaskEngine` handle shares
+    /// one lock around its lane limits (see `tasks::engine::TaskEngine::set_limits`), so
+    /// telling this one is enough — no restart, and nothing else in `AppState` needs to
+    /// change. `Light` is left alone: it was never governed by this setting.
     pub fn settings_set(state: &AppState, settings: &Settings) -> Result<Settings> {
         let saved = crate::store::settings::save(&state.db, settings)?;
         state.viewers.set_threshold(saved.activity_threshold());
+        state.tasks.set_limits(crate::tasks::state::LaneLimits {
+            compute: saved.concurrent_heavy_tasks as usize,
+            network: saved.concurrent_heavy_tasks as usize,
+            light: crate::tasks::state::LaneLimits::default().light,
+        });
         Ok(saved)
     }
 
