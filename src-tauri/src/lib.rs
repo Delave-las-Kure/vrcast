@@ -106,6 +106,22 @@ pub fn run() {
     // What keeps "does not update" from quietly reaching a release is the release workflow,
     // which refuses to build without the section (T362).
     let mut builder = tauri::Builder::default();
+
+    // A second instance must not open a second window (T539, FR-151). The task engine's
+    // own owner_pid/owner_identity already keep a second instance from disturbing the
+    // first one's work; this plugin keeps a second instance from starting up at all.
+    // Registered first, as the plugin's own documentation asks: that way it runs before
+    // anything else can interfere.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }));
+    }
+
     if context.config().plugins.0.contains_key("updater") {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
