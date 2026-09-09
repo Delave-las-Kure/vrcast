@@ -302,6 +302,7 @@ async fn scenario_5_a_ladder_measured_built_and_served_whole() {
             audio_track: 0,
             prefer_hardware: true,
             batch: None,
+            confirmed: true,
         },
     )
     .await
@@ -338,6 +339,7 @@ async fn scenario_5_a_ladder_measured_built_and_served_whole() {
             audio_track: 0,
             prefer_hardware: true,
             batch: None,
+            confirmed: true,
         },
     )
     .await

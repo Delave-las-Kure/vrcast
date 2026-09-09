@@ -92,6 +92,9 @@ mod library_scale;
 #[path = "integration/ladder_attach.rs"]
 mod ladder_attach;
 
+#[path = "integration/ladder_active_viewers.rs"]
+mod ladder_active_viewers;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 
@@ -109,6 +112,12 @@ mod process_tree;
 
 #[path = "integration/upload_live.rs"]
 mod upload_live;
+
+#[path = "integration/upload_finish_network_cut.rs"]
+mod upload_finish_network_cut;
+
+#[path = "integration/write_master.rs"]
+mod write_master;
 
 #[path = "integration/scenario_prepare.rs"]
 mod scenario_prepare;

@@ -204,3 +204,6 @@ mod task_purge;
 
 #[path = "unit/deploy_proof_symmetry.rs"]
 mod deploy_proof_symmetry;
+
+#[path = "unit/geo_fetch_lock.rs"]
+mod geo_fetch_lock;

@@ -640,6 +640,7 @@ fn nothing_the_screens_send_is_quietly_dropped() {
             audio_track: 0,
             prefer_hardware: true,
             batch: None,
+            confirmed: false,
         },
     );
     nothing_sent_is_dropped(

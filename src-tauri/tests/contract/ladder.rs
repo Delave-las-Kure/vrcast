@@ -258,7 +258,8 @@ async fn a_missing_measured_peak_leaves_the_probe_s_own_reading_in_charge() {
     let probed = vrcast_studio_lib::commands::api::source_probe(&path)
         .await
         .expect("the fixture clip would not probe");
-    let probe = probe_complexity::probe(&src, probed.duration_s, &encoders::Encoder::Software).await;
+    let probe =
+        probe_complexity::probe(&src, probed.duration_s, &encoders::Encoder::Software).await;
 
     assert_eq!(
         preview.anchor_mbps,
@@ -447,4 +448,59 @@ async fn a_measured_ladder_is_buildable_and_says_where_it_came_from() {
     // interface has to tell "measured here" from "borrowed" from "a guess".
     assert_ne!(LadderSource::Measured, LadderSource::Borrowed);
     assert_ne!(LadderSource::Borrowed, LadderSource::Formula);
+}
+
+// ---------- T571: BuildRequest.confirmed ----------
+
+/// A `BuildRequest` payload with no `confirmed` key at all — the exact shape `ipc.ts` sends
+/// today, since the frontend side of T571 is a separate ticket and has not been touched.
+///
+/// **The precise form the field takes, for the record.** `confirmed: bool`, `#[serde(default)]`
+/// — absent on the wire reads as `false`, exactly like `UploadRequest.confirmed`, which this
+/// was modelled on field-for-field.
+#[test]
+fn confirmed_is_false_by_default_when_the_field_is_absent() {
+    let json = serde_json::json!({
+        "server_id": "srv",
+        "path": "F:/films/film.mp4",
+        "slug": "demo",
+        "rungs": [],
+        "audio_track": 0,
+        "prefer_hardware": true
+        // no "confirmed" key at all — nothing sent it yet on the wire.
+    });
+    let request: vrcast_studio_lib::commands::ladder::BuildRequest = serde_json::from_value(json)
+        .expect(
+            "a BuildRequest with no confirmed field at all did not read — the default was \
+             not applied, so an old caller (or the frontend before its own T571 ticket \
+             lands) would fail to submit a build at all",
+        );
+    assert!(
+        !request.confirmed,
+        "an absent confirmed field defaulted to true — that would silently waive the \
+         active-viewers warning for every caller that has not been updated to send it"
+    );
+}
+
+/// The same field, explicitly sent both ways — the shape a frontend that HAS been updated
+/// for T571 would send.
+#[test]
+fn confirmed_reads_back_explicitly_both_ways() {
+    for sent in [true, false] {
+        let json = serde_json::json!({
+            "server_id": "srv",
+            "path": "F:/films/film.mp4",
+            "slug": "demo",
+            "rungs": [],
+            "audio_track": 0,
+            "prefer_hardware": true,
+            "confirmed": sent,
+        });
+        let request: vrcast_studio_lib::commands::ladder::BuildRequest =
+            serde_json::from_value(json).expect("an explicit confirmed value did not read");
+        assert_eq!(
+            request.confirmed, sent,
+            "an explicitly sent confirmed: {sent} was not read back as {sent}"
+        );
+    }
 }
