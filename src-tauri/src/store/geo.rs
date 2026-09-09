@@ -216,8 +216,41 @@ async fn fetch_month(dir: &Path, month: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn download(url: &str) -> Result<Vec<u8>, String> {
-    let response = reqwest::get(url)
+/// How long one download of a table may take, start to finish.
+///
+/// Unlike the timeouts in `hls_verify.rs`, `limits.rs`, `deploy/verify.rs` and
+/// `commands/servers.rs` (10-20s each, for a liveness probe with a tiny request and a tiny
+/// answer), `reqwest::Client::builder().timeout(...)` here bounds the **whole** request —
+/// not just the TCP connect, but the entire read of the response body via `.bytes()` below.
+/// The thing being fetched is not a probe: it is the city table (~62 MB compressed) or the
+/// ASN table (~5 MB), and a genuinely slow-but-working connection can legitimately take a
+/// while to pull that much (see the module doc: "seventy megabytes take a few seconds on a
+/// good connection and a long time on a bad one"). Reusing the 10-20s used elsewhere would
+/// abort a download that is actually still making progress, turning a slow success into a
+/// false failure.
+///
+/// 30s is chosen as the upper edge of that same order of magnitude rather than a new one:
+/// generous enough that a multi-megabyte transfer over a merely slow — not hung — connection
+/// normally still finishes inside it, while remaining a small, finite wait instead of the
+/// unbounded hang this constant exists to remove (see T569, T575).
+///
+/// `pub` so the test can assert its elapsed time against this exact value rather than a
+/// second, hard-coded copy of "30" that could silently drift out of sync with this one.
+pub const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `pub` rather than private, for the same reason `write_master` and `variant_already_there`
+/// in `tasks/ladder_build.rs` are (T529/T572): `tests/integration/geo_download_timeout.rs`
+/// is a separate crate and needs to call this directly against a real TCP socket that never
+/// answers — the one way to prove the timeout actually bounds a hung connection rather than
+/// merely being present in the source.
+pub async fn download(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(DOWNLOAD_TIMEOUT)
+        .build()
+        .map_err(|e| crate::store::redact::safe_display(&e))?;
+    let response = client
+        .get(url)
+        .send()
         .await
         .map_err(|e| crate::store::redact::safe_display(&e))?;
     if !response.status().is_success() {
