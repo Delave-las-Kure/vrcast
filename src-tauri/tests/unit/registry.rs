@@ -304,21 +304,6 @@ async fn a_record_whose_owner_has_since_died_is_still_swept() {
 
 // ---------- the account nobody was writing in (T504) ----------
 
-/// The account is one per process, and cargo runs tests in threads of that process.
-///
-/// The same reasoning as `redact.rs` sets out: two tests each installing an account of their
-/// own would write into each other's table, and the loser reports a defect that is not there.
-/// A flaky guard is worse than none — it teaches people to re-run until it passes.
-static ACCOUNT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Take the account for the duration of a test. A poisoned lock is taken anyway: it means
-/// another test panicked, and that test reports its own failure.
-fn alone_with_account(db: std::sync::Arc<Db>) -> std::sync::MutexGuard<'static, ()> {
-    let guard = ACCOUNT.lock().unwrap_or_else(|e| e.into_inner());
-    registry::keep_account_in(db);
-    guard
-}
-
 fn rows_in(db: &Db) -> Vec<u32> {
     db.with_conn(|c| {
         let mut stmt = c.prepare("SELECT pid FROM running_processes")?;
@@ -347,11 +332,18 @@ fn rows_in(db: &Db) -> Vec<u32> {
 /// looks.
 #[test]
 fn a_program_started_the_ordinary_way_lands_in_the_account() {
+    // Not `ManagedProcess::spawn` / the global account (T563): that account is one table
+    // shared by the whole process, and cargo runs every test of this binary as that one
+    // process. A test that installed the global account and started a real program used to
+    // race EVERY OTHER test in this binary doing the same at the same moment — on a PID
+    // collision, one test's `note_ended` could erase another's row before its own assertion
+    // ran, at roughly one run in four. `spawn_recording_into` writes into the database this
+    // test names outright, so nothing concurrent has anything to race it over.
     let db = std::sync::Arc::new(Db::open_in_memory().unwrap());
-    let _account = alone_with_account(db.clone());
 
     let (program, args) = long_running();
-    let child = ManagedProcess::spawn(program, &args).expect("the program would not start");
+    let child = ManagedProcess::spawn_recording_into(program, &args, db.clone())
+        .expect("the program would not start");
     let pid = child.id().expect("a started program has no number");
 
     assert!(
@@ -366,8 +358,6 @@ fn a_program_started_the_ordinary_way_lands_in_the_account() {
         "the program is gone and its row is not: the next start-up would spend its sweep on \
          a number that now belongs to somebody else"
     );
-
-    registry::keep_no_account();
 }
 
 /// The account has to be installed where the sweep that reads it is, and before it.

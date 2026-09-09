@@ -68,6 +68,23 @@ pub enum ProcessError {
 
 pub type Result<T> = std::result::Result<T, ProcessError>;
 
+/// Where a started program's number gets written down, so a crash can be found and swept up
+/// at the next start (T504) — normally. `Explicit` is the one exception: see
+/// `ManagedProcess::spawn_recording_into` (T563).
+enum Record {
+    /// The production path, always: the process-wide account installed once at start-up by
+    /// `commands::mod::setup` (`tasks::registry::note_started`/`note_ended`).
+    Account,
+    /// A database the caller names outright, bypassing the process-wide account entirely.
+    /// Not behind `#[cfg(test)]`: this crate's own unit-test build and the separate
+    /// `tests/unit` binary that actually needs this are two different compilations of this
+    /// library, and `#[cfg(test)]` is only active in the former — so the function that
+    /// builds this variant has to be ordinary `pub`, the same way `store::secrets::
+    /// InMemorySecretStore` is. It stays, correctly, unreachable from anywhere in the
+    /// shipped application: nothing but a test ever names `spawn_recording_into`.
+    Explicit(std::sync::Arc<crate::store::db::Db>),
+}
+
 /// An external program started in a group of its own.
 ///
 /// While this structure lives, the process tree is held; `kill_tree` terminates it whole.
@@ -84,6 +101,8 @@ pub struct ManagedProcess {
     /// then would cross off nothing and leave the row behind for the next start-up to
     /// consider a survivor.
     recorded: Option<u32>,
+    /// Which table `recorded`'s number belongs to — see `Record` (T563).
+    record: Record,
     #[cfg(windows)]
     job: windows_job::Job,
 }
@@ -109,6 +128,38 @@ impl ManagedProcess {
     /// sidesteps the whole question; the alternative is escaping by hand, which this
     /// project has already once got wrong quietly, writing the results nowhere.
     pub fn spawn_in(dir: Option<&Path>, program: &str, args: &[String]) -> Result<Self> {
+        Self::spawn_recording(dir, program, args, Record::Account)
+    }
+
+    /// Exactly like `spawn`, but writes the started program into `db` directly rather than
+    /// through the process-wide account (T563).
+    ///
+    /// **For tests only, by convention rather than by `#[cfg(test)]`** — see the note on
+    /// `Record::Explicit` for why it cannot be gated that way and still reach the separate
+    /// `tests/unit` binary. **Why it exists at all.** The account
+    /// (`tasks::registry::account`) is one table shared by the whole process, and `cargo
+    /// test` runs every test of a binary as that one process. A test that installs the
+    /// global account for its own use and then starts a real program races EVERY OTHER test
+    /// in the same binary that also starts one at the same moment — each writes into and
+    /// deletes from the same rows, by PID, and on a PID collision one test's `note_ended`
+    /// can erase another's row before its own assertion runs. Reproduced in practice at
+    /// roughly one run in four (T563). The fix is not a wider lock: it is not depending on
+    /// the global account at all where a test can instead hand over exactly the database it
+    /// means to check, so nothing concurrent has anything to race it over.
+    pub fn spawn_recording_into(
+        program: &str,
+        args: &[String],
+        db: std::sync::Arc<crate::store::db::Db>,
+    ) -> Result<Self> {
+        Self::spawn_recording(None, program, args, Record::Explicit(db))
+    }
+
+    fn spawn_recording(
+        dir: Option<&Path>,
+        program: &str,
+        args: &[String],
+        record: Record,
+    ) -> Result<Self> {
         let mut cmd = Command::new(program);
         cmd.args(args)
             .stdin(Stdio::null())
@@ -224,15 +275,32 @@ impl ManagedProcess {
         // by seven accidents but because nothing made anybody think about it. One funnel,
         // and the guard that keeps it the only one, is what makes forgetting impossible
         // rather than unlikely.
+        //
+        // Which table depends on `record` (T563): the ordinary path writes into the global
+        // account exactly as before; `spawn_recording_into` writes into the database its
+        // caller named, so a test never touches the process-wide table other tests share.
         let pid = child.id();
         if let Some(pid) = pid {
-            crate::tasks::registry::note_started(pid, program);
+            match &record {
+                Record::Account => crate::tasks::registry::note_started(pid, program),
+                Record::Explicit(db) => {
+                    if let Err(e) = crate::tasks::registry::record(db, pid, program, None) {
+                        tracing::warn!(
+                            error = %e,
+                            pid,
+                            program,
+                            "a started program was not written down"
+                        );
+                    }
+                }
+            }
         }
 
         Ok(Self {
             child,
             program: program.to_owned(),
             recorded: pid,
+            record,
             #[cfg(windows)]
             job,
             suspended: false,
@@ -366,7 +434,14 @@ impl ManagedProcess {
 impl Drop for ManagedProcess {
     fn drop(&mut self) {
         if let Some(pid) = self.recorded {
-            crate::tasks::registry::note_ended(pid);
+            match &self.record {
+                Record::Account => crate::tasks::registry::note_ended(pid),
+                Record::Explicit(db) => {
+                    if let Err(e) = crate::tasks::registry::forget(db, pid) {
+                        tracing::warn!(error = %e, pid, "a finished program was not crossed off");
+                    }
+                }
+            }
         }
     }
 }
