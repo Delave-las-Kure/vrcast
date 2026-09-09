@@ -779,6 +779,14 @@ button:focus-visible {
 
 .media__title {
   font-weight: 600;
+  /* T566: a person can type a title of any length (no MAX_TITLE_LEN — a title never
+     becomes a file name or a path, unlike `slug`, so there is no filesystem-shaped limit
+     to enforce). `min-width: 0` is required, not decoration: `.media__head` is a flex
+     container, and a flex item's default `min-width: auto` refuses to shrink below its
+     content's own width — without it `overflow-wrap` has nothing to act on and one long
+     word still pushes `.media__facts` aside or stretches the card sideways. */
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .media__facts {

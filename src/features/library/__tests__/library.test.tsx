@@ -241,6 +241,26 @@ describe("the library", () => {
     expect(await screen.findByText(ru.ui.library.linkFromServer)).toBeInTheDocument();
     expect(screen.getByText(ru.ui.library.linkViaCdn)).toBeInTheDocument();
   });
+
+  it("renders a several-thousand-character title whole, without truncating it (T566)", async () => {
+    // The backend puts no ceiling on a title's length (MAX_SLUG_LEN exists for `slug`
+    // because it becomes a file name; a title never does, so there is no filesystem-shaped
+    // limit to enforce — see the backend test for T566 in tests/integration/library_ops.rs).
+    // What the screen owes a person who typed one anyway is that the title still shows up
+    // whole: not silently cut short, which would look like their own text was lost.
+    //
+    // One long word with no spaces, deliberately: a title that wraps at ordinary word
+    // boundaries would render fine with no CSS help at all, and would tell this test
+    // nothing about `.media__title`'s own overflow handling.
+    const longTitle = "Оченьдлинноеназваниефильмабезединогопробела".repeat(100);
+    mockLibraryList.mockResolvedValue(view({ media: [media({ title: longTitle })] }));
+    draw();
+
+    const title = await screen.findByText(longTitle);
+    expect(title).toBeInTheDocument();
+    expect(title).toHaveClass("media__title");
+    expect(title.textContent).toBe(longTitle);
+  });
 });
 
 describe("a medium's built quality sets (T529)", () => {
