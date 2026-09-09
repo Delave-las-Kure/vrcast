@@ -333,6 +333,11 @@ pub fn save_state(
         // same pair migration 0010 gave the process records, and for the same reason — the
         // number alone lies once the system has handed it out again.
         let owner = if state == TaskState::Running {
+            // Not a temp-file-name component (the class of bug T567/T568 fixed elsewhere in
+            // `probe_complexity.rs`/`vmaf.rs`) — this pid identifies which application
+            // instance owns the row, stored in the database and compared against on the next
+            // start-up. Two instances racing to write the same task row is not a scenario
+            // this code path has: a task belongs to the instance that queued it.
             let pid = std::process::id();
             Some((pid, crate::tasks::process::process_identity(pid)))
         } else {
@@ -452,6 +457,8 @@ pub struct RecoveryReport {
 /// always were: nothing could have been running beside them.
 fn owner_is_still_running(pid: Option<u32>, identity: Option<&str>) -> bool {
     let Some(pid) = pid else { return false };
+    // Same pid, same purpose as `save_state` above: an owner identity, not a file name —
+    // see that function's comment for why this is not the T567/T568 class of bug.
     if pid == std::process::id() && identity.is_none() {
         return false;
     }
