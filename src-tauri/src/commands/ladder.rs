@@ -66,6 +66,14 @@ pub struct BuildRequest {
     /// Which batch this build belongs to (T445). `None` for a build a person started.
     #[serde(default)]
     pub batch: Option<crate::tasks::store::Batch>,
+    /// Consent to the consequences warned about before the start (T571) — the same shape as
+    /// `UploadRequest.confirmed`: rewriting `master.m3u8` on a server that is serving it
+    /// right now washes what active viewers were mid-stream out of the server's memory, the
+    /// same category of harm `media_rename`/`media_delete`/`upload_start` already guard
+    /// against for the same reason. `#[serde(default)]` so a request built before this field
+    /// existed still reads — the same reasoning `UploadRequest.confirmed` documents.
+    #[serde(default)]
+    pub confirmed: bool,
 }
 
 /// Where a ladder's rungs came from.
@@ -209,12 +217,13 @@ pub mod api {
         // when the measurement has not arrived yet, exactly as before.
         let effective_measured_bps = request.measured_peak_bps.or(probe.measured_bps);
 
-        let plan = ladder::plan(effective_measured_bps, &source, request.declared_layout)
-            .map_err(|refusal| match refusal {
+        let plan = ladder::plan(effective_measured_bps, &source, request.declared_layout).map_err(
+            |refusal| match refusal {
                 ladder::Refusal::SourceBitrateTooLow { .. } => {
                     AppError::new(ErrorCode::InvalidInput).with_cause(refusal_text(refusal))
                 }
-            })?;
+            },
+        )?;
 
         Ok(LadderPreview {
             verdict: LadderVerdict::of(&plan.rungs, &source),
@@ -266,6 +275,35 @@ pub mod api {
         }
 
         let profile = super::super::library::api::profile_of(state, &request.server_id)?;
+
+        // **The same guard `media_rename`/`media_delete`/`upload_start` already have, for
+        // the same reason** (T571). `write_master` rewrites `master.m3u8` on the server —
+        // and on a rebuild that file is very often already being served: the task 468
+        // comment two functions down in `tasks::ladder_build.rs` names a real incident where
+        // exactly that "quietly vanished quality for viewers" on production. Refused here,
+        // before a task exists — the same place every other quick refusal in this function
+        // lives, and before a single byte is encoded rather than after hours of it.
+        //
+        // The same approximation `media_rename` and `upload_start` already live with: what
+        // is asked is how many connections the web server holds open on 80/443 at all, not
+        // connections to this particular medium — `server::active_use` names why nothing
+        // finer exists yet, and this is not the task to fix that.
+        if !request.confirmed {
+            let conn = crate::server::gate::open(
+                state.secrets.as_ref(),
+                &profile,
+                crate::server::gate::Intent::Read,
+            )
+            .await?
+            .conn;
+            let connections = crate::server::active_use::serving_connections(&conn).await;
+            conn.close().await;
+            if connections > 0 {
+                return Err(AppError::new(ErrorCode::FileInUse)
+                    .with_cause(format!("connections={connections}")));
+            }
+        }
+
         let source = super::super::api::source_probe(&request.path).await?;
         let (encoder, _) = pick_encoder(request.prefer_hardware).await?;
         // Where these rungs came from, so the description can say it (T433). Asked of the

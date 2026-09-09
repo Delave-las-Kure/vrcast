@@ -322,6 +322,14 @@ pub mod api {
                 // The same batch as the measurement that started it. A build outside its
                 // batch would go on encoding for hours after somebody pressed stop.
                 batch: measured.batch.clone(),
+                // Not confirmed (T571): a batch chain runs unattended, with nobody at the
+                // screen to answer "build anyway?" — so it gets the same protection an
+                // unattended run is owed, exactly like every other quick refusal this
+                // chain already stops on (`may_build_unasked` above, `LadderCheckPending`
+                // in `ladder_build` itself). A rebuild that would wash a real viewer's
+                // quality out from under them is not something to do silently just because
+                // nobody was watching the screen it would have warned on.
+                confirmed: false,
             },
         )
         .await?;

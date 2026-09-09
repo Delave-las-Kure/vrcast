@@ -132,6 +132,7 @@ async fn an_unmeasured_ladder_is_refused_before_any_server_is_touched() {
             audio_track: 0,
             prefer_hardware: true,
             batch: None,
+            confirmed: true,
         },
     )
     .await
@@ -163,6 +164,7 @@ async fn a_ladder_with_no_rungs_is_refused_as_empty_rather_than_as_unmeasured() 
             audio_track: 0,
             prefer_hardware: true,
             batch: None,
+            confirmed: true,
         },
     )
     .await
@@ -188,6 +190,7 @@ async fn a_measured_ladder_gets_past_the_refusal_and_fails_on_the_server_instead
             audio_track: 0,
             prefer_hardware: true,
             batch: None,
+            confirmed: true,
         },
     )
     .await

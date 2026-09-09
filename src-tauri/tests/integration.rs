@@ -92,6 +92,9 @@ mod library_scale;
 #[path = "integration/ladder_attach.rs"]
 mod ladder_attach;
 
+#[path = "integration/ladder_active_viewers.rs"]
+mod ladder_active_viewers;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 
