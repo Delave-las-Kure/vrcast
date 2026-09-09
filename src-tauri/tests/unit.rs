@@ -198,3 +198,6 @@ mod encoder_fallback;
 
 #[path = "unit/convert_broken_source.rs"]
 mod convert_broken_source;
+
+#[path = "unit/task_purge.rs"]
+mod task_purge;
