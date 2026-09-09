@@ -633,9 +633,22 @@ async fn start(
                             // there it can say why.
                             (None, None) => return false,
                         };
-                        Connection::connect(address, user, credentials, &expected_host)
-                            .await
-                            .is_ok()
+                        // Closed explicitly on success, matching `password_refused` below
+                        // (`passwords_are_off`, which does the same after its own successful
+                        // connect) rather than left to `Drop` (T565). Not a correctness
+                        // fix — the TCP socket closes either way, nothing leaks — but this
+                        // proof runs up to six times over one deployment (`SshKey` and
+                        // `SshHardening` both call it), and a polite SSH disconnect on every
+                        // one of those instead of an implicit close is the same courtesy
+                        // the sibling proof already extends to the server.
+                        match Connection::connect(address, user, credentials, &expected_host).await
+                        {
+                            Ok(conn) => {
+                                conn.close().await;
+                                true
+                            }
+                            Err(_) => false,
+                        }
                     })
                 }
             };
