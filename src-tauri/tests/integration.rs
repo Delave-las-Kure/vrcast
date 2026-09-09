@@ -77,6 +77,11 @@ mod fixture;
 #[path = "integration/geo_real.rs"]
 mod geo_real;
 
+/// T575 — `download()` gives up on a connection that accepts and then never answers,
+/// instead of hanging forever. A real TCP socket, no real network dependency, not ignored.
+#[path = "integration/geo_download_timeout.rs"]
+mod geo_download_timeout;
+
 /// A ready quality set in the container (T151). Used by the checks of Phases 4 and 6.
 #[path = "integration/hls_fixture.rs"]
 #[allow(dead_code)]
