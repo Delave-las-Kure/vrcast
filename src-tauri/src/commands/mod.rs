@@ -99,6 +99,12 @@ pub struct AppState {
     /// Empty is a working state, and the one the application ships in: every viewer is then
     /// "not determined", which is the truth.
     pub places: Arc<std::sync::RwLock<crate::store::geo::Places>>,
+    /// Keeps `geo::fetch` from running twice at once (T569): `geo_update`'s explicit
+    /// "Fetch" button and `refresh_in_background`'s startup check both write into the same
+    /// temp files, and without this a person's click racing the background refresh could
+    /// corrupt the tables mid-write. Arc'd for the same reason as `places` — `AppState` is
+    /// cloned, and clones must share one lock, not each get their own.
+    pub geo_fetch: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -177,6 +183,7 @@ impl AppState {
                     .map(|d| crate::store::geo::Places::open(&d))
                     .unwrap_or_default(),
             )),
+            geo_fetch: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
