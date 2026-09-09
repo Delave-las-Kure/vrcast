@@ -458,3 +458,51 @@ async fn a_second_copy_of_the_application_gets_a_refusal_code_of_its_own() {
     // from its catalogue — one hint for every place this code turns up.
     assert_eq!(app_err.code, ErrorCode::ManifestConflict);
 }
+
+/// T566 — a title of several thousand characters is a real input the backend must handle,
+/// not one it happens to.
+///
+/// **What was found, and what was checked before adding this.** `Media.title` carries no
+/// length validation anywhere: `media_create` only refuses an empty one
+/// (`library.rs`, `title.is_empty()`), unlike `slug`, which has `MAX_SLUG_LEN` because a slug
+/// becomes part of a file name and file systems have a real 255-byte limit. A title never
+/// becomes a file name or a path component — it is stored as one JSON string field in the
+/// catalogue and shown as one string on screen — so there is no filesystem-shaped ceiling to
+/// enforce, and none was added (the task's own instruction: only introduce `MAX_TITLE_LEN` on
+/// finding an actual necessity, and reading the code found none). What this test establishes
+/// instead is that the current, deliberately permissive behaviour is real and stays real: a
+/// very long title is created, round-trips through the server's catalogue file whole, and
+/// reads back byte-for-byte identical — not truncated, not rejected, not mangled by the JSON
+/// layer at any point along write, `library.json`, and read.
+#[tokio::test]
+async fn a_medium_with_a_several_thousand_character_title_is_created_and_read_back_whole() {
+    let (_server, state, id) = setup(&[]).await;
+
+    // Multi-byte characters included on purpose, same reasoning as
+    // `a_medium_is_created_and_shows_in_the_library` above: a length check done in bytes
+    // instead of characters is a different bug than a missing length check, and mixing
+    // scripts is what would surface it.
+    let long_title: String = "Настоящий фильм какой он есть ".repeat(150) + "The End 🎬";
+    assert!(
+        long_title.chars().count() > 4000,
+        "the fixture title is not actually long enough to test anything: {} chars",
+        long_title.chars().count()
+    );
+
+    let media_id = library::media_create(&state, &id, &long_title, None)
+        .await
+        .expect("a medium with a very long title was refused");
+
+    let view = library::library_list(&state, &id, true).await.unwrap();
+    let media = view
+        .media
+        .iter()
+        .find(|m| m.id == media_id)
+        .expect("the medium with the long title is not visible in the library");
+
+    assert_eq!(
+        media.title, long_title,
+        "the long title did not round-trip through the server whole — it was \
+         truncated or altered somewhere between the write and the read"
+    );
+}
