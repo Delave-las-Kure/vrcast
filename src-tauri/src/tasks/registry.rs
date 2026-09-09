@@ -109,6 +109,9 @@ pub fn record(db: &Db, pid: u32, program: &str, task_id: Option<&str>) -> Result
     let identity = crate::tasks::process::process_identity(pid);
     // And who started it. A record whose owner is still running belongs to a live instance
     // and is not a survivor of anything — see `sweep_on_startup` and migration 0010.
+    // Not a temp-file-name component (the class of bug T567/T568 fixed elsewhere in
+    // `probe_complexity.rs`/`vmaf.rs`) — this pid identifies which application instance
+    // owns the record, stored in the database and compared against on the next sweep.
     let owner_pid = std::process::id();
     let owner_identity = crate::tasks::process::process_identity(owner_pid);
     db.with_conn(|c| {
@@ -193,6 +196,8 @@ pub fn sweep_on_startup(db: &Db) -> Result<SweepReport, DbError> {
         // behind, and its work is not this sweep's to end. Checked in the same two steps the
         // child process is checked in below, and for the same reason: the number alone lies
         // once it has been handed out again.
+        // Same pid, same purpose as `record` above: an owner identity, not a file name — see
+        // that function's comment for why this is not the T567/T568 class of bug.
         if let Some(owner) = owner_pid {
             if owner != std::process::id() || owner_identity.is_some() {
                 let owner_is_there = process_name(owner).is_some();

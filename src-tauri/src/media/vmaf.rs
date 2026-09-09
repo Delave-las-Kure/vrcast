@@ -201,9 +201,18 @@ impl Workspace {
     const SCORE: &'static str = "score.json";
 
     fn make(cell: Cell) -> Result<Self, VmafError> {
+        // This directory's name belongs to this one measurement rather than being shared:
+        // two calls that land on the same `(bitrate_mbps, height)` at the same moment — two
+        // concurrent quality measurements reaching the same grid cell, which
+        // `concurrent_heavy_tasks` (up to `MAX_HEAVY_TASKS`, `store/settings.rs`) makes
+        // reachable in production, or a test binary where `cargo test` runs everything in
+        // one process — must not read or write into the same `point.mkv`/`score.json`.
+        // `std::process::id()` used to stand in for uniqueness here, but a process id is
+        // shared by every thread in that one process, so it bought none; a UUID does (T568,
+        // same fix as `probe_complexity.rs`'s staged encode, T567).
         let dir = std::env::temp_dir().join(format!(
             "vrcast-vmaf-{}-{}-{}",
-            std::process::id(),
+            uuid::Uuid::new_v4().simple(),
             cell.bitrate_mbps,
             cell.height
         ));

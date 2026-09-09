@@ -179,6 +179,11 @@ impl ManagedProcess {
             //
             // The parent's id is remembered BEFORE spawning: the child will need it to
             // close the gap described below.
+            //
+            // Not a temp-file-name component (the class of bug T567/T568 fixed elsewhere in
+            // `probe_complexity.rs`/`vmaf.rs`) — this pid identifies which OS process the
+            // child must watch for death, read once inside `pre_exec` below and never used
+            // to name anything.
             let parent_pid = std::process::id();
             unsafe {
                 cmd.pre_exec(move || {
