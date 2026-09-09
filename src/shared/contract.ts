@@ -1067,6 +1067,14 @@ export interface LadderBuildRequest {
   rungs: Rung[];
   audio_track?: number;
   prefer_hardware?: boolean;
+  /**
+   * Agreement to the consequences named in the previous refusal (T571, T574).
+   *
+   * `bool` with `#[serde(default)]` on the Rust side (`commands/ladder.rs::BuildRequest`),
+   * so absence on the wire reads as `false` there — the same reasoning as
+   * `UploadRequest.confirmed` above applies here unchanged.
+   */
+  confirmed?: boolean;
 }
 
 /** Measure what the rungs are worth on this material. */
