@@ -131,7 +131,17 @@ async fn encode_piece(
     encoder: &Encoder,
 ) -> Result<u64, ffmpeg::FfmpegError> {
     let ffmpeg_bin = ffmpeg::locate("ffmpeg")?;
-    let out = std::env::temp_dir().join(format!("vrcast-probe-{at_s}-{}.mp4", std::process::id()));
+    // The staged file's name belongs to this one call rather than being shared: two calls
+    // that land on the same `at_s` (deterministic for a fixed clip length) at the same
+    // moment — two concurrent probes of the same clip, in production or in a test binary
+    // where `cargo test` runs everything in one process — must not read or write into the
+    // same file. `std::process::id()` used to stand in for uniqueness here, but a process id
+    // is shared by every thread in that one process, so it bought none; a UUID does (T567,
+    // same fix as `server::manifest_io`'s staged manifest file).
+    let out = std::env::temp_dir().join(format!(
+        "vrcast-probe-{at_s}-{}.mp4",
+        uuid::Uuid::new_v4().simple()
+    ));
 
     let mut args: Vec<String> = vec![
         "-nostdin".into(),
