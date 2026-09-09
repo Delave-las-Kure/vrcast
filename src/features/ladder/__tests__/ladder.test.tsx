@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { en, renderIn, ru } from "../../../test-utils";
 import type {
+  AppError,
   Detail,
   LadderPreview,
   LadderVerdict,
@@ -956,11 +957,73 @@ describe("choosing which rungs to build", () => {
   });
 });
 
+describe("building anyway when the set is being watched (T571, T574)", () => {
+  // The core refuses `ladder_build` with `FILE_IN_USE` when someone is watching an
+  // existing copy of the set right now and `confirmed` was not sent. The refusal is a
+  // fixed wording carrying no numbers of its own (like `media_rename`'s own FILE_IN_USE,
+  // T545), so the only thing the screen can offer is a second button that retries with
+  // `confirmed: true`.
+
+  function fileInUse(): AppError {
+    return { code: "FILE_IN_USE" } as AppError;
+  }
+
+  it("offers to build anyway when the first attempt is refused as in use", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockBuild.mockRejectedValueOnce(fileInUse());
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "en");
+
+    await waitFor(() => expect(screen.getByTestId("build")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("build"));
+
+    await waitFor(() => expect(screen.getByTestId("build-anyway")).toBeInTheDocument());
+  });
+
+  it("retries with confirmed: true when 'build anyway' is pressed", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockBuild.mockRejectedValueOnce(fileInUse());
+    mockBuild.mockResolvedValueOnce("build-2");
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "en");
+
+    await waitFor(() => expect(screen.getByTestId("build")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("build"));
+    await waitFor(() => expect(screen.getByTestId("build-anyway")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("build-anyway"));
+
+    await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(2));
+    expect(mockBuild.mock.calls[1][0]).toMatchObject({ confirmed: true });
+  });
+
+  it("removes the 'build anyway' button once the confirmed retry succeeds", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockBuild.mockRejectedValueOnce(fileInUse());
+    mockBuild.mockResolvedValueOnce("build-2");
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "en");
+
+    await waitFor(() => expect(screen.getByTestId("build")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("build"));
+    await waitFor(() => expect(screen.getByTestId("build-anyway")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("build-anyway"));
+
+    await waitFor(() => expect(screen.queryByTestId("build-anyway")).toBeNull());
+  });
+
+  it("does not show 'build anyway' on an ordinary successful build", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "en");
+
+    await waitFor(() => expect(screen.getByTestId("build")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("build"));
+
+    await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("build-anyway")).toBeNull();
+  });
+});
+
 describe("what the set is called", () => {
   it("is offered rather than decided, and what is typed is what is built", async () => {
-    // The guess comes from the file's own name, and a name with anything but Latin in it
-    // guesses down to something nobody meant — which is not obvious until the set is
-    // somewhere nobody expected.
     mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
     renderIn(<LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />, "en");
 

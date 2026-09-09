@@ -754,6 +754,10 @@ export const en: Catalogue = {
       buildBlocked: "Cannot be built: the rungs are not measured",
       buildBlockedEmpty: "Nothing to build: there are no rungs",
       building: "Building — this takes a while",
+      // T571, T574 — the same FILE_IN_USE refusal as renaming (renameAnyway, T545): a
+      // fixed wording with no numbers of its own, and the only thing left to decide is
+      // whether to go on despite the active viewers.
+      buildAnyway: "Build anyway",
       objections: "Objections",
     },
 

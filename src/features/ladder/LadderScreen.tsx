@@ -290,6 +290,11 @@ export function LadderScreen({
   const [leftOut, setLeftOut] = useState<ReadonlySet<number>>(new Set());
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  // T571, T574 — the core refuses `ladder_build` with `FILE_IN_USE` when somebody is
+  // watching the set right now and `confirmed` was not sent. The refusal names nothing
+  // to renew (fixed wording, like `media_rename`'s own FILE_IN_USE, T545), so there is
+  // nothing to compose — only a second button that retries with `confirmed: true`.
+  const [buildFileInUse, setBuildFileInUse] = useState(false);
   // T528 — media already on this server's library, offered explicitly instead of leaving
   // the link between "this set" and "that medium" to a guessed slug (`slugOf(path)`)
   // matching by accident. Empty while `serverId` is unknown: there is nothing to list.
@@ -307,6 +312,9 @@ export function LadderScreen({
     // this file was measured under would be forgotten the moment somebody typed a height.
     previewRef.current = null;
     measuredPeakRef.current = null;
+    // T574 — a refusal on a past file has nothing to say about this one: a fresh path is
+    // not necessarily still in use by anyone.
+    setBuildFileInUse(false);
     return () => {
       alive.current = false;
     };
@@ -473,6 +481,36 @@ export function LadderScreen({
   }, [path, loadPlan]);
 
   const blocked = preview?.verdict.not_buildable ?? null;
+
+  // T571, T574 — the core refuses `ladder_build` with `FILE_IN_USE` when the set is being
+  // watched right now and `confirmed` was not sent along. One function for the plain
+  // button and the "build anyway" retry, so the two cannot drift on what they send.
+  const doBuild = (confirmed?: boolean) => {
+    if (!preview || !serverId) return;
+    setBuilding(true);
+    ipc
+      .ladderBuild({
+        server_id: serverId,
+        path,
+        // T528 — an explicit choice from the library wins outright: its slug is
+        // exactly what the medium already answers to, and sending anything else
+        // would be the very guesswork this exists to remove. Only when nothing was
+        // picked does the typed name (or, failing that, a guess from the file name)
+        // apply, unchanged from before.
+        slug: selectedMedia?.slug ?? (name.trim() || slugOf(path)),
+        // Only what was asked for. The core names each variant by its own megabits
+        // (`film_22.mp4`), not by its place in the list, so a gap in the numbering
+        // costs nothing.
+        rungs: rungs.filter((rung) => !leftOut.has(rung.index)),
+        confirmed: confirmed ?? false,
+      })
+      .then(() => setBuildFileInUse(false))
+      .catch((e: AppError) => {
+        setError(e);
+        setBuildFileInUse(e.code === "FILE_IN_USE");
+      })
+      .finally(() => setBuilding(false));
+  };
 
   return (
     <div>
@@ -655,30 +693,24 @@ export function LadderScreen({
         type="button"
         disabled={blocked !== null || building || !serverId || rungs.length === leftOut.size}
         data-testid="build"
-        onClick={() => {
-          if (!preview || !serverId) return;
-          setBuilding(true);
-          ipc
-            .ladderBuild({
-              server_id: serverId,
-              path,
-              // T528 — an explicit choice from the library wins outright: its slug is
-              // exactly what the medium already answers to, and sending anything else
-              // would be the very guesswork this exists to remove. Only when nothing was
-              // picked does the typed name (or, failing that, a guess from the file name)
-              // apply, unchanged from before.
-              slug: selectedMedia?.slug ?? (name.trim() || slugOf(path)),
-              // Only what was asked for. The core names each variant by its own megabits
-              // (`film_22.mp4`), not by its place in the list, so a gap in the numbering
-              // costs nothing.
-              rungs: rungs.filter((rung) => !leftOut.has(rung.index)),
-            })
-            .catch((e: AppError) => setError(e))
-            .finally(() => setBuilding(false));
-        }}
+        onClick={() => doBuild()}
       >
         {building ? words.building : words.build}
       </button>
+      {/* T571, T574 — the core refuses a build with `FILE_IN_USE` when the set is being
+          watched right now and nobody confirmed going on regardless. Same pattern as
+          `RenameMediaDialog`'s `renameAnyway` (T545): the refusal carries no numbers of
+          its own to compose, only a choice to make. */}
+      {buildFileInUse && (
+        <button
+          type="button"
+          data-testid="build-anyway"
+          disabled={building}
+          onClick={() => doBuild(true)}
+        >
+          {words.buildAnyway}
+        </button>
+      )}
       {/* Taking another film's measurement, and getting back out of it (T427, T428). Above
           the evidence rather than below: somebody with no measurement at all is choosing
           whether to spend half an hour, and that choice comes before the numbers do. */}
