@@ -193,6 +193,23 @@ pub fn run() {
                 }
             }
 
+            // Retention for the task journal (T564): `purge_finished_before` existed,
+            // worked, and was called from nowhere — the table grew by one row per task
+            // for as long as the application ran, forever. Ninety days: long enough that
+            // a person checking "did last month's upload really finish" still finds it,
+            // short enough that a year of daily use does not carry a year of rows. Errors
+            // are logged and not fatal, in the same spirit as the sweep above this one:
+            // a full journal is a nuisance a person can live with for one more run, and
+            // refusing to start over housekeeping would be a worse trade.
+            let purge_before = (time::OffsetDateTime::now_utc() - time::Duration::days(90))
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            match crate::tasks::store::purge_finished_before(&state.db, &purge_before) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(purged = n, "old finished tasks were cleared out"),
+                Err(e) => tracing::error!(error = %e, "old finished tasks were not cleared out"),
+            }
+
             // The window is created hidden and shown when there is something to show:
             // otherwise a person sees a white flash before the interface loads.
             if let Some(window) = app.get_webview_window("main") {

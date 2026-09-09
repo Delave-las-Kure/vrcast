@@ -198,3 +198,9 @@ mod encoder_fallback;
 
 #[path = "unit/convert_broken_source.rs"]
 mod convert_broken_source;
+
+#[path = "unit/task_purge.rs"]
+mod task_purge;
+
+#[path = "unit/deploy_proof_symmetry.rs"]
+mod deploy_proof_symmetry;
