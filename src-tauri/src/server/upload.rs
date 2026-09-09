@@ -136,6 +136,34 @@ pub async fn uploaded_so_far(conn: &Connection, remote_temp: &str) -> Result<u64
     Ok(out.trimmed().trim().parse::<u64>().unwrap_or(0))
 }
 
+/// Whether a file exists on the server, and if so how large it is — in one round trip
+/// (T570).
+///
+/// Needed after a break during the checksum-or-publish phase: reconnecting is cheap, but a
+/// second SSH call to learn "does it exist" and a third to learn "how big" would be two
+/// chances for the state to change between them. `None` means the file is not there;
+/// `uploaded_so_far` cannot be reused for this because a missing file and an empty one both
+/// read back as `0` there, and telling "not published" from "published, zero bytes" apart is
+/// exactly the point here.
+pub async fn remote_file_size(conn: &Connection, path: &str) -> Result<Option<u64>> {
+    const ABSENT: &str = "VRCAST_ABSENT";
+    let out = conn
+        .exec(&format!(
+            "stat -c %s -- {} 2>/dev/null || echo {ABSENT}",
+            shell_quote(path)
+        ))
+        .await?;
+    let text = out.trimmed().trim();
+    if text == ABSENT {
+        return Ok(None);
+    }
+    text.parse::<u64>().map(Some).map_err(|_| {
+        UploadError::Failed(format!(
+            "the size of {path} on the server could not be read from \"{text}\""
+        ))
+    })
+}
+
 /// Write one window, and give up on it when the connection has died under it.
 ///
 /// ⚠ **Without this the transfer does not fail — it stops** (T483, measured 2026-09-04). The

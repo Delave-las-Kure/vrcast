@@ -620,6 +620,15 @@ impl TestServer {
         &self.network
     }
 
+    /// The container's own id, for `docker` commands this module does not already wrap —
+    /// fault injection (T570) being the reason one exists: `docker network disconnect`
+    /// needs a name or an id, and there is no way to sever a container's networking through
+    /// SSH commands run *inside* it (the very last command to run would be the one cutting
+    /// its own connection off).
+    pub fn container_id(&self) -> &str {
+        &self.id
+    }
+
     /// The serving's access log, as the server itself wrote it.
     ///
     /// Half of what is known about a viewer is read out of here (R-02), and the check of

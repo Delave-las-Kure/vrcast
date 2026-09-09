@@ -31,6 +31,18 @@ use std::time::Duration;
 /// giving up after the very first one would demand that a person sit by the button.
 const MAX_ATTEMPTS: usize = 8;
 
+/// How many times reconnecting is attempted during the checksum-or-publish phase (T570).
+///
+/// Kept apart from [`MAX_ATTEMPTS`] rather than shared with it: that constant is sized for
+/// a byte transfer that can run for hours, where the number of windows a break might land in
+/// is large. This phase is short by comparison — a checksum pass and one rename — and every
+/// attempt here also does the extra round trip in [`api::locate`] to see what the server
+/// actually has, so there is less to retry towards. The same number as `MAX_ATTEMPTS` all
+/// the same: nothing about this phase's own failures on a real connection suggested it needs
+/// either more patience or less, and two different ceilings would want two different
+/// justifications the moment somebody asked why they differ.
+const FINISH_MAX_ATTEMPTS: usize = MAX_ATTEMPTS;
+
 /// The pause retrying starts from, and the one it grows to.
 const FIRST_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
@@ -501,13 +513,17 @@ pub mod api {
             match upload::transfer_once(&conn, &ctx, &plan, &mut estimate).await {
                 Ok(sent) => {
                     let outcome = finish(
-                        &conn,
                         &ctx,
-                        &plan,
-                        sent,
-                        &clean_name,
-                        &request,
-                        &profile.video_dir,
+                        Finishing {
+                            conn: &conn,
+                            secrets: secrets.as_ref(),
+                            profile: &profile,
+                            plan: &plan,
+                            sent,
+                            clean_name: &clean_name,
+                            request: &request,
+                            video_dir: &profile.video_dir,
+                        },
                     )
                     .await;
                     conn.close().await;
@@ -548,15 +564,35 @@ pub mod api {
     }
 
     /// Compare the checksums and enter the file into serving.
-    async fn finish(
-        conn: &crate::ssh::Connection,
-        ctx: &crate::tasks::engine::TaskContext,
-        plan: &UploadPlan,
+    ///
+    /// Bundled into one argument rather than passed loose (T570 added two of these — the
+    /// secrets and the profile, needed only for reconnecting inside this phase — and eight
+    /// loose parameters is a shape `clippy::too_many_arguments` rightly complains about).
+    struct Finishing<'a> {
+        conn: &'a crate::ssh::Connection,
+        secrets: &'a dyn crate::store::secrets::SecretStore,
+        profile: &'a crate::domain::server_profile::ServerProfile,
+        plan: &'a UploadPlan,
         sent: u64,
-        clean_name: &str,
-        request: &UploadRequest,
-        video_dir: &str,
+        clean_name: &'a str,
+        request: &'a UploadRequest,
+        video_dir: &'a str,
+    }
+
+    async fn finish(
+        ctx: &crate::tasks::engine::TaskContext,
+        job: Finishing<'_>,
     ) -> std::result::Result<(), AppError> {
+        let Finishing {
+            conn,
+            secrets,
+            profile,
+            plan,
+            sent,
+            clean_name,
+            request,
+            video_dir,
+        } = job;
         if sent != plan.total_bytes {
             return Err(AppError::new(ErrorCode::Internal).with_detail(
                 Detail::new(DetailCode::UploadShort)
@@ -580,36 +616,32 @@ pub mod api {
         let ours = checksum::local(&plan.local_path)
             .await
             .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
-        let theirs = checksum::remote(conn, &plan.remote_temp)
-            .await
-            .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
 
-        if !checksum::matches(&ours, &theirs) {
-            // The file does not enter serving, and we clean up after ourselves: a spoilt
-            // transfer must leave no trace (FR-032, FR-038).
-            upload::cleanup(conn, &plan.remote_temp).await;
-            return Err(AppError::new(ErrorCode::ChecksumMismatch)
-                .detail(DetailCode::UploadChecksumMismatch));
-        }
-
-        // The last place a cancellation can still be obeyed. After the rename the file is
-        // being served, and there is no taking that back inside this function — deleting a
-        // file somebody may already be watching is not what "stop the upload" asked for.
-        if ctx.is_cancelled() {
-            upload::cleanup(conn, &plan.remote_temp).await;
-            return Ok(());
-        }
-
-        upload::publish(conn, plan)
-            .await
-            .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+        // ⚠ **This phase used to have no reconnection of its own** (T570). It runs two
+        // network calls — `checksum::remote`, which reads the whole file on the server and
+        // can take minutes, and `publish`, the rename into serving — and a break in either
+        // used to surface as `AppError::Internal` straight away: the retriable-ness that
+        // `UploadError` already knows was thrown away, and the task failed even when the
+        // file was sitting on the server intact. Falling back on `run_upload`'s own retry
+        // loop will not do either: that loop exists to resume a byte transfer from
+        // `uploaded_so_far`, and handing it a failure here would send the whole file again
+        // — after every byte had already arrived. So the loop is here instead, and it reasons
+        // about what the reconnected server actually shows rather than assuming the worst.
+        let (working_conn, opened_here) =
+            match checksum_and_publish(conn, ctx, secrets, profile, plan, &ours).await? {
+                FinishOutcome::Published(c, o) => (c, o),
+                // A cancellation was honoured somewhere inside the retry loop — cleanup
+                // already ran there, on whichever connection was open at the time.
+                FinishOutcome::Cancelled => return Ok(()),
+            };
 
         // **The window that cannot be closed, said out loud instead of hidden.** Between the
-        // check above and the rename finishing there is a moment, and a cancellation arriving
-        // in it is real: the engine will write the task down as cancelled, truthfully as far
-        // as the person's press goes, while the file is serving. The row then says "cancelled"
-        // and nothing else — so the note is what makes the two agree. The alternative,
-        // un-publishing, would delete under a viewer who has already started watching.
+        // check inside `checksum_and_publish` and the rename finishing there is a moment, and
+        // a cancellation arriving in it is real: the engine will write the task down as
+        // cancelled, truthfully as far as the person's press goes, while the file is serving.
+        // The row then says "cancelled" and nothing else — so the note is what makes the two
+        // agree. The alternative, un-publishing, would delete under a viewer who has already
+        // started watching.
         if ctx.is_cancelled() {
             ctx.add_notice(
                 Detail::new(DetailCode::NoticeCancelledAfterPublish).with("name", clean_name),
@@ -634,7 +666,7 @@ pub mod api {
         // a repeat that has nothing left to do. It is said instead, as a notice, and the file
         // shows up unrecognised — which is exactly where it used to land every time.
         if let Some(media_id) = request.media_id.as_deref() {
-            if let Err(e) = file_it_under(conn, video_dir, media_id, clean_name).await {
+            if let Err(e) = file_it_under(&working_conn, video_dir, media_id, clean_name).await {
                 tracing::warn!(error = %e, media_id, "the file was not filed under its medium");
                 ctx.add_notice(
                     Detail::new(DetailCode::NoticeNotFiledUnderMedium).with("name", clean_name),
@@ -651,7 +683,337 @@ pub mod api {
         }
 
         ctx.report_important(1.0, DetailCode::StageDone);
+
+        // Ours to close only if we are the ones who opened it: the connection `finish` was
+        // handed belongs to `run_upload`, which closes it once this function returns.
+        if opened_here {
+            working_conn.close().await;
+        }
         Ok(())
+    }
+
+    /// What one attempt at comparing the checksum and publishing found.
+    enum FinishStep {
+        /// Published, whole and matching.
+        Done,
+        /// A cancellation landed after the checksum was found to match but before the
+        /// publish — the one point past the checksum where stopping can still be honoured
+        /// cleanly (see the comment in [`finish_once`]).
+        CancelledBeforePublish,
+        /// The staged file's checksum diverges from the source's. Not a break — a spoilt
+        /// transfer, exactly as the ordinary path already treats it.
+        ChecksumMismatch,
+    }
+
+    /// Why an attempt at the checksum-or-publish phase could not be completed.
+    enum FinishBreak {
+        /// A break in the connection, or the server not answering — worth trying again.
+        Retriable(String),
+        /// Something else: not a connection trouble, and retrying it would not help.
+        Fatal(AppError),
+    }
+
+    /// Turn a break during the checksum comparison into what it means for retrying.
+    fn classify_ssh(e: crate::ssh::SshError) -> FinishBreak {
+        classify_upload(UploadError::from(e))
+    }
+
+    /// The same, for a break during publishing — `upload::publish` already returns
+    /// `UploadError`, so there is nothing to convert.
+    fn classify_upload(e: UploadError) -> FinishBreak {
+        if e.is_retriable() {
+            FinishBreak::Retriable(e.to_string())
+        } else {
+            FinishBreak::Fatal(AppError::new(ErrorCode::Internal).with_cause(e))
+        }
+    }
+
+    /// One attempt: compare the checksum (when asked to) and publish.
+    ///
+    /// `verify_checksum` is `false` only right after a fresh reconnect found the file
+    /// already published — there is nothing left on this attempt to verify by hand, because
+    /// [`locate`] has already looked.
+    async fn finish_once(
+        conn: &crate::ssh::Connection,
+        ctx: &crate::tasks::engine::TaskContext,
+        plan: &UploadPlan,
+        ours: &str,
+        verify_checksum: bool,
+    ) -> std::result::Result<FinishStep, FinishBreak> {
+        if verify_checksum {
+            match checksum::remote(conn, &plan.remote_temp).await {
+                Ok(theirs) => {
+                    if !checksum::matches(ours, &theirs) {
+                        return Ok(FinishStep::ChecksumMismatch);
+                    }
+                }
+                Err(e) => {
+                    // ⚠ **A checksum failure is not always a checksum failure** (T570, found
+                    // by the reconnect test itself:
+                    // `a_cancellation_after_a_rediscovered_publish_ends_cancelled_with_a_
+                    // notice` failed here on its first real run). Nothing else in this whole
+                    // codebase ever renames `remote_temp` away except `publish`, a few lines
+                    // below — so on the very same connection, in the very same attempt, "the
+                    // staged file is gone" can only mean one thing: `publish` from an EARLIER
+                    // attempt actually went through on the server, and only the
+                    // acknowledgement of *that* attempt's success — not this one's — never
+                    // made it back before the connection seemed to die and a retry began.
+                    // Classifying that as a plain `Failed` (not retriable) would report a
+                    // completed upload as an internal error, one connection recovery away
+                    // from the every other case this whole phase exists to catch. So it is
+                    // asked about directly, the same way the reconnect loop above already
+                    // asks: not guessed at from the sha256sum's stderr text, but from what
+                    // the server actually has.
+                    return match locate(conn, plan).await {
+                        Ok(Progress::Published) => Ok(FinishStep::Done),
+                        // Genuinely still staged: the checksum failure was about something
+                        // else — corruption, permissions — and the original classification
+                        // stands.
+                        Ok(Progress::Staged) => Err(classify_ssh(e)),
+                        // Neither file is there any longer: not an ordinary break, and not a
+                        // rediscovered publish either — something else removed the staged
+                        // file. The same honest failure `checksum_and_publish`'s own
+                        // reconnect loop gives this case, reached here instead because this
+                        // attempt never left the connection it started on.
+                        Ok(Progress::Gone) => Err(FinishBreak::Fatal(
+                            AppError::new(ErrorCode::Internal).with_cause(format!(
+                                "neither {} nor {} is on the server any longer — \
+                                     something else removed the staged file while this \
+                                     upload was running",
+                                plan.remote_final, plan.remote_temp
+                            )),
+                        )),
+                        // The server would not say either way: nothing has been learnt
+                        // beyond what the original failure already said, so that is what is
+                        // reported.
+                        Err(_) => Err(classify_ssh(e)),
+                    };
+                }
+            }
+        }
+
+        // The last point a cancellation can still be turned away cleanly (T503): after this,
+        // the file is either about to be renamed into serving or already has been, and there
+        // is no undoing a rename a viewer may already be watching through.
+        if ctx.is_cancelled() {
+            return Ok(FinishStep::CancelledBeforePublish);
+        }
+
+        upload::publish(conn, plan).await.map_err(classify_upload)?;
+        Ok(FinishStep::Done)
+    }
+
+    /// What actually stands on the server for this plan (T570), told apart in the fewest
+    /// round trips: published already, still staged, or neither.
+    enum Progress {
+        /// `remote_final` is there, the size the source is.
+        Published,
+        /// `remote_final` is not there, but `remote_temp` still is.
+        Staged,
+        /// Neither is there.
+        Gone,
+    }
+
+    /// Ask the server what it actually has, after reconnecting.
+    ///
+    /// **Size is enough, and does not need a second checksum pass.** `publish` is a rename
+    /// on one file system (`ensure_staging` refuses any other kind), and nothing but this
+    /// same upload ever writes to `remote_temp` under this name — so a `remote_final` of
+    /// exactly the source's length is that same file, moved, not a coincidence to be
+    /// re-verified at the cost of reading it all again.
+    async fn locate(conn: &crate::ssh::Connection, plan: &UploadPlan) -> upload::Result<Progress> {
+        if let Some(size) = upload::remote_file_size(conn, &plan.remote_final).await? {
+            if size == plan.total_bytes {
+                return Ok(Progress::Published);
+            }
+            // Present, but not the size expected: not evidence either way about *this*
+            // publish (a leftover of some other name, or a previous version) — fall through
+            // exactly as though nothing had been found under the final name at all.
+        }
+        if upload::remote_file_size(conn, &plan.remote_temp)
+            .await?
+            .is_some()
+        {
+            return Ok(Progress::Staged);
+        }
+        Ok(Progress::Gone)
+    }
+
+    /// Where the checksum-and-publish phase, run through its own retry loop, ended up.
+    enum FinishOutcome {
+        /// The file is in serving. `bool` — whether the connection carrying it was opened
+        /// inside this loop and so must be closed by the caller (the one passed in belongs
+        /// to `run_upload`, which closes it itself).
+        Published(crate::ssh::Connection, bool),
+        /// A cancellation was honoured — cleanup already ran on whichever connection was
+        /// open when it was.
+        Cancelled,
+    }
+
+    fn too_many_finish_breaks() -> AppError {
+        AppError::new(ErrorCode::SshUnreachable).with_detail(
+            Detail::new(DetailCode::UploadTooManyBreaks)
+                .with("attempts", FINISH_MAX_ATTEMPTS as u64),
+        )
+    }
+
+    /// The checksum comparison and the entry into serving, reconnecting through a break at
+    /// either point (T570).
+    ///
+    /// **Reasons about what the server actually has, rather than assuming the worst.** A
+    /// break can land after the very thing it interrupted has already gone through — the
+    /// `mv` in `publish` finishes on the server microseconds before the acknowledgement is
+    /// lost — and blindly repeating the work would at best waste a checksum pass and at
+    /// worst publish over a file a viewer has already started watching. So every reconnect
+    /// asks [`locate`] first and only redoes what [`locate`] shows is still undone.
+    async fn checksum_and_publish(
+        conn: &crate::ssh::Connection,
+        ctx: &crate::tasks::engine::TaskContext,
+        secrets: &dyn crate::store::secrets::SecretStore,
+        profile: &crate::domain::server_profile::ServerProfile,
+        plan: &UploadPlan,
+        ours: &str,
+    ) -> std::result::Result<FinishOutcome, AppError> {
+        let mut active = conn.clone();
+        let mut opened_here = false;
+        let mut have_connection = true;
+        let mut verify_checksum = true;
+        let mut delay = FIRST_RETRY_DELAY;
+
+        for attempt in 1..=FINISH_MAX_ATTEMPTS {
+            if have_connection {
+                match finish_once(&active, ctx, plan, ours, verify_checksum).await {
+                    Ok(FinishStep::Done) => {
+                        return Ok(FinishOutcome::Published(active, opened_here))
+                    }
+                    Ok(FinishStep::CancelledBeforePublish) => {
+                        upload::cleanup(&active, &plan.remote_temp).await;
+                        if opened_here {
+                            active.close().await;
+                        }
+                        return Ok(FinishOutcome::Cancelled);
+                    }
+                    Ok(FinishStep::ChecksumMismatch) => {
+                        // The file does not enter serving, and we clean up after ourselves:
+                        // a spoilt transfer must leave no trace (FR-032, FR-038).
+                        upload::cleanup(&active, &plan.remote_temp).await;
+                        if opened_here {
+                            active.close().await;
+                        }
+                        return Err(AppError::new(ErrorCode::ChecksumMismatch)
+                            .detail(DetailCode::UploadChecksumMismatch));
+                    }
+                    Err(FinishBreak::Fatal(e)) => {
+                        if opened_here {
+                            active.close().await;
+                        }
+                        return Err(e);
+                    }
+                    Err(FinishBreak::Retriable(reason)) => {
+                        tracing::warn!(
+                            attempt,
+                            reason = %reason,
+                            "the checksum-or-publish phase broke off; reconnecting"
+                        );
+                        if opened_here {
+                            active.close().await;
+                        }
+                        have_connection = false;
+                    }
+                }
+            }
+
+            if attempt == FINISH_MAX_ATTEMPTS {
+                return Err(too_many_finish_breaks());
+            }
+            if wait_before_retry(ctx, &mut delay).await == Waited::Cancelled {
+                return cancel_during_finish(secrets, profile, plan).await;
+            }
+
+            match gate::open(secrets, profile, Intent::Change).await {
+                Ok(opened) => match locate(&opened.conn, plan).await {
+                    Ok(Progress::Published) => {
+                        return Ok(FinishOutcome::Published(opened.conn, true))
+                    }
+                    Ok(Progress::Staged) => {
+                        active = opened.conn;
+                        opened_here = true;
+                        have_connection = true;
+                        verify_checksum = true;
+                    }
+                    Ok(Progress::Gone) => {
+                        // Not "an ordinary break" any longer: something else removed the
+                        // staged file between attempts, and there is nothing left to retry
+                        // towards. Not retried forever — a bar the person is owed an honest
+                        // answer about rather than a task that spins until the attempt
+                        // ceiling.
+                        opened.conn.close().await;
+                        return Err(AppError::new(ErrorCode::Internal).with_cause(format!(
+                            "neither {} nor {} is on the server any longer — something else \
+                             removed the staged file while this upload was reconnecting",
+                            plan.remote_final, plan.remote_temp
+                        )));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "could not learn what is on the server after reconnecting"
+                        );
+                        opened.conn.close().await;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "could not reconnect during the checksum-or-publish phase"
+                    );
+                }
+            }
+        }
+        unreachable!("the loop above returns on every path by its last iteration")
+    }
+
+    /// Whether a cancellation during the checksum-or-publish phase's own retry wait may be
+    /// honoured (T570).
+    ///
+    /// **The same "window that cannot be closed" the ordinary path already lives with**,
+    /// reached from a different direction: the break that put this phase into its retry loop
+    /// may itself have landed after the publish already went through and only its
+    /// acknowledgement was lost. So before honouring the stop, one more connection is opened
+    /// for the sole purpose of finding out — best effort, exactly like `sweep_after_cancelling`:
+    /// a failure to check or to clean up must not turn an honoured cancellation into a
+    /// reported failure.
+    async fn cancel_during_finish(
+        secrets: &dyn crate::store::secrets::SecretStore,
+        profile: &crate::domain::server_profile::ServerProfile,
+        plan: &UploadPlan,
+    ) -> std::result::Result<FinishOutcome, AppError> {
+        match gate::open(secrets, profile, Intent::Change).await {
+            Ok(opened) => match locate(&opened.conn, plan).await {
+                Ok(Progress::Published) => Ok(FinishOutcome::Published(opened.conn, true)),
+                Ok(Progress::Staged) | Ok(Progress::Gone) => {
+                    upload::cleanup(&opened.conn, &plan.remote_temp).await;
+                    opened.conn.close().await;
+                    Ok(FinishOutcome::Cancelled)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "could not learn what is on the server while honouring a cancellation"
+                    );
+                    opened.conn.close().await;
+                    Ok(FinishOutcome::Cancelled)
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "a cancelled transfer's leftovers could not be checked or removed after \
+                     the checksum-or-publish phase broke off"
+                );
+                Ok(FinishOutcome::Cancelled)
+            }
+        }
     }
 
     /// Put a file into the catalogue under the medium it belongs to.

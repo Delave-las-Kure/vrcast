@@ -110,6 +110,9 @@ mod process_tree;
 #[path = "integration/upload_live.rs"]
 mod upload_live;
 
+#[path = "integration/upload_finish_network_cut.rs"]
+mod upload_finish_network_cut;
+
 #[path = "integration/scenario_prepare.rs"]
 mod scenario_prepare;
 #[path = "integration/scenario_upload.rs"]
