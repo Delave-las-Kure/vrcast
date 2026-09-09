@@ -558,23 +558,53 @@ async fn send(job: &BuildJob<'_>, local: &Path, name: &str) -> Result<(), BuildE
     Ok(())
 }
 
-async fn write_master(conn: &Connection, path: &str, body: &str) -> Result<(), BuildError> {
+/// Write `master.m3u8` staged-and-renamed, the way [`send`] already writes a variant (T572).
+///
+/// **Why this had to change and `send` did not have to.** On a rebuild `master.m3u8` almost
+/// always already exists and is already being served — that is the whole point of a rebuild.
+/// Writing straight into it left a window, exactly as an unstaged variant write would have,
+/// where a viewer's player could read a plain description mid-write and get a truncated or
+/// empty file: not corrupt bytes inside a segment, but a playlist that names none of them.
+/// `-f` on the final `mv` (unlike `send`'s bare `mv`) is deliberate and not an oversight:
+/// `path` is expected to exist here, the same case `server::upload::publish` already uses
+/// `-f` for, and `send`'s bare `mv` is right for exactly the opposite reason — there `target`
+/// is ordinarily a fresh name.
+///
+/// **Public rather than private, like [`variant_already_there`] a little above it in this
+/// file** (T529): the point being checked here only exists on a real server — what a real
+/// SFTP session does when its write is cut short — and the check for it lives in the
+/// integration tests, in a separate crate, which can only reach what this module exports.
+pub async fn write_master(conn: &Connection, path: &str, body: &str) -> Result<(), BuildError> {
     use tokio::io::AsyncWriteExt;
+
+    let staged = format!("{path}.part");
 
     let sftp = conn.sftp().await?;
     let written = async {
-        let mut file = sftp.create(path.to_owned()).await?;
+        let mut file = sftp.create(staged.clone()).await?;
         file.write_all(body.as_bytes()).await?;
         file.flush().await?;
         file.shutdown().await?;
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     }
     .await;
-    written.map_err(|e| {
-        BuildError::Ssh(crate::ssh::SshError::sftp(
+    if let Err(e) = written {
+        // Best-effort, exactly as `send` already does: the write's own failure is what is
+        // owed to the caller, and a cleanup that also fails must not bury it.
+        let _ = sftp.remove_file(staged.clone()).await;
+        return Err(BuildError::Ssh(crate::ssh::SshError::sftp(
             crate::store::redact::safe_display(&*e),
-        ))
-    })
+        )));
+    }
+
+    conn.exec(&format!(
+        "mv -f {} {}",
+        crate::server::shell_quote(&staged),
+        crate::server::shell_quote(path)
+    ))
+    .await?
+    .require_ok("could not put master.m3u8 in place")?;
+    Ok(())
 }
 
 /// ffprobe reports a level as a number — 30 is 3.0, 51 is 5.1 — and the description wants

@@ -116,6 +116,9 @@ mod upload_live;
 #[path = "integration/upload_finish_network_cut.rs"]
 mod upload_finish_network_cut;
 
+#[path = "integration/write_master.rs"]
+mod write_master;
+
 #[path = "integration/scenario_prepare.rs"]
 mod scenario_prepare;
 #[path = "integration/scenario_upload.rs"]
