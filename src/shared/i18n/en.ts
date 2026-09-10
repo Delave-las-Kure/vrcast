@@ -1190,6 +1190,8 @@ export const en: Catalogue = {
         "Follow it in the Tasks section. If the application is closed, it continues from where it got to at the next start.",
       startedBatchAll: "{n} {n|plural:file} queued.",
       startedBatchPartial: "{ok} of {total} {total|plural:file} queued.",
+      orphanedMediaWarning: "A new medium “{title}” was created, but no file made it into it.",
+      orphanedMediaDelete: "Delete the empty medium",
       checking: "Checking…",
       start: "Start the upload",
     },

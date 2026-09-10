@@ -25,6 +25,15 @@
  * `PreflightWarnings` the single-file flow shows comes up for that one file, and once
  * agreed to, the agreement holds for the rest of this run's remaining files — nobody
  * is asked the same question once per file in a series that all share one cause.
+ *
+ * T577 — a batch that creates its medium inline can still end up with that medium
+ * holding no files at all: every file in the pack failed, or every liftable refusal
+ * (T576) was declined rather than agreed to. The medium is real on the server and
+ * empty, and the owner's call was to say so plainly rather than roll it back
+ * silently — no deletion in this codebase ever happens without an explicit click
+ * (see `ConfirmDeleteDialog`'s own doc-comment). `batchSummary` names it and offers
+ * deleting it right there, through the same unconfirmed-then-confirmed dialog
+ * `LibraryScreen` already uses for every other deletion.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -37,6 +46,7 @@ import { fill, renderError } from "../../shared/i18n/render";
 import { isReady, useActiveServer, useServers } from "../servers/store";
 import { basename } from "../shared/names";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { ConfirmDeleteDialog } from "../library/dialogs/MediaDialogs";
 import { PreflightWarnings, canConfirm } from "./PreflightWarnings";
 
 /**
@@ -60,11 +70,21 @@ const LIMITS: Array<{ key: keyof Catalogue["ui"]["upload"]; value: number | null
  */
 const NEW_MEDIA_MARKER = "__new__";
 
+/** A medium created inline for this run, named so it can be offered for deletion. */
+interface NewMedium {
+  id: string;
+  title: string;
+}
+
 /** What came of queuing a pack of files: how many made it, and what stopped the rest. */
 interface BatchSummary {
   ok: number;
   total: number;
   failures: Array<{ name: string; message: string; hint: string }>;
+  /** T577 — set only when this run created its medium inline AND not one file of the
+   *  pack made it in: the medium exists on the server, real, and empty. `null` covers
+   *  every other case — an existing medium was used, or at least one file landed. */
+  orphanedMedia: NewMedium | null;
 }
 
 /**
@@ -79,6 +99,10 @@ interface BatchRun {
   ok: number;
   failures: BatchSummary["failures"];
   forceConfirmed: boolean;
+  /** T577 — non-null only when `resolvedMediaId` names a medium THIS run created,
+   *  rather than one already on the server. Carried through pause/resume unchanged
+   *  so the final summary can still tell the two apart once the run finishes. */
+  newMedia: NewMedium | null;
 }
 
 export function UploadScreen() {
@@ -107,6 +131,17 @@ export function UploadScreen() {
   const [batchPreflight, setBatchPreflight] = useState<{ error: AppError; run: BatchRun } | null>(
     null,
   );
+  /** T577 — the orphaned-medium delete flow, offered from `batchSummary`. `null` when
+   *  nothing is being asked. Mirrors `LibraryScreen`'s own dialog-open state: the first
+   *  `mediaDelete` call goes unconfirmed, and the core's refusal is what supplies the
+   *  numbers `ConfirmDeleteDialog` shows (there is nothing to confirm blind). Failures
+   *  from either call go through the same `error`/`busy` the rest of the screen already
+   *  uses — a second pair of flags would say nothing `busy`/`error` cannot already say.
+   */
+  const [orphanDelete, setOrphanDelete] = useState<{
+    media: NewMedium;
+    consequences: string;
+  } | null>(null);
   const t = useT();
   const { lang } = useLang();
   const u = t.ui.upload;
@@ -163,6 +198,7 @@ export function UploadScreen() {
     setStartedTask(null);
     setBatchSummary(null);
     setBatchPreflight(null);
+    setOrphanDelete(null);
   };
 
   /**
@@ -179,6 +215,7 @@ export function UploadScreen() {
     setStartedTask(null);
     setBatchSummary(null);
     setBatchPreflight(null);
+    setOrphanDelete(null);
   };
 
   const pick = async () => {
@@ -216,7 +253,7 @@ export function UploadScreen() {
   const runBatch = async (run: BatchRun) => {
     if (!active) return;
     let { index, ok } = run;
-    const { paths, resolvedMediaId, forceConfirmed } = run;
+    const { paths, resolvedMediaId, forceConfirmed, newMedia } = run;
     const failures = [...run.failures];
     setBusy(true);
 
@@ -238,7 +275,10 @@ export function UploadScreen() {
       } catch (e) {
         const err = toAppError(e);
         if (!forceConfirmed && canConfirm(err)) {
-          setBatchPreflight({ error: err, run: { paths, index, resolvedMediaId, ok, failures, forceConfirmed } });
+          setBatchPreflight({
+            error: err,
+            run: { paths, index, resolvedMediaId, ok, failures, forceConfirmed, newMedia },
+          });
           setBusy(false);
           return;
         }
@@ -251,7 +291,11 @@ export function UploadScreen() {
     setStartedTask(null);
     setPreflight(null);
     setBatchPreflight(null);
-    setBatchSummary({ ok, total: paths.length, failures });
+    // T577 — this run created its own medium AND not one file of the pack made it
+    // in: the medium sits on the server, real and empty, with nothing pointing back
+    // at it from this screen. Named here rather than left for the library to notice.
+    const orphanedByThisRun = newMedia && ok === 0 ? newMedia : null;
+    setBatchSummary({ ok, total: paths.length, failures, orphanedMedia: orphanedByThisRun });
     setBusy(false);
   };
 
@@ -261,9 +305,14 @@ export function UploadScreen() {
     setError(null);
 
     let resolvedMediaId: string | null = mediaId === "" ? null : mediaId;
+    // T577 — remembered so a batch that ends with nothing queued can name exactly
+    // this medium in its summary. `null` for an existing medium: only one THIS run
+    // made can be orphaned by it, never one that was already on the server.
+    let newMedia: NewMedium | null = null;
     if (usingNewMedia) {
       try {
         resolvedMediaId = await ipc.mediaCreate(active.id, newMediaTitle.trim(), null);
+        newMedia = { id: resolvedMediaId, title: newMediaTitle.trim() };
       } catch (e) {
         // A pack with no real medium behind it is not queued at all — not one file of
         // it, if the person explicitly asked for a new medium to hold the whole pack.
@@ -311,8 +360,53 @@ export function UploadScreen() {
       ok: 0,
       failures: [],
       forceConfirmed: false,
+      newMedia,
     });
   };
+
+  /**
+   * T577 — ask what deleting the orphaned medium would cost, the same two-call shape
+   * `LibraryScreen.askBeforeDelete` uses: an unconfirmed `mediaDelete` is refused with
+   * `CONFIRMATION_REQUIRED`, carrying the numbers (here always zero files, but the
+   * core is still the one saying so) that `ConfirmDeleteDialog` shows. Nothing here is
+   * deleted silently — the button only ever starts this same confirm-then-act path.
+   */
+  const askDeleteOrphan = async (media: NewMedium) => {
+    if (!active) return;
+    try {
+      await ipc.mediaDelete(active.id, media.id, false);
+      // The core agreed without confirmation. That should not happen — but if it has,
+      // the summary must stop naming a medium that is no longer there.
+      setBatchSummary((prev) => (prev ? { ...prev, orphanedMedia: null } : prev));
+    } catch (e) {
+      const err = toAppError(e);
+      if (err.code === "CONFIRMATION_REQUIRED") {
+        setOrphanDelete({ media, consequences: renderError(err, t, lang).message });
+      } else {
+        setError(err);
+      }
+    }
+  };
+
+  /** T577 — carry out the deletion asked for above, once agreed to. */
+  const confirmDeleteOrphan = async () => {
+    if (!active || !orphanDelete) return;
+    setBusy(true);
+    try {
+      await ipc.mediaDelete(active.id, orphanDelete.media.id, true);
+      setOrphanDelete(null);
+      setBatchSummary((prev) => (prev ? { ...prev, orphanedMedia: null } : prev));
+    } catch (e) {
+      setError(toAppError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // A plain local rather than `batchSummary.orphanedMedia` used inline: TypeScript
+  // does not carry a property's narrowing into a closure (the `onClick` below), but it
+  // does carry a `const` local's — and this is read from three places in the JSX.
+  const orphanedMedia = batchSummary?.orphanedMedia ?? null;
 
   const ready =
     active !== null &&
@@ -350,9 +444,7 @@ export function UploadScreen() {
                 <button id="upload-file" onClick={() => void pick()} disabled={busy}>
                   {u.pickFile}
                 </button>
-                {localPaths.length === 1 && (
-                  <span className="form__value">{localPaths[0]}</span>
-                )}
+                {localPaths.length === 1 && <span className="form__value">{localPaths[0]}</span>}
               </div>
               {localPaths.length > 1 && (
                 <ul className="upload__file-list">
@@ -502,6 +594,23 @@ export function UploadScreen() {
                       )}
                 </strong>
                 <p className="notice__hint">{u.startedHint}</p>
+                {orphanedMedia && (
+                  <div className="notice__orphan">
+                    <p className="notice__hint">
+                      {fill(u.orphanedMediaWarning, { title: orphanedMedia.title }, t, lang)}
+                    </p>
+                    <div className="notice__actions">
+                      <button
+                        type="button"
+                        className="button--danger"
+                        onClick={() => void askDeleteOrphan(orphanedMedia)}
+                        disabled={busy}
+                      >
+                        {u.orphanedMediaDelete}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {batchSummary.failures.length > 0 && (
                   <ul>
                     {batchSummary.failures.map((f) => (
@@ -514,6 +623,16 @@ export function UploadScreen() {
                 )}
               </div>
             </div>
+          )}
+
+          {orphanDelete && (
+            <ConfirmDeleteDialog
+              what={orphanDelete.media.title}
+              consequences={orphanDelete.consequences}
+              busy={busy}
+              onCancel={() => setOrphanDelete(null)}
+              onConfirm={() => void confirmDeleteOrphan()}
+            />
           )}
 
           <div className="form__actions">

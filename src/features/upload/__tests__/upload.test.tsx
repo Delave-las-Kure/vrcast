@@ -31,6 +31,7 @@ const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<() => Promise<string[] | null>>();
 const mockTasksReorder = vi.fn<(ids: string[]) => Promise<number>>();
 const mockMediaCreate = vi.fn<(...a: unknown[]) => Promise<string>>();
+const mockMediaDelete = vi.fn<(...a: unknown[]) => Promise<string>>();
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
@@ -49,6 +50,7 @@ vi.mock("../../../shared/ipc", async () => {
       uploadResume: vi.fn(),
       tasksReorder: (ids: string[]) => mockTasksReorder(ids),
       mediaCreate: (...a: unknown[]) => mockMediaCreate(...a),
+      mediaDelete: (...a: unknown[]) => mockMediaDelete(...a),
     }),
   };
 });
@@ -442,6 +444,199 @@ describe("T576 — a pack of files can answer a liftable refusal mid-run", () =>
     );
     expect(screen.queryByText(ru.ui.preflight.uploadAnyway)).not.toBeInTheDocument();
     expect(mockUploadStart).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("T577 — a batch that creates its medium inline can end up orphaning it", () => {
+  /** Choose two files, ask for a brand-new medium, and fill in its title. */
+  async function chooseFilesForANewMedium(title: string) {
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.upload.newMediaLabel), {
+      target: { value: title },
+    });
+  }
+
+  it("warns and offers deletion when every file in the pack fails outright", async () => {
+    // Non-liftable refusals (REMOTE_DISK_FULL): the run never pauses for agreement,
+    // it just records both as failures and reaches the end with ok === 0.
+    mockMediaCreate.mockResolvedValue("new-media-orphan-1");
+    mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
+    await chooseFilesForANewMedium("Осиротевший сериал");
+
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(fill(ru.ui.upload.startedBatchPartial, { ok: 0, total: 2 }, ru, "ru")),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(
+        fill(ru.ui.upload.orphanedMediaWarning, { title: "Осиротевший сериал" }, ru, "ru"),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.upload.orphanedMediaDelete)).toBeInTheDocument();
+  });
+
+  it("warns when every file's liftable refusal is declined, not just failed outright", async () => {
+    // The T576 path: VIEWERS_ACTIVE can be argued with, but the person says no every
+    // time — the narrower route tasks.md's own trade-off note describes post-T576.
+    mockMediaCreate.mockResolvedValue("new-media-orphan-2");
+    mockUploadStart.mockRejectedValue({ code: "VIEWERS_ACTIVE", details: [] } as AppError);
+    await chooseFilesForANewMedium("Отклонённый сериал");
+
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(fill(ru.ui.upload.startedBatchPartial, { ok: 0, total: 2 }, ru, "ru")),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(
+        fill(ru.ui.upload.orphanedMediaWarning, { title: "Отклонённый сериал" }, ru, "ru"),
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not warn when at least one file of the pack lands", async () => {
+    mockMediaCreate.mockResolvedValue("new-media-3");
+    mockUploadStart.mockRejectedValueOnce({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
+    mockUploadStart.mockResolvedValueOnce("t-9");
+    await chooseFilesForANewMedium("Наполовину залитый сериал");
+
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(fill(ru.ui.upload.startedBatchPartial, { ok: 1, total: 2 }, ru, "ru")),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText(
+        fill(ru.ui.upload.orphanedMediaWarning, { title: "Наполовину залитый сериал" }, ru, "ru"),
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not warn when the batch used a medium already on the server", async () => {
+    // The medium existed before this run — deleting it would take real files with
+    // it (or at least a medium the person made on purpose), never this screen's call.
+    mockLibraryList.mockResolvedValue({
+      ...EMPTY_LIBRARY,
+      media: [mediaView({ id: "m1", title: "Существующий сериал" })],
+    });
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "m1" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(fill(ru.ui.upload.startedBatchPartial, { ok: 0, total: 2 }, ru, "ru")),
+      ).toBeInTheDocument(),
+    );
+    expect(mockMediaCreate).not.toHaveBeenCalled();
+    expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument();
+  });
+
+  it("clicking delete asks the core, and confirming really deletes the orphaned medium", async () => {
+    mockMediaCreate.mockResolvedValue("new-media-4");
+    mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
+    await chooseFilesForANewMedium("Удаляемый сериал");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await screen.findByText(ru.ui.upload.orphanedMediaDelete);
+
+    // The first call goes unconfirmed, same shape as `LibraryScreen.askBeforeDelete`:
+    // the core is the one naming the consequences, even when they are all zero.
+    mockMediaDelete.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        {
+          key: "CONFIRM_DELETE",
+          params: { what: "Удаляемый сериал", files: 0, bytes: 0 },
+        },
+      ],
+    } as AppError);
+    fireEvent.click(screen.getByText(ru.ui.upload.orphanedMediaDelete));
+
+    await waitFor(() =>
+      expect(mockMediaDelete).toHaveBeenNthCalledWith(1, "s1", "new-media-4", false),
+    );
+    // The refusal's own numbers are what is shown — not a blind "are you sure?".
+    expect(await screen.findByText(/Будет снято 0/)).toBeInTheDocument();
+
+    mockMediaDelete.mockResolvedValueOnce("new-media-4");
+    fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
+
+    await waitFor(() =>
+      expect(mockMediaDelete).toHaveBeenNthCalledWith(2, "s1", "new-media-4", true),
+    );
+    // Once deleted, the summary must stop naming a medium that is no longer there.
+    await waitFor(() =>
+      expect(
+        screen.queryByText(
+          fill(ru.ui.upload.orphanedMediaWarning, { title: "Удаляемый сериал" }, ru, "ru"),
+        ),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("declining the delete confirmation deletes nothing and keeps the warning", async () => {
+    mockMediaCreate.mockResolvedValue("new-media-5");
+    mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
+    await chooseFilesForANewMedium("Оставшийся сериал");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await screen.findByText(ru.ui.upload.orphanedMediaDelete);
+
+    mockMediaDelete.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "Оставшийся сериал", files: 0, bytes: 0 } },
+      ],
+    } as AppError);
+    fireEvent.click(screen.getByText(ru.ui.upload.orphanedMediaDelete));
+    await screen.findByText(ru.ui.library.deleteNo);
+
+    fireEvent.click(screen.getByText(ru.ui.library.deleteNo));
+
+    expect(mockMediaDelete).toHaveBeenCalledTimes(1);
+    expect(mockMediaDelete).not.toHaveBeenCalledWith("s1", "new-media-5", true);
+    expect(
+      screen.getByText(
+        fill(ru.ui.upload.orphanedMediaWarning, { title: "Оставшийся сериал" }, ru, "ru"),
+      ),
+    ).toBeInTheDocument();
   });
 });
 

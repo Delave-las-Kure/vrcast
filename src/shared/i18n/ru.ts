@@ -1181,6 +1181,8 @@ const ui = {
       "Следить за ней — в разделе «Задачи». Если закрыть приложение, она продолжится с достигнутого места при следующем запуске.",
     startedBatchAll: "{n} {n|plural:file} поставлено в очередь.",
     startedBatchPartial: "В очередь поставлено {ok} из {total} {total|plural:file}.",
+    orphanedMediaWarning: "Создано новое медиа «{title}», но в него не попало ни одного файла.",
+    orphanedMediaDelete: "Удалить пустое медиа",
     checking: "Проверяем…",
     start: "Залить",
   },
