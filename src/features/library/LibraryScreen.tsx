@@ -274,6 +274,7 @@ export function LibraryScreen() {
           what={dialog.media.title}
           consequences={dialog.consequences}
           busy={busy}
+          error={dialogError}
           onCancel={() => setDialog(null)}
           onConfirm={() => void act(() => ipc.mediaDelete(active.id, dialog.media.id, true))}
         />
@@ -283,6 +284,7 @@ export function LibraryScreen() {
           what={dialog.path}
           consequences={dialog.consequences}
           busy={busy}
+          error={dialogError}
           onCancel={() => setDialog(null)}
           onConfirm={() => void act(() => ipc.fileDelete(active.id, dialog.path, true))}
         />

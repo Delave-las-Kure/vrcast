@@ -470,6 +470,63 @@ describe("deleting", () => {
     await waitFor(() => expect(screen.queryByText(/Будет снято 1 файл/)).not.toBeInTheDocument());
     expect(mockMediaDelete).not.toHaveBeenCalledWith("srv_1", "m1", true);
   });
+
+  it("T581 — a confirmed delete that fails shows the failure in the dialog instead of hanging", async () => {
+    // The first, unconfirmed call is refused with CONFIRMATION_REQUIRED as always — that
+    // is not the bug. The bug is what happens to the *second*, confirmed call: until T581
+    // its failure had nowhere to be drawn, so the dialog just sat there, busy forever.
+    const refusal: AppError = {
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        {
+          key: "CONFIRM_DELETE",
+          params: { what: "Название фильма", files: 3, bytes: 4_509_715_660 },
+        },
+      ],
+    };
+    mockMediaDelete.mockRejectedValueOnce(refusal);
+    draw();
+
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
+    await screen.findByText(/Будет снято 3 файла/);
+
+    mockMediaDelete.mockRejectedValueOnce({ code: "INTERNAL" } satisfies AppError);
+    fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
+
+    const dialog = await screen.findByRole("alertdialog");
+    await waitFor(() =>
+      expect(within(dialog).getByText(ru.errors.INTERNAL.message)).toBeInTheDocument(),
+    );
+
+    // The dialog stayed open — both buttons are still reachable — and busy was
+    // lifted, so trying again is actually possible rather than a dead button.
+    expect(within(dialog).getByText(ru.ui.library.deleteYes)).not.toBeDisabled();
+    expect(within(dialog).getByText(ru.ui.library.deleteNo)).not.toBeDisabled();
+  });
+
+  it("T581 — a confirmed file delete that fails also shows the failure in the dialog", async () => {
+    // Same wrapper (`act`), same bug class, different confirmed call (fileDelete
+    // instead of mediaDelete) — worth its own test since nothing else covered this path.
+    const refusal: AppError = {
+      code: "CONFIRMATION_REQUIRED",
+      details: [{ key: "CONFIRM_DELETE", params: { what: "film_22.mp4", files: 1, bytes: 1024 } }],
+    };
+    mockFileDelete.mockRejectedValueOnce(refusal);
+    draw();
+
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteFile));
+    await screen.findByRole("alertdialog");
+
+    mockFileDelete.mockRejectedValueOnce({ code: "INTERNAL" } satisfies AppError);
+    fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
+
+    const dialog = await screen.findByRole("alertdialog");
+    await waitFor(() =>
+      expect(within(dialog).getByText(ru.errors.INTERNAL.message)).toBeInTheDocument(),
+    );
+  });
 });
 
 describe("renaming", () => {
