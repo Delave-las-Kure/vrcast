@@ -217,6 +217,39 @@ impl AppState {
             state,
         });
     }
+
+    /// Forget the library cache and say that it changed (T578).
+    ///
+    /// The two-line effect `library.rs::invalidate` already gives every mutating library
+    /// command (`media_create`, `media_rename`, `media_delete`, `file_move`, `file_delete`),
+    /// as a method so ordinary callers holding a whole `AppState` reach for it the same way
+    /// they reach for `notify_library_changed`. `upload_start`'s and `ladder_build`'s own
+    /// background code cannot call this — it runs inside `state.tasks.submit(...)`, holding
+    /// only the fields cloned out of `AppState` before submission (`db`, `secrets`, and now
+    /// `events`), not a whole `AppState` — so [`invalidate_library_parts`] gives the same
+    /// effect from those two fields alone.
+    pub fn invalidate_library(&self, server_id: &str) {
+        invalidate_library_parts(&self.db, &self.events, server_id);
+    }
+}
+
+/// The effect [`AppState::invalidate_library`] gives, taking only what it needs (T578).
+///
+/// Split out so background work that has cloned `db` and `events` out of `AppState` — rather
+/// than holding a whole `AppState`, which `upload_start`'s and `ladder_build`'s background
+/// closures deliberately do not (see their own comments) — can still forget the cache and
+/// send the event after writing a manifest, exactly as the five commands in `library.rs` do.
+pub(crate) fn invalidate_library_parts(
+    db: &Db,
+    events: &tokio::sync::broadcast::Sender<AppEvent>,
+    server_id: &str,
+) {
+    if let Err(e) = crate::store::library_cache::forget(db, server_id) {
+        tracing::warn!(server = server_id, error = %e, "the library cache was not cleared");
+    }
+    let _ = events.send(AppEvent::LibraryChanged {
+        server_id: server_id.to_owned(),
+    });
 }
 
 /// The versions of the application and of the server side (FR-128).

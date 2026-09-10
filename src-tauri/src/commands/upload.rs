@@ -158,6 +158,7 @@ pub mod api {
         // Everything is checked — the task goes in.
         let db = state.db.clone();
         let secrets = state.secrets.clone();
+        let events = state.events.clone();
         let plan_request = request.clone();
         let name_for_task = clean_name.clone();
         let total = meta.len();
@@ -167,7 +168,7 @@ pub mod api {
             .submit(TaskKind::Upload, Some(profile.id.clone()), move |ctx| {
                 let request = plan_request;
                 let name = name_for_task;
-                async move { run_upload(db, secrets, ctx, request, name, total).await }
+                async move { run_upload(db, secrets, events, ctx, request, name, total).await }
             })
             .await?;
 
@@ -255,13 +256,14 @@ pub mod api {
 
             let db = state.db.clone();
             let secrets = state.secrets.clone();
+            let events = state.events.clone();
             let name = token.remote_name.clone();
             let total = token.source_size;
 
             let result = state
                 .tasks
                 .resubmit_paused(&task.id, move |ctx| async move {
-                    run_upload(db, secrets, ctx, request, name, total).await
+                    run_upload(db, secrets, events, ctx, request, name, total).await
                 });
 
             match result {
@@ -401,6 +403,7 @@ pub mod api {
     async fn run_upload(
         db: std::sync::Arc<crate::store::db::Db>,
         secrets: std::sync::Arc<dyn crate::store::secrets::SecretStore>,
+        events: tokio::sync::broadcast::Sender<crate::commands::AppEvent>,
         ctx: crate::tasks::engine::TaskContext,
         request: UploadRequest,
         clean_name: String,
@@ -523,6 +526,8 @@ pub mod api {
                             clean_name: &clean_name,
                             request: &request,
                             video_dir: &profile.video_dir,
+                            events: &events,
+                            db: db.as_ref(),
                         },
                     )
                     .await;
@@ -577,6 +582,8 @@ pub mod api {
         clean_name: &'a str,
         request: &'a UploadRequest,
         video_dir: &'a str,
+        events: &'a tokio::sync::broadcast::Sender<crate::commands::AppEvent>,
+        db: &'a crate::store::db::Db,
     }
 
     async fn finish(
@@ -592,6 +599,8 @@ pub mod api {
             clean_name,
             request,
             video_dir,
+            events,
+            db,
         } = job;
         if sent != plan.total_bytes {
             return Err(AppError::new(ErrorCode::Internal).with_detail(
@@ -679,6 +688,14 @@ pub mod api {
                 ctx.set_result(crate::tasks::store::TaskResult {
                     media_id: media_id.to_owned(),
                 });
+
+                // **T578 — a screen open on the library while this upload was running must
+                // learn the manifest changed, the same way the five mutating commands in
+                // `library.rs` already say so.** Only on this branch: the manifest was
+                // actually rewritten by `file_it_under` just above, so the cache is
+                // genuinely stale now — an upload with no `media_id`, or one whose filing
+                // failed, wrote nothing, and there is nothing here to invalidate for.
+                crate::commands::invalidate_library_parts(db, events, &request.server_id);
             }
         }
 

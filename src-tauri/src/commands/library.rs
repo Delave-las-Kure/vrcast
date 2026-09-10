@@ -1021,10 +1021,11 @@ pub mod api {
     }
 
     /// Forget the cache: after a change it certainly no longer matches the server.
+    ///
+    /// A thin wrapper (T578): the two lines now live on `AppState::invalidate_library`,
+    /// shared with `upload_start` and `ladder_build`'s background code, which cannot reach
+    /// this function's `state: &AppState` at all.
     fn invalidate(state: &AppState, server_id: &str) {
-        if let Err(e) = library_cache::forget(&state.db, server_id) {
-            tracing::warn!(server = server_id, error = %e, "the library cache was not cleared");
-        }
-        state.notify_library_changed(server_id);
+        state.invalidate_library(server_id);
     }
 }

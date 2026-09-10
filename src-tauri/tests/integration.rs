@@ -124,6 +124,11 @@ mod upload_finish_network_cut;
 #[path = "integration/write_master.rs"]
 mod write_master;
 
+/// T578 — `upload_start` and `ladder_build` notify `library:changed` after writing the
+/// manifest, matching the five mutating commands in `library.rs`.
+#[path = "integration/library_changed_notify.rs"]
+mod library_changed_notify;
+
 #[path = "integration/scenario_prepare.rs"]
 mod scenario_prepare;
 #[path = "integration/scenario_upload.rs"]
