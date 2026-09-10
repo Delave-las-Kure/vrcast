@@ -131,5 +131,6 @@ it("the scan reaches the screens it is about", () => {
     "features/tasks/TasksPanel.tsx",
     "features/tasks/notifications.tsx",
     "features/upload/PreflightWarnings.tsx",
+    "features/upload/UploadScreen.tsx",
   ]);
 });

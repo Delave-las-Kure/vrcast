@@ -19,6 +19,7 @@ import { fill } from "../../../shared/i18n/render";
 import type {
   AppError,
   LibraryView,
+  MediaView,
   ServerProfile,
   Task,
   TaskOnClose,
@@ -27,8 +28,9 @@ import type {
 const mockUploadStart = vi.fn<(request: unknown) => Promise<string>>();
 const mockLibraryList = vi.fn<() => Promise<LibraryView>>();
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
-const mockOpen = vi.fn<() => Promise<string | null>>();
+const mockOpen = vi.fn<() => Promise<string[] | null>>();
 const mockTasksReorder = vi.fn<(ids: string[]) => Promise<number>>();
+const mockMediaCreate = vi.fn<(...a: unknown[]) => Promise<string>>();
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
@@ -46,6 +48,7 @@ vi.mock("../../../shared/ipc", async () => {
       uploadStart: (request: unknown) => mockUploadStart(request),
       uploadResume: vi.fn(),
       tasksReorder: (ids: string[]) => mockTasksReorder(ids),
+      mediaCreate: (...a: unknown[]) => mockMediaCreate(...a),
     }),
   };
 });
@@ -85,11 +88,24 @@ const EMPTY_LIBRARY: LibraryView = {
   stale: false,
 };
 
+function mediaView(over: Partial<MediaView> = {}): MediaView {
+  return {
+    id: "m1",
+    title: "Сериал",
+    slug: "serial",
+    files: [],
+    ladders: [],
+    total_bytes: 0,
+    created_at: "2026-08-01T00:00:00Z",
+    ...over,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockServersList.mockResolvedValue([profile()]);
   mockLibraryList.mockResolvedValue(EMPTY_LIBRARY);
-  mockOpen.mockResolvedValue("F:\\видео\\фильм 22.mp4");
+  mockOpen.mockResolvedValue(["F:\\видео\\фильм 22.mp4"]);
   mockUploadStart.mockResolvedValue("t-1");
   mockTasksReorder.mockResolvedValue(2);
 });
@@ -186,6 +202,114 @@ describe("the upload screen", () => {
       await screen.findByText(fill(ru.ui.upload.notReady, { name: "Боевой" }, ru, "ru")),
     ).toBeInTheDocument();
     expect(screen.queryByText(ru.ui.upload.start)).not.toBeInTheDocument();
+  });
+});
+
+describe("T573 — a pack of files bound to one medium", () => {
+  it("each file queues its own upload with the same media_id", async () => {
+    mockLibraryList.mockResolvedValue({
+      ...EMPTY_LIBRARY,
+      media: [mediaView({ id: "m1", title: "Сериал" })],
+    });
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    await screen.findByText("s01e02.mp4");
+
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "m1" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
+    expect(mockUploadStart).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        media_id: "m1",
+        remote_name: "s01e01.mp4",
+        confirmed: false,
+      }),
+    );
+    expect(mockUploadStart).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        media_id: "m1",
+        remote_name: "s01e02.mp4",
+        confirmed: false,
+      }),
+    );
+  });
+
+  it("creates a new medium inline and uses it for every file", async () => {
+    mockMediaCreate.mockResolvedValue("new-media-1");
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.upload.newMediaLabel), {
+      target: { value: "Новый сериал" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() =>
+      expect(mockMediaCreate).toHaveBeenCalledWith("s1", "Новый сериал", null),
+    );
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
+    expect(mockUploadStart).toHaveBeenCalledWith(
+      expect.objectContaining({ media_id: "new-media-1" }),
+    );
+  });
+
+  it("a single file's flow is untouched: creating a medium for it too", async () => {
+    mockMediaCreate.mockResolvedValue("new-media-2");
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    await chooseAFile();
+
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.upload.newMediaLabel), {
+      target: { value: "Один фильм" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() =>
+      expect(mockMediaCreate).toHaveBeenCalledWith("s1", "Один фильм", null),
+    );
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+    expect(mockUploadStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media_id: "new-media-2",
+        local_path: "F:\\видео\\фильм 22.mp4",
+        remote_name: "фильм 22.mp4",
+        confirmed: false,
+      }),
+    );
   });
 });
 
