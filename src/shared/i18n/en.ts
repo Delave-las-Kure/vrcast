@@ -1174,6 +1174,8 @@ export const en: Catalogue = {
       newMediaLabel: "Title of the new medium",
       newMediaPlaceholder: "Title",
       multipleNamesHint: "Names in service will be taken from the file names — no line-by-line editing.",
+      dropFile: "Remove",
+      dropOneFile: "Remove {name} from the list",
       fieldLimit: "Cap the speed",
       limitNone: "no cap",
       limit10: "10 Mbit/s",

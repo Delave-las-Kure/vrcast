@@ -445,6 +445,81 @@ describe("T576 — a pack of files can answer a liftable refusal mid-run", () =>
   });
 });
 
+describe("T580 — UploadScreen pick() accumulates and drops files", () => {
+  it("two picks in a row keep both sets of files, without duplicates on overlap", async () => {
+    mockOpen.mockResolvedValueOnce(["F:\\видео\\Сериал\\s01e01.mp4"]);
+    mockOpen.mockResolvedValueOnce([
+      "F:\\видео\\Сериал\\s01e01.mp4", // chosen again — must not duplicate
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByDisplayValue("s01e01.mp4");
+
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e02.mp4");
+
+    expect(screen.getByText("s01e01.mp4")).toBeInTheDocument();
+    expect(screen.getAllByText("s01e01.mp4")).toHaveLength(1);
+    expect(screen.getByText("s01e02.mp4")).toBeInTheDocument();
+  });
+
+  it("dropping one file removes it from the list and from what gets sent", async () => {
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e02.mp4");
+
+    fireEvent.click(
+      screen.getByLabelText(fill(ru.ui.upload.dropOneFile, { name: "s01e01.mp4" }, ru, "ru")),
+    );
+
+    expect(screen.queryByText("s01e01.mp4")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+    expect(mockUploadStart).toHaveBeenCalledWith(
+      expect.objectContaining({ remote_name: "s01e02.mp4" }),
+    );
+  });
+
+  it("dropping down to one file fills the served name in from it", async () => {
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e02.mp4");
+
+    fireEvent.click(
+      screen.getByLabelText(fill(ru.ui.upload.dropOneFile, { name: "s01e02.mp4" }, ru, "ru")),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("s01e01.mp4"),
+    );
+  });
+});
+
 describe("what is said before it starts", () => {
   const nameTaken: AppError = {
     code: "NAME_EXISTS",

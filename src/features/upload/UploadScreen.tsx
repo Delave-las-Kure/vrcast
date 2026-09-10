@@ -149,10 +149,32 @@ export function UploadScreen() {
    * the file name is the sort of thing that gets done on one path and forgotten on the
    * other. With more than one file the served name stops meaning anything — each file
    * keeps its own, from its own name — so the field is left alone.
+   *
+   * T580 — accumulates rather than replaces, the same as `BatchScreen.pick()`: a
+   * person picking a season two folders at a time must not have the first folder's
+   * files thrown away the moment the dialogue opens a second time. `new Set` keeps a
+   * file chosen twice from appearing twice in the list.
    */
-  const take = (paths: string[]) => {
-    setLocalPaths(paths);
-    if (paths.length === 1 && !remoteName) setRemoteName(basename(paths[0]));
+  const take = (newPaths: string[]) => {
+    const merged = [...new Set([...localPaths, ...newPaths])];
+    setLocalPaths(merged);
+    if (merged.length === 1 && !remoteName) setRemoteName(basename(merged[0]));
+    setPreflight(null);
+    setStartedTask(null);
+    setBatchSummary(null);
+    setBatchPreflight(null);
+  };
+
+  /**
+   * T580 — drop one file from an already-chosen list, the same pattern as
+   * `BatchScreen`'s own remove button. If this brings the list back down to exactly
+   * one file, the served name is filled in from it — same as choosing a single file
+   * from the start — rather than being left blank as if nothing had ever been chosen.
+   */
+  const dropFile = (path: string) => {
+    const next = localPaths.filter((p) => p !== path);
+    setLocalPaths(next);
+    if (next.length === 1 && !remoteName) setRemoteName(basename(next[0]));
     setPreflight(null);
     setStartedTask(null);
     setBatchSummary(null);
@@ -335,7 +357,17 @@ export function UploadScreen() {
               {localPaths.length > 1 && (
                 <ul className="upload__file-list">
                   {localPaths.map((path) => (
-                    <li key={path}>{basename(path)}</li>
+                    <li key={path}>
+                      {basename(path)}{" "}
+                      <button
+                        type="button"
+                        className="button-link"
+                        onClick={() => dropFile(path)}
+                        aria-label={fill(u.dropOneFile, { name: basename(path) }, t, lang)}
+                      >
+                        {u.dropFile}
+                      </button>
+                    </li>
                   ))}
                 </ul>
               )}

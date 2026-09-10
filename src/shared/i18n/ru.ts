@@ -1165,6 +1165,8 @@ const ui = {
     newMediaPlaceholder: "Название",
     multipleNamesHint:
       "Имена в раздаче возьмутся из имён файлов — построчная правка недоступна.",
+    dropFile: "Убрать",
+    dropOneFile: "Убрать {name} из списка",
     fieldLimit: "Ограничить скорость",
     limitNone: "не ограничивать",
     limit10: "10 Мбит/с",
