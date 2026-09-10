@@ -40,6 +40,15 @@ const MESSAGE_IS_THE_WHOLE_ANSWER: Array<[string, string]> = [
       "advice about a fault would misdescribe a question as a problem.",
   ],
   [
+    "features/upload/UploadScreen.tsx",
+    "T577's `askDeleteOrphan` takes the exact same CONFIRMATION_REQUIRED refusal `mediaDelete` " +
+      "sends for any medium — here for one this screen just found orphaned — and turns it into " +
+      "the `consequences` line of the same `ConfirmDeleteDialog` `LibraryScreen` uses. Same " +
+      "shape, same reason: it is the question, not a fault, and its answer is the dialog's own " +
+      "two buttons rather than a hint. The file's other `renderError` calls (batch failures) " +
+      "already destructure both halves and are unaffected by this excuse.",
+  ],
+  [
     "features/tasks/notifications.tsx",
     "The body of a system notification, which the platform gives two lines and truncates. It " +
       "exists to say a long task ended badly while the window was out of sight; the advice " +

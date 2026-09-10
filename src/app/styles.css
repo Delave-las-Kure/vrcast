@@ -988,6 +988,12 @@ button:focus-visible {
   margin-top: 10px;
 }
 
+.notice__orphan {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
 .notice__list {
   margin: 6px 0 0;
   padding-left: 18px;
