@@ -519,6 +519,23 @@ export function LadderScreen({
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
+      {/* T571, T574, T579 — the core refuses a build with `FILE_IN_USE` when the set is
+          being watched right now and nobody confirmed going on regardless. Same pattern
+          as `RenameMediaDialog`'s `renameAnyway` (T545): the refusal carries no numbers
+          of its own to compose, only a choice to make. Placed right after the error it
+          answers, a couple of Tab stops away, rather than after the whole form below —
+          T579 moved this here from just below the main `build` button. */}
+      {buildFileInUse && (
+        <button
+          type="button"
+          data-testid="build-anyway"
+          disabled={building}
+          onClick={() => doBuild(true)}
+        >
+          {words.buildAnyway}
+        </button>
+      )}
+
       {/*
         What the source is, and then what its peak is. The peak alone was on screen and the
         rest was written and shown nowhere — and without the frame and the rate, a peak in
@@ -697,20 +714,6 @@ export function LadderScreen({
       >
         {building ? words.building : words.build}
       </button>
-      {/* T571, T574 — the core refuses a build with `FILE_IN_USE` when the set is being
-          watched right now and nobody confirmed going on regardless. Same pattern as
-          `RenameMediaDialog`'s `renameAnyway` (T545): the refusal carries no numbers of
-          its own to compose, only a choice to make. */}
-      {buildFileInUse && (
-        <button
-          type="button"
-          data-testid="build-anyway"
-          disabled={building}
-          onClick={() => doBuild(true)}
-        >
-          {words.buildAnyway}
-        </button>
-      )}
       {/* Taking another film's measurement, and getting back out of it (T427, T428). Above
           the evidence rather than below: somebody with no measurement at all is choosing
           whether to spend half an hour, and that choice comes before the numbers do. */}
