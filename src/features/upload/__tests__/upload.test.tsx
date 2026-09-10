@@ -313,6 +313,138 @@ describe("T573 — a pack of files bound to one medium", () => {
   });
 });
 
+describe("T576 — a pack of files can answer a liftable refusal mid-run", () => {
+  it("a liftable refusal mid-pack shows PreflightWarnings, not a batch summary yet", async () => {
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    mockUploadStart.mockRejectedValueOnce({
+      code: "VIEWERS_ACTIVE",
+      details: [],
+    } as AppError);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(ru.ui.preflight.uploadAnyway)).toBeInTheDocument();
+    expect(
+      screen.queryByText(fill(ru.ui.upload.startedBatchAll, { n: 1 }, ru, "ru")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("agreeing retries the same file with confirmed:true and carries it through the rest", async () => {
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    mockUploadStart.mockRejectedValueOnce({ code: "VIEWERS_ACTIVE", details: [] } as AppError);
+    mockUploadStart.mockResolvedValue("t-2");
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.preflight.uploadAnyway));
+
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(3));
+    // The second call is the retry of s01e01 with confirmed: true...
+    expect(mockUploadStart.mock.calls[1][0]).toMatchObject({
+      remote_name: "s01e01.mp4",
+      confirmed: true,
+    });
+    // ...and the third is s01e02, going straight through with confirmed: true too, no
+    // second PreflightWarnings shown for it.
+    expect(mockUploadStart.mock.calls[2][0]).toMatchObject({
+      remote_name: "s01e02.mp4",
+      confirmed: true,
+    });
+    expect(
+      await screen.findByText(fill(ru.ui.upload.startedBatchAll, { n: 2 }, ru, "ru")),
+    ).toBeInTheDocument();
+  });
+
+  it("declining sends the current file to failures and lets the rest of the pack try", async () => {
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    mockUploadStart.mockRejectedValueOnce({ code: "VIEWERS_ACTIVE", details: [] } as AppError);
+    mockUploadStart.mockResolvedValueOnce("t-2");
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(fill(ru.ui.upload.startedBatchPartial, { ok: 1, total: 2 }, ru, "ru")),
+      ).toBeInTheDocument(),
+    );
+    // Both files accounted for: one failure, one success — nothing lost in the count.
+    expect(mockUploadStart).toHaveBeenCalledTimes(2);
+    expect(mockUploadStart.mock.calls[1][0]).toMatchObject({
+      remote_name: "s01e02.mp4",
+      confirmed: false,
+    });
+  });
+
+  it("a non-liftable refusal (REMOTE_DISK_FULL) in a pack never pauses for PreflightWarnings", async () => {
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    mockUploadStart.mockRejectedValueOnce({
+      code: "REMOTE_DISK_FULL",
+      details: [
+        {
+          key: "NOT_ENOUGH_SPACE",
+          params: { short_by: 1024 ** 3, needed: 1024 ** 3 * 2, free: 1024 ** 3 },
+        },
+      ],
+    } as AppError);
+    mockUploadStart.mockResolvedValueOnce("t-2");
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(fill(ru.ui.upload.startedBatchPartial, { ok: 1, total: 2 }, ru, "ru")),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(ru.ui.preflight.uploadAnyway)).not.toBeInTheDocument();
+    expect(mockUploadStart).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("what is said before it starts", () => {
   const nameTaken: AppError = {
     code: "NAME_EXISTS",

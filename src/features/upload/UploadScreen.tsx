@@ -16,10 +16,15 @@
  * T573 — several files can be chosen at once and bound to one medium (new or
  * existing), for a series uploaded episode by episode. One file behaves exactly as
  * before: the DOM and the existing tests must not tell the two apart. Several files
- * queue one `uploadStart` each, in order, unconfirmed — the preflight question-and-
- * answer this screen otherwise shows is a deliberately dropped corner for a first
- * pack of files: it does not scale to a list, and a failed file simply gets reported
- * and skipped rather than blocking the rest of the pack.
+ * queue one `uploadStart` each, in order, unconfirmed to start — a failed file whose
+ * refusal cannot be lifted by agreement (`REMOTE_DISK_FULL`) is simply reported and
+ * skipped, the rest of the pack going on.
+ *
+ * T576 — a refusal that CAN be lifted by agreement (`VIEWERS_ACTIVE`, `NAME_EXISTS`,
+ * `CONFIRMATION_REQUIRED`) pauses the run instead of being silently skipped: the same
+ * `PreflightWarnings` the single-file flow shows comes up for that one file, and once
+ * agreed to, the agreement holds for the rest of this run's remaining files — nobody
+ * is asked the same question once per file in a series that all share one cause.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -62,6 +67,20 @@ interface BatchSummary {
   failures: Array<{ name: string; message: string; hint: string }>;
 }
 
+/**
+ * T576 — where a paused batch run stands: which files are left, what has already been
+ * settled, and whether agreement has already been given once this run (in which case it
+ * holds for the rest of the pack, not just the file that first asked).
+ */
+interface BatchRun {
+  paths: string[];
+  index: number;
+  resolvedMediaId: string | null;
+  ok: number;
+  failures: BatchSummary["failures"];
+  forceConfirmed: boolean;
+}
+
 export function UploadScreen() {
   const profiles = useServers((s) => s.profiles);
   const reloadServers = useServers((s) => s.reload);
@@ -81,6 +100,13 @@ export function UploadScreen() {
   const [busy, setBusy] = useState(false);
   const [startedTask, setStartedTask] = useState<string | null>(null);
   const [batchSummary, setBatchSummary] = useState<BatchSummary | null>(null);
+  /** T576 — a batch paused mid-pack on a liftable refusal (`VIEWERS_ACTIVE`,
+   *  `NAME_EXISTS`, `CONFIRMATION_REQUIRED`), waiting on the same `PreflightWarnings`
+   *  the single-file flow uses, but keeping the rest of the pack's state alive so the
+   *  run can pick up where it stopped rather than starting over. */
+  const [batchPreflight, setBatchPreflight] = useState<{ error: AppError; run: BatchRun } | null>(
+    null,
+  );
   const t = useT();
   const { lang } = useLang();
   const u = t.ui.upload;
@@ -130,6 +156,7 @@ export function UploadScreen() {
     setPreflight(null);
     setStartedTask(null);
     setBatchSummary(null);
+    setBatchPreflight(null);
   };
 
   const pick = async () => {
@@ -153,6 +180,58 @@ export function UploadScreen() {
   }, [handed]);
 
   const usingNewMedia = mediaId === NEW_MEDIA_MARKER;
+
+  /**
+   * T576 — carry a batch forward from wherever it stands. Runs until every file has
+   * been tried, or until a liftable refusal (`VIEWERS_ACTIVE`, `NAME_EXISTS`,
+   * `CONFIRMATION_REQUIRED`) turns up and nobody has agreed to it yet this run — in
+   * which case it stops and shows `PreflightWarnings` for that one file, the same
+   * component the single-file flow already uses. Once agreement is given once, it is
+   * remembered for the rest of this run (`forceConfirmed`): the question is not asked
+   * again file after file. A non-liftable refusal (`REMOTE_DISK_FULL` and the like)
+   * never pauses anything — it is recorded and the run goes straight on, as before.
+   */
+  const runBatch = async (run: BatchRun) => {
+    if (!active) return;
+    let { index, ok } = run;
+    const { paths, resolvedMediaId, forceConfirmed } = run;
+    const failures = [...run.failures];
+    setBusy(true);
+
+    while (index < paths.length) {
+      const path = paths[index];
+      const name = basename(path);
+      const request: UploadRequest = {
+        server_id: active.id,
+        local_path: path,
+        remote_name: name,
+        media_id: resolvedMediaId,
+        limit_bps: limitBps,
+        confirmed: forceConfirmed,
+      };
+      try {
+        await ipc.uploadStart(request);
+        ok += 1;
+        index += 1;
+      } catch (e) {
+        const err = toAppError(e);
+        if (!forceConfirmed && canConfirm(err)) {
+          setBatchPreflight({ error: err, run: { paths, index, resolvedMediaId, ok, failures, forceConfirmed } });
+          setBusy(false);
+          return;
+        }
+        const { message, hint } = renderError(err, t, lang);
+        failures.push({ name, message, hint });
+        index += 1;
+      }
+    }
+
+    setStartedTask(null);
+    setPreflight(null);
+    setBatchPreflight(null);
+    setBatchSummary({ ok, total: paths.length, failures });
+    setBusy(false);
+  };
 
   const send = async (confirmed: boolean) => {
     if (!active || localPaths.length === 0) return;
@@ -199,34 +278,18 @@ export function UploadScreen() {
       return;
     }
 
-    // Several files, one medium: each queues its own `uploadStart`, in order, one
-    // failure at a time rather than all-or-nothing. No preflight question-and-answer
-    // here — a failed file (taken name included) is simply reported and the rest of
-    // the pack goes on; there is no line to re-ask per file on this iteration.
-    let ok = 0;
-    const failures: BatchSummary["failures"] = [];
-    for (const path of localPaths) {
-      const name = basename(path);
-      const request: UploadRequest = {
-        server_id: active.id,
-        local_path: path,
-        remote_name: name,
-        media_id: resolvedMediaId,
-        limit_bps: limitBps,
-        confirmed: false,
-      };
-      try {
-        await ipc.uploadStart(request);
-        ok += 1;
-      } catch (e) {
-        const { message, hint } = renderError(toAppError(e), t, lang);
-        failures.push({ name, message, hint });
-      }
-    }
-    setStartedTask(null);
-    setPreflight(null);
-    setBatchSummary({ ok, total: localPaths.length, failures });
-    setBusy(false);
+    // Several files, one medium: each queues its own `uploadStart`, in order. A
+    // liftable refusal (VIEWERS_ACTIVE, NAME_EXISTS, CONFIRMATION_REQUIRED) pauses the
+    // run and asks — via `runBatch`/`batchPreflight` — rather than skipping straight to
+    // failure; a non-liftable one (REMOTE_DISK_FULL) is recorded and the pack goes on.
+    await runBatch({
+      paths: localPaths,
+      index: 0,
+      resolvedMediaId,
+      ok: 0,
+      failures: [],
+      forceConfirmed: false,
+    });
   };
 
   const ready =
@@ -355,6 +418,29 @@ export function UploadScreen() {
               busy={busy}
               onConfirm={() => void send(true)}
               onCancel={() => setPreflight(null)}
+            />
+          )}
+
+          {batchPreflight && (
+            <PreflightWarnings
+              error={batchPreflight.error}
+              busy={busy}
+              onConfirm={() => {
+                const { run } = batchPreflight;
+                setBatchPreflight(null);
+                void runBatch({ ...run, forceConfirmed: true });
+              }}
+              onCancel={() => {
+                const { error: err, run } = batchPreflight;
+                const name = basename(run.paths[run.index]);
+                const { message, hint } = renderError(err, t, lang);
+                setBatchPreflight(null);
+                void runBatch({
+                  ...run,
+                  index: run.index + 1,
+                  failures: [...run.failures, { name, message, hint }],
+                });
+              }}
             />
           )}
 
