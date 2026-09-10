@@ -1020,6 +1020,28 @@ describe("building anyway when the set is being watched (T571, T574)", () => {
     await waitFor(() => expect(mockBuild).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("build-anyway")).toBeNull();
   });
+
+  it("T579: 'build anyway' sits right after the error, before the rung table", async () => {
+    mockLadderPlan.mockResolvedValue(preview("measured", MEASURED));
+    mockBuild.mockRejectedValueOnce(fileInUse());
+    const { container } = renderIn(
+      <LadderScreen path="F:/films/film.mp4" serverId="s1" slug="film" />,
+      "en",
+    );
+
+    await waitFor(() => expect(screen.getByTestId("build")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("build"));
+    await waitFor(() => expect(screen.getByTestId("build-anyway")).toBeInTheDocument());
+
+    const order = [...container.querySelectorAll("[data-testid]")].map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    const anywayIndex = order.indexOf("build-anyway");
+    const advancedIndex = order.indexOf("ladder-advanced");
+    expect(anywayIndex).toBeGreaterThanOrEqual(0);
+    expect(advancedIndex).toBeGreaterThanOrEqual(0);
+    expect(anywayIndex).toBeLessThan(advancedIndex);
+  });
 });
 
 describe("what the set is called", () => {
