@@ -351,6 +351,8 @@ pub mod api {
             std::path::Path::new(&request.path),
         );
         let secrets = state.secrets.clone();
+        let db = state.db.clone();
+        let events = state.events.clone();
 
         let task_id = state
             .tasks
@@ -392,6 +394,15 @@ pub mod api {
                         {
                             ctx.set_result(crate::tasks::store::TaskResult { media_id });
                         }
+                        // **T578 — the same signal the five mutating commands in
+                        // `library.rs` already send after writing the manifest.**
+                        // `run` above wrote the built set onto the server before
+                        // `outcome.is_ok()` could be true at all (`ladder_build::run`'s
+                        // own doc explains the sequence), so the cache is stale here
+                        // regardless of whether `attach_built_set` found a medium to tie
+                        // it to — an unattached set still changed what `library_list`
+                        // would read back as unrecognised.
+                        crate::commands::invalidate_library_parts(&db, &events, &request.server_id);
                     }
                     conn.close().await;
                     // ⚠ **The build says what it has to say as it happens, and this no
