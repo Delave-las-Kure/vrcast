@@ -200,12 +200,14 @@ export function ConfirmDeleteDialog({
   onConfirm,
   onCancel,
   busy,
+  error,
 }: {
   what: string;
   consequences: string;
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
+  error?: AppError | null;
 }) {
   const t = useT();
   const { lang } = useLang();
@@ -216,6 +218,7 @@ export function ConfirmDeleteDialog({
       <h3>{fill(l.deleteHeading, { what }, t, lang)}</h3>
       <p className="dialog__warning">{consequences}</p>
       <p className="muted">{l.deleteIrreversible}</p>
+      {error && <DialogError error={error} />}
 
       <div className="form__actions">
         <button type="button" onClick={onCancel} disabled={busy} autoFocus>
