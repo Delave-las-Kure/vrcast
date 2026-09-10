@@ -640,6 +640,67 @@ describe("T577 — a batch that creates its medium inline can end up orphaning i
   });
 });
 
+describe("T582 — a stale orphan-delete response is ignored after a new file pick", () => {
+  it("ignores CONFIRMATION_REQUIRED that arrives after take() has already moved on", async () => {
+    // Same starting point as T577's own delete flow: a pack that orphaned its medium.
+    mockMediaCreate.mockResolvedValue("new-media-race");
+    mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.upload.newMediaLabel), {
+      target: { value: "Гоночный сериал" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await screen.findByText(ru.ui.upload.orphanedMediaDelete);
+
+    // The unconfirmed mediaDelete call is left hanging — the person acts again
+    // before this network round-trip has a chance to come back.
+    let rejectDelete: (err: unknown) => void = () => {};
+    mockMediaDelete.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectDelete = reject;
+        }),
+    );
+    fireEvent.click(screen.getByText(ru.ui.upload.orphanedMediaDelete));
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledTimes(1));
+
+    // A brand-new pick, while the old delete request is still in flight. `take()`
+    // accumulates (T580), so the pack now holds three files and the single-file name
+    // field is gone — the new file shows up in the file list instead.
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал2\\ep01.mp4"]);
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("ep01.mp4");
+
+    // Only now does the stale request come back, asking for confirmation.
+    rejectDelete({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "Гоночный сериал", files: 0, bytes: 0 } },
+      ],
+    } as AppError);
+
+    // The confirm dialog must never appear — the request it would answer is stale.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText(ru.ui.library.deleteYes)).not.toBeInTheDocument();
+    // And the new pick's file is what is actually on screen — untouched by the
+    // stale response, rather than clobbered by whatever it would have set.
+    expect(screen.getByText("ep01.mp4")).toBeInTheDocument();
+  });
+});
+
 describe("T580 — UploadScreen pick() accumulates and drops files", () => {
   it("two picks in a row keep both sets of files, without duplicates on overlap", async () => {
     mockOpen.mockResolvedValueOnce(["F:\\видео\\Сериал\\s01e01.mp4"]);

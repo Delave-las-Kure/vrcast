@@ -36,7 +36,7 @@
  * `LibraryScreen` already uses for every other deletion.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSearchParams } from "react-router-dom";
 import type { AppError, LibraryView, UploadRequest } from "../../shared/contract";
@@ -142,6 +142,17 @@ export function UploadScreen() {
     media: NewMedium;
     consequences: string;
   } | null>(null);
+  /**
+   * T582 — guards against a stale `askDeleteOrphan`/`confirmDeleteOrphan` response
+   * landing after the person has already moved on to a new file pick. `askDeleteOrphan`
+   * sends its unconfirmed `mediaDelete` and then awaits the network; if `take()` or
+   * `dropFile()` runs in the meantime, they bump this counter, and the awaited call's
+   * `catch`/success branch compares its own captured value against the current one —
+   * a mismatch means the request is answering a question nobody is asking anymore, so
+   * its result (a confirm dialog, an error, a summary update) is simply dropped rather
+   * than popping up over state that has already moved on.
+   */
+  const uploadGenRef = useRef(0);
   const t = useT();
   const { lang } = useLang();
   const u = t.ui.upload;
@@ -191,6 +202,7 @@ export function UploadScreen() {
    * file chosen twice from appearing twice in the list.
    */
   const take = (newPaths: string[]) => {
+    uploadGenRef.current += 1;
     const merged = [...new Set([...localPaths, ...newPaths])];
     setLocalPaths(merged);
     if (merged.length === 1 && !remoteName) setRemoteName(basename(merged[0]));
@@ -208,6 +220,7 @@ export function UploadScreen() {
    * from the start — rather than being left blank as if nothing had ever been chosen.
    */
   const dropFile = (path: string) => {
+    uploadGenRef.current += 1;
     const next = localPaths.filter((p) => p !== path);
     setLocalPaths(next);
     if (next.length === 1 && !remoteName) setRemoteName(basename(next[0]));
@@ -373,12 +386,15 @@ export function UploadScreen() {
    */
   const askDeleteOrphan = async (media: NewMedium) => {
     if (!active) return;
+    const gen = uploadGenRef.current;
     try {
       await ipc.mediaDelete(active.id, media.id, false);
+      if (gen !== uploadGenRef.current) return;
       // The core agreed without confirmation. That should not happen — but if it has,
       // the summary must stop naming a medium that is no longer there.
       setBatchSummary((prev) => (prev ? { ...prev, orphanedMedia: null } : prev));
     } catch (e) {
+      if (gen !== uploadGenRef.current) return;
       const err = toAppError(e);
       if (err.code === "CONFIRMATION_REQUIRED") {
         setOrphanDelete({ media, consequences: renderError(err, t, lang).message });
@@ -391,12 +407,15 @@ export function UploadScreen() {
   /** T577 — carry out the deletion asked for above, once agreed to. */
   const confirmDeleteOrphan = async () => {
     if (!active || !orphanDelete) return;
+    const gen = uploadGenRef.current;
     setBusy(true);
     try {
       await ipc.mediaDelete(active.id, orphanDelete.media.id, true);
+      if (gen !== uploadGenRef.current) return;
       setOrphanDelete(null);
       setBatchSummary((prev) => (prev ? { ...prev, orphanedMedia: null } : prev));
     } catch (e) {
+      if (gen !== uploadGenRef.current) return;
       setError(toAppError(e));
     } finally {
       setBusy(false);
