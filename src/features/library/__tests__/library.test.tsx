@@ -569,6 +569,48 @@ describe("deleting", () => {
   });
 });
 
+describe("T589 — askBeforeDelete/askBeforeDeleteFile are guarded by their own busy flag", () => {
+  it("disables the delete button while its request is in flight, and a second click sends no second mediaDelete", async () => {
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+
+    // The unconfirmed mediaDelete call is left hanging — same setup as T586's own test.
+    let rejectDelete: (err: unknown) => void = () => {};
+    mockMediaDelete.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectDelete = reject;
+        }),
+    );
+
+    const deleteButton = screen.getByText(ru.ui.library.deleteMedia);
+    fireEvent.click(deleteButton);
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledTimes(1));
+
+    // The button must now be disabled — its own in-flight request, not `busy`.
+    expect(deleteButton).toBeDisabled();
+
+    // A real click on a disabled button fires no onClick handler in the DOM, but this
+    // simulates it directly to make sure askBeforeDelete itself did not run again.
+    fireEvent.click(deleteButton);
+    expect(mockMediaDelete).toHaveBeenCalledTimes(1);
+
+    rejectDelete({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "Название фильма", files: 3, bytes: 4_509_715_660 } },
+      ],
+    } as AppError);
+
+    // Once the one request it owns has settled, the button is usable again — the flag
+    // is scoped to that single round trip, not stuck forever — and the dialog opened
+    // exactly once, pointing at the still-current medium.
+    await waitFor(() => expect(deleteButton).toBeEnabled());
+    expect(await screen.findByText(/Будет снято 3 файла/)).toBeInTheDocument();
+    expect(mockMediaDelete).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("renaming", () => {
   it("asks for the new name and hands it to the core", async () => {
     draw();

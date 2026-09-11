@@ -50,6 +50,21 @@ export function LibraryScreen() {
   const [dialog, setDialogRaw] = useState<Dialog>(null);
   const [dialogError, setDialogError] = useState<AppError | null>(null);
   const [renameFileInUse, setRenameFileInUse] = useState(false);
+  /**
+   * T589 — guards `askBeforeDelete`/`askBeforeDeleteFile` against a second click while their
+   * own unconfirmed `mediaDelete`/`fileDelete` is still in flight. `busy` does not cover
+   * this: it is set by `act`/`doRename`, never by these two, so the delete button stayed
+   * clickable for the whole round trip — a second click sent a second parallel unconfirmed
+   * request for the same target, and if the two resolved out of order, the confirm dialog
+   * could reopen pointing at a medium/file already gone. Same shape as T586's
+   * `orphanDeleteAsking` in UploadScreen: set at the start, cleared in `finally` regardless
+   * of outcome. One flag for both functions rather than two: from a click's point of view
+   * both mean "I am currently asking the core whether this delete is allowed", and neither
+   * ever runs while the other is in flight for the very same click — sharing it disables
+   * every delete button on the screen while either is pending, which is no worse than
+   * disabling only the one that started it, and is simpler.
+   */
+  const [deleteAsking, setDeleteAsking] = useState(false);
 
   /**
    * T584 — the single entry point through which `dialog` ever changes. Two
@@ -185,6 +200,7 @@ export function LibraryScreen() {
    */
   const askBeforeDelete = async (media: MediaView) => {
     if (!active) return;
+    setDeleteAsking(true);
     try {
       await ipc.mediaDelete(active.id, media.id, false);
       // The core agreed without confirmation. That should not happen, but if it
@@ -202,11 +218,14 @@ export function LibraryScreen() {
       } else {
         setError(err);
       }
+    } finally {
+      setDeleteAsking(false);
     }
   };
 
   const askBeforeDeleteFile = async (path: string) => {
     if (!active) return;
+    setDeleteAsking(true);
     try {
       await ipc.fileDelete(active.id, path, false);
       await load(true);
@@ -221,6 +240,8 @@ export function LibraryScreen() {
       } else {
         setError(err);
       }
+    } finally {
+      setDeleteAsking(false);
     }
   };
 
@@ -314,7 +335,7 @@ export function LibraryScreen() {
               watching={watchers[m.id] ?? 0}
               t={t}
               lang={lang}
-              disabled={busy || view.stale}
+              disabled={busy || view.stale || deleteAsking}
               onRename={() => setDialog({ kind: "rename", media: m })}
               onDelete={() => void askBeforeDelete(m)}
               onDeleteFile={(path) => void askBeforeDeleteFile(path)}
@@ -331,7 +352,7 @@ export function LibraryScreen() {
               files={view.unrecognized}
               media={view.media}
               serverId={active.id}
-              disabled={busy || view.stale}
+              disabled={busy || view.stale || deleteAsking}
               onAssign={(path, mediaId) =>
                 void act(() => ipc.fileMove(active.id, path, mediaId, true))
               }
