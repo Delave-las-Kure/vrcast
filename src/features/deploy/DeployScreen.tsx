@@ -18,7 +18,7 @@
  * to two different places, and only one of them is a place.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DomainCheck } from "./DomainCheck";
 import { Ipv6Choice } from "./Ipv6Choice";
@@ -65,6 +65,16 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   const [running, setRunning] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  /**
+   * T590 — bumped once per `serverId` change, in the reset effect below. `start`
+   * captures this at the moment it calls `deployRun` and checks it again when the
+   * response comes back: if `serverId` has since moved on to a different server's own
+   * deploy screen, the response is for a request nobody standing here asked, and
+   * `setRunning`/`setError` from it would paint this screen with somebody else's
+   * deployment. The reset effect itself does not need to read this — it is only ever
+   * compared against, never branched on, by the async callback that outlives it.
+   */
+  const genRef = useRef(0);
 
   const domainOk = domain !== null && domain.advice === null;
   // **The button waits on both** (T525(1)). `domainOk` alone would still let a person start
@@ -94,6 +104,27 @@ export function DeployScreen({ serverId }: { serverId: string }) {
     [profile, serverId],
   );
 
+
+  // T590 — every piece of local state reset here in one place, keyed only on `serverId`.
+  // `/deploy` renders this component with no `key` (see DeployPage.tsx), so switching
+  // `?server=X` to `?server=Y` reuses the same instance rather than remounting it — every
+  // `useState` below otherwise carries over from whichever server was open before. Worst of
+  // all was `running`: if a deployment on server A was still going, opening B's own deploy
+  // screen left `running` pointing at A's task id forever — the progress-watching effect
+  // below filters by `id === serverId` (now B), so A's own `task:done` event can never match
+  // it and clear it. A person would see somebody else's "in progress" that can never finish.
+  // Placed first, ahead of the two effects below, so a render that follows a `serverId`
+  // change never reads the previous server's `ipv6`/`domain` before this has cleared them.
+  useEffect(() => {
+    genRef.current += 1;
+    setIpv6(null);
+    setDomain(null);
+    setPreview(null);
+    setLive(null);
+    setRunning(null);
+    setDone(false);
+    setError(null);
+  }, [serverId]);
 
   // The plan is asked for only once the domain is right. Asking earlier is possible, but a
   // list of changes that cannot be applied reads as an offer — a person agrees to it, and
@@ -137,12 +168,21 @@ export function DeployScreen({ serverId }: { serverId: string }) {
 
   const start = useCallback(() => {
     if (ipv6 === null) return;
+    // T590 — captured now and checked again when `deployRun` answers: if `serverId` has
+    // since moved on to a different server's own screen (the reset effect above already
+    // bumped `genRef`), this response is not about anything shown here anymore, and
+    // `setRunning`/`setError` from it must not land on a screen that has moved on.
+    const gen = genRef.current;
     setError(null);
     setLive(null);
     ipc
       .deployRun(serverId, ipv6, true)
-      .then(setRunning)
-      .catch((e: AppError) => setError(e));
+      .then((taskId) => {
+        if (gen === genRef.current) setRunning(taskId);
+      })
+      .catch((e: AppError) => {
+        if (gen === genRef.current) setError(e);
+      });
   }, [serverId, ipv6]);
 
   if (done) {

@@ -11,7 +11,7 @@
  * most often that is a leftover from the domain's previous life.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT } from "../../shared/i18n";
@@ -36,18 +36,34 @@ export function DomainCheck({
   const [answer, setAnswer] = useState<DomainAnswer | null>(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  /**
+   * T592 — a per-request generation token, the same pattern LadderScreen's `genRef` and
+   * UploadScreen's `uploadGenRef` already use (T587, T582). `ask` used to have nothing
+   * guarding against two `dnsCheck` calls in flight at once: two quick IPv6 radio switches
+   * start two requests, and whichever answers second is not necessarily the one that was
+   * asked second — `setAnswer`/`onAnswer` from the STALE one could land after the current
+   * one and show (and report upward, into `readyToStart`) a verdict for an IPv6 choice
+   * nobody has selected anymore.
+   */
+  const genRef = useRef(0);
 
   const ask = useCallback(() => {
+    const gen = ++genRef.current;
     setAsking(true);
     setError(null);
     ipc
       .dnsCheck(serverId, ipv6)
       .then((got) => {
+        if (gen !== genRef.current) return;
         setAnswer(got);
         onAnswer?.(got);
       })
-      .catch((e: AppError) => setError(e))
-      .finally(() => setAsking(false));
+      .catch((e: AppError) => {
+        if (gen === genRef.current) setError(e);
+      })
+      .finally(() => {
+        if (gen === genRef.current) setAsking(false);
+      });
   }, [serverId, ipv6, onAnswer]);
 
   // Asked on opening and whenever the IPv6 choice changes: the same domain gives two
