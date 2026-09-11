@@ -244,6 +244,7 @@ export type DetailCode =
   | "UPLOAD_NOT_A_FILE"
   | "UPLOAD_NAME_EMPTY"
   | "UPLOAD_ALREADY_RUNNING"
+  | "BUILD_ALREADY_RUNNING"
   | "UPLOAD_NAME_RESERVED"
   // What to add at the registrar, with what value, and where it points now (FR-140).
   | "DOMAIN_ADD_RECORD"

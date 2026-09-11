@@ -239,6 +239,34 @@ pub mod api {
         })
     }
 
+    /// Whether a build for this slug on this server is already running.
+    ///
+    /// The same gap `running_upload_for` documents and accepts, for the same reason: this is
+    /// not the last line of defence, and closing it with a lock held for the whole submission
+    /// costs more than the case is worth — two builds begun at the very same instant would both
+    /// pass this check. What it does close is the realistic case named in T591: a repeat click
+    /// before `building` reaches the UI, or a batch's own `then_build` racing a manual click —
+    /// neither shares state with the other, so nothing before this stopped both from reaching
+    /// `submit_in_batch` and writing the same `master.m3u8`/`v{N}` directories concurrently.
+    fn running_build_for(
+        state: &super::super::AppState,
+        server_id: &str,
+        slug: &str,
+    ) -> Result<Option<String>> {
+        for task in state.tasks.list()? {
+            if task.kind != TaskKind::BuildLadder
+                || task.state.is_final()
+                || task.server_id.as_deref() != Some(server_id)
+            {
+                continue;
+            }
+            if task.resume_token.as_deref() == Some(slug) {
+                return Ok(Some(task.id));
+            }
+        }
+        Ok(None)
+    }
+
     /// Build the set: prepare each variant, send it, cut it, and check it is served.
     ///
     /// Returns a task number at once (FR-080). Everything that can be refused quickly is
@@ -304,6 +332,14 @@ pub mod api {
             }
         }
 
+        if let Some(busy) = running_build_for(state, &request.server_id, &request.slug)? {
+            return Err(AppError::new(ErrorCode::NameExists)
+                .with_detail(
+                    Detail::new(DetailCode::BuildAlreadyRunning).with("slug", request.slug.clone()),
+                )
+                .with_cause(busy));
+        }
+
         let source = super::super::api::source_probe(&request.path).await?;
         let (encoder, _) = pick_encoder(request.prefer_hardware).await?;
         // Where these rungs came from, so the description can say it (T433). Asked of the
@@ -353,6 +389,9 @@ pub mod api {
         let secrets = state.secrets.clone();
         let db = state.db.clone();
         let events = state.events.clone();
+        // Taken before `request` moves into the closure below — the marker write after
+        // `submit_in_batch` needs the slug too, and `request` does not survive that move.
+        let slug_for_marker = request.slug.clone();
 
         let task_id = state
             .tasks
@@ -417,6 +456,13 @@ pub mod api {
                 },
             )
             .await?;
+        // T591 — not a real resume position (nothing in `tasks::ladder_build` ever reads this
+        // field back for BuildLadder tasks; see the doc on `PauseKind::ResumableAcrossRestart`
+        // for how this kind actually carries on after a restart). Written here for the one
+        // narrower reason `running_build_for` above needs it: a live marker of which slug this
+        // task is building, read back the same way `running_upload_for` already reads its own
+        // `resume_token` on the upload side.
+        let _ = crate::tasks::store::save_resume_token(&state.db, &task_id, &slug_for_marker);
         Ok(task_id)
     }
 

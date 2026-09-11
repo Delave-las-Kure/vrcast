@@ -100,6 +100,9 @@ mod ladder_attach;
 #[path = "integration/ladder_active_viewers.rs"]
 mod ladder_active_viewers;
 
+#[path = "integration/ladder_build_race.rs"]
+mod ladder_build_race;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 

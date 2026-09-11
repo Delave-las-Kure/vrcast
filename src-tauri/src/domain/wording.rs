@@ -354,6 +354,8 @@ detail_codes! {
     UploadNameEmpty => "UPLOAD_NAME_EMPTY",
     /// `name` — the file already on its way to this server.
     UploadAlreadyRunning => "UPLOAD_ALREADY_RUNNING",
+    /// `slug` — the set already being built for it.
+    BuildAlreadyRunning => "BUILD_ALREADY_RUNNING",
     UploadNameReserved => "UPLOAD_NAME_RESERVED",
     /// `short_by`, `needed`, `free` — bytes.
     NotEnoughSpace => "NOT_ENOUGH_SPACE",
