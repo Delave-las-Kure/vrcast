@@ -334,6 +334,14 @@ export function LadderScreen({
     // reading the same ref) could still match a task started on the file just left, and
     // paint this screen with that other file's notices the moment it finishes.
     measuringId.current = null;
+    // T588 — found alongside the T587 fix above, and left for its own task: `measuring`
+    // is a plain boolean, not keyed to any file, so switching files while it was true left
+    // it true. `measuringId.current` becoming null the line above already keeps a stray
+    // `task:done` from painting this screen with a past file's result, but it did nothing
+    // for what a person actually sees in the meantime — `MeasureOffer` reading `measuring`
+    // as `running` kept showing file A's "measuring…" status under file B's own offer,
+    // for a file that had not started any measurement of its own yet.
+    setMeasuring(false);
   }, [path]);
 
   // T528 — the library of the server this set would be built on, fetched only when a
