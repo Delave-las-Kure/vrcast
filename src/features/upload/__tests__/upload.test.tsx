@@ -16,6 +16,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
 import { fill } from "../../../shared/i18n/render";
+import { basename } from "../../shared/names";
 import type {
   AppError,
   LibraryView,
@@ -773,6 +774,50 @@ describe("T580 — UploadScreen pick() accumulates and drops files", () => {
     await waitFor(() =>
       expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("s01e01.mp4"),
     );
+  });
+});
+
+describe("T585 — dropFile is blocked while a batch is running", () => {
+  it("disables the remove button for every file while runBatch is in flight, and ignores a click on it", async () => {
+    const firstPath = "F:\\видео\\Сериал\\s01e01.mp4";
+    const secondPath = "F:\\видео\\Сериал\\s01e02.mp4";
+    mockOpen.mockResolvedValue([firstPath, secondPath]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText(basename(secondPath));
+
+    let resolveFirst: (id: string) => void = () => {};
+    mockUploadStart.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveFirst = resolve; }),
+    );
+    mockUploadStart.mockResolvedValue("task-2");
+
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+
+    // busy is now true — the first uploadStart is still pending.
+    const dropSecondButton = screen.getByLabelText(
+      fill(ru.ui.upload.dropOneFile, { name: basename(secondPath) }, ru, "ru"),
+    );
+    expect(dropSecondButton).toBeDisabled();
+
+    // A real click on a disabled button fires no onClick handler in the DOM, but
+    // this simulates it directly to make sure dropFile itself did not run either.
+    fireEvent.click(dropSecondButton);
+    expect(screen.getByText(basename(secondPath))).toBeInTheDocument();
+
+    resolveFirst("task-1");
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
+
+    expect(mockUploadStart.mock.calls[1][0]).toMatchObject({
+      local_path: secondPath,
+      remote_name: basename(secondPath),
+    });
   });
 });
 

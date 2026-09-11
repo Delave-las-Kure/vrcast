@@ -474,6 +474,7 @@ export function UploadScreen() {
                         type="button"
                         className="button-link"
                         onClick={() => dropFile(path)}
+                        disabled={busy}
                         aria-label={fill(u.dropOneFile, { name: basename(path) }, t, lang)}
                       >
                         {u.dropFile}
