@@ -16,7 +16,7 @@
  * the machines a person needs to look at.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BitratePeaks } from "./BitratePeaks";
 import { HealthPanel } from "./HealthPanel";
@@ -49,8 +49,19 @@ export function DiagScreen({ serverId }: { serverId: string }) {
     average_mbit: number;
     peak_10s_mbit: number;
   } | null>(null);
+  /**
+   * T594 — a per-request generation token, the same pattern `DomainCheck`'s `genRef`
+   * already uses (T592), and `LadderScreen`'s (T587) and `UploadScreen`'s `uploadGenRef`
+   * (T582) before it. `ask` is rebuilt whenever `minutes` changes and the effect below
+   * re-runs it, but nothing used to stop an older, slower call from overwriting what a
+   * newer one already showed — a person who switches from 120 minutes to 10 right after
+   * opening the screen could see the 120-minute figures win the race and sit there under
+   * a "10 minutes" label.
+   */
+  const genRef = useRef(0);
 
   const ask = useCallback(async () => {
+    const gen = ++genRef.current;
     setAsking(true);
     setError(null);
     try {
@@ -58,13 +69,24 @@ export function DiagScreen({ serverId }: { serverId: string }) {
       // asked together take three channels out of eight — two of which the viewer watching
       // already holds (R-04). The stall reading also measures live load for five seconds, and
       // measuring it while our own questions run alongside is measuring ourselves.
-      setHealth(await ipc.diagHealth(serverId));
-      setLogs(await ipc.diagLogs(serverId, minutes));
-      setStalls(await ipc.diagExplainStalls(serverId, minutes, fileShape ?? undefined));
+      const health = await ipc.diagHealth(serverId);
+      if (gen !== genRef.current) return;
+      setHealth(health);
+
+      const logs = await ipc.diagLogs(serverId, minutes);
+      if (gen !== genRef.current) return;
+      setLogs(logs);
+
+      const stalls = await ipc.diagExplainStalls(serverId, minutes, fileShape ?? undefined);
+      if (gen !== genRef.current) return;
+      setStalls(stalls);
     } catch (e) {
-      setError(e as AppError);
+      if (gen === genRef.current) setError(e as AppError);
     } finally {
-      setAsking(false);
+      // Checked here too: a stale call finishing after a newer one is still going would
+      // otherwise clear `asking` early, and a person would see "done" while the current,
+      // actually-relevant request is still in flight.
+      if (gen === genRef.current) setAsking(false);
     }
   }, [serverId, minutes, fileShape]);
 
