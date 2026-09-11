@@ -66,6 +66,16 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
   /**
+   * T593 — set synchronously, inside `start` itself, before the first `await`/microtask.
+   * A person who clicks twice before the screen re-renders sends two separate
+   * `deployRun` calls otherwise (confirmed by QA: three clicks, three calls) — this is a
+   * deploy running twice on somebody's real server, unasked. `disabled` on the button
+   * alone does not save it: `start` is also called directly by tests (and could in
+   * principle be called from anywhere else) with no HTML attribute in the way, so the
+   * refusal has to live in the handler, not only in the markup.
+   */
+  const [starting, setStarting] = useState(false);
+  /**
    * T590 — bumped once per `serverId` change, in the reset effect below. `start`
    * captures this at the moment it calls `deployRun` and checks it again when the
    * response comes back: if `serverId` has since moved on to a different server's own
@@ -124,6 +134,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
     setRunning(null);
     setDone(false);
     setError(null);
+    setStarting(false);
   }, [serverId]);
 
   // The plan is asked for only once the domain is right. Asking earlier is possible, but a
@@ -167,7 +178,13 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   }, [running, serverId]);
 
   const start = useCallback(() => {
-    if (ipv6 === null) return;
+    // T593 — checked synchronously, before anything else: a second click that lands
+    // while the first `deployRun` is still in flight must not send its own. `starting`
+    // is set right here, in the same synchronous stretch — not in a `.then` — so a
+    // second call to `start` before this one has even finished its microtask sees it
+    // already `true`.
+    if (ipv6 === null || starting) return;
+    setStarting(true);
     // T590 — captured now and checked again when `deployRun` answers: if `serverId` has
     // since moved on to a different server's own screen (the reset effect above already
     // bumped `genRef`), this response is not about anything shown here anymore, and
@@ -182,8 +199,14 @@ export function DeployScreen({ serverId }: { serverId: string }) {
       })
       .catch((e: AppError) => {
         if (gen === genRef.current) setError(e);
+      })
+      .finally(() => {
+        // Unconditional: `starting` marks only "my own click has not answered yet", not
+        // which server's response is current — unlike `gen`/`running`, it carries no
+        // per-server meaning to protect.
+        setStarting(false);
       });
-  }, [serverId, ipv6]);
+  }, [serverId, ipv6, starting]);
 
   if (done) {
     return (
@@ -221,7 +244,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
               and a person has a right to know such a file will appear on their server. */}
           <p>{words.machine(preview.memory_mb, preview.disk)}</p>
           <StepList steps={preview.steps} />
-          <button type="button" onClick={start} disabled={!readyToStart}>
+          <button type="button" onClick={start} disabled={!readyToStart || starting}>
             {words.agreeAndStart}
           </button>
         </>

@@ -312,6 +312,40 @@ describe("T592 — DomainCheck ignores a stale dnsCheck answer after a quick re-
   });
 });
 
+describe("T593 — DeployScreen guards agreeAndStart against a repeat click", () => {
+  it("sends deployRun exactly once for three quick clicks, then recovers normally", async () => {
+    // Left hanging: if `mockRun` resolved synchronously, its own `.finally` could clear
+    // `starting` between two `fireEvent.click` calls and the race this test exists to
+    // catch would never actually happen.
+    let resolveRun: (id: string) => void = () => {};
+    mockRun.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeEnabled());
+
+    const button = screen.getByText(ru.ui.deploy.agreeAndStart);
+    // Three clicks with nothing awaited between them — a real browser would already
+    // refuse the second and third because the button carries `disabled` after the
+    // first, but `fireEvent.click` in jsdom does not respect that HTML attribute (same
+    // note as T589's own test in library.test.tsx) and calls `onClick` regardless. The
+    // handler has to refuse itself.
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(mockRun).toHaveBeenCalledTimes(1);
+
+    resolveRun("task-1");
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.running)).toBeInTheDocument());
+    expect(screen.queryByText(ru.ui.deploy.agreeAndStart)).not.toBeInTheDocument();
+  });
+});
+
 describe("what a step says it will do", () => {
   /**
    * ⚠ **T507, FR-122.** The core has always worked out what each step changes — the packages

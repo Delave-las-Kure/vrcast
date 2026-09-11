@@ -287,3 +287,60 @@ describe("the diagnosis screen", () => {
     ]);
   });
 });
+
+describe("T594 — DiagScreen ignores a stale health answer after a quick period switch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHealth.mockResolvedValue(HEALTH);
+    mockLogs.mockResolvedValue(LOGS);
+    mockStalls.mockResolvedValue(STALLS);
+    mockOpen.mockResolvedValue(null);
+  });
+
+  it("keeps the second request's data when the first, slower one resolves later", async () => {
+    // The first, automatic `ask()` (triggered on mount) hangs on `diagHealth` — the same
+    // technique as T592's own test in `deploy.test.tsx` (`resolveKeep`).
+    let resolveFirst: (h: Health) => void = () => {};
+    mockHealth.mockImplementationOnce(
+      () =>
+        new Promise<Health>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    renderIn(<DiagScreen serverId="s1" />);
+    await waitFor(() => expect(mockHealth).toHaveBeenCalledTimes(1));
+
+    // The second call — after switching the period — resolves quickly, with data
+    // distinguishable by content from the first (still-hanging) call's would-be answer.
+    const SECOND: Health = {
+      ...HEALTH,
+      worst: "fine",
+      readings: [
+        {
+          about: "serving",
+          rating: "fine",
+          say: { key: "HEALTH_SERVING_STOPPED", params: { service: "nginx", state: "active" } },
+        },
+      ],
+    };
+    mockHealth.mockResolvedValueOnce(SECOND);
+
+    fireEvent.change(screen.getByTestId("diag-period"), { target: { value: "10" } });
+    await waitFor(() => expect(mockHealth).toHaveBeenCalledTimes(2));
+
+    // The second (current) request's answer must be on screen...
+    await waitFor(() => expect(screen.getByTestId("reading-serving")).toHaveTextContent("nginx"));
+    expect(screen.getByTestId("reading-serving")).toHaveAttribute("data-rating", "fine");
+
+    // ...and once the first, now-stale request finally answers, it must not overwrite it:
+    // by the time it resolves, it is no longer the request the period select is showing.
+    // A stale answer that failed the `gen` check never reaches `diagLogs` either — it
+    // returns right after `setHealth` would have run — so `mockLogs` stays at the one
+    // call the second (current) request made.
+    resolveFirst(HEALTH);
+    await waitFor(() => expect(screen.getByTestId("reading-serving")).toBeInTheDocument());
+    expect(screen.getByTestId("reading-serving")).toHaveTextContent("nginx");
+    expect(screen.getByTestId("reading-serving")).toHaveAttribute("data-rating", "fine");
+    expect(mockLogs).toHaveBeenCalledTimes(1);
+  });
+});
