@@ -87,6 +87,10 @@ export const en: Catalogue = {
       message: "The swap file could not be created",
       hint: "Free up space on the server's disk: the swap file needs at least a gigabyte.",
     },
+    DEPLOY_ALREADY_RUNNING: {
+      message: "A deployment or upgrade of this server is already running",
+      hint: "Wait for the current operation to finish — starting it again would repeat the same steps on the server once more.",
+    },
 
     // --- library ---
     SLUG_TAKEN: {

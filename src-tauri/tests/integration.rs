@@ -63,6 +63,12 @@ mod deploy_stand;
 #[path = "integration/deploy_foreign.rs"]
 mod deploy_foreign;
 
+/// T593 — `deploy_run`/`server_upgrade_run` refuse a second concurrent call on the same
+/// server, the guard `running_deploy_for` adds by the same pattern as `running_build_for`
+/// (T591, `ladder_build_race.rs`).
+#[path = "integration/deploy_run_race.rs"]
+mod deploy_run_race;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 

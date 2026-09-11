@@ -522,6 +522,34 @@ fn step_error(e: crate::server::deploy::DeployError) -> AppError {
     }
 }
 
+/// Whether a deploy or upgrade for this server is already running.
+///
+/// The same gap `running_build_for` (T591) and `running_upload_for` document and
+/// accept, for the same reason: this is not the last line of defence, and closing it
+/// with a lock held for the whole submission costs more than the case is worth — two
+/// deploys begun at the very same instant would both pass this check. What it closes
+/// is the realistic case: a repeat click on "agree, deploy" before `running` reaches
+/// the UI. Unlike `running_build_for`'s `slug`, there is nothing narrower than the
+/// server itself to scope this to — a fresh deploy and an upgrade of the SAME server
+/// are the same class of dangerous, unrepeatable, real-machine work (create the
+/// system user, open the firewall, rewrite the SSH configuration), so BOTH kinds are
+/// checked together: a deploy in flight blocks a concurrent upgrade of the same
+/// server and vice versa.
+fn running_deploy_for(state: &super::AppState, server_id: &str) -> Result<Option<String>> {
+    for task in state.tasks.list()? {
+        if task.state.is_final() || task.server_id.as_deref() != Some(server_id) {
+            continue;
+        }
+        if matches!(
+            task.kind,
+            crate::tasks::state::TaskKind::Deploy | crate::tasks::state::TaskKind::UpgradeServer
+        ) {
+            return Ok(Some(task.id));
+        }
+    }
+    Ok(None)
+}
+
 /// Start a deployment or an upgrade as a task.
 async fn start(
     state: &super::AppState,
@@ -530,6 +558,16 @@ async fn start(
     kind: crate::tasks::deploy::Kind,
 ) -> Result<String> {
     let profile = super::library::api::profile_of(state, server_id)?;
+
+    // Checked here, right after the one lookup that is local and cheap (`profile_of`),
+    // and before `gate::open` — unlike upload/ladder, where the guard sits after their
+    // own cheap preflight because that preflight still needs a connection anyway. Here
+    // `gate::open` is a real SSH connection and `look_at_domain` further down can cost
+    // up to 30 seconds on DNS (T593) — a doomed second call should not pay for either.
+    if let Some(busy) = running_deploy_for(state, server_id)? {
+        return Err(AppError::new(ErrorCode::DeployAlreadyRunning).with_cause(busy));
+    }
+
     let intent = Intent::Setup;
 
     // Refused before a task exists: the door, the key, and the domain. Each of them costs one
