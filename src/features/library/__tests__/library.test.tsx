@@ -527,6 +527,46 @@ describe("deleting", () => {
       expect(within(dialog).getByText(ru.errors.INTERNAL.message)).toBeInTheDocument(),
     );
   });
+
+  it("T584 — a rename error cancelled away does not leak into the next dialog opened", async () => {
+    // The rename dialog fails once with INTERNAL, the person cancels out of it
+    // (not retries, not closes-on-success — just Cancel), and then opens a
+    // *different* dialog (delete) without ever having submitted anything of its
+    // own. That dialog must start clean, not inherit the abandoned rename's error.
+    mockMediaRename.mockRejectedValueOnce({ code: "INTERNAL" } satisfies AppError);
+    draw();
+
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
+
+    const renameDialog = (
+      await screen.findByText(ru.ui.library.fieldSlug)
+    ).closest("form") as HTMLElement;
+    fireEvent.change(screen.getByLabelText(ru.ui.library.fieldSlug), {
+      target: { value: "drugoe" },
+    });
+    fireEvent.click(within(renameDialog).getByRole("button", { name: ru.ui.library.rename }));
+
+    await waitFor(() =>
+      expect(within(renameDialog).getByText(ru.errors.INTERNAL.message)).toBeInTheDocument(),
+    );
+
+    // Cancel out of the rename dialog — this is the path T584 covers: onCancel,
+    // not a successful/act()-wrapped submit.
+    fireEvent.click(within(renameDialog).getByText(ru.ui.common.cancel));
+    await waitFor(() => expect(screen.queryByLabelText(ru.ui.library.fieldSlug)).toBeNull());
+
+    mockMediaDelete.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "Название фильма", files: 1, bytes: 1024 } },
+      ],
+    } satisfies AppError);
+    fireEvent.click(screen.getByText(ru.ui.library.deleteMedia));
+
+    await screen.findByRole("alertdialog");
+    expect(screen.queryByText(ru.errors.INTERNAL.message)).not.toBeInTheDocument();
+  });
 });
 
 describe("renaming", () => {
