@@ -785,6 +785,23 @@ pub mod api {
             return Err(confirmation_needed(&manifest.media[index].title, &impact));
         }
 
+        // ⚠ **T596 — checked before a single byte moves, the same as the confirmation
+        // refusal just above.** `running_build_for`/`running_upload_for` (T591) only ever
+        // guarded one direction: a second task could not START on top of a running one. A
+        // `ladder_build` for this medium's slug writing `video_dir/slug/v22` right now, or an
+        // `upload_start` still writing this medium's file, was never asked before `rm -rf`
+        // ran straight through it — found by an independent QA audit 2026-09-11 (round 16),
+        // the same severity class as T593's live-server corruption.
+        if let Some(err) = refuse_if_busy(
+            state,
+            server_id,
+            &tops_of(manifest.media[index].all_paths()),
+            ErrorCode::MediaBusy,
+        )? {
+            conn.close().await;
+            return Err(err);
+        }
+
         let media = manifest.media[index].clone();
         remove_entries(&conn, &profile.video_dir, media.all_paths()).await?;
 
@@ -889,6 +906,16 @@ pub mod api {
             return Err(confirmation_needed(path, &impact));
         }
 
+        // ⚠ **T596 — same guard as `media_delete`, for the same reason.** `file_delete`
+        // never called `running_build_for`/`running_upload_for` at all: a single top-level
+        // path is exactly what a `ladder_build` or `upload_start` might be writing right
+        // now, and `remove_entries` below runs `rm -rf` straight through it unasked.
+        if let Some(err) = refuse_if_busy(state, server_id, &[top.to_owned()], ErrorCode::FileBusy)?
+        {
+            conn.close().await;
+            return Err(err);
+        }
+
         remove_entries(&conn, &profile.video_dir, std::iter::once(&path.to_owned())).await?;
 
         // It leaves the catalogue in the same act: the file is gone, and a reference to it
@@ -980,6 +1007,71 @@ pub mod api {
     /// and two copies of one count would diverge at the first edit.
     async fn active_connections(conn: &Connection) -> usize {
         crate::server::active_use::serving_connections(conn).await
+    }
+
+    /// The top-level entries a set of paths would touch — the same grouping
+    /// `remove_entries` itself uses just below, pulled out so the T596 guard can be checked
+    /// against exactly the set of names `rm -rf` is about to be given, rather than against
+    /// the finer paths a medium happens to record.
+    fn tops_of<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
+        let mut tops: Vec<String> = Vec::new();
+        for path in paths {
+            let top = path.split('/').next().unwrap_or(path).to_owned();
+            if !tops.contains(&top) {
+                tops.push(top);
+            }
+        }
+        tops
+    }
+
+    /// Refuse a deletion whose target a running task is actively writing (T596).
+    ///
+    /// **What T591/T593 protect and what they never did.** `running_build_for`
+    /// (`ladder.rs`) and `running_upload_for` (`upload.rs`) exist to stop a SECOND task
+    /// from starting on top of a running one; nothing before this called either of them from
+    /// the deletion side, so `media_delete`/`file_delete` ran `rm -rf` straight through a
+    /// directory a `ladder_build` was mid-encode into, or a file an `upload_start` was
+    /// mid-transfer to. Same severity as T593 (a live server, corrupted rather than merely
+    /// inconvenienced).
+    ///
+    /// **Why both guards run against every top, not one each.** A medium's `slug` is
+    /// ordinarily the same string as the top of each of its `ladders` paths, but that is a
+    /// convention `ladder.rs` follows, not a rule this function is in a position to trust —
+    /// and `running_upload_for` keys on the remote *file* name, which for a `files` entry is
+    /// the very same top. Running both checks against every top is two cheap in-memory scans
+    /// with no case left unguarded, rather than a guess at which check "belongs" to which
+    /// kind of path.
+    fn refuse_if_busy(
+        state: &AppState,
+        server_id: &str,
+        tops: &[String],
+        code: ErrorCode,
+    ) -> Result<Option<AppError>> {
+        for top in tops {
+            if let Some(busy) =
+                crate::commands::ladder::api::running_build_for(state, server_id, top)?
+            {
+                return Ok(Some(
+                    AppError::new(code)
+                        .with_detail(
+                            Detail::new(DetailCode::MediaBusyBuilding).with("slug", top.clone()),
+                        )
+                        .with_cause(busy),
+                ));
+            }
+            if let Some(busy) =
+                crate::commands::upload::api::running_upload_for(state, server_id, top)?
+            {
+                return Ok(Some(
+                    AppError::new(code)
+                        .with_detail(
+                            Detail::new(DetailCode::MediaBusyUploading).with("name", top.clone()),
+                        )
+                        .with_cause(busy),
+                ));
+            }
+        }
+        Ok(None)
     }
 
     /// Delete catalogue entries — both files and quality-ladder directories.

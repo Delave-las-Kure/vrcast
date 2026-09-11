@@ -109,6 +109,14 @@ export const en: Catalogue = {
       message: "Someone is watching this file right now",
       hint: "Deleting or renaming it will cut their viewing short. Wait until they finish, or confirm deliberately.",
     },
+    MEDIA_BUSY: {
+      message: "This medium is being processed by the server right now",
+      hint: "A build of its quality set or an upload of one of its files is still running. Wait for it to finish and try deleting again.",
+    },
+    FILE_BUSY: {
+      message: "This file is being processed by the server right now",
+      hint: "A build of its quality set or an upload of it is still running. Wait for it to finish and try deleting again.",
+    },
 
     // --- preparing files ---
     FFMPEG_BROKEN: {
@@ -336,6 +344,10 @@ export const en: Catalogue = {
       "Delete “{what}”? {files} {files|plural:file} will be removed, freeing {bytes|bytes}.",
     VIEWERS_ACTIVE_DELETE:
       "The server is serving data right now — {connections} connections are open. Deleting may cut someone's viewing short.",
+    MEDIA_BUSY_BUILDING:
+      "The quality set “{slug}” is being built on the server right now — deletion will wait until the build finishes.",
+    MEDIA_BUSY_UPLOADING:
+      "The file “{name}” is being uploaded to the server right now — deletion will wait until the upload finishes.",
 
     // --- preparing files ---
     FFMPEG_SELF_BROKEN:

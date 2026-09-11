@@ -58,7 +58,36 @@ pub async fn run<'a>(
         // that is not there. That is the right outcome — there was nothing to lose — and it
         // still leaves a `latest` to roll back to, so the answer to "put it back" stops being
         // an internal error about a missing directory.
-        upgrade::run(ctx, steps, &cancelled, &mut watch).await
+        let run_fut = upgrade::run(ctx, steps, &cancelled, &mut watch);
+        let cancel_token = task.cancel_token();
+
+        // ⚠ **T595 — cancellation raced against the run itself, not only checked between
+        // steps.** `upgrade::run` (`server/deploy/mod.rs`) only calls `cancelled()` between
+        // steps: a cancel arriving while `(step.apply)(ctx).await` is already in flight is
+        // not seen until that await itself returns — which, on a step stuck behind a
+        // `Connection::exec` that has not hit its own `EXEC_CEILING` yet, could be minutes.
+        // This is the one production call site with a live `TaskContext`
+        // (`tasks/deploy.rs::run`, unlike the test fixtures that call `server::deploy::run`
+        // directly with `cancelled = || false`), so it is the one place this fix can land
+        // without touching `Step`'s signature — see the doc comment on `upgrade::run` for
+        // why that wider rework was deliberately not done here.
+        //
+        // **This is best-effort, not a hard guarantee.** When `task.cancel_token()` fires
+        // first, `run_fut` is dropped mid-flight — inside it, `Connection::exec`'s `Channel`
+        // is dropped along with it, which usually (not always: the server decides whether to
+        // signal the child at all) tears down the SSH channel the stuck command was running
+        // on. That is the same best-effort standing `upload::cleanup` already accepts for a
+        // remote process, and it is NOT the constitution's principle III guarantee — that
+        // one is about the LOCAL process tree via `kill_tree()`, not a command running on
+        // somebody else's machine. What this buys is real: the task itself answers
+        // `Cancelled` at once instead of waiting out `EXEC_CEILING`, so the "cancel" button
+        // stops lying about working. `opened.conn.close()` in `commands/deploy.rs` runs
+        // right after this returns, outside `tasks::deploy::run` entirely, so the connection
+        // itself is always closed regardless of which side of this race won.
+        tokio::select! {
+            result = run_fut => result,
+            _ = cancel_token.cancelled() => Err(DeployError::Cancelled),
+        }
     };
 
     outcome.map_err(|e| failed(e, &settled))

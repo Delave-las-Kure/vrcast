@@ -40,6 +40,8 @@ export type ErrorCode =
   | "MANIFEST_CONFLICT"
   | "FILE_MISSING_ON_SERVER"
   | "FILE_IN_USE"
+  | "MEDIA_BUSY"
+  | "FILE_BUSY"
   // preparing files
   | "FFMPEG_BROKEN"
   | "NO_AUDIO_TRACKS"
@@ -152,6 +154,8 @@ export type DetailCode =
   | "MANIFEST_MALFORMED"
   | "CONFIRM_DELETE"
   | "VIEWERS_ACTIVE_DELETE"
+  | "MEDIA_BUSY_BUILDING"
+  | "MEDIA_BUSY_UPLOADING"
 
   // preparing files
   | "FFMPEG_SELF_BROKEN"

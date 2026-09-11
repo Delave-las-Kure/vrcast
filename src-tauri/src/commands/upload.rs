@@ -290,7 +290,15 @@ pub mod api {
     /// the last line of defence: the checksum comparison will catch the divergence, and such
     /// a file never enters serving. Closing it with a lock held for the whole submission
     /// costs more than the case is worth.
-    fn running_upload_for(state: &AppState, server_id: &str, name: &str) -> Result<Option<String>> {
+    ///
+    /// `pub(crate)` since T596: `library.rs`'s `media_delete`/`file_delete` call this too, in
+    /// the opposite direction — not "refuse a second upload" but "refuse to delete what an
+    /// upload is actively writing".
+    pub(crate) fn running_upload_for(
+        state: &AppState,
+        server_id: &str,
+        name: &str,
+    ) -> Result<Option<String>> {
         for task in state.tasks.list()? {
             if task.kind != TaskKind::Upload
                 || task.state.is_final()

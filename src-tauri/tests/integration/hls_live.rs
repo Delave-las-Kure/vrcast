@@ -15,11 +15,20 @@ use vrcast_studio_lib::domain::hls_master::{self, Variant};
 use vrcast_studio_lib::domain::hls_package::ToCut;
 use vrcast_studio_lib::server::hls_package::Cutting;
 use vrcast_studio_lib::server::hls_verify;
+use vrcast_studio_lib::store::db::Db;
+use vrcast_studio_lib::tasks::engine::TaskContext;
 use vrcast_studio_lib::tasks::ladder_build;
 
 use super::fixture::TestServer;
 use super::hls_fixture::VIDEO_DIR;
 use super::ssh_live::connect;
+
+/// A context with nowhere real to report to — enough for `Cutting::run`'s cancellation race
+/// to have something to watch, the same stand-in `deploy_clean.rs`/`lane_overlap_bench.rs`
+/// use for the same reason (see `TaskContext::detached`'s own doc comment).
+fn detached_ctx() -> TaskContext {
+    TaskContext::detached(std::sync::Arc::new(Db::open_in_memory().unwrap()))
+}
 
 /// How long the little films are.
 ///
@@ -77,8 +86,9 @@ async fn a_ladder_is_cut_on_the_server_and_every_variant_of_it_is_served() {
     };
 
     let mut announced = Vec::new();
+    let ctx = detached_ctx();
     let facts = cutting
-        .run(|progress| announced.push(progress.cut.len()))
+        .run(&ctx, |progress| announced.push(progress.cut.len()))
         .await
         .expect("the cutting did not finish");
 
@@ -186,7 +196,7 @@ async fn a_variant_taken_away_makes_the_result_incomplete_rather_than_successful
         ],
     };
     let facts = cutting
-        .run(|_| {})
+        .run(&detached_ctx(), |_| {})
         .await
         .expect("the cutting did not finish");
 
@@ -259,7 +269,10 @@ async fn a_variant_already_cut_whole_is_not_cut_again() {
             file: String::from("again_6.mp4"),
         }],
     };
-    cutting.run(|_| {}).await.expect("the first cutting failed");
+    cutting
+        .run(&detached_ctx(), |_| {})
+        .await
+        .expect("the first cutting failed");
 
     // A mark of our own inside the finished variant. If the second run cuts it again the
     // mark goes with it — which is exactly what "was it rebuilt?" means here.
@@ -270,7 +283,7 @@ async fn a_variant_already_cut_whole_is_not_cut_again() {
         .expect("the mark would not be left");
 
     cutting
-        .run(|_| {})
+        .run(&detached_ctx(), |_| {})
         .await
         .expect("the second cutting failed");
 

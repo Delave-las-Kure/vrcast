@@ -109,6 +109,11 @@ mod ladder_active_viewers;
 #[path = "integration/ladder_build_race.rs"]
 mod ladder_build_race;
 
+/// T596 — `media_delete`/`file_delete` refuse to delete a top-level path an active
+/// `ladder_build`/`upload_start` is writing right now.
+#[path = "integration/media_delete_during_active_build.rs"]
+mod media_delete_during_active_build;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 
@@ -153,6 +158,11 @@ mod serving;
 #[path = "integration/hls_live.rs"]
 mod hls_live;
 
+/// T597 — cancelling during the cutting phase actually stops the detached server-side
+/// process (`Cutting::stop_remote`, and `Cutting::run` calling it on cancellation).
+#[path = "integration/hls_cutting_cancel.rs"]
+mod hls_cutting_cancel;
+
 #[path = "integration/limits_live.rs"]
 mod limits_live;
 
@@ -170,6 +180,11 @@ mod stand_scenarios;
 
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;
+
+/// T595 — `Connection::exec` gives up on a remote command that hangs instead of waiting on
+/// it forever, and the same call is what deploy steps run through.
+#[path = "integration/ssh_exec_timeout.rs"]
+mod ssh_exec_timeout;
 
 #[path = "integration/viewers_live.rs"]
 mod viewers_live;
