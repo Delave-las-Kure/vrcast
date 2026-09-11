@@ -143,6 +143,20 @@ export function UploadScreen() {
     consequences: string;
   } | null>(null);
   /**
+   * T586 — guards `askDeleteOrphan` against a second click while its own unconfirmed
+   * `mediaDelete` is still in flight. `busy` does not cover this: it is set by
+   * `runBatch` and `confirmDeleteOrphan`, never by `askDeleteOrphan` itself, so the
+   * delete button stayed clickable for the whole round trip — a second click sent a
+   * second parallel unconfirmed `mediaDelete`, and if the two resolved out of order
+   * (or the person confirmed the first while the second was still pending), the
+   * confirm dialog could reopen pointing at a medium that was already gone. Same
+   * shape as `busy`: set at the start of `askDeleteOrphan`, cleared in its `finally`,
+   * regardless of whether the request turned out to be stale (see `uploadGenRef`
+   * above) — a stale request is still this button's own request, and the button must
+   * not stay disabled forever once it settles.
+   */
+  const [orphanDeleteAsking, setOrphanDeleteAsking] = useState(false);
+  /**
    * T582 — guards against a stale `askDeleteOrphan`/`confirmDeleteOrphan` response
    * landing after the person has already moved on to a new file pick. `askDeleteOrphan`
    * sends its unconfirmed `mediaDelete` and then awaits the network; if `take()` or
@@ -387,6 +401,7 @@ export function UploadScreen() {
   const askDeleteOrphan = async (media: NewMedium) => {
     if (!active) return;
     const gen = uploadGenRef.current;
+    setOrphanDeleteAsking(true);
     try {
       await ipc.mediaDelete(active.id, media.id, false);
       if (gen !== uploadGenRef.current) return;
@@ -401,6 +416,8 @@ export function UploadScreen() {
       } else {
         setError(err);
       }
+    } finally {
+      setOrphanDeleteAsking(false);
     }
   };
 
@@ -624,7 +641,7 @@ export function UploadScreen() {
                         type="button"
                         className="button--danger"
                         onClick={() => void askDeleteOrphan(orphanedMedia)}
-                        disabled={busy}
+                        disabled={busy || orphanDeleteAsking}
                       >
                         {u.orphanedMediaDelete}
                       </button>
