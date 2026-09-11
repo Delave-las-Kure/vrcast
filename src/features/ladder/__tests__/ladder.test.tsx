@@ -1296,3 +1296,44 @@ describe("the measured peak reaching the shown ladder (T522)", () => {
     expect(mockLadderPlan.mock.calls[1][0]).toMatchObject({ measured_peak_bps: 55_000_000 });
   });
 });
+
+describe("T587 — a stale ladderPlan response for a past file is ignored", () => {
+  it("keeps file B's rungs on screen when file A's late response arrives after file B's own", async () => {
+    // ladderMeasure is left pending for the whole test: its own reload-on-finish path
+    // (T522) is not what this test is about, and letting it resolve would fire a second
+    // loadPlan call for each file, muddying which ladderPlan call answers which file.
+    mockLadderMeasure.mockImplementation(() => new Promise(() => {}));
+
+    let resolvePlanA: (p: LadderPreview) => void = () => {};
+    const planA = new Promise<LadderPreview>((resolve) => {
+      resolvePlanA = resolve;
+    });
+    let resolvePlanB: (p: LadderPreview) => void = () => {};
+    const planB = new Promise<LadderPreview>((resolve) => {
+      resolvePlanB = resolve;
+    });
+    mockLadderPlan.mockImplementationOnce(() => planA).mockImplementationOnce(() => planB);
+
+    const { rerender } = renderIn(<LadderScreen path="F:/films/A.mp4" />, "en");
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(1));
+
+    // File B is opened before A's plan has come back at all — the same component
+    // instance, no remount, exactly as LadderPage really renders a file switch (no
+    // `key` on <LadderScreen> there).
+    rerender(<LadderScreen path="F:/films/B.mp4" />);
+    await waitFor(() => expect(mockLadderPlan).toHaveBeenCalledTimes(2));
+
+    // B's own answer arrives first.
+    resolvePlanB(preview("measured", [rung(0, 9, 1080, 91.0)]));
+    await waitFor(() => expect(screen.getByTestId("rung-0")).toHaveTextContent("91.00"));
+
+    // A's answer — issued first, but arriving second, after B has already painted the
+    // screen — must not be allowed to overwrite it.
+    resolvePlanA(preview("measured", MEASURED));
+    // Give a (wrongly accepted) update a tick to land before asserting it did not.
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(screen.getByTestId("rung-0")).toHaveTextContent("91.00");
+    expect(screen.queryByText(/96\.10/)).not.toBeInTheDocument();
+  });
+});
