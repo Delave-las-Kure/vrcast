@@ -1337,3 +1337,40 @@ describe("T587 — a stale ladderPlan response for a past file is ignored", () =
     expect(screen.queryByText(/96\.10/)).not.toBeInTheDocument();
   });
 });
+
+describe("T588 — measuring does not survive a file change", () => {
+  it("stops showing file A's measuring status once file B is open, before B measures", async () => {
+    // Left pending for the whole test, exactly as the T587 test above does: its own
+    // reload-on-finish path is not what this test is about, and letting it resolve would
+    // fire a second loadPlan call for each file, muddying which call is for which file.
+    mockLadderMeasure.mockImplementation(() => new Promise(() => {}));
+    // A ladder from the formula, with something left to measure, is what puts
+    // `MeasureOffer` — the only thing that reads `measuring` — on screen at all.
+    mockLadderPlan.mockResolvedValue(
+      preview("formula", GUESSED, { code: "RUNGS_NOT_MEASURED", indexes: [0, 1] }),
+    );
+
+    const { rerender } = renderIn(<LadderScreen path="F:/films/A.mp4" />, "en");
+
+    await waitFor(() => expect(screen.getByText(en.ui.ladder.measureStart)).toBeEnabled());
+    fireEvent.click(screen.getByText(en.ui.ladder.measureStart));
+    await waitFor(() =>
+      expect(screen.getByText(en.ui.ladder.measureRunning)).toBeInTheDocument(),
+    );
+
+    // File B is opened while the screen still thinks A's measurement is running — the
+    // same component instance, no remount, exactly as LadderPage really renders a file
+    // switch (no `key` on <LadderScreen> there) and exactly as the T587 test above does.
+    rerender(<LadderScreen path="F:/films/B.mp4" />);
+
+    // B has started no measurement of its own (no click happened for it) — A's leftover
+    // status must not still be on screen under B's own, unrelated offer.
+    await waitFor(() =>
+      expect(screen.queryByText(en.ui.ladder.measureRunning)).not.toBeInTheDocument(),
+    );
+    // And it must stay gone — not disappear for one tick and come back once B's own
+    // `qualityMeasurePreview` answer lands a moment later.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(screen.queryByText(en.ui.ladder.measureRunning)).not.toBeInTheDocument();
+  });
+});
