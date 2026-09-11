@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crate::domain::hls_package::{self, CutFacts, Progress, ToCut};
 use crate::ssh::{Connection, Result, SshError};
+use crate::tasks::engine::TaskContext;
 
 /// What is being cut, and where.
 pub struct Cutting<'a> {
@@ -25,6 +26,25 @@ pub struct Cutting<'a> {
     pub base: &'a str,
     pub variants: &'a [ToCut],
 }
+
+/// How [`Cutting::run`] ended.
+///
+/// A type of its own rather than reusing [`SshError`] (T597) — by the same precedent
+/// `UploadError` sets in `server::upload`: that one carries its own `Cancelled` apart from
+/// the SSH failures it also wraps, for the same reason. `SshError` has no shape for "a
+/// person asked to stop"; bolting one on there would widen a type every ordinary command
+/// failure also has to match on, for the sake of the one caller that watches a
+/// `TaskContext`.
+#[derive(Debug, thiserror::Error)]
+pub enum CuttingError {
+    #[error(transparent)]
+    Ssh(#[from] SshError),
+
+    #[error("the cutting was cancelled")]
+    Cancelled,
+}
+
+pub type CuttingResult<T> = std::result::Result<T, CuttingError>;
 
 /// How often the log is asked for.
 ///
@@ -91,15 +111,68 @@ impl Cutting<'_> {
     }
 
     /// Whether the script is still running.
+    ///
+    /// ⚠ **The pattern is self-excluding, and that is not decoration.** `conn.exec` runs
+    /// every command through the remote shell (`bash -lc '<command>'`), so the invocation
+    /// `pgrep -f "vrcast-hls-{base}.sh"` has its own command line containing the very text
+    /// it is searching for — `pgrep -f` matches against the whole command line of every
+    /// process, and that includes the shell that is running `pgrep` itself. Found while
+    /// writing T597's own test: `still_running()` reported `true` for seconds after the
+    /// actual script and its `ffmpeg` had both already exited, because the check was really
+    /// observing its own invocation, not the thing it meant to ask about. The classic fix —
+    /// `pgrep -f '[v]rcast-hls-…'` — makes the search regex match the plain text
+    /// `vrcast-hls-…` wherever it occurs, while `pgrep`'s own command line contains the
+    /// bracketed form `[v]rcast-hls-…`, which the regex does not match against itself.
     pub async fn still_running(&self) -> Result<bool> {
         let out = self
             .conn
             .exec(&format!(
                 "pgrep -f {} >/dev/null && echo yes || echo no",
-                super::shell_quote(&format!("vrcast-hls-{}.sh", self.base))
+                super::shell_quote(&self_excluding_pattern(self.base))
             ))
             .await?;
         Ok(out.trimmed() == "yes")
+    }
+
+    /// Ask the server to end the detached cutting process, best-effort (T597).
+    ///
+    /// The same self-excluding pattern [`Self::still_running`] builds and explains — `pkill`
+    /// is `pgrep`'s twin, built from the same command-line search, and needs the identical
+    /// guard for the identical reason.
+    ///
+    /// **Best-effort, like `tidy_up`/`upload::cleanup`, and deliberately not a hard error.**
+    /// By the time anything calls this, a cancellation has already happened (or is about to
+    /// be reported); failing to reach a process that may already have finished on its own
+    /// must not turn an honest cancellation into a reported failure. A refusal is logged and
+    /// swallowed rather than propagated.
+    ///
+    /// `pkill`'s own exit code 1 ("no process matched") is not a failure here — it is what a
+    /// cutting that had already finished, or was never started, looks like, and is exactly as
+    /// welcome an outcome as actually having killed something.
+    pub async fn stop_remote(&self) {
+        let pattern = self_excluding_pattern(self.base);
+        match self
+            .conn
+            .exec(&format!("pkill -f {}", super::shell_quote(&pattern)))
+            .await
+        {
+            Ok(out) if out.ok() || out.exit_code == Some(1) => {}
+            Ok(out) => {
+                tracing::warn!(
+                    base = self.base,
+                    exit_code = ?out.exit_code,
+                    stderr = out.stderr.trim(),
+                    "pkill against the detached cutting process did not end cleanly"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    base = self.base,
+                    error = %e,
+                    "could not ask the server to stop the detached cutting process"
+                );
+            }
+        }
     }
 
     /// What each variant turned out to be, read back from the server.
@@ -129,15 +202,43 @@ impl Cutting<'_> {
     ///
     /// Resumes rather than restarts: the script itself skips a variant that is already cut
     /// whole, so running this again after a break picks up where it stopped (FR-048).
-    pub async fn run<F>(&self, mut on_progress: F) -> Result<Vec<CutFacts>>
+    ///
+    /// ⚠ **T597 — takes a `TaskContext` and actually answers a cancellation, rather than only
+    /// polling every [`ASK_EVERY`].** `server::upload` already imports
+    /// `crate::tasks::engine::TaskContext` directly (`server/upload.rs`), so the `server`
+    /// layer being handed a live task's context is not new — the same precedent this follows.
+    /// Before this, `ladder_build::run`'s only cancellation check was `bail_if_cancelled()`
+    /// **before** the cutting phase started (`tasks/ladder_build.rs:176`); once inside this
+    /// loop, a stop pressed on the interface did nothing but wait out the sleep, and the
+    /// detached server-side process (`setsid nohup`) went on consuming CPU and disk on the
+    /// server after the task had already reported itself cancelled — the very drift a
+    /// person cancelling a build believes they just stopped.
+    pub async fn run<F>(
+        &self,
+        ctx: &TaskContext,
+        mut on_progress: F,
+    ) -> CuttingResult<Vec<CutFacts>>
     where
         F: FnMut(&Progress),
     {
         self.start().await?;
 
         let mut last_seen = 0usize;
+        let cancel_token = ctx.cancel_token();
         loop {
-            tokio::time::sleep(ASK_EVERY).await;
+            // Raced rather than checked only between iterations: waiting out the whole of
+            // `ASK_EVERY` before noticing a cancellation would answer "stop" several seconds
+            // late on every single poll, and this is the one thing T597 exists to shorten.
+            tokio::select! {
+                _ = tokio::time::sleep(ASK_EVERY) => {}
+                _ = cancel_token.cancelled() => {
+                    // Best-effort, like `tidy_up`/`upload::cleanup` — see `stop_remote`'s own
+                    // doc comment for why a failure here must not turn an honest cancellation
+                    // into a reported one.
+                    self.stop_remote().await;
+                    return Err(CuttingError::Cancelled);
+                }
+            }
 
             // A broken poll is not a broken build: the work is detached, so we simply ask
             // again. Only the work itself ending decides anything.
@@ -145,7 +246,7 @@ impl Cutting<'_> {
                 continue;
             };
             if let Some(why) = &progress.failed {
-                return Err(SshError::Exec(format!("the cutting stopped: {why}")));
+                return Err(SshError::Exec(format!("the cutting stopped: {why}")).into());
             }
             if progress.cut.len() > last_seen {
                 last_seen = progress.cut.len();
@@ -161,11 +262,12 @@ impl Cutting<'_> {
             if !self.still_running().await.unwrap_or(true) {
                 return Err(SshError::Exec(String::from(
                     "the cutting is no longer running and never said it had finished",
-                )));
+                ))
+                .into());
             }
         }
 
-        self.facts().await
+        Ok(self.facts().await?)
     }
 
     /// Remove what the cutting left behind on the server.
@@ -182,6 +284,22 @@ impl Cutting<'_> {
             ))
             .await?;
         Ok(())
+    }
+}
+
+/// Build a `pgrep -f`/`pkill -f` pattern that does not match its own invocation.
+///
+/// See [`Cutting::still_running`]'s doc comment for the whole story: `pgrep -f pattern` run
+/// through `conn.exec` (itself `bash -lc '<command>'` on the far end) has `pattern` sitting
+/// right there in its own command line, and matches itself. Bracketing the first character
+/// turns it into a one-character character class in the regex `pgrep -f` builds internally,
+/// which still matches the plain text everywhere else but no longer matches the bracketed
+/// text of `pgrep`'s own argument.
+fn self_excluding_pattern(base: &str) -> String {
+    let full = format!("vrcast-hls-{base}.sh");
+    match full.chars().next() {
+        Some(c) => format!("[{c}]{}", &full[c.len_utf8()..]),
+        None => full,
     }
 }
 

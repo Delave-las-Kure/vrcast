@@ -158,6 +158,11 @@ mod serving;
 #[path = "integration/hls_live.rs"]
 mod hls_live;
 
+/// T597 — cancelling during the cutting phase actually stops the detached server-side
+/// process (`Cutting::stop_remote`, and `Cutting::run` calling it on cancellation).
+#[path = "integration/hls_cutting_cancel.rs"]
+mod hls_cutting_cancel;
+
 #[path = "integration/limits_live.rs"]
 mod limits_live;
 

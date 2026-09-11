@@ -221,7 +221,10 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         base: job.slug,
         variants: &to_cut,
     };
-    let facts = cutting.run(|_| {}).await?;
+    let facts = cutting.run(ctx, |_| {}).await.map_err(|e| match e {
+        crate::server::hls_package::CuttingError::Cancelled => BuildError::Cancelled,
+        crate::server::hls_package::CuttingError::Ssh(inner) => BuildError::Ssh(inner),
+    })?;
 
     // The description is built from what the cutting reported — the segments' own numbers,
     // not an estimate of them.
