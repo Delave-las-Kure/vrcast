@@ -463,6 +463,8 @@ export const en: Catalogue = {
     UPLOAD_NAME_EMPTY: "Enter the name the file will be visible under to viewers.",
     UPLOAD_ALREADY_RUNNING:
       "The file “{name}” is already being uploaded to this server. Wait for it to finish, or cancel that task.",
+    BUILD_ALREADY_RUNNING:
+      "A build of the set “{slug}” is already running on this server. Wait for it to finish.",
     UPLOAD_NAME_RESERVED: "That name belongs to an internal serving entry — choose another.",
     DOMAIN_ADD_RECORD:
       "Create a {record} record for “{name}” with the value {value} at your domain registrar. The change takes a few minutes to spread; the check can be run again.",
