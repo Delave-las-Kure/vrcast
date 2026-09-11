@@ -35,6 +35,16 @@ export function UpgradeDialog({
   const [plan, setPlan] = useState<UpgradePlan | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
+  /**
+   * T593 — its own flag, not `running`: `running` holds the id of the real task once
+   * `serverUpgradeRun` has answered, and the effect above compares `event.id !== running`
+   * against it — it means "a task is now actually going". `starting` means something
+   * narrower and earlier: "my own click has been sent, its answer has not arrived yet".
+   * Conflating the two would mean the button re-enables (or the handler re-runs) during
+   * the exact window between a click and the response, which is precisely the gap a
+   * second unasked upgrade slips through.
+   */
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -99,13 +109,19 @@ export function UpgradeDialog({
 
           <button
             type="button"
-            disabled={running !== null || toDo.length === 0}
+            disabled={running !== null || toDo.length === 0 || starting}
             onClick={() => {
+              // T593 — same synchronous refusal as DeployScreen's `start`: a second click
+              // that lands before this one's answer must not send its own
+              // `serverUpgradeRun`, an unasked-for second upgrade on the server.
+              if (starting) return;
+              setStarting(true);
               setError(null);
               ipc
                 .serverUpgradeRun(serverId, true)
                 .then(setRunning)
-                .catch((e: AppError) => setError(e));
+                .catch((e: AppError) => setError(e))
+                .finally(() => setStarting(false));
             }}
           >
             {words.agreeAndUpgrade}
