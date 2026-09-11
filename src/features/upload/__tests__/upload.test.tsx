@@ -702,6 +702,65 @@ describe("T582 — a stale orphan-delete response is ignored after a new file pi
   });
 });
 
+describe("T586 — askDeleteOrphan is guarded by its own busy flag", () => {
+  it("disables the delete button while its request is in flight, and a second click sends no second mediaDelete", async () => {
+    mockMediaCreate.mockResolvedValue("new-media-t586");
+    mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
+    mockOpen.mockResolvedValue([
+      "F:\\видео\\Сериал\\s01e01.mp4",
+      "F:\\видео\\Сериал\\s01e02.mp4",
+    ]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByText("s01e01.mp4");
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.upload.newMediaLabel), {
+      target: { value: "T586 сериал" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await screen.findByText(ru.ui.upload.orphanedMediaDelete);
+
+    // The unconfirmed mediaDelete call is left hanging — same setup as T582's own test.
+    let rejectDelete: (err: unknown) => void = () => {};
+    mockMediaDelete.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectDelete = reject;
+        }),
+    );
+
+    const deleteButton = screen.getByText(ru.ui.upload.orphanedMediaDelete);
+    fireEvent.click(deleteButton);
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledTimes(1));
+
+    // The button must now be disabled — its own in-flight request, not `busy`.
+    expect(deleteButton).toBeDisabled();
+
+    // A real click on a disabled button fires no onClick handler in the DOM, but this
+    // simulates it directly to make sure askDeleteOrphan itself did not run again.
+    fireEvent.click(deleteButton);
+    expect(mockMediaDelete).toHaveBeenCalledTimes(1);
+
+    rejectDelete({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "T586 сериал", files: 0, bytes: 0 } },
+      ],
+    } as AppError);
+
+    // Once the one request it owns has settled, the button is usable again — the flag
+    // is scoped to that single round trip, not stuck forever.
+    await waitFor(() => expect(deleteButton).toBeEnabled());
+    expect(await screen.findByText(ru.ui.library.deleteYes)).toBeInTheDocument();
+  });
+});
+
 describe("T580 — UploadScreen pick() accumulates and drops files", () => {
   it("two picks in a row keep both sets of files, without duplicates on overlap", async () => {
     mockOpen.mockResolvedValueOnce(["F:\\видео\\Сериал\\s01e01.mp4"]);

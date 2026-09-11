@@ -257,9 +257,19 @@ export function LadderScreen({
   /** What the measurement had to say about itself. Cleared when the file changes. */
   const [measured, setMeasured] = useState<Detail[]>([]);
   const [measuring, setMeasuring] = useState(false);
-  // Tied to the file rather than to what is running: this must go false when the screen is
-  // put away or asked about another file, and at no other moment.
-  const alive = useRef(true);
+  // T587 — a per-file generation token, the same pattern `uploadGenRef` already uses in
+  // `UploadScreen` (T582/T585). This used to be a plain boolean (`alive`): true while the
+  // screen was open, false once torn down. That answers "is the component still mounted",
+  // not "is this particular answer still about the file on screen right now" — and because
+  // `LadderPage` renders this same component instance across a file change (no `key`, so no
+  // remount), the effect for the NEW file flips the very same boolean back to true before an
+  // in-flight request for the OLD file has any chance to come back. A `loadPlan`/
+  // `ladderMeasure` response for file A, arriving after file B is already open, then read
+  // `alive.current === true` — correctly true, just about the wrong file — and overwrote B's
+  // screen with A's source, rungs and provenance. Bumped once per file change; every
+  // callback below captures its own value at request-start and compares it at
+  // response-time, so an answer is accepted only for the file that actually asked it.
+  const genRef = useRef(0);
   const [name, setName] = useState(slug ?? "");
   // The most recent answer, read by `loadPlan` itself rather than by adding `preview` to its
   // own dependency list (T522). `preview` is *set* by `loadPlan`, so making the callback
@@ -305,7 +315,11 @@ export function LadderScreen({
   const selectedMedia = existingMedia.find((m) => m.id === selectedMediaId) ?? null;
 
   useEffect(() => {
-    alive.current = true;
+    // T587 — invalidates every request in flight for whatever file was open before this
+    // one, in every callback that captures `genRef.current` at its own start. Bumped here
+    // and nowhere else: one point where "the file changed" is decided, rather than a
+    // cleanup racing the next effect's own setup (see the note on `genRef` above).
+    genRef.current += 1;
     // A different file was never measured under any codec, so there is nothing yet to ask
     // a repeat `ladderPlan` call to keep asking under (see `loadPlan` below) — reset only
     // when the file itself changes, not on every edit of the advanced fields, or a codec
@@ -315,9 +329,11 @@ export function LadderScreen({
     // T574 — a refusal on a past file has nothing to say about this one: a fresh path is
     // not necessarily still in use by anyone.
     setBuildFileInUse(false);
-    return () => {
-      alive.current = false;
-    };
+    // T587 — a measurement task id from a past file has nothing to say about this one
+    // either: without this, `onTaskDone` below (subscribed fresh for the new file, but
+    // reading the same ref) could still match a task started on the file just left, and
+    // paint this screen with that other file's notices the moment it finishes.
+    measuringId.current = null;
   }, [path]);
 
   // T528 — the library of the server this set would be built on, fetched only when a
@@ -348,6 +364,11 @@ export function LadderScreen({
    * line the other did not.
    */
   const loadPlan = useCallback(async (): Promise<LadderPreview | null> => {
+    // T587 — captured before the request goes out, compared once it comes back. A stale
+    // answer (this file's generation has since moved on) is dropped in every branch
+    // below — success, failure and `finally` alike — none of the three gets to touch a
+    // screen that has already moved on to another file.
+    const gen = genRef.current;
     setWorking(true);
     try {
       // T522 — the two "Advanced" fields, sent along on every call. Blank means unknown to
@@ -384,22 +405,25 @@ export function LadderScreen({
         // own probe-based anchor, which is the correct old behaviour for that moment.
         measured_peak_bps: measuredPeakRef.current ?? undefined,
       });
-      if (!alive.current) return null;
+      if (gen !== genRef.current) return null;
       previewRef.current = answer;
       setPreview(answer);
       setRungs(answer.plan.rungs);
       if (answer.from !== "formula") setOffer(null);
       return answer;
     } catch (e) {
-      if (alive.current) setError(e as AppError);
+      if (gen === genRef.current) setError(e as AppError);
       return null;
     } finally {
-      if (alive.current) setWorking(false);
+      if (gen === genRef.current) setWorking(false);
     }
   }, [path, nativeHeightInput, declaredLayout]);
 
   useEffect(() => {
     if (!path) return;
+    // T587 — this effect runs right after the one above bumped `genRef`, so this always
+    // captures the generation the NEW file was just given, not the one it is leaving.
+    const gen = genRef.current;
     setError(null);
     // A different file has not been measured, so nothing is known about its measurement.
     setMeasured([]);
@@ -408,11 +432,11 @@ export function LadderScreen({
       // The offer to measure is only worth fetching when there is nothing measured yet:
       // it runs the complexity probe, and running that on a screen that already has an
       // answer would cost seconds for nothing.
-      if (!alive.current || answer?.from !== "formula") return;
+      if (gen !== genRef.current || answer?.from !== "formula") return;
       ipc
         .qualityMeasurePreview({ path })
         .then((o) => {
-          if (alive.current) setOffer(o);
+          if (gen === genRef.current) setOffer(o);
         })
         .catch(() => undefined);
     });
@@ -422,7 +446,7 @@ export function LadderScreen({
     ipc
       .ladderMeasure(path)
       .then((m) => {
-        if (!alive.current) return;
+        if (gen !== genRef.current) return;
         setSource(m);
         // T522 — the measured peak reaches the shown ladder only if it is actually sent
         // back to the core: the first `loadPlan()` above started before this measurement
@@ -447,6 +471,11 @@ export function LadderScreen({
   // was waiting for.
   useEffect(() => {
     if (!path) return;
+    // T587 — kept in step with the other two call sites above, even though the
+    // `measuringId.current = null` reset in the file-change effect already keeps a task
+    // left running by a past file from matching by id in the ordinary case: cheap, and
+    // correct if that invariant is ever loosened later without this comparison in mind.
+    const gen = genRef.current;
     const unlisten = onTaskDone((event) => {
       if (event.id !== measuringId.current) return;
       measuringId.current = null;
@@ -470,9 +499,9 @@ export function LadderScreen({
       // Tolerant of an event that carries none: the field is in the contract and the core
       // always sends it, but an aside going missing must not take the whole screen down
       // with it.
-      if (alive.current) setMeasured(event.notices ?? []);
+      if (gen === genRef.current) setMeasured(event.notices ?? []);
       void loadPlan().finally(() => {
-        if (alive.current) setMeasuring(false);
+        if (gen === genRef.current) setMeasuring(false);
       });
     });
     return () => {
