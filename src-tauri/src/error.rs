@@ -91,6 +91,12 @@ error_codes! {
     ManifestConflict => "MANIFEST_CONFLICT",
     FileMissingOnServer => "FILE_MISSING_ON_SERVER",
     FileInUse => "FILE_IN_USE",
+    /// `media_delete` refused: a `ladder_build`/`upload_start` is actively writing one of
+    /// this medium's top-level paths right now (T596).
+    MediaBusy => "MEDIA_BUSY",
+    /// `file_delete` refused, for the same reason as `MediaBusy` — this single file's top
+    /// is what an active build or upload is writing (T596).
+    FileBusy => "FILE_BUSY",
 
     // --- preparing files ---
     FfmpegBroken => "FFMPEG_BROKEN",

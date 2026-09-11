@@ -109,6 +109,11 @@ mod ladder_active_viewers;
 #[path = "integration/ladder_build_race.rs"]
 mod ladder_build_race;
 
+/// T596 — `media_delete`/`file_delete` refuse to delete a top-level path an active
+/// `ladder_build`/`upload_start` is writing right now.
+#[path = "integration/media_delete_during_active_build.rs"]
+mod media_delete_during_active_build;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 

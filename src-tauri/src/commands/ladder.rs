@@ -248,7 +248,11 @@ pub mod api {
     /// before `building` reaches the UI, or a batch's own `then_build` racing a manual click —
     /// neither shares state with the other, so nothing before this stopped both from reaching
     /// `submit_in_batch` and writing the same `master.m3u8`/`v{N}` directories concurrently.
-    fn running_build_for(
+    ///
+    /// `pub(crate)` since T596: `library.rs`'s `media_delete`/`file_delete` call this too, in
+    /// the opposite direction — not "refuse a second build" but "refuse to delete what a
+    /// build is actively writing".
+    pub(crate) fn running_build_for(
         state: &super::super::AppState,
         server_id: &str,
         slug: &str,
