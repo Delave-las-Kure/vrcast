@@ -171,6 +171,11 @@ mod stand_scenarios;
 #[path = "integration/ssh_live.rs"]
 mod ssh_live;
 
+/// T595 — `Connection::exec` gives up on a remote command that hangs instead of waiting on
+/// it forever, and the same call is what deploy steps run through.
+#[path = "integration/ssh_exec_timeout.rs"]
+mod ssh_exec_timeout;
+
 #[path = "integration/viewers_live.rs"]
 mod viewers_live;
 
