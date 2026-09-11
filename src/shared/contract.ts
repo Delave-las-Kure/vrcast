@@ -34,6 +34,7 @@ export type ErrorCode =
   | "SERVER_NEEDS_UPGRADE"
   | "DEPLOY_STEP_FAILED"
   | "SWAP_FAILED"
+  | "DEPLOY_ALREADY_RUNNING"
   // library
   | "SLUG_TAKEN"
   | "MANIFEST_CONFLICT"

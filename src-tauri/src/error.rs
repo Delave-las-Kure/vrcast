@@ -83,6 +83,8 @@ error_codes! {
     ServerNeedsUpgrade => "SERVER_NEEDS_UPGRADE",
     DeployStepFailed => "DEPLOY_STEP_FAILED",
     SwapFailed => "SWAP_FAILED",
+    /// A deploy or upgrade for this server is already running (T593).
+    DeployAlreadyRunning => "DEPLOY_ALREADY_RUNNING",
 
     // --- library ---
     SlugTaken => "SLUG_TAKEN",
