@@ -282,6 +282,36 @@ describe("T590 — DeployScreen resets all local state on a serverId change", ()
   });
 });
 
+describe("T592 — DomainCheck ignores a stale dnsCheck answer after a quick re-switch", () => {
+  it("keeps the verdict for the current IPv6 choice when an older request answers later", async () => {
+    let resolveKeep: (a: DomainAnswer) => void = () => {};
+    mockDnsCheck.mockImplementationOnce(
+      () =>
+        new Promise<DomainAnswer>((resolve) => {
+          resolveKeep = resolve;
+        }),
+    );
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Keep");
+    await waitFor(() => expect(mockDnsCheck).toHaveBeenCalledTimes(1));
+
+    // "Keep"'s own dnsCheck is still hanging. Switching to "Disable" fires a second
+    // request, which resolves at once (a plain mockResolvedValueOnce, no pending promise).
+    mockDnsCheck.mockResolvedValueOnce(DOMAIN_WRONG);
+    chooseIpv6("Disable");
+    await waitFor(() => expect(mockDnsCheck).toHaveBeenCalledTimes(2));
+
+    // The screen must already show "Disable"'s own verdict — DOMAIN_WRONG.
+    await waitFor(() => expect(screen.getByText("198.51.100.7")).toBeInTheDocument());
+
+    // Now "Keep"'s long-overdue answer lands. It must not overwrite "Disable"'s verdict:
+    // by the time it resolves, "Keep" is no longer the choice on screen.
+    resolveKeep(DOMAIN_OK);
+    await waitFor(() => expect(screen.getByText("198.51.100.7")).toBeInTheDocument());
+    expect(screen.queryByText(ru.ui.deploy.domainOk)).not.toBeInTheDocument();
+  });
+});
+
 describe("what a step says it will do", () => {
   /**
    * ⚠ **T507, FR-122.** The core has always worked out what each step changes — the packages
