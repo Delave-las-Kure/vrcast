@@ -47,9 +47,25 @@ export function LibraryScreen() {
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [dialog, setDialog] = useState<Dialog>(null);
+  const [dialog, setDialogRaw] = useState<Dialog>(null);
   const [dialogError, setDialogError] = useState<AppError | null>(null);
   const [renameFileInUse, setRenameFileInUse] = useState(false);
+
+  /**
+   * T584 — the single entry point through which `dialog` ever changes. Two
+   * transient, dialog-specific pieces of state — `dialogError` and
+   * `renameFileInUse` — used to be cleared by hand at each call site that opens
+   * or closes a dialog, and it was easy to miss one: closing the rename dialog
+   * via its own `onCancel` left `dialogError` standing, and the next dialog
+   * opened (create, delete) inherited a stale error that was never its own.
+   * Clearing both here, in the one place `dialog` itself is ever set, makes
+   * that omission impossible rather than merely rarer.
+   */
+  const setDialog = useCallback((next: Dialog) => {
+    setDialogRaw(next);
+    setDialogError(null);
+    setRenameFileInUse(false);
+  }, []);
   const t = useT();
   const { lang } = useLang();
   const [watchers, setWatchers] = useState<Record<string, number>>({});
@@ -260,10 +276,7 @@ export function LibraryScreen() {
           busy={busy}
           error={dialogError}
           fileInUse={renameFileInUse}
-          onCancel={() => {
-            setDialog(null);
-            setRenameFileInUse(false);
-          }}
+          onCancel={() => setDialog(null)}
           onRename={(title, slug, confirmed) =>
             void doRename(dialog.media, title, slug, confirmed)
           }
@@ -302,11 +315,7 @@ export function LibraryScreen() {
               t={t}
               lang={lang}
               disabled={busy || view.stale}
-              onRename={() => {
-                setDialog({ kind: "rename", media: m });
-                setDialogError(null);
-                setRenameFileInUse(false);
-              }}
+              onRename={() => setDialog({ kind: "rename", media: m })}
               onDelete={() => void askBeforeDelete(m)}
               onDeleteFile={(path) => void askBeforeDeleteFile(path)}
               onMoveFile={(path, mediaId) =>
