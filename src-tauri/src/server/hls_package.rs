@@ -134,11 +134,27 @@ impl Cutting<'_> {
         Ok(out.trimmed() == "yes")
     }
 
-    /// Ask the server to end the detached cutting process, best-effort (T597).
+    /// Ask the server to end the detached cutting process, best-effort (T597/T598).
     ///
-    /// The same self-excluding pattern [`Self::still_running`] builds and explains — `pkill`
-    /// is `pgrep`'s twin, built from the same command-line search, and needs the identical
-    /// guard for the identical reason.
+    /// The same self-excluding pattern [`Self::still_running`] builds and explains for
+    /// finding the wrapper's PID — but **not** for the kill itself (T598). `start()` runs
+    /// the wrapper as `setsid nohup bash {script} ... &`: `setsid` puts the wrapper in a new
+    /// session of which it is also the process-group leader (`PGID(bash) == PID(bash)`), and
+    /// the `ffmpeg` it spawns ordinarily — without a `setpgid` of its own — stays in that
+    /// same group. `pkill -f <pattern>` only ever signals PIDs whose own command line
+    /// matches the pattern; that is the wrapper's `bash /tmp/vrcast-hls-{base}.sh ...`
+    /// invocation, never the child `ffmpeg ...`, whose command line contains no trace of the
+    /// script's name at all. Killing only the wrapper let `ffmpeg` reparent onto init and
+    /// keep writing segments indefinitely — silently reopening the very race T596 closed,
+    /// because `Cancelled` is a final task state and the `running_build_for` guard stops
+    /// treating the build as active the moment `run()` returns it, regardless of whether the
+    /// orphaned `ffmpeg` is still writing into the directory that guard exists to protect.
+    ///
+    /// The fix: find the wrapper's PID with the self-excluding `pgrep -f`, then signal the
+    /// whole **process group** with a negative PID (`kill -- -$pid`) — the shell equivalent
+    /// of what [`crate::tasks::process::Process::kill_tree`] already does locally via
+    /// `libc_killpg`, just issued over SSH instead of libc because the target is the far end
+    /// of the connection.
     ///
     /// **Best-effort, like `tidy_up`/`upload::cleanup`, and deliberately not a hard error.**
     /// By the time anything calls this, a cancellation has already happened (or is about to
@@ -146,16 +162,20 @@ impl Cutting<'_> {
     /// must not turn an honest cancellation into a reported failure. A refusal is logged and
     /// swallowed rather than propagated.
     ///
-    /// `pkill`'s own exit code 1 ("no process matched") is not a failure here — it is what a
-    /// cutting that had already finished, or was never started, looks like, and is exactly as
-    /// welcome an outcome as actually having killed something.
+    /// Exit code 1 ("no process matched") is not a failure here — it is what a cutting that
+    /// had already finished, or was never started, looks like, and is exactly as welcome an
+    /// outcome as actually having killed something. The script below deliberately preserves
+    /// that exact exit code for an empty `pgrep` match, matching what plain `pkill -f` used
+    /// to return in the same case, so the caller's existing handling below needs no change.
     pub async fn stop_remote(&self) {
         let pattern = self_excluding_pattern(self.base);
-        match self
-            .conn
-            .exec(&format!("pkill -f {}", super::shell_quote(&pattern)))
-            .await
-        {
+        let script = format!(
+            "pids=$(pgrep -f {pattern}); \
+             if [ -z \"$pids\" ]; then exit 1; fi; \
+             for pid in $pids; do kill -- \"-$pid\"; done",
+            pattern = super::shell_quote(&pattern)
+        );
+        match self.conn.exec(&script).await {
             Ok(out) if out.ok() || out.exit_code == Some(1) => {}
             Ok(out) => {
                 tracing::warn!(
