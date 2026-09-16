@@ -114,6 +114,12 @@ mod ladder_build_race;
 #[path = "integration/media_delete_during_active_build.rs"]
 mod media_delete_during_active_build;
 
+/// T599 — `media_rename` refuses to move a top-level path an active
+/// `ladder_build`/`upload_start` is writing right now — the same guard T596 gave
+/// `media_delete`/`file_delete`.
+#[path = "integration/media_rename_during_active_build.rs"]
+mod media_rename_during_active_build;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 

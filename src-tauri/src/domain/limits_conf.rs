@@ -73,14 +73,34 @@ const HEADER: &str =
 /// match the server is worse than no list.
 const MARK: &str = "# vrcast-limit";
 
+/// The marker the generation counter's own line carries (T600).
+///
+/// **Deliberately not a prefix of [`MARK`] and not prefixed by it either.** `parse()` below
+/// finds a rule's line by `line.trim().strip_prefix(MARK)` — had this marker instead read
+/// `"# vrcast-limits-generation"`, it would itself start with the literal text `"# vrcast-
+/// limit"` and `strip_prefix(MARK)` would silently succeed on it, handing the generation
+/// line to the rule parser as if it carried a rule (harmlessly filtered back out by the
+/// following `?`-chained field reads failing to find enough whitespace-separated tokens —
+/// but relying on that coincidence would be exactly the "would not be easily told apart"
+/// the task warns against). `"# vrcast-generation"` shares no prefix with `MARK` in either
+/// direction, so there is no such ambiguity to rely on being harmless.
+const GENERATION_MARK: &str = "# vrcast-generation";
+
 /// Build the whole file.
 ///
 /// Whole, never appended to: a file assembled from what is wanted now cannot drift, and
 /// drift in a serving configuration is not the kind of thing anybody notices early.
-pub fn build(limits: &[Limit], serving_prefix: &str) -> String {
+///
+/// `generation` is the optimistic-concurrency counter (T600, the same idea as
+/// `Manifest::generation`/`manifest_io::write`'s `base_generation` check, adapted to a text
+/// config file instead of JSON): written into the header so a concurrent
+/// `Serving::apply()` can tell whether the file it is about to overwrite is still the one it
+/// read.
+pub fn build(limits: &[Limit], serving_prefix: &str, generation: u64) -> String {
     let prefix = serving_prefix.trim_end_matches('/');
     let mut out = String::from(HEADER);
     out.push('\n');
+    out.push_str(&format!("{GENERATION_MARK} {generation}\n"));
 
     // The caching exception first, and once, whatever the limits are.
     //
@@ -135,6 +155,21 @@ pub fn parse(text: &str) -> Vec<Limit> {
             })
         })
         .collect()
+}
+
+/// Read the generation counter back out of a file taken from the server (T600).
+///
+/// **A missing line means generation 0, not an error** — the same rule
+/// `Manifest::empty()`/an absent catalogue follows for the same reason: a server this
+/// application already deployed to before this change exists has a `vrcast-limits.conf`
+/// with no such line at all, and reading that as a format error rather than as "generation
+/// zero" would turn the very first `limit_set`/`limit_clear` after an application upgrade
+/// into a false conflict on a server that was never touched concurrently.
+pub fn read_generation(text: &str) -> u64 {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix(GENERATION_MARK))
+        .and_then(|rest| rest.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// The matcher's name for one limit.

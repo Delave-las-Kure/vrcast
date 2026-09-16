@@ -111,7 +111,7 @@ fn the_caching_rule_is_the_one_that_was_measured_to_work() {
     // Measured against Caddy itself: a plain set loses to the blanket rule set deeper in
     // the chain, a delete leaves the description with no caching rule at all, and only a
     // **deferred** set does what is wanted.
-    let text = build(&[], "/videos");
+    let text = build(&[], "/videos", 0);
     assert!(text.contains("defer"), "the rule is not deferred:\n{text}");
     assert!(text.contains("Cache-Control \"no-cache\""));
     assert!(
@@ -134,6 +134,7 @@ fn each_limit_gets_a_rule_with_a_name_of_its_own() {
             a_limit("203.0.113.11", "demo", 6_000_000),
         ],
         "/videos",
+        0,
     );
     let first = matcher_name("203.0.113.10", "demo");
     let second = matcher_name("203.0.113.11", "demo");
@@ -159,7 +160,7 @@ fn the_rules_can_be_read_back_from_the_server() {
         a_limit("203.0.113.10", "demo", 12_000_000),
         a_limit("198.51.100.7", "other-film", 6_000_000),
     ];
-    let read = parse(&build(&limits, "/videos"));
+    let read = parse(&build(&limits, "/videos", 0));
     assert_eq!(read, limits);
 }
 
@@ -181,11 +182,54 @@ fn a_file_somebody_edited_by_hand_is_read_for_what_it_holds_rather_than_refused(
 fn the_file_is_written_whole_rather_than_added_to() {
     // A file assembled from what is wanted now cannot drift, and drift in a serving
     // configuration is not the kind of thing anybody notices early.
-    let one = build(&[a_limit("203.0.113.10", "demo", 12_000_000)], "/videos");
-    let none = build(&[], "/videos");
+    let one = build(&[a_limit("203.0.113.10", "demo", 12_000_000)], "/videos", 0);
+    let none = build(&[], "/videos", 0);
     assert!(one.len() > none.len());
     assert_eq!(parse(&none).len(), 0);
     // And what is written always says whose file it is: a person who opens it should not
     // have to guess why their own lines vanished.
     assert!(none.contains("VRCast Studio"));
+}
+
+// ---------- T600: the generation counter ----------
+
+#[test]
+fn a_file_with_no_generation_line_at_all_reads_as_generation_zero() {
+    // Backward compatibility: a server this application already deployed to before T600
+    // has a `vrcast-limits.conf` with no such line. Reading that as a format error rather
+    // than as "generation zero" would turn the very first `limit_set`/`limit_clear` call
+    // after an application upgrade into a false conflict on a server nobody else ever
+    // touched concurrently — see `Manifest::empty()`, which follows the identical rule for
+    // an absent catalogue.
+    use vrcast_studio_lib::domain::limits_conf::read_generation;
+
+    let text = "# something a person wrote\n\
+                # vrcast-limit 203.0.113.10 demo 12000000 2026-08-26T10:00:00Z\n";
+    assert_eq!(read_generation(text), 0);
+    assert_eq!(read_generation(""), 0);
+}
+
+#[test]
+fn the_generation_written_is_read_back_unchanged() {
+    use vrcast_studio_lib::domain::limits_conf::read_generation;
+
+    let text = build(&[], "/videos", 42);
+    assert_eq!(read_generation(&text), 42);
+    // And the rules themselves are unaffected by the generation line sitting beside them.
+    let with_rules = build(&[a_limit("203.0.113.10", "demo", 12_000_000)], "/videos", 7);
+    assert_eq!(read_generation(&with_rules), 7);
+    assert_eq!(parse(&with_rules).len(), 1);
+}
+
+#[test]
+fn the_generation_marker_is_never_mistaken_for_a_rule() {
+    // The generation line must not be picked up by `parse()`, which looks for a different,
+    // deliberately non-overlapping marker (see `GENERATION_MARK`'s own doc comment for why
+    // the two markers share no prefix in either direction).
+    let text = build(&[a_limit("203.0.113.10", "demo", 12_000_000)], "/videos", 5);
+    assert_eq!(
+        parse(&text).len(),
+        1,
+        "the generation line was misread as an extra rule:\n{text}"
+    );
 }

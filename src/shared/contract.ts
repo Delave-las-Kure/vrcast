@@ -69,6 +69,7 @@ export type ErrorCode =
   // web server configuration
   | "CADDY_VALIDATE_FAILED"
   | "CADDY_RELOAD_FAILED"
+  | "LIMITS_CONFLICT"
   // tasks
   | "TASK_CANCELLED"
   | "TASK_NOT_FOUND"

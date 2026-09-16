@@ -81,6 +81,7 @@ async fn a_limited_viewer_gets_the_shortened_set_and_everyone_else_the_whole_one
                 set_at: when(),
             }],
             &[(String::from("demo"), short.clone())],
+            0,
         )
         .await
         .expect("the limit would not go on");
@@ -192,6 +193,7 @@ async fn a_rule_the_web_server_refuses_is_rolled_back_and_the_serving_keeps_work
                 set_at: when(),
             }],
             &[(String::from("demo"), shorten(&all, cap, PREFIX, "demo"))],
+            0,
         )
         .await
         .expect("the first limit would not go on");
@@ -209,6 +211,7 @@ async fn a_rule_the_web_server_refuses_is_rolled_back_and_the_serving_keeps_work
                 set_at: when(),
             }],
             &[],
+            1,
         )
         .await;
 
@@ -252,8 +255,8 @@ async fn a_rule_the_web_server_refuses_is_rolled_back_and_the_serving_keeps_work
         .limits()
         .await
         .expect("the limits would not be read");
-    assert_eq!(kept.len(), 1);
-    assert_eq!(kept[0].ip, viewer.ip());
+    assert_eq!(kept.0.len(), 1);
+    assert_eq!(kept.0[0].ip, viewer.ip());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -296,12 +299,13 @@ async fn taking_a_limit_off_gives_the_viewer_the_whole_set_again() {
                 set_at: when(),
             }],
             &[(String::from("demo"), shorten(&all, cap, PREFIX, "demo"))],
+            0,
         )
         .await
         .expect("the limit would not go on");
 
     serving
-        .clear(&[], "demo")
+        .clear(&[], "demo", 1)
         .await
         .expect("the limit would not come off");
 
@@ -313,7 +317,7 @@ async fn taking_a_limit_off_gives_the_viewer_the_whole_set_again() {
         3,
         "the viewer did not get their rungs back:\n{back}"
     );
-    assert!(serving.limits().await.unwrap().is_empty());
+    assert!(serving.limits().await.unwrap().0.is_empty());
 
     let left = server
         .exec_inside(&format!(
@@ -374,6 +378,7 @@ async fn a_cap_under_everything_serves_the_lightest_rather_than_nothing() {
                 set_at: when(),
             }],
             &[(String::from("demo"), short)],
+            0,
         )
         .await
         .expect("the limit would not go on");
@@ -402,3 +407,180 @@ async fn a_cap_under_everything_serves_the_lightest_rather_than_nothing() {
 /// Give a reload a moment on a loaded machine.
 #[allow(dead_code)]
 const PATIENCE: Duration = Duration::from_secs(30);
+
+// ---------- T600: concurrent limit_set/limit_clear do not silently lose one another ----------
+
+/// One end-to-end "set a limit" cycle, exactly the shape `commands/limits.rs::api::limit_set`
+/// itself follows: read the list and its generation in one round-trip, add one rule to the
+/// in-memory copy, `apply()` passing that same generation back. Each call opens its own
+/// connection — two clients working with one server never share a connection either.
+async fn add_one_limit(
+    server: &TestServer,
+    ip: &str,
+    slug: &str,
+    cap_bps: u64,
+) -> Result<(), LimitError> {
+    let conn = connect(server).await;
+    let serving = Serving {
+        conn: &conn,
+        video_dir: VIDEO_DIR,
+        conf_path: CONF,
+        main_conf: MAIN_CONF,
+        serving_prefix: PREFIX,
+        check_url: &format!(
+            "http://{}:{}/videos/{slug}/master.m3u8",
+            server.host(),
+            server.http_port
+        ),
+        owner: "root:root",
+    };
+    let (existing, generation) = serving.limits().await?;
+    let mut limits = existing;
+    limits.push(Limit {
+        ip: ip.to_owned(),
+        slug: slug.to_owned(),
+        cap_bps,
+        set_at: when(),
+    });
+    let outcome = serving.apply(&limits, &[], generation).await;
+    conn.close().await;
+    outcome
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_concurrent_limit_sets_never_silently_lose_one_another() {
+    // T600. Without the generation check, `apply()` was a plain read-modify-write: two
+    // concurrent calls each read the list before either had written, each added their own
+    // rule to their own in-memory copy, and whichever wrote last won — the other's rule
+    // vanished with no error at all. `tokio::join!` races the two calls over real SSH
+    // round-trips rather than any `sleep()` hook inside the production code, the same
+    // approach `ladder_build_race.rs`/`deploy_run_race.rs` already take for their own races.
+    //
+    // Run several times in one test (races are not deterministic): every run must land in
+    // one of the two ACCEPTABLE outcomes named in the task — (a) both succeed and the file
+    // ends up with both rules (a genuinely sequential pair of round-trips, not a real race),
+    // or (b) exactly one succeeds and the other gets `LimitsConflict` naming the rule that
+    // did land. What must NEVER happen, on any run, is both calls returning `Ok(())` while
+    // the file holds only one of the two rules — that is the silent loss this task exists to
+    // rule out.
+    for round in 0..5 {
+        let server = TestServer::start().expect("the container would not come up");
+        lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+
+        let ip_a = format!("203.0.113.{}", 10 + round);
+        let ip_b = format!("203.0.113.{}", 110 + round);
+
+        let (result_a, result_b) = tokio::join!(
+            add_one_limit(&server, &ip_a, "demo", 6_000_000),
+            add_one_limit(&server, &ip_b, "demo", 6_000_000),
+        );
+
+        let conn = connect(&server).await;
+        let serving = Serving {
+            conn: &conn,
+            video_dir: VIDEO_DIR,
+            conf_path: CONF,
+            main_conf: MAIN_CONF,
+            serving_prefix: PREFIX,
+            check_url: &format!(
+                "http://{}:{}/videos/demo/master.m3u8",
+                server.host(),
+                server.http_port
+            ),
+            owner: "root:root",
+        };
+        let (on_server, _) = serving
+            .limits()
+            .await
+            .expect("the rules would not be read back after the race");
+        conn.close().await;
+        let ips_present: Vec<&str> = on_server.iter().map(|l| l.ip.as_str()).collect();
+
+        match (result_a, result_b) {
+            (Ok(()), Ok(())) => {
+                assert!(
+                    ips_present.contains(&ip_a.as_str()) && ips_present.contains(&ip_b.as_str()),
+                    "round {round}: both calls reported success, but the file does not hold \
+                     both rules — one was silently lost. On the server: {ips_present:?}"
+                );
+            }
+            (Ok(()), Err(LimitError::Conflict { .. })) => {
+                assert!(
+                    ips_present.contains(&ip_a.as_str()),
+                    "round {round}: the successful call's own rule is not on the server: \
+                     {ips_present:?}"
+                );
+            }
+            (Err(LimitError::Conflict { .. }), Ok(())) => {
+                assert!(
+                    ips_present.contains(&ip_b.as_str()),
+                    "round {round}: the successful call's own rule is not on the server: \
+                     {ips_present:?}"
+                );
+            }
+            other => panic!(
+                "round {round}: an outcome outside the two acceptable ones from the task: \
+                 {other:?}"
+            ),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_limit_set_on_a_file_with_no_generation_line_at_all_succeeds() {
+    // T600 backward compatibility. A server this application was already deployed to before
+    // this change has a `vrcast-limits.conf` written by the OLD `build()` — one line short of
+    // the new generation marker. The very first `limit_set` after an application upgrade must
+    // not fail with a false `LimitsConflict` on such a server: "no line" reads as generation
+    // zero on both sides of the check (see `read_generation`'s own doc for why), the same as
+    // an absent catalogue reads as `Manifest::empty()`.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+
+    let conn = connect(&server).await;
+    // Simulating the OLD file shape directly: no `# vrcast-generation` line, only what the
+    // pre-T600 `build()` ever wrote (nothing here, since the medium has no limit yet).
+    conn.exec(&format!(
+        "printf '%s\\n' \\
+         '# The quality-limit rules. This file belongs to VRCast Studio: it is rewritten whole' \\
+         '# on every change, and anything added here by hand will be lost.' \\
+         > {CONF}"
+    ))
+    .await
+    .expect("could not lay out the pre-T600 file shape")
+    .require_ok("writing the old-shaped file failed")
+    .expect("writing the old-shaped file failed");
+    conn.close().await;
+
+    add_one_limit(&server, "203.0.113.50", "demo", 6_000_000)
+        .await
+        .expect(
+            "a limit_set against a file with no generation line at all was refused as a \
+             false conflict",
+        );
+
+    let conn = connect(&server).await;
+    let serving = Serving {
+        conn: &conn,
+        video_dir: VIDEO_DIR,
+        conf_path: CONF,
+        main_conf: MAIN_CONF,
+        serving_prefix: PREFIX,
+        check_url: &format!(
+            "http://{}:{}/videos/demo/master.m3u8",
+            server.host(),
+            server.http_port
+        ),
+        owner: "root:root",
+    };
+    let (on_server, generation) = serving
+        .limits()
+        .await
+        .expect("the rules would not be read back");
+    conn.close().await;
+    assert_eq!(on_server.len(), 1);
+    assert_eq!(on_server[0].ip, "203.0.113.50");
+    // And the file now carries a generation line of its own, for the NEXT call to check
+    // against — the upgrade path only forgives the very first call, not every call forever.
+    assert_eq!(generation, 1);
+}

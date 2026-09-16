@@ -140,6 +140,10 @@ error_codes! {
     // --- web server configuration ---
     CaddyValidateFailed => "CADDY_VALIDATE_FAILED",
     CaddyReloadFailed => "CADDY_RELOAD_FAILED",
+    /// Two concurrent `limit_set`/`limit_clear` calls raced each other on the same server
+    /// (T600) — the same standing `ManifestConflict` has for the JSON catalogue, adapted to
+    /// the text rules file: re-read and retry, nothing was silently lost.
+    LimitsConflict => "LIMITS_CONFLICT",
 
     // --- tasks ---
     TaskCancelled => "TASK_CANCELLED",
