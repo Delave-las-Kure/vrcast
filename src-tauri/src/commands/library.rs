@@ -674,6 +674,25 @@ pub mod api {
                             .with_cause(format!("connections={connections}")));
                     }
                 }
+                // ⚠ **T599 — same guard T596 gave `media_delete`/`file_delete`.**
+                // `rename_entries` below runs `mv -n` on the very same top-level paths a
+                // `ladder_build` may be mid-encode into, or an `upload_start` may be
+                // mid-transfer to — a rename racing either moves the directory a running
+                // task is actively writing, corrupting it exactly as an unguarded `rm -rf`
+                // would have. Checked against `media.all_paths()` (the medium's current
+                // `files`/`ladders`, the same source `media_delete` reads `tops_of` from),
+                // not `old` alone, for the same reason `refuse_if_busy` is already checked
+                // that way elsewhere: a medium's set of top-level names is not guaranteed
+                // to collapse to a single slug in every layout.
+                if let Some(err) = refuse_if_busy(
+                    state,
+                    server_id,
+                    &tops_of(media.all_paths()),
+                    ErrorCode::MediaBusy,
+                )? {
+                    conn.close().await;
+                    return Err(err);
+                }
                 rename_entries(&conn, &profile.video_dir, media, &old, s).await?;
                 media.slug = s.to_owned();
             }
