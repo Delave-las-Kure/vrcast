@@ -39,8 +39,26 @@ pub enum LimitError {
     #[error("the serving is broken and the previous configuration would not go back: {0}")]
     RollbackFailed(String),
 
+    /// Another change reached the server between this call's read and its write (T600).
+    ///
+    /// The same idea as `ManifestIoError::Conflict`, adapted to a text config file instead
+    /// of JSON: nothing was written, the file on the server is exactly as the OTHER change
+    /// left it, and the caller is expected to read again and either retry or give up —
+    /// never to treat this as a fault of the serving itself.
+    #[error("the rules were changed by another change in between: read generation {base}, server has {current}")]
+    Conflict { base: u64, current: u64 },
+
     #[error(transparent)]
     Ssh(#[from] SshError),
+}
+
+/// What the atomic remote compare-and-swap step (T600) found out.
+enum CompareAndSwap {
+    /// The generation matched; the staged file is now in place.
+    Applied,
+    /// It did not; nothing on the server was touched, and the staged file was removed by
+    /// the script itself.
+    Conflict { current: u64 },
 }
 
 /// The serving, as far as limits are concerned.
@@ -61,12 +79,16 @@ pub struct Serving<'a> {
 }
 
 impl Serving<'_> {
-    /// What limits the **server** says are in force.
+    /// What limits the **server** says are in force, and the generation they were read at
+    /// (T600).
     ///
     /// Read from the server rather than from a note kept here (FR-064): a note goes stale
     /// the moment somebody edits the server by hand, and a list that does not match the
-    /// server is worse than no list.
-    pub async fn limits(&self) -> Result<Vec<Limit>, LimitError> {
+    /// server is worse than no list. The generation comes from the very same read as the
+    /// list — a caller that means to write back must pass exactly this number as
+    /// `apply()`'s `base_generation`, or the check below is comparing against a read that
+    /// never happened.
+    pub async fn limits(&self) -> Result<(Vec<Limit>, u64), LimitError> {
         let out = self
             .conn
             .exec(&format!(
@@ -74,7 +96,10 @@ impl Serving<'_> {
                 super::shell_quote(self.conf_path)
             ))
             .await?;
-        Ok(limits_conf::parse(&out.stdout))
+        Ok((
+            limits_conf::parse(&out.stdout),
+            limits_conf::read_generation(&out.stdout),
+        ))
     }
 
     /// Put a set of limits in force, whole.
@@ -83,13 +108,16 @@ impl Serving<'_> {
     ///
     ///  1. the shortened descriptions are written first — a rule pointing at a description
     ///     that is not there yet would serve a limited viewer nothing at all;
-    ///  2. the previous rules file is kept;
-    ///  3. the new one is put in place and the web server is asked to check it **by its own
-    ///     means** — our opinion of a configuration file is worth nothing;
-    ///  4. it is reloaded;
-    ///  5. the serving is asked for something a viewer would ask for.
+    ///  2. the new rules are staged in a temporary file, not yet in force;
+    ///  3. **one atomic remote step** (T600) checks the generation, keeps the previous file,
+    ///     and puts the staged one in place — all inside a single `flock`'d shell script, so
+    ///     no other `apply()` can interleave between the check and the swap;
+    ///  4. the web server is asked to check what is now in place **by its own means** — our
+    ///     opinion of a configuration file is worth nothing;
+    ///  5. it is reloaded;
+    ///  6. the serving is asked for something a viewer would ask for.
     ///
-    /// From step 3 onwards, any failure puts the previous file back, reloads, and checks
+    /// From step 4 onwards, any failure puts the previous file back, reloads, and checks
     /// that the serving works.
     ///
     /// **Why the checking happens after the file is in place and not before.** The main
@@ -98,30 +126,56 @@ impl Serving<'_> {
     /// web server does rather than something we do: a reload that is refused leaves the
     /// **previous** configuration running. So a bad file is caught while the old one is
     /// still serving.
+    ///
+    /// **`base_generation` — optimistic concurrency for a text file (T600), made genuinely
+    /// atomic rather than read-then-write.** A plain "read the generation, then separately
+    /// write if it still matches" is not enough: two truly concurrent calls can each pass
+    /// that check before either has written — read and write are three separate SSH
+    /// round-trips, and all three of another call's round-trips can land in between any two
+    /// of this call's own. Measured directly while writing this fix: a naive read-then-write
+    /// version of this exact check still lost a rule silently under `tokio::join!` in
+    /// integration testing. The fix is doing the compare **and** the swap in one
+    /// [`flock`(1)](https://man7.org/linux/man-pages/man1/flock.1.html)'d shell script run in
+    /// a single `exec()` — a single command the remote shell either runs as one atomic unit
+    /// while holding the lock, or does not run at all; there is no window between the check
+    /// and the write for another call to land in, because there is no round-trip between
+    /// them at all.
+    ///
+    /// `base_generation` must be the generation `Serving::limits()` returned alongside the
+    /// list this `limits` argument was built from (`commands/limits.rs::api::limit_set`/
+    /// `limit_clear` do exactly this). A mismatch returns `LimitError::Conflict` having
+    /// written nothing at all. A match writes `generation = base_generation + 1` — the same
+    /// "I am writing over what I read" claim `Manifest::prepared_for_write` makes for the
+    /// JSON catalogue.
     pub async fn apply(
         &self,
         limits: &[Limit],
         shortened: &[(String, Shortened)],
+        base_generation: u64,
     ) -> Result<(), LimitError> {
         for (slug, short) in shortened {
             self.write_shortened(slug, short).await?;
         }
 
-        let backup = format!("{}.previous", self.conf_path);
-        // Kept before anything is touched (FR-095). The rollback takes **this file** rather
-        // than assembling what it thinks used to be there: what it thinks and what is there
-        // are two different things, and the difference only shows up when it matters.
-        self.conn
-            .exec(&format!(
-                "if [ -f {conf} ]; then cp -p {conf} {backup}; fi",
-                conf = super::shell_quote(self.conf_path),
-                backup = super::shell_quote(&backup),
-            ))
-            .await?
-            .require_ok("could not keep the previous rules")?;
+        // Staged rather than written straight to `conf_path`: the atomic step below moves
+        // this into place only if the generation still matches, and a file half-written by
+        // `write_file` sitting directly at `conf_path` would be exactly the kind of half
+        // state R-10-style staging exists to avoid.
+        let temp = format!("{}.{}.tmp", self.conf_path, uuid::Uuid::new_v4().simple());
+        let text = limits_conf::build(limits, self.serving_prefix, base_generation + 1);
+        self.write_file(&temp, &text).await?;
 
-        let text = limits_conf::build(limits, self.serving_prefix);
-        self.write_file(self.conf_path, &text).await?;
+        let backup = format!("{}.previous", self.conf_path);
+        match self.compare_and_swap(&temp, &backup, base_generation).await {
+            Ok(CompareAndSwap::Applied) => {}
+            Ok(CompareAndSwap::Conflict { current }) => {
+                return Err(LimitError::Conflict {
+                    base: base_generation,
+                    current,
+                });
+            }
+            Err(e) => return Err(e),
+        }
 
         if let Err(e) = self.check_and_reload().await {
             self.roll_back(&backup).await?;
@@ -134,13 +188,78 @@ impl Serving<'_> {
         Ok(())
     }
 
+    /// The one atomic remote step `apply()` rests on (T600): under a single `flock`, keep
+    /// the previous file if there is one, check the generation against what this call read,
+    /// and only on a match put the staged file in place. All three happen inside one shell
+    /// script run by one `exec()` — there is no SSH round-trip between the check and the
+    /// swap for a second call to land in.
+    ///
+    /// On a conflict the staged file is removed by the script itself (`rm -f {temp}`) before
+    /// it returns — nothing is left behind for the caller to clean up, and nothing on the
+    /// server was touched at all.
+    async fn compare_and_swap(
+        &self,
+        temp: &str,
+        backup: &str,
+        base_generation: u64,
+    ) -> Result<CompareAndSwap, LimitError> {
+        let lock_path = format!("{}.lock", self.conf_path);
+        // `awk '{print $3}'` on a line shaped `# vrcast-generation N`: field 1 is `#`, field
+        // 2 is `vrcast-generation`, field 3 is the number — see `GENERATION_MARK`.
+        // `${cur:-0}` is the backward-compatibility rule from `read_generation`'s own doc,
+        // reproduced here in shell rather than only in Rust: a file with no such line at all
+        // (a server from before T600) reads as generation zero, not as an error.
+        let script = format!(
+            "(\n\
+             flock -x -w 30 200 || {{ echo LOCK_TIMEOUT; exit 4; }}\n\
+             cur=$(grep -m1 '^# vrcast-generation ' {conf} 2>/dev/null | awk '{{print $3}}')\n\
+             cur=${{cur:-0}}\n\
+             if [ \"$cur\" != {base} ]; then\n\
+             echo \"CONFLICT $cur\"\n\
+             rm -f {temp}\n\
+             exit 3\n\
+             fi\n\
+             if [ -f {conf} ]; then cp -p {conf} {backup}; fi\n\
+             mv -f {temp} {conf}\n\
+             echo OK\n\
+             ) 200>{lock}",
+            conf = super::shell_quote(self.conf_path),
+            base = super::shell_quote(&base_generation.to_string()),
+            temp = super::shell_quote(temp),
+            backup = super::shell_quote(backup),
+            lock = super::shell_quote(&lock_path),
+        );
+
+        let out = self.conn.exec(&script).await?;
+        let first_line = out.stdout.lines().next().unwrap_or("").trim();
+        if first_line == "OK" {
+            return Ok(CompareAndSwap::Applied);
+        }
+        if let Some(rest) = first_line.strip_prefix("CONFLICT ") {
+            let current = rest.trim().parse().unwrap_or(base_generation.wrapping_add(1));
+            return Ok(CompareAndSwap::Conflict { current });
+        }
+        Err(LimitError::Ssh(SshError::Exec(format!(
+            "the atomic generation check did not behave as expected: exit {:?}, stdout {:?}, \
+             stderr {:?}",
+            out.exit_code,
+            out.stdout.trim(),
+            out.stderr.trim()
+        ))))
+    }
+
     /// Take a limit off: the rule and the shortened description both (FR-065).
     ///
     /// The description goes as well as the rule. Left behind it is a file nobody reaches,
     /// which is untidy — and worse, it is a file that would be served again the moment
     /// somebody set a limit on that medium and expected a fresh one.
-    pub async fn clear(&self, remaining: &[Limit], slug: &str) -> Result<(), LimitError> {
-        self.apply(remaining, &[]).await?;
+    pub async fn clear(
+        &self,
+        remaining: &[Limit],
+        slug: &str,
+        base_generation: u64,
+    ) -> Result<(), LimitError> {
+        self.apply(remaining, &[], base_generation).await?;
         self.conn
             .exec(&format!(
                 "rm -f {}",

@@ -140,10 +140,15 @@ pub mod api {
 
         // Everything already in force, with this one replacing any it repeats. The file is
         // written whole, so what is not in this list stops existing.
-        let mut limits: Vec<Limit> = serving
-            .limits()
-            .await
-            .map_err(to_error)?
+        //
+        // The generation is read alongside the list, from this exact SSH round-trip (T600):
+        // `apply()` below re-reads it fresh right before writing and refuses with
+        // `LimitsConflict` if another change has landed on the server since this read —
+        // without this, two concurrent `limit_set` calls on the same server could each read
+        // the list, each add their own rule to their own in-memory copy, and whichever wrote
+        // last would silently erase the other's rule.
+        let (existing, generation) = serving.limits().await.map_err(to_error)?;
+        let mut limits: Vec<Limit> = existing
             .into_iter()
             .filter(|l| !(l.ip == request.ip && l.slug == request.slug))
             .collect();
@@ -155,7 +160,7 @@ pub mod api {
         });
 
         let outcome = serving
-            .apply(&limits, &[(request.slug.clone(), short)])
+            .apply(&limits, &[(request.slug.clone(), short)], generation)
             .await;
         conn.close().await;
         outcome.map_err(to_error)
@@ -186,19 +191,17 @@ pub mod api {
             owner: &format!("{}:{}", profile.user, profile.user),
         };
 
-        let remaining: Vec<Limit> = serving
-            .limits()
-            .await
-            .map_err(to_error)?
+        let (existing, generation) = serving.limits().await.map_err(to_error)?;
+        let remaining: Vec<Limit> = existing
             .into_iter()
             .filter(|l| !(l.ip == ip && l.slug == slug))
             .collect();
         // The shortened description goes only when nothing else still points at it.
         let still_wanted = remaining.iter().any(|l| l.slug == slug);
         let outcome = if still_wanted {
-            serving.apply(&remaining, &[]).await
+            serving.apply(&remaining, &[], generation).await
         } else {
-            serving.clear(&remaining, slug).await
+            serving.clear(&remaining, slug, generation).await
         };
         conn.close().await;
         outcome.map_err(to_error)
@@ -223,7 +226,7 @@ pub mod api {
             check_url: "",
             owner: "",
         };
-        let found = serving.limits().await.map_err(to_error);
+        let found = serving.limits().await.map_err(to_error).map(|(l, _)| l);
         conn.close().await;
         found
     }
@@ -260,6 +263,11 @@ fn to_error(e: LimitError) -> AppError {
         LimitError::ReloadFailed(said) => {
             AppError::new(ErrorCode::CaddyReloadFailed).with_cause(said)
         }
+        // Normal work, not a fault (T600) — the same standing `ManifestConflict` already
+        // has for the JSON catalogue: another change reached the server in between, and
+        // this one is expected to read again and retry rather than being told something is
+        // broken.
+        LimitError::Conflict { .. } => AppError::new(ErrorCode::LimitsConflict).with_cause(e),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }

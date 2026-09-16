@@ -217,6 +217,10 @@ export const en: Catalogue = {
       message: "The server did not accept the new configuration",
       hint: "The previous configuration was restored and serving works. Check the server's condition in the diagnostics section.",
     },
+    LIMITS_CONFLICT: {
+      message: "Someone else changed the quality limits at the same moment",
+      hint: "Reload the list of limits and try again — nothing was lost, but this change did not go through.",
+    },
 
     // --- tasks ---
     TASK_CANCELLED: {
