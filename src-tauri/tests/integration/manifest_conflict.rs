@@ -178,6 +178,239 @@ async fn after_re_reading_the_write_goes_through() {
     assert_eq!(outcome.generation, 2);
 }
 
+/// Everything in the serving directory except the catalogue itself — what a person would
+/// see as "not recognised" in their library.
+fn litter(server: &TestServer) -> Vec<String> {
+    server
+        .exec_inside(&format!("ls -A {VIDEO_DIR}"))
+        .expect("the directory would not read")
+        .lines()
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && *n != "library.json")
+        .map(str::to_owned)
+        .collect()
+}
+
+fn catalogue_on_server(server: &TestServer) -> String {
+    server
+        .exec_inside(&format!("cat {VIDEO_DIR}/library.json"))
+        .expect("the catalogue would not read by the server's own means")
+}
+
+#[tokio::test]
+async fn two_simultaneous_writes_over_one_generation_one_wins_one_is_refused() {
+    // T604. The test above lets the first write finish before the second begins, so it
+    // never exercised the window the old code had: both copies checked the generation, then
+    // both staged, then both moved — and the second move quietly wiped out the first. Here
+    // the two writes run at once, over separate connections, from the same generation, and
+    // round after round: exactly one must go through, the other must be refused as a
+    // conflict, and what lies on the server must be the winner's record, whole.
+    const ROUNDS: usize = 8;
+    let server = TestServer::start().expect("the container would not come up");
+    let first = connect(&server).await;
+    let second = connect(&server).await;
+
+    for round in 0..ROUNDS {
+        let base = manifest_io::read(&first, VIDEO_DIR).await.unwrap();
+        let a_slug = format!("a{round}");
+        let b_slug = format!("b{round}");
+        let a = with_media(&base, &format!("m_a{round}"), &a_slug);
+        let b = with_media(&base, &format!("m_b{round}"), &b_slug);
+
+        let (ra, rb) = tokio::join!(
+            manifest_io::write(&first, VIDEO_DIR, &a, base.generation),
+            manifest_io::write(&second, VIDEO_DIR, &b, base.generation),
+        );
+
+        let winner = match (&ra, &rb) {
+            (Ok(()), Err(ManifestIoError::Conflict { .. })) => &a_slug,
+            (Err(ManifestIoError::Conflict { .. }), Ok(())) => &b_slug,
+            _ => panic!(
+                "round {round}: exactly one write must win and the other be refused as a \
+                 conflict, got {ra:?} and {rb:?}"
+            ),
+        };
+        let loser = if winner == &a_slug { &b_slug } else { &a_slug };
+
+        let outcome = manifest_io::read(&first, VIDEO_DIR).await.unwrap();
+        assert_eq!(
+            outcome.generation,
+            base.generation + 1,
+            "round {round}: the generation did not grow by exactly one"
+        );
+        assert_eq!(
+            outcome.media.len(),
+            base.media.len() + 1,
+            "round {round}: the catalogue does not hold exactly the winner's change: {outcome:?}"
+        );
+        assert!(
+            outcome.find_by_slug(winner).is_some(),
+            "round {round}: the write reported as successful is not on the server"
+        );
+        assert!(
+            outcome.find_by_slug(loser).is_none(),
+            "round {round}: the write reported as refused is on the server"
+        );
+        // Every earlier winner is still there: nothing was lost quietly in any round.
+        let on_server = catalogue_on_server(&server);
+        assert!(
+            on_server.contains(&format!("\"{winner}\"")),
+            "round {round}: the server's own reading lacks the winner: {on_server}"
+        );
+        assert!(
+            litter(&server).is_empty(),
+            "round {round}: service files were left in the serving directory: {:?}",
+            litter(&server)
+        );
+    }
+}
+
+/// Put a tool in front of the real one that refuses exactly when its last argument is
+/// `target`, and passes everything else through. `/usr/local/bin` comes before `/usr/bin`
+/// in the PATH sshd gives a command, so the application's own scripts run into it.
+fn install_failing(server: &TestServer, tool: &str, target: &str) {
+    server
+        .exec_inside(&format!(
+            "printf '%s\\n' '#!/bin/bash' \
+             'for last in \"$@\"; do :; done' \
+             'if [ \"$last\" = \"{target}\" ]; then echo \"{tool} refused on purpose\" >&2; exit 1; fi' \
+             'exec /usr/bin/{tool} \"$@\"' > /usr/local/bin/{tool} && chmod 755 /usr/local/bin/{tool}"
+        ))
+        .expect("the failing tool would not go in");
+}
+
+fn remove_failing(server: &TestServer, tool: &str) {
+    server
+        .exec_inside(&format!("/usr/bin/rm -f /usr/local/bin/{tool}"))
+        .expect("the failing tool would not come out");
+}
+
+#[tokio::test]
+async fn a_replacement_that_fails_is_an_error_and_leaves_the_catalogue_as_it_was() {
+    // T604, the lesson of T603: a move that did not happen must never read as a write
+    // that did. The move is made to fail on the server; the write must come back with an
+    // error, the catalogue must be the one from before to the byte, and the staged file
+    // must be gone.
+    let server = TestServer::start().expect("the container would not come up");
+    let conn = connect(&server).await;
+
+    let base = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
+    manifest_io::write(
+        &conn,
+        VIDEO_DIR,
+        &with_media(&base, "m_1", "film"),
+        base.generation,
+    )
+    .await
+    .unwrap();
+    let before = catalogue_on_server(&server);
+
+    let read = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
+    install_failing(&server, "mv", &format!("{VIDEO_DIR}/library.json"));
+    let outcome = manifest_io::write(
+        &conn,
+        VIDEO_DIR,
+        &with_media(&read, "m_2", "drugoe"),
+        read.generation,
+    )
+    .await;
+    remove_failing(&server, "mv");
+
+    match outcome {
+        Err(ManifestIoError::Ssh(_)) => {}
+        other => panic!("a failed replacement came back as {other:?}"),
+    }
+    assert_eq!(
+        catalogue_on_server(&server),
+        before,
+        "the catalogue changed although its replacement failed"
+    );
+    assert!(
+        litter(&server).is_empty(),
+        "the staged file was left behind: {:?}",
+        litter(&server)
+    );
+}
+
+#[tokio::test]
+async fn a_write_that_cannot_get_the_lock_is_refused_and_leaves_nothing() {
+    // T604. Somebody holds the catalogue's lock (the test itself, on the serving directory)
+    // for longer than a write will wait. The write must give up with "somebody else is
+    // changing the library" — never replace anything without the lock — and leave neither
+    // the catalogue changed nor a staged file behind.
+    let server = TestServer::start().expect("the container would not come up");
+    let conn = connect(&server).await;
+
+    let base = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
+    manifest_io::write(
+        &conn,
+        VIDEO_DIR,
+        &with_media(&base, "m_1", "film"),
+        base.generation,
+    )
+    .await
+    .unwrap();
+    let before = catalogue_on_server(&server);
+
+    server
+        .exec_inside(&format!(
+            "setsid nohup flock -x {VIDEO_DIR} sleep 120 >/dev/null 2>&1 < /dev/null & \
+             echo $! > /tmp/zz-t604-holder.pid"
+        ))
+        .expect("the test could not take the lock");
+    let mut held = false;
+    for _ in 0..50 {
+        let probe = server
+            .exec_inside(&format!(
+                "flock -n -x {VIDEO_DIR} true && echo FREE || echo HELD"
+            ))
+            .expect("the lock would not be probed");
+        if probe.contains("HELD") {
+            held = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(held, "the test's own lock never took hold");
+
+    let read = manifest_io::read(&conn, VIDEO_DIR).await.unwrap();
+    let outcome = manifest_io::write(
+        &conn,
+        VIDEO_DIR,
+        &with_media(&read, "m_2", "drugoe"),
+        read.generation,
+    )
+    .await;
+
+    // By the process group `setsid` made, not by a pattern: `pkill -f` would match the very
+    // shell running it, whose command line holds the same words.
+    server
+        .exec_inside("kill -- -\"$(cat /tmp/zz-t604-holder.pid)\"; rm -f /tmp/zz-t604-holder.pid")
+        .expect("the test's lock would not be let go");
+
+    match outcome {
+        Err(e @ ManifestIoError::Busy) => {
+            let app = vrcast_studio_lib::commands::error::AppError::from(e);
+            assert_eq!(
+                app.code,
+                vrcast_studio_lib::commands::error::ErrorCode::ManifestConflict,
+                "a lock timeout must read as \"read again and retry\""
+            );
+        }
+        other => panic!("a write without the lock came back as {other:?}"),
+    }
+    assert_eq!(
+        catalogue_on_server(&server),
+        before,
+        "the catalogue changed without the lock"
+    );
+    assert!(
+        litter(&server).is_empty(),
+        "the staged file was left behind: {:?}",
+        litter(&server)
+    );
+}
+
 #[tokio::test]
 async fn a_failed_write_leaves_no_litter_in_the_serving_directory() {
     // The staged file is a detail of how writing works, and it has no right to stay in the

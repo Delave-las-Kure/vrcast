@@ -379,6 +379,9 @@ impl From<crate::server::manifest_io::ManifestIoError> for AppError {
             // The only case where a refusal is normal work rather than a fault:
             // another copy of the application is working with this server.
             M::Conflict { .. } => AppError::new(ErrorCode::ManifestConflict).with_cause(e),
+            // Another write held the catalogue's lock too long (T604): for the person it is
+            // the same thing — somebody else is changing the library; read again and retry.
+            M::Busy => AppError::new(ErrorCode::ManifestConflict).with_cause(e),
             M::Malformed(_) => AppError::new(ErrorCode::Internal)
                 .detail(DetailCode::ManifestMalformed)
                 .with_cause(e),
