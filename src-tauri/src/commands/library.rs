@@ -692,9 +692,18 @@ pub mod api {
                 // `mv -f` overwrite the renamed file the moment it finished; the same for a
                 // build writing `fresh/` while `film/` is moved onto it. `slug_available`
                 // only knows the catalogue, not what running tasks are about to create.
+                //
+                // The old and the new short name themselves are asked about as well, even
+                // when no path of the medium is (or becomes) exactly `old`/`s`: a build is
+                // keyed by slug, and a medium holding only `film_9.mp4` has no top equal to
+                // `film` or `fresh`. A build of `fresh` running while `film` becomes `fresh`
+                // would have its finished set filed under the renamed medium by
+                // `attach_built_set` (`find_by_slug`) — a set nobody built for it; a build of
+                // `film` would find no medium left to file its set under.
                 let plan = media::rename_plan(media, &old, s);
                 let mut touched = tops_of(media.all_paths());
-                for target in tops_of(plan.targets()) {
+                let slugs = [old.clone(), s.to_owned()];
+                for target in tops_of(plan.targets()).into_iter().chain(slugs) {
                     if !touched.contains(&target) {
                         touched.push(target);
                     }

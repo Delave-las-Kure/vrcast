@@ -13,15 +13,19 @@
 //! Modelled on `media_rename_during_active_build.rs` (T599); the fixture helpers are copied
 //! rather than imported for the same reason that module gives.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
+use vrcast_studio_lib::commands::ladder::{api as ladder, BuildRequest};
 use vrcast_studio_lib::commands::library::api as library;
 use vrcast_studio_lib::commands::servers::{api as servers, ServerInput};
 use vrcast_studio_lib::commands::upload::{api as upload, UploadRequest};
 use vrcast_studio_lib::commands::AppState;
+use vrcast_studio_lib::domain::ladder::{Quality, Rung};
 use vrcast_studio_lib::domain::server_profile::AuthKind;
+use vrcast_studio_lib::media::ffmpeg;
 use vrcast_studio_lib::server::{gate, manifest_io};
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::InMemorySecretStore;
@@ -35,6 +39,76 @@ const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 /// rename (~24 s); the test cancels it once it has what it needs.
 const FILE_SIZE: usize = 12 * 1024 * 1024;
 const SLOW_BPS: u64 = 512 * 1024;
+
+/// A small, real film for the build case — the shape `media_rename_during_active_build.rs`
+/// uses, but 20 s long rather than 2: the build must still be encoding when the rename
+/// arrives, and the test asserts that rather than hoping for it.
+fn make_film(path: &Path) -> Result<(), String> {
+    let ffmpeg_bin = ffmpeg::locate("ffmpeg").map_err(|e| e.to_string())?;
+    let out = std::process::Command::new(ffmpeg_bin)
+        .args([
+            "-nostdin",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=24:duration=20",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=20",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-b:v",
+            "1000k",
+            "-g",
+            "24",
+            "-keyint_min",
+            "24",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    Ok(())
+}
+
+fn build_request(server_id: &str, path: &str, slug: &str) -> BuildRequest {
+    let rung = |index, bitrate_bps: u64, vmaf_x100| Rung {
+        index,
+        bitrate_bps,
+        maxrate_bps: bitrate_bps / 10 * 11,
+        bufsize_bps: bitrate_bps / 10 * 11,
+        width: 320,
+        height: 240,
+        level: String::from("3.0"),
+        reasons: Vec::new(),
+        quality: Quality::MeasuredHere { vmaf_x100 },
+    };
+    BuildRequest {
+        server_id: server_id.to_owned(),
+        path: path.to_owned(),
+        slug: slug.to_owned(),
+        rungs: vec![rung(0, 500_000, 9200), rung(1, 250_000, 8800)],
+        audio_track: 0,
+        prefer_hardware: false,
+        batch: None,
+        // Past the FILE_IN_USE question: nobody is watching in the container, and this is
+        // not what the test is about.
+        confirmed: true,
+    }
+}
 
 fn app_state() -> AppState {
     AppState::with_db(
@@ -176,6 +250,16 @@ async fn media_rename_onto_the_target_of_a_running_upload_is_refused() {
         .await
         .expect_err("media_rename moved a file onto the target of a running upload");
     assert_eq!(err.code, ErrorCode::MediaBusy);
+    let detail = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::MediaBusyUploading)
+        .unwrap_or_else(|| panic!("the refusal does not say an upload is in the way: {err:?}"));
+    assert_eq!(
+        detail.params.get("name").and_then(|v| v.as_str()),
+        Some("t606-fresh_9.mp4"),
+        "the refusal does not name the upload's target: {detail:?}"
+    );
 
     // ---- nothing was moved: the old file is where it was, with its contents, and the
     // upload's final name is still free ----
@@ -203,8 +287,136 @@ async fn media_rename_onto_the_target_of_a_running_upload_is_refused() {
         .find(|m| m.id == media_id)
         .expect("the medium vanished");
     assert_eq!(medium.slug, "t606");
+    assert_eq!(
+        medium
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["t606_9.mp4"],
+        "the catalogue's files were rewritten despite the refusal"
+    );
 
     cancel_and_wait(&state, &task).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn media_rename_onto_the_slug_of_a_running_build_is_refused() {
+    let (server, state, id) = setup().await;
+
+    let media_id = library::media_create(&state, &id, "T606 fixture", Some("t606"))
+        .await
+        .expect("the medium was not created");
+    // Only a plain file, no ladder directory: none of the medium's paths is, or becomes,
+    // exactly `t606-fresh` — the build is keyed by slug, and it is the new short name
+    // itself that meets it.
+    attach_file_by_hand(&state, &id, &media_id, "t606_9.mp4").await;
+
+    let film_dir = std::env::temp_dir().join(format!(
+        "vrcast-t606-build-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&film_dir).expect("could not make a working directory");
+    let film = film_dir.join("source.mp4");
+    make_film(&film).expect("the fixture film would not encode");
+
+    // ---- a build of `t606-fresh` is running ----
+    let task = ladder::ladder_build(
+        &state,
+        build_request(&id, &film.to_string_lossy(), "t606-fresh"),
+    )
+    .await
+    .expect("the build was refused although nothing else was running");
+    let record = state
+        .tasks
+        .get(&task)
+        .unwrap()
+        .expect("the build task vanished");
+    assert!(
+        !record.state.is_final(),
+        "the build already finished — the scenario needs it running"
+    );
+
+    // ---- rename t606 → t606-fresh: refused, naming the build ----
+    let err = library::media_rename(&state, &id, &media_id, None, Some("t606-fresh"), true)
+        .await
+        .expect_err("media_rename took the short name of a running build");
+    assert_eq!(err.code, ErrorCode::MediaBusy);
+    let detail = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::MediaBusyBuilding)
+        .unwrap_or_else(|| panic!("the refusal does not say a build is in the way: {err:?}"));
+    assert_eq!(
+        detail.params.get("slug").and_then(|v| v.as_str()),
+        Some("t606-fresh"),
+        "the refusal does not name the build's slug: {detail:?}"
+    );
+
+    // ---- nothing moved, the catalogue untouched ----
+    server
+        .exec_inside(&format!("test -e '{VIDEO_DIR}/t606_9.mp4'"))
+        .expect("the medium's file is gone from its old name despite the refusal");
+    assert!(
+        server
+            .exec_inside(&format!("test -e '{VIDEO_DIR}/t606-fresh_9.mp4'"))
+            .is_err(),
+        "the medium's file was renamed despite the refusal"
+    );
+    let listed = library::library_list(&state, &id, true)
+        .await
+        .expect("the library would not list");
+    let medium = listed
+        .media
+        .iter()
+        .find(|m| m.id == media_id)
+        .expect("the medium vanished");
+    assert_eq!(medium.slug, "t606");
+
+    cancel_and_wait(&state, &task).await;
+    let _ = std::fs::remove_dir_all(&film_dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn media_rename_with_no_running_task_goes_through() {
+    let (server, state, id) = setup().await;
+
+    let media_id = library::media_create(&state, &id, "T606 fixture", Some("t606"))
+        .await
+        .expect("the medium was not created");
+    attach_file_by_hand(&state, &id, &media_id, "t606_9.mp4").await;
+
+    library::media_rename(&state, &id, &media_id, None, Some("t606-fresh"), true)
+        .await
+        .expect("a rename with nothing running was refused");
+
+    let moved = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/t606-fresh_9.mp4'"))
+        .expect("the medium's file was not renamed on the server");
+    assert!(moved.contains("the old film"), "wrong contents: {moved:?}");
+    assert!(
+        server
+            .exec_inside(&format!("test -e '{VIDEO_DIR}/t606_9.mp4'"))
+            .is_err(),
+        "the old name is still there after the rename"
+    );
+    let listed = library::library_list(&state, &id, true)
+        .await
+        .expect("the library would not list");
+    let medium = listed
+        .media
+        .iter()
+        .find(|m| m.id == media_id)
+        .expect("the medium vanished");
+    assert_eq!(medium.slug, "t606-fresh");
+    assert_eq!(
+        medium
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["t606-fresh_9.mp4"]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
