@@ -20,7 +20,8 @@ use crate::domain::ladder_size;
 use crate::domain::source::SourceFile;
 use crate::domain::wording::{Detail, DetailCode};
 use crate::media::encoders::Encoder;
-use crate::server::{hls_package::Cutting, hls_verify};
+use crate::server::hls_package::{Cutting, CuttingError};
+use crate::server::hls_verify;
 use crate::ssh::Connection;
 use crate::tasks::engine::TaskContext;
 
@@ -77,6 +78,18 @@ pub enum BuildError {
 
     #[error("the build was cancelled")]
     Cancelled,
+
+    /// A cutting of this set is still alive on the server — left by an earlier run of this
+    /// application, or started by another one — and a second one was not put beside it
+    /// (T605).
+    #[error("a cutting of \"{0}\" is already running on the server")]
+    AlreadyCutting(String),
+
+    /// The work ended, but the end of its processes on the server is not confirmed yet
+    /// (T605). Never a final answer: [`settle_stop`] turns it into one, and only once the
+    /// stop is confirmed.
+    #[error(transparent)]
+    StopUnconfirmed(crate::server::hls_package::CuttingError),
 
     #[error(transparent)]
     Ssh(#[from] crate::ssh::SshError),
@@ -221,10 +234,20 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         base: job.slug,
         variants: &to_cut,
     };
-    let facts = cutting.run(ctx, |_| {}).await.map_err(|e| match e {
-        crate::server::hls_package::CuttingError::Cancelled => BuildError::Cancelled,
-        crate::server::hls_package::CuttingError::Ssh(inner) => BuildError::Ssh(inner),
-    })?;
+    let facts = match cutting.run(ctx, |_| {}).await {
+        Ok(facts) => facts,
+        Err(e) => {
+            if matches!(e, CuttingError::StopUnconfirmed(_)) {
+                // Said out loud while it lasts: a person who pressed "stop" and sees the task
+                // still running is owed the reason, not a frozen bar.
+                ctx.report_important(
+                    work.len() as f64 / (work.len() as f64 + 1.0),
+                    DetailCode::StageStopUnconfirmed,
+                );
+            }
+            return Err(from_cutting(e));
+        }
+    };
 
     // The description is built from what the cutting reported — the segments' own numbers,
     // not an estimate of them.
@@ -285,6 +308,45 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         reused,
         verdict,
     })
+}
+
+/// How the cutting's own ending reads as the build's.
+fn from_cutting(e: CuttingError) -> BuildError {
+    match e {
+        CuttingError::Cancelled => BuildError::Cancelled,
+        CuttingError::Ssh(inner) => BuildError::Ssh(inner),
+        CuttingError::AlreadyRunning { base } => BuildError::AlreadyCutting(base),
+        pending @ CuttingError::StopUnconfirmed(_) => BuildError::StopUnconfirmed(pending),
+    }
+}
+
+/// Settle a build whose cutting's stop was not confirmed: try the stop again until it is,
+/// and only then hand back how the build really ended (T605).
+///
+/// Every other outcome passes straight through. The retries are
+/// [`crate::server::hls_package::PendingStop::confirm`]'s — a growing pause with a
+/// ceiling, for as long as it takes, because returning before the stop is confirmed would
+/// let the engine write `Cancelled` or `Failed` and release the media's directory while a
+/// process of the cutting may still be writing into it (constitution III).
+///
+/// `attempt` is one try through a fresh connection; the caller makes it, because that is
+/// where the secrets and the profile are (`commands::ladder`). Public so that the rule —
+/// "does not return until confirmed" — can be checked against the real task engine
+/// without a server (`tests/unit/cutting_stop.rs`).
+pub async fn settle_stop<T, A, Fut>(
+    outcome: Result<T, BuildError>,
+    attempt: A,
+) -> Result<T, BuildError>
+where
+    A: FnMut(crate::server::hls_package::JobMark) -> Fut,
+    Fut: std::future::Future<Output = Result<crate::server::hls_package::Stopped, String>>,
+{
+    match outcome {
+        Err(BuildError::StopUnconfirmed(CuttingError::StopUnconfirmed(pending))) => {
+            Err(from_cutting(pending.confirm(attempt).await))
+        }
+        other => other,
+    }
 }
 
 /// Whether a variant's prepared file is already on the server, whole.

@@ -684,16 +684,36 @@ pub mod api {
                 // not `old` alone, for the same reason `refuse_if_busy` is already checked
                 // that way elsewhere: a medium's set of top-level names is not guaranteed
                 // to collapse to a single slug in every layout.
-                if let Some(err) = refuse_if_busy(
-                    state,
-                    server_id,
-                    &tops_of(media.all_paths()),
-                    ErrorCode::MediaBusy,
-                )? {
+                //
+                // ⚠ **T606 — and against every DESTINATION too.** The new names are worked
+                // out here, before the guard, rather than inside the `mv` loop: a rename
+                // `film`→`fresh` moving `film_9.mp4` onto `fresh_9.mp4` while an upload of a
+                // new `fresh_9.mp4` is still in transfer would have the upload's final
+                // `mv -f` overwrite the renamed file the moment it finished; the same for a
+                // build writing `fresh/` while `film/` is moved onto it. `slug_available`
+                // only knows the catalogue, not what running tasks are about to create.
+                //
+                // The old and the new short name themselves are asked about as well, even
+                // when no path of the medium is (or becomes) exactly `old`/`s`: a build is
+                // keyed by slug, and a medium holding only `film_9.mp4` has no top equal to
+                // `film` or `fresh`. A build of `fresh` running while `film` becomes `fresh`
+                // would have its finished set filed under the renamed medium by
+                // `attach_built_set` (`find_by_slug`) — a set nobody built for it; a build of
+                // `film` would find no medium left to file its set under.
+                let plan = media::rename_plan(media, &old, s);
+                let mut touched = tops_of(media.all_paths());
+                let slugs = [old.clone(), s.to_owned()];
+                for target in tops_of(plan.targets()).into_iter().chain(slugs) {
+                    if !touched.contains(&target) {
+                        touched.push(target);
+                    }
+                }
+                if let Some(err) = refuse_if_busy(state, server_id, &touched, ErrorCode::MediaBusy)?
+                {
                     conn.close().await;
                     return Err(err);
                 }
-                rename_entries(&conn, &profile.video_dir, media, &old, s).await?;
+                rename_entries(&conn, &profile.video_dir, media, plan).await?;
                 media.slug = s.to_owned();
             }
         }
@@ -714,40 +734,18 @@ pub mod api {
         conn: &Connection,
         video_dir: &str,
         media: &mut Media,
-        old_slug: &str,
-        new_slug: &str,
+        plan: media::RenamePlan,
     ) -> Result<()> {
         use crate::server::{join_remote, shell_quote};
 
-        // The top-level entries that have to be renamed: the name equals the old short
-        // name entirely, or begins with it.
-        let mut renames: Vec<(String, String)> = Vec::new();
-        let mut rename_top = |path: &str| -> String {
-            let (top, rest) = match path.split_once('/') {
-                Some((t, r)) => (t, Some(r)),
-                None => (path, None),
-            };
-            let new_top = if top == old_slug {
-                new_slug.to_owned()
-            } else if let Some(tail) = top.strip_prefix(old_slug) {
-                format!("{new_slug}{tail}")
-            } else {
-                // The file does not follow the naming convention — it must not be
-                // touched: a person may have attributed something of their own naming to
-                // the medium.
-                return path.to_owned();
-            };
-            if top != new_top && !renames.iter().any(|(o, _)| o == top) {
-                renames.push((top.to_owned(), new_top.clone()));
-            }
-            match rest {
-                Some(r) => format!("{new_top}/{r}"),
-                None => new_top,
-            }
-        };
-
-        let new_files: Vec<String> = media.files.iter().map(|p| rename_top(p)).collect();
-        let new_ladders: Vec<String> = media.ladders.iter().map(|p| rename_top(p)).collect();
+        // The top-level entries to rename and the medium's paths afterwards are worked out
+        // by `media::rename_plan` before this is called (T606): the busy-guard needs the
+        // destinations before any `mv` runs, not after.
+        let media::RenamePlan {
+            renames,
+            files: new_files,
+            ladders: new_ladders,
+        } = plan;
 
         for (old, new) in &renames {
             let out = conn

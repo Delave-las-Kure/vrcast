@@ -53,6 +53,10 @@ mod ladder_build;
 #[path = "unit/hls_package.rs"]
 mod hls_package;
 
+/// T605 — a build whose cutting's stop is unconfirmed is not ended, and keeps its slug.
+#[path = "unit/cutting_stop.rs"]
+mod cutting_stop;
+
 #[path = "unit/measured_ladder.rs"]
 mod measured_ladder;
 
@@ -207,3 +211,7 @@ mod deploy_proof_symmetry;
 
 #[path = "unit/geo_fetch_lock.rs"]
 mod geo_fetch_lock;
+
+/// T606 — the destinations of a short-name change are known before any `mv` runs.
+#[path = "unit/rename_plan.rs"]
+mod rename_plan;

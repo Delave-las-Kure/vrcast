@@ -280,7 +280,10 @@ pub mod api {
     /// an upgrade has just gone wrong, and it should answer at once.
     pub async fn server_rollback(state: &super::super::AppState, server_id: &str) -> Result<()> {
         let profile = super::super::library::api::profile_of(state, server_id)?;
-        let opened = gate::open(state.secrets.as_ref(), &profile, Intent::Read).await?;
+        // `Restore`, not `Read` (T601): this copies configuration back over the live one, and
+        // the gate is what keeps that off a machine that is somebody else's or newer than
+        // this application understands (FR-130, FR-132) — refused before anything is written.
+        let opened = gate::open(state.secrets.as_ref(), &profile, Intent::Restore).await?;
         let public_key = public_key_for(state.secrets.as_ref(), &profile)?;
         let facts = machine::look(&opened.conn).await?;
 

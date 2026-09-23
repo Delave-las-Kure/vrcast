@@ -72,6 +72,71 @@ impl Media {
     }
 }
 
+/// What changing a medium's short name does to the server and to the catalogue — worked out
+/// in full **before** anything is moved (T606).
+///
+/// It used to be computed inside the very loop that ran `mv`, which meant the new names only
+/// existed after the busy-guard had already been passed: `media_rename` could ask whether a
+/// running upload/build was writing the OLD names, but never the NEW ones. A rename
+/// `film`→`fresh` would happily move `film_9.mp4` onto `fresh_9.mp4` while an upload of a
+/// fresh `fresh_9.mp4` was mid-transfer — and that upload's final `mv -f` then overwrote the
+/// renamed file. With the plan in hand first, the guard sees both sides of every `mv`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenamePlan {
+    /// The top-level entries to move, `(old, new)`, each once and in first-seen order.
+    pub renames: Vec<(String, String)>,
+    /// The medium's `files` after the rename.
+    pub files: Vec<String>,
+    /// The medium's `ladders` after the rename.
+    pub ladders: Vec<String>,
+}
+
+impl RenamePlan {
+    /// The top-level names the rename will create on the server — the destinations of every
+    /// `mv`. Together with the sources these are everything the rename touches.
+    pub fn targets(&self) -> impl Iterator<Item = &String> {
+        self.renames.iter().map(|(_, new)| new)
+    }
+}
+
+/// Work out the renames for a short-name change from `old_slug` to `new_slug`.
+///
+/// A top-level entry is renamed when its name equals the old short name entirely or begins
+/// with it (`film` → `fresh`, `film_9.mp4` → `fresh_9.mp4`, `film/master.m3u8` →
+/// `fresh/master.m3u8`). A path that does not follow the naming convention is left alone:
+/// a person may have attributed something of their own naming to the medium.
+pub fn rename_plan(media: &Media, old_slug: &str, new_slug: &str) -> RenamePlan {
+    let mut renames: Vec<(String, String)> = Vec::new();
+    let mut rename_top = |path: &str| -> String {
+        let (top, rest) = match path.split_once('/') {
+            Some((t, r)) => (t, Some(r)),
+            None => (path, None),
+        };
+        let new_top = if top == old_slug {
+            new_slug.to_owned()
+        } else if let Some(tail) = top.strip_prefix(old_slug) {
+            format!("{new_slug}{tail}")
+        } else {
+            return path.to_owned();
+        };
+        if top != new_top && !renames.iter().any(|(o, _)| o == top) {
+            renames.push((top.to_owned(), new_top.clone()));
+        }
+        match rest {
+            Some(r) => format!("{new_top}/{r}"),
+            None => new_top,
+        }
+    };
+
+    let files: Vec<String> = media.files.iter().map(|p| rename_top(p)).collect();
+    let ladders: Vec<String> = media.ladders.iter().map(|p| rename_top(p)).collect();
+    RenamePlan {
+        renames,
+        files,
+        ladders,
+    }
+}
+
 /// A served file: the facts known about it.
 ///
 /// Everything but `path`, `size_bytes` and `exists_on_server` may be unknown — the
