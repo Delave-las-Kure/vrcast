@@ -196,13 +196,9 @@ pub mod api {
             .into_iter()
             .filter(|l| !(l.ip == ip && l.slug == slug))
             .collect();
-        // The shortened description goes only when nothing else still points at it.
-        let still_wanted = remaining.iter().any(|l| l.slug == slug);
-        let outcome = if still_wanted {
-            serving.apply(&remaining, &[], generation).await
-        } else {
-            serving.clear(&remaining, slug, generation).await
-        };
+        // The shortened description goes only when nothing else still points at it —
+        // decided inside `clear()`'s own transaction (T603).
+        let outcome = serving.clear(&remaining, slug, generation).await;
         conn.close().await;
         outcome.map_err(to_error)
     }
@@ -266,8 +262,11 @@ fn to_error(e: LimitError) -> AppError {
         // Normal work, not a fault (T600) — the same standing `ManifestConflict` already
         // has for the JSON catalogue: another change reached the server in between, and
         // this one is expected to read again and retry rather than being told something is
-        // broken.
-        LimitError::Conflict { .. } => AppError::new(ErrorCode::LimitsConflict).with_cause(e),
+        // broken. `Busy` (T603) means the same for the caller — another change is still
+        // going on — and nothing was touched, so it is reported the same way.
+        LimitError::Conflict { .. } | LimitError::Busy => {
+            AppError::new(ErrorCode::LimitsConflict).with_cause(e)
+        }
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }
