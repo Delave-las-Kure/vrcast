@@ -211,3 +211,7 @@ mod deploy_proof_symmetry;
 
 #[path = "unit/geo_fetch_lock.rs"]
 mod geo_fetch_lock;
+
+/// T606 — the destinations of a short-name change are known before any `mv` runs.
+#[path = "unit/rename_plan.rs"]
+mod rename_plan;

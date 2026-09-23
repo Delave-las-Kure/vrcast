@@ -120,6 +120,11 @@ mod media_delete_during_active_build;
 #[path = "integration/media_rename_during_active_build.rs"]
 mod media_rename_during_active_build;
 
+/// T606 — `media_rename` refuses to move a path ONTO a name an active `upload_start` is
+/// about to enter serving under — T599 checked only the names being moved away from.
+#[path = "integration/media_rename_onto_active_upload.rs"]
+mod media_rename_onto_active_upload;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 
