@@ -69,6 +69,10 @@ mod deploy_foreign;
 #[path = "integration/deploy_run_race.rs"]
 mod deploy_run_race;
 
+/// T609 phase A — an ignored measurement: cancelling/killing apt and dpkg mid-deployment.
+#[path = "integration/deploy_cancel_measure.rs"]
+mod deploy_cancel_measure;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 
