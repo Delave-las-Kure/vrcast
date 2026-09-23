@@ -22,7 +22,7 @@ use super::hls_fixture::{lay_out_ladder, VIDEO_DIR};
 use super::ssh_live::connect;
 use super::viewer::Viewer;
 
-const CONF: &str = "/etc/caddy/vrcast-limits.conf";
+pub(super) const CONF: &str = "/etc/caddy/vrcast-limits.conf";
 const MAIN_CONF: &str = "/etc/caddy/Caddyfile";
 const PREFIX: &str = "/videos";
 
@@ -614,7 +614,7 @@ const LOCK: &str = "/etc/caddy/vrcast-limits.conf.lock";
 const SLOW: &str = "/var/lib/vrcast/videos/_slow";
 
 /// Where the description for one ceiling on `demo` sits (T602).
-fn short_at(cap_bps: u64) -> String {
+pub(super) fn short_at(cap_bps: u64) -> String {
     format!("{SLOW}/demo/{cap_bps}/master.m3u8")
 }
 
@@ -630,7 +630,7 @@ fn slow_snapshot(server: &TestServer) -> String {
         .expect("the shortened descriptions would not be listed")
 }
 
-fn good_url(server: &TestServer) -> String {
+pub(super) fn good_url(server: &TestServer) -> String {
     format!(
         "http://{}:{}/videos/demo/master.m3u8",
         server.host(),
@@ -651,7 +651,7 @@ fn serving_at<'a>(conn: &'a vrcast_studio_lib::ssh::Connection, check_url: &'a s
 }
 
 /// A file's exact bytes as the container sees them, or `ABSENT` — read around our own code.
-fn contents(server: &TestServer, path: &str) -> String {
+pub(super) fn contents(server: &TestServer, path: &str) -> String {
     server
         .exec_inside(&format!(
             "if [ -e '{path}' ]; then cat '{path}'; else printf ABSENT; fi"
@@ -724,7 +724,7 @@ fn a_rule(ip: &str, cap_bps: u64) -> Limit {
 }
 
 /// The ladder the fixture lays out, read the way a viewer would.
-fn the_ladder(server: &TestServer) -> Vec<Variant> {
+pub(super) fn the_ladder(server: &TestServer) -> Vec<Variant> {
     let viewer = Viewer::attach(server).expect("the viewer would not attach");
     parse(
         &viewer
@@ -1154,7 +1154,7 @@ async fn a_clear_whose_check_fails_brings_the_description_back() {
 
 /// Put `ip`'s limit on `slug` the way `commands/limits.rs::api::limit_set` does: read the
 /// rules and their generation, replace this address's rule for this medium, apply.
-async fn put_limit(
+pub(super) async fn put_limit(
     server: &TestServer,
     ip: &str,
     slug: &str,
@@ -1199,7 +1199,7 @@ async fn take_limit_off(
 }
 
 /// The rungs `viewer` is offered for `slug`, heaviest first, by bandwidth.
-fn offered(viewer: &Viewer, slug: &str) -> Vec<u64> {
+pub(super) fn offered(viewer: &Viewer, slug: &str) -> Vec<u64> {
     let text = viewer
         .fetch(&format!("/videos/{slug}/master.m3u8"))
         .unwrap_or_else(|e| panic!("{} was served nothing for {slug}: {e}", viewer.ip()));
@@ -1216,7 +1216,7 @@ fn offered(viewer: &Viewer, slug: &str) -> Vec<u64> {
 }
 
 /// What somebody with no limit is offered — asked from outside the server's network.
-async fn offered_to_everybody(server: &TestServer, slug: &str) -> Vec<u64> {
+pub(super) async fn offered_to_everybody(server: &TestServer, slug: &str) -> Vec<u64> {
     let text = reqwest::get(&format!(
         "http://{}:{}/videos/{slug}/master.m3u8",
         server.host(),
@@ -1234,7 +1234,7 @@ async fn offered_to_everybody(server: &TestServer, slug: &str) -> Vec<u64> {
         .collect()
 }
 
-fn exists(server: &TestServer, path: &str) -> bool {
+pub(super) fn exists(server: &TestServer, path: &str) -> bool {
     server
         .exec_inside(&format!("test -e '{path}' && echo YES || echo NO"))
         .expect("the server would not answer")

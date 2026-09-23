@@ -142,6 +142,11 @@ mod manifest_conflict;
 #[path = "integration/rollback_refused.rs"]
 mod rollback_refused;
 
+/// T610 — a rollback leaves the quality-limit rules alone: a limit set after a run
+/// survives it, and a copy of the rules an earlier client took is passed by.
+#[path = "integration/rollback_keeps_limits.rs"]
+mod rollback_keeps_limits;
+
 #[path = "integration/process_tree.rs"]
 mod process_tree;
 
