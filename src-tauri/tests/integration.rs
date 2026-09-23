@@ -132,6 +132,11 @@ mod live_readonly;
 #[path = "integration/manifest_conflict.rs"]
 mod manifest_conflict;
 
+/// T601 — `server_rollback` is refused on Foreign/TooNew before anything is written, and
+/// still goes through on a current server of ours.
+#[path = "integration/rollback_refused.rs"]
+mod rollback_refused;
+
 #[path = "integration/process_tree.rs"]
 mod process_tree;
 

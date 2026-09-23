@@ -34,6 +34,22 @@ pub enum Intent {
     Change,
     /// Set the server up, or bring it up to date.
     Setup,
+    /// Put the last upgrade's copies back (FR-133) — `server_rollback` and nothing else (T601).
+    ///
+    /// ⚠ **This used to go through as `Read`, and a rollback is not a look.** It copies
+    /// `state.json`, the Caddyfile and the rest back over the live ones and reloads the
+    /// services. Opened as `Read`, it went through on anything that answered: an older
+    /// application on a server a newer one had already upgraded past what it knows (FR-130)
+    /// put back a layout it does not understand, and on somebody else's machine (FR-132) it
+    /// copied whatever lay under `/etc/vrcast/backup/latest` over their configuration.
+    ///
+    /// **Neither `Change` nor `Setup` fits, and that is why this is a variant of its own.**
+    /// `Change` refuses a server that `NeedsUpgrade` — and an upgrade of an older server that
+    /// broke half-way leaves exactly that behind, because `state.json` is written last: the
+    /// one moment a rollback is most wanted. `Setup` refuses a current server of ours
+    /// (`AlreadyDeployed`) — which is what an upgrade that *finished* and turned out badly
+    /// leaves. So: ours, at a version this application either knows or is behind.
+    Restore,
 }
 
 /// Why the door stayed shut.
@@ -136,6 +152,13 @@ pub fn allowed(state: &ServerState, intent: Intent) -> Result<(), Refusal> {
         Intent::Read => true,
         Intent::Change => may.change_serving,
         Intent::Setup => !matches!(may.setup, server_state::Setup::Nothing),
+        // Ours, and not newer than this application understands. Everything else is refused
+        // by the same reasoning as a change: TooNew by FR-130, Foreign (an unreadable state
+        // file included) by FR-132, and a bare or half-deployed machine has no upgrade of
+        // ours to roll back.
+        Intent::Restore => {
+            state.kind == Kind::Managed && matches!(state.compat, Compat::Ok | Compat::NeedsUpgrade)
+        }
     };
     if ok {
         return Ok(());

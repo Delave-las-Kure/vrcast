@@ -159,6 +159,117 @@ fn every_combination_holds() {
     }
 }
 
+// ---------- a rollback is a change, and is gated like one (T601) ----------
+
+#[test]
+fn a_rollback_is_let_through_exactly_on_our_own_server_at_a_version_we_know_or_are_behind() {
+    // The whole product again — every kind, Unfinished included, against every compat —
+    // because `Restore` is its own rule and a hole in it is somebody's configuration
+    // copied over with an old one.
+    let kinds = [
+        Kind::Clean,
+        Kind::Managed,
+        Kind::Foreign,
+        Kind::Unfinished,
+        Kind::Unreachable,
+    ];
+    let compats = [
+        Compat::Ok,
+        Compat::NeedsUpgrade,
+        Compat::TooNew,
+        Compat::NotDeployed,
+        Compat::Unknown,
+    ];
+    for kind in kinds {
+        for compat in compats {
+            let state = server(kind, compat);
+            let at = format!("{kind:?}/{compat:?}");
+            let outcome = allowed(&state, Intent::Restore);
+
+            let should =
+                kind == Kind::Managed && matches!(compat, Compat::Ok | Compat::NeedsUpgrade);
+            assert_eq!(
+                outcome.is_ok(),
+                should,
+                "{at}: the wrong answer about rolling back: {outcome:?}"
+            );
+            if should {
+                continue;
+            }
+
+            // Refused by the rule that names what was found, not by any rule: the refusal is
+            // what the screen offers next.
+            match (kind, compat, &outcome) {
+                (Kind::Foreign, _, Err(Refusal::Foreign { .. })) => {}
+                (Kind::Managed, Compat::TooNew, Err(Refusal::TooNew { .. })) => {}
+                (
+                    Kind::Clean | Kind::Unfinished | Kind::Unreachable,
+                    _,
+                    Err(Refusal::NotDeployed),
+                ) => {}
+                (
+                    Kind::Managed,
+                    Compat::NotDeployed | Compat::Unknown,
+                    Err(Refusal::NotDeployed),
+                ) => {}
+                _ => panic!("{at}: refused for the wrong reason: {outcome:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_rollback_is_refused_on_a_server_whose_marker_cannot_be_read() {
+    // FR-132 through the door that matters most here: a rollback copies `state.json` back,
+    // and a state file we cannot read is a machine we do not understand.
+    use vrcast_studio_lib::domain::server_state::StateFileProblem;
+    let unreadable = ServerState {
+        server_version: None,
+        foreign_reason: Some(ForeignReason::StateFileUnreadable {
+            problem: StateFileProblem::NoVersion,
+        }),
+        ..server(Kind::Foreign, Compat::Unknown)
+    };
+    assert!(matches!(
+        allowed(&unreadable, Intent::Restore),
+        Err(Refusal::Foreign {
+            reason: Some(ForeignReason::StateFileUnreadable { .. })
+        })
+    ));
+}
+
+#[test]
+fn a_rollback_names_the_newer_version_it_refused() {
+    let newer = ServerState {
+        server_version: Some(APP_EXPECTS + 1),
+        ..server(Kind::Managed, Compat::TooNew)
+    };
+    match allowed(&newer, Intent::Restore) {
+        Err(Refusal::TooNew {
+            server,
+            app_expects,
+        }) => {
+            assert_eq!(server, APP_EXPECTS + 1);
+            assert_eq!(app_expects, APP_EXPECTS);
+        }
+        other => panic!("a rollback went through on a newer server side: {other:?}"),
+    }
+}
+
+#[test]
+fn a_rollback_stays_open_after_an_upgrade_that_broke_half_way_and_one_that_finished() {
+    // Why `Restore` is neither `Change` nor `Setup`. An upgrade of an older server that broke
+    // half-way leaves the old `state.json` (it is written last) — NeedsUpgrade, which `Change`
+    // refuses. One that finished leaves Managed/Ok — which `Setup` refuses.
+    let half_way = server(Kind::Managed, Compat::NeedsUpgrade);
+    assert!(allowed(&half_way, Intent::Change).is_err());
+    assert!(allowed(&half_way, Intent::Restore).is_ok());
+
+    let finished = server(Kind::Managed, Compat::Ok);
+    assert!(allowed(&finished, Intent::Setup).is_err());
+    assert!(allowed(&finished, Intent::Restore).is_ok());
+}
+
 // ---------- the gate is the door, and there is no second one (T488) ----------
 //
 // ⚠ **The rule above is checked; the way to it was not.** Everything in this file judges
