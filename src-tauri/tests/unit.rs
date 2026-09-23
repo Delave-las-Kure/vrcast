@@ -53,6 +53,10 @@ mod ladder_build;
 #[path = "unit/hls_package.rs"]
 mod hls_package;
 
+/// T605 — a build whose cutting's stop is unconfirmed is not ended, and keeps its slug.
+#[path = "unit/cutting_stop.rs"]
+mod cutting_stop;
+
 #[path = "unit/measured_ladder.rs"]
 mod measured_ladder;
 

@@ -425,6 +425,33 @@ pub mod api {
                         work_dir: &work_dir,
                     };
                     let outcome = crate::tasks::ladder_build::run(&job, &ctx).await;
+                    // **T605 — a build whose cutting could not be confirmed stopped does not
+                    // end here.** `settle_stop` tries the stop again, each time through a
+                    // fresh connection, until the server confirms nothing of the cutting is
+                    // left; only then does this closure return, and only then does the
+                    // engine write `Cancelled`/`Failed` and `running_build_for` let go of
+                    // the slug. The fresh connection goes through the same gate, with the
+                    // same intent, the build itself went through: stopping a process on the
+                    // server is an action on the server, not a read (T601).
+                    let outcome = crate::tasks::ladder_build::settle_stop(outcome, |mark| {
+                        let secrets = secrets.clone();
+                        let profile = profile.clone();
+                        async move {
+                            let opened = crate::server::gate::open(
+                                secrets.as_ref(),
+                                &profile,
+                                crate::server::gate::Intent::Change,
+                            )
+                            .await
+                            .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
+                            let stopped =
+                                crate::server::hls_package::stop_confirmed(&opened.conn, &mark)
+                                    .await;
+                            opened.conn.close().await;
+                            stopped.map_err(|problem| problem.to_string())
+                        }
+                    })
+                    .await;
                     // **The built set's own medium, found while the connection is still
                     // open** (T519(3)), and now attached to it in the catalogue itself
                     // (T528). Best effort and only on success: the slug may match no
@@ -647,6 +674,12 @@ fn build_error(e: crate::tasks::ladder_build::BuildError) -> AppError {
     use crate::tasks::ladder_build::BuildError as E;
     match e {
         E::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+        // The same refusal a second build of the same slug already gets before a task
+        // exists (`running_build_for`): here the one already running was found on the
+        // server rather than in this application's own list.
+        E::AlreadyCutting(slug) => AppError::new(ErrorCode::NameExists)
+            .with_detail(Detail::new(DetailCode::BuildAlreadyRunning).with("slug", slug.clone()))
+            .with_cause(format!("a cutting of {slug} is alive on the server")),
         E::NotBuildable(_) => AppError::new(ErrorCode::LadderNotMeasured),
         // The one failure that names names: a person is owed "the lower rung" rather
         // than "something went wrong", because the two ask for different work.

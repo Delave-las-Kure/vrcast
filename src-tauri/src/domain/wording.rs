@@ -183,6 +183,10 @@ detail_codes! {
     StageBuildingLadder => "STAGE_BUILDING_LADDER",
     StageCuttingSegments => "STAGE_CUTTING_SEGMENTS",
     StageVerifyingLadder => "STAGE_VERIFYING_LADDER",
+    /// The build was stopped or failed, and the server has not yet confirmed that the
+    /// cutting's processes are gone (T605). The task stays running, and the stop is tried
+    /// again until it is confirmed.
+    StageStopUnconfirmed => "STAGE_STOP_UNCONFIRMED",
     /// A deployment is under way. Which step it is on goes out as its own event: the
     /// screen shows the whole list with their states, and a single stage code could not.
     StageDeploying => "STAGE_DEPLOYING",

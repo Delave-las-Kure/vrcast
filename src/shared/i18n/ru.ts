@@ -394,6 +394,8 @@ export const ruCore: CatalogueCore = {
     STAGE_BUILDING_LADDER: "готовим варианты",
     STAGE_CUTTING_SEGMENTS: "режем на отрезки — на сервере",
     STAGE_VERIFYING_LADDER: "проверяем, что отдаётся каждый вариант",
+    STAGE_STOP_UNCONFIRMED:
+      "останавливаем на сервере — остановка ещё не подтверждена, пробуем снова",
     STAGE_DEPLOYING: "Разворачиваю сервер",
     STAGE_DONE: "готово",
 

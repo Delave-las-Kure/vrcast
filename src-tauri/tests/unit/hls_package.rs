@@ -242,3 +242,135 @@ fn a_master_missing_a_variant_is_not_a_success_even_if_what_it_names_all_works()
     };
     assert!(!unserved.ok());
 }
+
+// ---------- T605: the process group, and its stop ----------
+
+use vrcast_studio_lib::domain::hls_package::{
+    check_launch, read_launch, read_stop, GroupProblem, GroupRecord, LaunchReport, StopReport,
+    Stopped,
+};
+
+const JOB: &str = "demo:0123456789abcdef0123456789abcdef";
+
+fn launched(launcher: u32, pid: u32, pgid: u32, sid: u32, job: &str) -> String {
+    format!("VRCAST_HLS_LAUNCHER {launcher}\nVRCAST_HLS_GROUP {pid} {pgid} {sid} {job}\n")
+}
+
+#[test]
+fn the_wrapper_is_the_leader_of_a_group_and_a_session_of_its_own() {
+    let report = read_launch(&launched(400, 411, 411, 411, JOB));
+    assert_eq!(
+        check_launch(&report, JOB),
+        Ok(GroupRecord {
+            pid: 411,
+            pgid: 411,
+            sid: 411,
+            job: JOB.to_owned(),
+        })
+    );
+}
+
+#[test]
+fn a_start_that_did_not_get_a_group_of_its_own_is_not_trusted() {
+    // Still in the launching shell's group: signalling "the group" would reach the shell.
+    assert_eq!(
+        check_launch(&read_launch(&launched(400, 411, 400, 400, JOB)), JOB),
+        Err(GroupProblem::LaunchersGroup { pgid: 400 })
+    );
+    // A group of its own, but somebody else leads it — the wrapper is not who `-PGID` names.
+    assert_eq!(
+        check_launch(&read_launch(&launched(400, 411, 409, 409, JOB)), JOB),
+        Err(GroupProblem::NotLeader {
+            pid: 411,
+            pgid: 409
+        })
+    );
+    // Leads a group, but inside someone else's session: `setsid` did not do its work, and
+    // the session ending could reach it.
+    assert_eq!(
+        check_launch(&read_launch(&launched(400, 411, 411, 400, JOB)), JOB),
+        Err(GroupProblem::NoSessionOfItsOwn { pid: 411, sid: 400 })
+    );
+    // Nothing recorded at all.
+    assert_eq!(
+        check_launch(&read_launch("VRCAST_HLS_LAUNCHER 400\n"), JOB),
+        Err(GroupProblem::NotRecorded)
+    );
+    // A record from another start — a stale file, or somebody else's — is not ours to aim at.
+    assert!(matches!(
+        check_launch(
+            &read_launch(&launched(
+                400,
+                411,
+                411,
+                411,
+                "demo:ffffffffffffffffffffffffffffffff"
+            )),
+            JOB
+        ),
+        Err(GroupProblem::NotThisJob { .. })
+    ));
+    // The init process is never a cutting's group, whatever a record says.
+    assert!(check_launch(&read_launch(&launched(400, 1, 1, 1, JOB)), JOB).is_err());
+}
+
+#[test]
+fn a_live_cutting_of_the_same_directory_is_reported_rather_than_started_over() {
+    assert_eq!(read_launch("VRCAST_HLS_BUSY\n"), LaunchReport::Busy);
+}
+
+#[test]
+fn only_the_stop_scripts_own_words_are_a_confirmation() {
+    assert_eq!(
+        read_stop("VRCAST_STOP none\n"),
+        StopReport::Confirmed {
+            how: Stopped::AlreadyGone,
+            elapsed_ms: None
+        }
+    );
+    assert_eq!(
+        read_stop("VRCAST_STOP term 104ms\n"),
+        StopReport::Confirmed {
+            how: Stopped::AfterTerm,
+            elapsed_ms: Some(104)
+        }
+    );
+    assert_eq!(
+        read_stop("noise\nVRCAST_STOP kill 5230ms\n"),
+        StopReport::Confirmed {
+            how: Stopped::AfterKill,
+            elapsed_ms: Some(5230)
+        }
+    );
+    assert!(matches!(
+        read_stop("VRCAST_STOP alive 811:811 groups: 811 \n"),
+        StopReport::StillAlive(_)
+    ));
+    // Silence, an error message, or the scan saying it could not read /proc: none of them
+    // is "gone". This is the whole reason the answer is read rather than the exit code.
+    assert!(matches!(read_stop(""), StopReport::Unreadable(_)));
+    assert!(matches!(
+        read_stop("bash: mapfile: -d: invalid option\n"),
+        StopReport::Unreadable(_)
+    ));
+    assert!(matches!(
+        read_stop("VRCAST_STOP unreadable\n"),
+        StopReport::Unreadable(_)
+    ));
+}
+
+#[test]
+fn the_wrapper_records_its_group_before_it_does_anything_else() {
+    let script = script_text();
+    let record = script
+        .find("VRCAST_HLS_PGID_FILE")
+        .expect("the wrapper never records its group");
+    let first_work = script
+        .find("mkdir -p")
+        .expect("the script makes no directory");
+    assert!(
+        record < first_work,
+        "the group is recorded only after the work has begun — a stop in between would not \
+         know what to aim at"
+    );
+}
