@@ -80,7 +80,7 @@ async fn a_limited_viewer_gets_the_shortened_set_and_everyone_else_the_whole_one
                 cap_bps: cap,
                 set_at: when(),
             }],
-            &[(String::from("demo"), short.clone())],
+            Some("demo"),
             0,
         )
         .await
@@ -192,7 +192,7 @@ async fn a_rule_the_web_server_refuses_is_rolled_back_and_the_serving_keeps_work
                 cap_bps: cap,
                 set_at: when(),
             }],
-            &[(String::from("demo"), shorten(&all, cap, PREFIX, "demo"))],
+            Some("demo"),
             0,
         )
         .await
@@ -210,7 +210,7 @@ async fn a_rule_the_web_server_refuses_is_rolled_back_and_the_serving_keeps_work
                 cap_bps: cap,
                 set_at: when(),
             }],
-            &[],
+            None,
             1,
         )
         .await;
@@ -315,14 +315,14 @@ async fn taking_a_limit_off_gives_the_viewer_the_whole_set_again() {
                 cap_bps: cap,
                 set_at: when(),
             }],
-            &[(String::from("demo"), shorten(&all, cap, PREFIX, "demo"))],
+            Some("demo"),
             0,
         )
         .await
         .expect("the limit would not go on");
 
     serving
-        .clear(&[], "demo", 1)
+        .apply(&[], None, 1)
         .await
         .expect("the limit would not come off");
 
@@ -338,7 +338,7 @@ async fn taking_a_limit_off_gives_the_viewer_the_whole_set_again() {
 
     let left = server
         .exec_inside(&format!(
-            "test -f {VIDEO_DIR}/_slow/demo/master.m3u8 && echo still-there || echo gone"
+            "test -e {VIDEO_DIR}/_slow/demo && echo still-there || echo gone"
         ))
         .expect("the server would not answer");
     assert!(
@@ -394,7 +394,7 @@ async fn a_cap_under_everything_serves_the_lightest_rather_than_nothing() {
                 cap_bps: cap,
                 set_at: when(),
             }],
-            &[(String::from("demo"), short)],
+            Some("demo"),
             0,
         )
         .await
@@ -459,7 +459,7 @@ async fn add_one_limit(
         cap_bps,
         set_at: when(),
     });
-    let outcome = serving.apply(&limits, &[], generation).await;
+    let outcome = serving.apply(&limits, Some(slug), generation).await;
     conn.close().await;
     outcome
 }
@@ -611,7 +611,24 @@ async fn a_limit_set_on_a_file_with_no_generation_line_at_all_succeeds() {
 // one is still being checked.
 
 const LOCK: &str = "/etc/caddy/vrcast-limits.conf.lock";
-const SHORT: &str = "/var/lib/vrcast/videos/_slow/demo/master.m3u8";
+const SLOW: &str = "/var/lib/vrcast/videos/_slow";
+
+/// Where the description for one ceiling on `demo` sits (T602).
+fn short_at(cap_bps: u64) -> String {
+    format!("{SLOW}/demo/{cap_bps}/master.m3u8")
+}
+
+/// Everything under `_slow/`, exactly: every directory, and every file with its hash —
+/// read around our own code. Two equal snapshots mean nothing under it changed.
+fn slow_snapshot(server: &TestServer) -> String {
+    server
+        .exec_inside(&format!(
+            "cd {SLOW} 2>/dev/null || {{ echo NO_SLOW; exit 0; }}; \
+             find . -type d | LC_ALL=C sort; echo ---; \
+             find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum"
+        ))
+        .expect("the shortened descriptions would not be listed")
+}
 
 fn good_url(server: &TestServer) -> String {
     format!(
@@ -723,21 +740,14 @@ async fn one_limit_in_force(server: &TestServer, all: &[Variant]) {
     let conn = connect(server).await;
     let url = good_url(server);
     serving_at(&conn, &url)
-        .apply(
-            &[a_rule("203.0.113.7", all[1].bandwidth)],
-            &[(
-                String::from("demo"),
-                shorten(all, all[1].bandwidth, PREFIX, "demo"),
-            )],
-            0,
-        )
+        .apply(&[a_rule("203.0.113.7", all[1].bandwidth)], Some("demo"), 0)
         .await
         .expect("the first limit would not go on");
     conn.close().await;
 }
 
-/// A second limit on the same medium, with a shortened description of its own — the change
-/// the failure checks try to make.
+/// A second limit on the same medium, with a ceiling of its own — the change the failure
+/// checks try to make.
 async fn add_a_second_limit(server: &TestServer, all: &[Variant]) -> Result<(), LimitError> {
     let conn = connect(server).await;
     let url = good_url(server);
@@ -747,10 +757,7 @@ async fn add_a_second_limit(server: &TestServer, all: &[Variant]) -> Result<(), 
                 a_rule("203.0.113.7", all[1].bandwidth),
                 a_rule("203.0.113.8", all[2].bandwidth),
             ],
-            &[(
-                String::from("demo"),
-                shorten(all, all[2].bandwidth, PREFIX, "demo"),
-            )],
+            Some("demo"),
             1,
         )
         .await;
@@ -758,18 +765,18 @@ async fn add_a_second_limit(server: &TestServer, all: &[Variant]) -> Result<(), 
     outcome
 }
 
-/// What a failed change must leave: the same rules to the byte, the same shortened
-/// description to the byte, nothing staged lying about, and the lock free.
-fn nothing_changed(server: &TestServer, conf_before: &str, short_before: &str, what: &str) {
+/// What a failed change must leave: the same rules to the byte, everything under `_slow/`
+/// to the byte, nothing staged lying about, and the lock free.
+fn nothing_changed(server: &TestServer, conf_before: &str, slow_before: &str, what: &str) {
     assert_eq!(
         contents(server, CONF),
         conf_before,
         "{what}: the rules in force changed although the change failed"
     );
     assert_eq!(
-        contents(server, SHORT),
-        short_before,
-        "{what}: the shortened description was not put back"
+        slow_snapshot(server),
+        slow_before,
+        "{what}: the shortened descriptions were not put back as they were"
     );
     assert_eq!(
         leftovers(server),
@@ -789,7 +796,7 @@ async fn a_refused_move_into_place_is_an_error_and_changes_nothing() {
     let all = the_ladder(&server);
     one_limit_in_force(&server, &all).await;
     let conf_before = contents(&server, CONF);
-    let short_before = contents(&server, SHORT);
+    let slow_before = slow_snapshot(&server);
 
     install_failing(&server, "mv", CONF);
     let outcome = add_a_second_limit(&server, &all).await;
@@ -803,7 +810,7 @@ async fn a_refused_move_into_place_is_an_error_and_changes_nothing() {
         !matches!(outcome, Err(LimitError::Conflict { .. })),
         "a refused move is not somebody else's change: {outcome:?}"
     );
-    nothing_changed(&server, &conf_before, &short_before, "refused mv");
+    nothing_changed(&server, &conf_before, &slow_before, "refused mv");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -814,7 +821,7 @@ async fn a_refused_backup_means_the_new_rules_never_go_in() {
     let all = the_ladder(&server);
     one_limit_in_force(&server, &all).await;
     let conf_before = contents(&server, CONF);
-    let short_before = contents(&server, SHORT);
+    let slow_before = slow_snapshot(&server);
 
     install_failing(&server, "cp", &format!("{CONF}.previous"));
     let outcome = add_a_second_limit(&server, &all).await;
@@ -824,7 +831,7 @@ async fn a_refused_backup_means_the_new_rules_never_go_in() {
         outcome.is_err(),
         "the previous rules could not be kept and the new ones went in anyway"
     );
-    nothing_changed(&server, &conf_before, &short_before, "refused backup");
+    nothing_changed(&server, &conf_before, &slow_before, "refused backup");
 }
 
 /// Somewhere that takes a connection and never answers it: a check against it runs into
@@ -858,7 +865,7 @@ async fn a_rollback_never_undoes_a_change_that_landed_after_it() {
 
     let mut b_rules: Vec<String> = Vec::new();
     for round in 0..3u32 {
-        let short_before = contents(&server, SHORT);
+        let slow_before = slow_snapshot(&server);
         let ip_a = format!("198.51.100.{}", 10 + round);
         let ip_b = format!("203.0.113.{}", 100 + round);
 
@@ -875,16 +882,7 @@ async fn a_rollback_never_undoes_a_change_that_landed_after_it() {
             let (mut rules, generation) = serving.limits().await.expect("A could not read");
             rules.push(a_rule(&ip_a, all[2].bandwidth));
             let started = std::time::Instant::now();
-            let outcome = serving
-                .apply(
-                    &rules,
-                    &[(
-                        String::from("demo"),
-                        shorten(&all, all[2].bandwidth, PREFIX, "demo"),
-                    )],
-                    generation,
-                )
-                .await;
+            let outcome = serving.apply(&rules, Some("demo"), generation).await;
             eprintln!(
                 "round {round}: A's whole change took {:.1}s and ended {outcome:?}",
                 started.elapsed().as_secs_f64()
@@ -902,7 +900,7 @@ async fn a_rollback_never_undoes_a_change_that_landed_after_it() {
                 let (mut rules, generation) = serving.limits().await.expect("B could not read");
                 rules.retain(|l| l.ip != ip_b);
                 rules.push(a_rule(&ip_b, all[1].bandwidth));
-                match serving.apply(&rules, &[], generation).await {
+                match serving.apply(&rules, Some("demo"), generation).await {
                     Err(LimitError::Conflict { .. }) => {
                         tokio::time::sleep(Duration::from_millis(300)).await;
                     }
@@ -975,9 +973,10 @@ async fn a_rollback_never_undoes_a_change_that_landed_after_it() {
              handed an old number again: {seen:?}"
         );
         assert_eq!(
-            contents(&server, SHORT),
-            short_before,
-            "round {round}: A's shortened description stayed after its rollback"
+            slow_snapshot(&server),
+            slow_before,
+            "round {round}: A's shortened description (or its directory) stayed after its \
+             rollback"
         );
         assert_eq!(leftovers(&server), "", "round {round}: leftovers");
         assert!(
@@ -997,7 +996,7 @@ async fn a_change_that_cannot_get_the_lock_touches_nothing_and_says_so() {
     let all = the_ladder(&server);
     one_limit_in_force(&server, &all).await;
     let conf_before = contents(&server, CONF);
-    let short_before = contents(&server, SHORT);
+    let slow_before = slow_snapshot(&server);
 
     // Held by the test, in the container, around our own code: detached so `docker exec`
     // returns, and for longer than any change waits.
@@ -1037,7 +1036,7 @@ async fn a_change_that_cannot_get_the_lock_touches_nothing_and_says_so() {
         lock_frees_within(&server, Duration::from_secs(10)).await,
         "the lock was not free once the test let go of it"
     );
-    nothing_changed(&server, &conf_before, &short_before, "lock timeout");
+    nothing_changed(&server, &conf_before, &slow_before, "lock timeout");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1052,8 +1051,9 @@ async fn clearing_keeps_the_description_while_a_rule_still_points_at_it() {
     add_a_second_limit(&server, &all)
         .await
         .expect("the second limit would not go on");
-    let short_with_two = contents(&server, SHORT);
-    assert_ne!(short_with_two, "ABSENT");
+    let short_of_seven = contents(&server, &short_at(all[1].bandwidth));
+    assert_ne!(short_of_seven, "ABSENT");
+    assert_ne!(contents(&server, &short_at(all[2].bandwidth)), "ABSENT");
 
     let conn = connect(&server).await;
     let url = good_url(&server);
@@ -1066,13 +1066,18 @@ async fn clearing_keeps_the_description_while_a_rule_still_points_at_it() {
         .filter(|l| l.ip != "203.0.113.8")
         .collect();
     serving
-        .clear(&remaining, "demo", generation)
+        .apply(&remaining, None, generation)
         .await
         .expect("the first of two limits would not come off");
     assert_eq!(
-        contents(&server, SHORT),
-        short_with_two,
+        contents(&server, &short_at(all[1].bandwidth)),
+        short_of_seven,
         "the description went while a rule still pointed at it"
+    );
+    assert_eq!(
+        contents(&server, &short_at(all[2].bandwidth)),
+        "ABSENT",
+        "the description of a ceiling no rule names any more stayed"
     );
 
     let (rules, generation) = serving.limits().await.expect("the rules would not read");
@@ -1083,15 +1088,15 @@ async fn clearing_keeps_the_description_while_a_rule_still_points_at_it() {
         .collect();
     assert!(remaining.is_empty());
     serving
-        .clear(&remaining, "demo", generation)
+        .apply(&remaining, None, generation)
         .await
         .expect("the last limit would not come off");
     conn.close().await;
 
     assert_eq!(
-        contents(&server, SHORT),
-        "ABSENT",
-        "the description stayed after the last rule for it went"
+        slow_snapshot(&server),
+        ".\n---\n",
+        "something stayed under _slow/ after the last rule went"
     );
     assert_eq!(leftovers(&server), "");
     assert!(lock_is_free(&server));
@@ -1107,11 +1112,11 @@ async fn a_clear_whose_check_fails_brings_the_description_back() {
     lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
     let all = the_ladder(&server);
     one_limit_in_force(&server, &all).await;
-    let short_before = contents(&server, SHORT);
+    let slow_before = slow_snapshot(&server);
 
     let silent = a_silent_address().await;
     let conn = connect(&server).await;
-    let outcome = serving_at(&conn, &silent).clear(&[], "demo", 1).await;
+    let outcome = serving_at(&conn, &silent).apply(&[], None, 1).await;
     conn.close().await;
     assert!(
         outcome.is_err(),
@@ -1130,11 +1135,495 @@ async fn a_clear_whose_check_fails_brings_the_description_back() {
         generation, 3,
         "the rollback must write a new generation (1 → 2 by the clear → 3 by its undo)"
     );
+    // Since T602 nothing is removed before the check passes, so the description the rule
+    // points at never went in the first place.
     assert_eq!(
-        contents(&server, SHORT),
-        short_before,
-        "the description the rule points at did not come back"
+        slow_snapshot(&server),
+        slow_before,
+        "the description the rule points at did not stay"
     );
     assert_eq!(leftovers(&server), "");
     assert!(lock_frees_within(&server, Duration::from_secs(5)).await);
+}
+
+// ---------- T602: one shortened description per ceiling ----------
+//
+// Every rule of a medium used to rewrite onto one `_slow/<slug>/master.m3u8`, and each
+// `limit_set` wrote the shortened description of its own request there — so the last one
+// written was what every limited viewer of that medium got, whatever their own ceiling.
+
+/// Put `ip`'s limit on `slug` the way `commands/limits.rs::api::limit_set` does: read the
+/// rules and their generation, replace this address's rule for this medium, apply.
+async fn put_limit(
+    server: &TestServer,
+    ip: &str,
+    slug: &str,
+    cap_bps: u64,
+    check_url: &str,
+) -> Result<(), LimitError> {
+    let conn = connect(server).await;
+    let serving = serving_at(&conn, check_url);
+    let outcome = async {
+        let (mut rules, generation) = serving.limits().await?;
+        rules.retain(|l| !(l.ip == ip && l.slug == slug));
+        rules.push(Limit {
+            ip: ip.to_owned(),
+            slug: slug.to_owned(),
+            cap_bps,
+            set_at: when(),
+        });
+        serving.apply(&rules, Some(slug), generation).await
+    }
+    .await;
+    conn.close().await;
+    outcome
+}
+
+/// Take `ip`'s limit on `slug` off the way `commands/limits.rs::api::limit_clear` does.
+async fn take_limit_off(
+    server: &TestServer,
+    ip: &str,
+    slug: &str,
+    check_url: &str,
+) -> Result<(), LimitError> {
+    let conn = connect(server).await;
+    let serving = serving_at(&conn, check_url);
+    let outcome = async {
+        let (mut rules, generation) = serving.limits().await?;
+        rules.retain(|l| !(l.ip == ip && l.slug == slug));
+        serving.apply(&rules, None, generation).await
+    }
+    .await;
+    conn.close().await;
+    outcome
+}
+
+/// The rungs `viewer` is offered for `slug`, heaviest first, by bandwidth.
+fn offered(viewer: &Viewer, slug: &str) -> Vec<u64> {
+    let text = viewer
+        .fetch(&format!("/videos/{slug}/master.m3u8"))
+        .unwrap_or_else(|e| panic!("{} was served nothing for {slug}: {e}", viewer.ip()));
+    let variants =
+        parse(&text).unwrap_or_else(|e| panic!("what was served would not read ({e:?}):\n{text}"));
+    for v in &variants {
+        assert!(
+            v.path.starts_with(&format!("/videos/{slug}/")) || !v.path.starts_with('/'),
+            "a rung of {slug} points somewhere else: {}",
+            v.path
+        );
+    }
+    variants.iter().map(|v| v.bandwidth).collect()
+}
+
+/// What somebody with no limit is offered — asked from outside the server's network.
+async fn offered_to_everybody(server: &TestServer, slug: &str) -> Vec<u64> {
+    let text = reqwest::get(&format!(
+        "http://{}:{}/videos/{slug}/master.m3u8",
+        server.host(),
+        server.http_port
+    ))
+    .await
+    .expect("the serving would not answer")
+    .text()
+    .await
+    .expect("no answer body");
+    parse(&text)
+        .expect("the full description would not read")
+        .iter()
+        .map(|v| v.bandwidth)
+        .collect()
+}
+
+fn exists(server: &TestServer, path: &str) -> bool {
+    server
+        .exec_inside(&format!("test -e '{path}' && echo YES || echo NO"))
+        .expect("the server would not answer")
+        .contains("YES")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_viewers_of_one_medium_keep_their_own_ceilings() {
+    // T602 (a), the bug itself. A is capped to the lightest rung, B to two. A is set first,
+    // B second — and A must still get only the lightest after B's limit went in.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    let a = Viewer::attach(&server).expect("A would not attach");
+    let b = Viewer::attach(&server).expect("B would not attach");
+    assert_ne!(a.ip(), b.ip(), "the two viewers share an address");
+    let url = good_url(&server);
+    let cap_a = all[2].bandwidth;
+    let cap_b = all[1].bandwidth;
+
+    put_limit(&server, a.ip(), "demo", cap_a, &url)
+        .await
+        .expect("A's limit would not go on");
+    assert_eq!(offered(&a, "demo"), vec![all[2].bandwidth]);
+
+    put_limit(&server, b.ip(), "demo", cap_b, &url)
+        .await
+        .expect("B's limit would not go on");
+    assert_eq!(
+        offered(&b, "demo"),
+        vec![all[1].bandwidth, all[2].bandwidth],
+        "B was not given their own two rungs"
+    );
+    assert_eq!(
+        offered(&a, "demo"),
+        vec![all[2].bandwidth],
+        "A was handed B's set once B's limit went in — the last limit written decides for \
+         everybody"
+    );
+    assert_eq!(
+        offered_to_everybody(&server, "demo").await.len(),
+        3,
+        "somebody with no limit lost rungs"
+    );
+
+    assert!(
+        exists(&server, &short_at(cap_a)),
+        "A's description is not on disk"
+    );
+    assert!(
+        exists(&server, &short_at(cap_b)),
+        "B's description is not on disk"
+    );
+
+    // The caching rule reaches a limited viewer's description at its new place, one level
+    // deeper: a description cached for thirty days would make lifting the limit meaningless.
+    let headers = a
+        .headers("/videos/demo/master.m3u8")
+        .expect("A's description would not be served");
+    assert!(
+        headers.to_lowercase().contains("cache-control: no-cache"),
+        "a limited viewer's description is cached like a segment:\n{headers}"
+    );
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_is_free(&server));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn taking_one_viewers_limit_off_leaves_the_other_alone() {
+    // T602 (b). In the state of (a), A's limit comes off: A gets everything, B's answer
+    // and B's file stay exactly as they were, and A's ceiling's directory is gone.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    let a = Viewer::attach(&server).expect("A would not attach");
+    let b = Viewer::attach(&server).expect("B would not attach");
+    let url = good_url(&server);
+    let cap_a = all[2].bandwidth;
+    let cap_b = all[1].bandwidth;
+    put_limit(&server, a.ip(), "demo", cap_a, &url)
+        .await
+        .expect("A's limit would not go on");
+    put_limit(&server, b.ip(), "demo", cap_b, &url)
+        .await
+        .expect("B's limit would not go on");
+
+    let b_answer_before = b
+        .fetch("/videos/demo/master.m3u8")
+        .expect("B was served nothing");
+    let b_file_before = contents(&server, &short_at(cap_b));
+
+    take_limit_off(&server, a.ip(), "demo", &url)
+        .await
+        .expect("A's limit would not come off");
+
+    assert_eq!(
+        offered(&a, "demo").len(),
+        3,
+        "A did not get every rung back"
+    );
+    assert_eq!(
+        b.fetch("/videos/demo/master.m3u8")
+            .expect("B was served nothing"),
+        b_answer_before,
+        "B's answer changed when A's limit came off"
+    );
+    assert_eq!(
+        contents(&server, &short_at(cap_b)),
+        b_file_before,
+        "B's description changed when A's limit came off"
+    );
+    assert!(
+        !exists(&server, &format!("{SLOW}/demo/{cap_a}")),
+        "A's ceiling's directory stayed after the last rule for it went"
+    );
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_is_free(&server));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_viewers_with_one_ceiling_share_a_file_until_both_are_gone() {
+    // T602 (c).
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    let a = Viewer::attach(&server).expect("A would not attach");
+    let b = Viewer::attach(&server).expect("B would not attach");
+    let url = good_url(&server);
+    let cap = all[1].bandwidth;
+    put_limit(&server, a.ip(), "demo", cap, &url)
+        .await
+        .expect("A's limit would not go on");
+    put_limit(&server, b.ip(), "demo", cap, &url)
+        .await
+        .expect("B's limit would not go on");
+
+    let listed = server
+        .exec_inside(&format!("cd {SLOW} && find . -type f | LC_ALL=C sort"))
+        .expect("the descriptions would not be listed");
+    assert_eq!(
+        listed.trim(),
+        format!("./demo/{cap}/master.m3u8"),
+        "two viewers with one ceiling did not share one file"
+    );
+
+    take_limit_off(&server, a.ip(), "demo", &url)
+        .await
+        .expect("A's limit would not come off");
+    assert!(
+        exists(&server, &short_at(cap)),
+        "the shared file went while B's rule still points at it"
+    );
+    assert_eq!(offered(&b, "demo").len(), 2, "B lost their limit");
+    assert_eq!(
+        offered(&a, "demo").len(),
+        3,
+        "A kept a limit that was taken off"
+    );
+
+    take_limit_off(&server, b.ip(), "demo", &url)
+        .await
+        .expect("B's limit would not come off");
+    assert!(
+        !exists(&server, &format!("{SLOW}/demo")),
+        "_slow/demo/ stayed"
+    );
+    assert!(exists(&server, SLOW), "_slow/ itself was removed");
+    assert_eq!(offered(&b, "demo").len(), 3);
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_is_free(&server));
+}
+
+/// Lay out the state a client built before T602 leaves (T603's): a rules file at
+/// `generation` whose rules rewrite onto `_slow/<slug>/master.m3u8`, those files, and the
+/// serving reloaded onto it.
+fn lay_out_pre_t602(server: &TestServer, rules: &[Limit], generation: u64, all: &[Variant]) {
+    let mut text = vrcast_studio_lib::domain::limits_conf::build(rules, PREFIX, generation);
+    for rule in rules {
+        text = text.replace(
+            &format!("/_slow/{}/{}/master.m3u8", rule.slug, rule.cap_bps),
+            &format!("/_slow/{}/master.m3u8", rule.slug),
+        );
+        assert!(
+            text.contains(&format!("{PREFIX}/_slow/{}/master.m3u8\n", rule.slug)),
+            "the old rule shape was not made:\n{text}"
+        );
+    }
+    write_inside(server, CONF, &text);
+    for rule in rules {
+        let short = shorten(all, rule.cap_bps, PREFIX, &rule.slug);
+        server
+            .exec_inside(&format!("mkdir -p {SLOW}/{}", rule.slug))
+            .expect("the old directory would not be made");
+        write_inside(
+            server,
+            &format!("{SLOW}/{}/master.m3u8", rule.slug),
+            &short.text,
+        );
+    }
+    server
+        .exec_inside(&format!(
+            "caddy reload --config {MAIN_CONF} --adapter caddyfile 2>&1"
+        ))
+        .expect("the serving would not take the old rules");
+}
+
+fn write_inside(server: &TestServer, path: &str, text: &str) {
+    server
+        .exec_inside(&format!(
+            "cat > '{path}' <<'VRCAST_T602_EOF'\n{text}VRCAST_T602_EOF"
+        ))
+        .expect("the file would not be written");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_first_change_moves_every_rule_off_the_old_shared_files() {
+    // T602 (d). A server a pre-T602 client changed last: generation 5, rules for A on
+    // `demo` and C on `other` rewriting onto the old one-per-medium files. The first change
+    // by this client — B's limit on `demo` — puts every rule on the new files, removes the
+    // old ones, and nobody is left without their set.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    lay_out_ladder(&server, "other").expect("the second quality set was not laid out");
+    let all = the_ladder(&server);
+    let a = Viewer::attach(&server).expect("A would not attach");
+    let b = Viewer::attach(&server).expect("B would not attach");
+    let c = Viewer::attach(&server).expect("C would not attach");
+    let cap_a = all[2].bandwidth;
+    let cap_b = all[1].bandwidth;
+    let cap_c = all[1].bandwidth;
+    let old = [
+        Limit {
+            ip: a.ip().to_owned(),
+            slug: String::from("demo"),
+            cap_bps: cap_a,
+            set_at: when(),
+        },
+        Limit {
+            ip: c.ip().to_owned(),
+            slug: String::from("other"),
+            cap_bps: cap_c,
+            set_at: when(),
+        },
+    ];
+    lay_out_pre_t602(&server, &old, 5, &all);
+    // The old state really is in force: A and C are limited through the old files.
+    assert_eq!(offered(&a, "demo"), vec![all[2].bandwidth]);
+    assert_eq!(offered(&c, "other").len(), 2);
+
+    put_limit(&server, b.ip(), "demo", cap_b, &good_url(&server))
+        .await
+        .expect("the first change after the old client would not go in");
+
+    assert!(
+        !exists(&server, &format!("{SLOW}/demo/master.m3u8")),
+        "the old file of the medium being changed stayed"
+    );
+    assert!(
+        !exists(&server, &format!("{SLOW}/other/master.m3u8")),
+        "the old file of another medium stayed, and no rule reaches it any more"
+    );
+    assert_eq!(
+        offered(&a, "demo"),
+        vec![all[2].bandwidth],
+        "A lost their set"
+    );
+    assert_eq!(
+        offered(&b, "demo"),
+        vec![all[1].bandwidth, all[2].bandwidth],
+        "B did not get their set"
+    );
+    assert_eq!(
+        offered(&c, "other"),
+        vec![all[1].bandwidth, all[2].bandwidth],
+        "C, on a medium nobody touched, lost their set"
+    );
+    assert_eq!(offered_to_everybody(&server, "other").await.len(), 3);
+
+    let conn = connect(&server).await;
+    let url = good_url(&server);
+    let (rules, generation) = serving_at(&conn, &url)
+        .limits()
+        .await
+        .expect("the rules would not read");
+    conn.close().await;
+    assert_eq!(generation, 6);
+    assert_eq!(rules.len(), 3);
+    let conf = contents(&server, CONF);
+    assert!(
+        !conf.contains("/_slow/demo/master.m3u8") && !conf.contains("/_slow/other/master.m3u8"),
+        "a rule still points at an old file:\n{conf}"
+    );
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_is_free(&server));
+}
+
+/// The rules as they read without the generation line — what a rollback brings back
+/// exactly (the number itself only grows, T603).
+fn without_generation(text: &str) -> String {
+    text.lines()
+        .filter(|l| !l.starts_with("# vrcast-generation "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_that_fails_its_check_leaves_everything_under_slow_as_it_was() {
+    // T602 (e). The pre-T602 state of (d) — old files, a rule of another ceiling — and a
+    // change whose check fails. The change had made new directories and written new files
+    // for every rule before its rules went in; all of it goes, nothing old was removed, and
+    // the old rules keep serving through the old files.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    lay_out_ladder(&server, "other").expect("the second quality set was not laid out");
+    let all = the_ladder(&server);
+    let a = Viewer::attach(&server).expect("A would not attach");
+    let old = [
+        Limit {
+            ip: a.ip().to_owned(),
+            slug: String::from("demo"),
+            cap_bps: all[2].bandwidth,
+            set_at: when(),
+        },
+        Limit {
+            ip: String::from("203.0.113.30"),
+            slug: String::from("other"),
+            cap_bps: all[1].bandwidth,
+            set_at: when(),
+        },
+    ];
+    lay_out_pre_t602(&server, &old, 5, &all);
+    let conf_before = contents(&server, CONF);
+    let slow_before = slow_snapshot(&server);
+
+    let silent = a_silent_address().await;
+    let outcome = put_limit(&server, "203.0.113.20", "demo", all[1].bandwidth, &silent).await;
+    // `RollbackFailed` rather than `ServingStopped`: the silent address does not answer
+    // after the rollback either, so the rollback's own check fails too. What matters here
+    // is what is on disk afterwards, checked byte for byte below.
+    assert!(
+        matches!(
+            outcome,
+            Err(LimitError::ServingStopped | LimitError::RollbackFailed(_))
+        ),
+        "the check could not have passed: {outcome:?}"
+    );
+
+    let conf_after = contents(&server, CONF);
+    assert_eq!(
+        without_generation(&conf_after),
+        without_generation(&conf_before),
+        "the rules did not come back as they were"
+    );
+    assert_eq!(
+        vrcast_studio_lib::domain::limits_conf::read_generation(&conf_after),
+        7,
+        "5 before, 6 by the failed change, 7 by putting the old rules back"
+    );
+    assert_eq!(
+        slow_snapshot(&server),
+        slow_before,
+        "something under _slow/ is not as it was"
+    );
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_frees_within(&server, Duration::from_secs(5)).await);
+    assert_eq!(
+        offered(&a, "demo"),
+        vec![all[2].bandwidth],
+        "A lost their set through the failed change"
+    );
+
+    // And taking a limit off whose check fails, in the new layout: nothing removed either.
+    let url = good_url(&server);
+    put_limit(&server, "203.0.113.20", "demo", all[1].bandwidth, &url)
+        .await
+        .expect("a sound change would not go in");
+    let conf_before = contents(&server, CONF);
+    let slow_before = slow_snapshot(&server);
+    let outcome = take_limit_off(&server, a.ip(), "demo", &silent).await;
+    assert!(
+        outcome.is_err(),
+        "the check could not have passed: {outcome:?}"
+    );
+    assert_eq!(
+        without_generation(&contents(&server, CONF)),
+        without_generation(&conf_before)
+    );
+    assert_eq!(slow_snapshot(&server), slow_before);
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_frees_within(&server, Duration::from_secs(5)).await);
+    assert_eq!(offered(&a, "demo"), vec![all[2].bandwidth]);
 }

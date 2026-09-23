@@ -239,6 +239,37 @@ impl Viewer {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// Ask for something once and get only the answer's headers back, as this viewer.
+    ///
+    /// For what the serving tells *this* address about caching (T602): a limited viewer's
+    /// description is served from somewhere else than everybody's, and the caching rule
+    /// has to reach it there too.
+    pub fn headers(&self, path: &str) -> Result<String, String> {
+        let url = format!("http://{SERVER_ALIAS}{path}");
+        let out = docker(&[
+            "exec",
+            &self.id,
+            "curl",
+            "-sS",
+            "-m",
+            "20",
+            "-D",
+            "-",
+            "-o",
+            "/dev/null",
+            &url,
+        ])
+        .map_err(|e| format!("could not make the request: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "the request for {path} from {} failed: {}",
+                self.ip,
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
     /// Whether this viewer is still pulling something.
     pub fn is_watching(&self) -> bool {
         matches!(docker(&["exec", &self.id, "pgrep", "-x", "curl"]), Ok(o) if o.status.success())

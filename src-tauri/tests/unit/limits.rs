@@ -2,7 +2,9 @@
 
 use vrcast_studio_lib::domain::hls_master::Variant;
 use vrcast_studio_lib::domain::limits_conf::{build, matcher_name, parse, Limit};
-use vrcast_studio_lib::domain::slow_master::{shorten, slow_master_path};
+use vrcast_studio_lib::domain::slow_master::{
+    legacy_slow_master_path, plan, shorten, slow_master_address, slow_master_path, SlowPlan,
+};
 
 fn variant(path: &str, bandwidth: u64, height: u32) -> Variant {
     Variant {
@@ -84,13 +86,40 @@ fn a_cap_above_everything_keeps_the_whole_ladder() {
 #[test]
 fn the_shortened_description_sits_beside_the_media_rather_than_inside_it() {
     // Inside, a viewer with no limit could stumble into it. Beside, nobody reaches it
-    // except through the rule that rewrites onto it.
+    // except through the rule that rewrites onto it. One per ceiling (T602): two viewers
+    // of one medium with different ceilings must not share a file.
     assert_eq!(
-        slow_master_path("/var/lib/vrcast/videos", "demo"),
+        slow_master_path("/var/lib/vrcast/videos", "demo", 6_000_000),
+        "/var/lib/vrcast/videos/_slow/demo/6000000/master.m3u8"
+    );
+    assert_eq!(
+        slow_master_path("/var/lib/vrcast/videos/", "demo", 6_000_000),
+        "/var/lib/vrcast/videos/_slow/demo/6000000/master.m3u8"
+    );
+    assert_ne!(
+        slow_master_path("/var/lib/vrcast/videos", "demo", 6_000_000),
+        slow_master_path("/var/lib/vrcast/videos", "demo", 13_000_000)
+    );
+    // The address a rule rewrites onto is the same path under the serving prefix.
+    assert_eq!(
+        slow_master_address("/videos", "demo", 6_000_000),
+        "/videos/_slow/demo/6000000/master.m3u8"
+    );
+    assert_eq!(
+        slow_master_address("/videos/", "demo", 6_000_000),
+        "/videos/_slow/demo/6000000/master.m3u8"
+    );
+}
+
+#[test]
+fn the_description_from_before_t602_is_still_named_so_it_can_be_removed() {
+    // Written by earlier clients, one per medium; only ever removed now.
+    assert_eq!(
+        legacy_slow_master_path("/var/lib/vrcast/videos", "demo"),
         "/var/lib/vrcast/videos/_slow/demo/master.m3u8"
     );
     assert_eq!(
-        slow_master_path("/var/lib/vrcast/videos/", "demo"),
+        legacy_slow_master_path("/var/lib/vrcast/videos/", "demo"),
         "/var/lib/vrcast/videos/_slow/demo/master.m3u8"
     );
 }
@@ -232,4 +261,199 @@ fn the_generation_marker_is_never_mistaken_for_a_rule() {
         1,
         "the generation line was misread as an extra rule:\n{text}"
     );
+}
+
+// ---------- T602: one shortened description per ceiling ----------
+
+/// The `rewrite` target of the rule for one address, read out of a built file.
+fn rewrite_for(text: &str, ip: &str, slug: &str) -> String {
+    let key = matcher_name(ip, slug);
+    text.lines()
+        .find_map(|l| l.strip_prefix(&format!("rewrite @{key} ")))
+        .unwrap_or_else(|| panic!("no rewrite for {ip}/{slug} in:\n{text}"))
+        .trim()
+        .to_owned()
+}
+
+#[test]
+fn two_viewers_of_one_medium_with_different_ceilings_are_rewritten_to_different_files() {
+    // The bug: every rule of a medium rewrote onto one `_slow/<slug>/master.m3u8`, and the
+    // last limit written decided what every limited viewer of that medium got.
+    let text = build(
+        &[
+            a_limit("203.0.113.10", "demo", 2_000_000),
+            a_limit("203.0.113.11", "demo", 5_000_000),
+        ],
+        "/videos",
+        3,
+    );
+    let low = rewrite_for(&text, "203.0.113.10", "demo");
+    let high = rewrite_for(&text, "203.0.113.11", "demo");
+    assert_eq!(low, "/videos/_slow/demo/2000000/master.m3u8");
+    assert_eq!(high, "/videos/_slow/demo/5000000/master.m3u8");
+    assert_ne!(low, high);
+    // Built from the one function the file path is built from, so they cannot drift.
+    assert_eq!(low, slow_master_address("/videos", "demo", 2_000_000));
+}
+
+#[test]
+fn two_viewers_with_the_same_ceiling_share_one_file() {
+    let text = build(
+        &[
+            a_limit("203.0.113.10", "demo", 2_000_000),
+            a_limit("203.0.113.11", "demo", 2_000_000),
+        ],
+        "/videos/",
+        3,
+    );
+    assert_eq!(
+        rewrite_for(&text, "203.0.113.10", "demo"),
+        rewrite_for(&text, "203.0.113.11", "demo")
+    );
+    assert_eq!(
+        rewrite_for(&text, "203.0.113.10", "demo"),
+        "/videos/_slow/demo/2000000/master.m3u8"
+    );
+}
+
+#[test]
+fn the_ceiling_survives_a_round_trip_through_the_file() {
+    let limits = vec![
+        a_limit("203.0.113.10", "demo", 2_000_000),
+        a_limit("203.0.113.11", "demo", 5_000_000),
+        a_limit("203.0.113.12", "demo", 5_000_000),
+    ];
+    let text = build(&limits, "/videos", 9);
+    assert_eq!(parse(&text), limits);
+    // And what is read back rewrites onto the same files again.
+    assert_eq!(build(&parse(&text), "/videos", 9), text);
+}
+
+const VIDEOS: &str = "/var/lib/vrcast/videos";
+
+fn file(slug: &str, cap: u64) -> String {
+    slow_master_path(VIDEOS, slug, cap)
+}
+fn legacy(slug: &str) -> String {
+    legacy_slow_master_path(VIDEOS, slug)
+}
+fn cap_dir(slug: &str, cap: u64) -> String {
+    format!("{VIDEOS}/_slow/{slug}/{cap}")
+}
+fn slug_dir(slug: &str) -> String {
+    format!("{VIDEOS}/_slow/{slug}")
+}
+
+#[test]
+fn taking_off_one_of_two_different_ceilings_removes_only_its_file() {
+    let before = [
+        a_limit("203.0.113.10", "demo", 2_000_000),
+        a_limit("203.0.113.11", "demo", 5_000_000),
+    ];
+    let after = [a_limit("203.0.113.11", "demo", 5_000_000)];
+    let p = plan(VIDEOS, &before, &after);
+    assert_eq!(
+        p,
+        SlowPlan {
+            descriptions: vec![(String::from("demo"), 5_000_000)],
+            remove_files: vec![file("demo", 2_000_000), legacy("demo")],
+            remove_dirs_if_empty: vec![cap_dir("demo", 2_000_000), slug_dir("demo")],
+        }
+    );
+    assert!(!p.remove_files.contains(&file("demo", 5_000_000)));
+}
+
+#[test]
+fn taking_off_one_of_two_equal_ceilings_removes_nothing_the_other_uses() {
+    let before = [
+        a_limit("203.0.113.10", "demo", 2_000_000),
+        a_limit("203.0.113.11", "demo", 2_000_000),
+    ];
+    let after = [a_limit("203.0.113.11", "demo", 2_000_000)];
+    let p = plan(VIDEOS, &before, &after);
+    assert_eq!(p.descriptions, vec![(String::from("demo"), 2_000_000)]);
+    assert_eq!(p.remove_files, vec![legacy("demo")]);
+    // The medium's directory is only a candidate; it holds the other's file and stays.
+    assert_eq!(p.remove_dirs_if_empty, vec![slug_dir("demo")]);
+
+    // And taking off the last one removes the ceiling's file and both directories.
+    let p = plan(VIDEOS, &after, &[]);
+    assert!(p.descriptions.is_empty());
+    assert_eq!(
+        p.remove_files,
+        vec![file("demo", 2_000_000), legacy("demo")]
+    );
+    assert_eq!(
+        p.remove_dirs_if_empty,
+        vec![cap_dir("demo", 2_000_000), slug_dir("demo")]
+    );
+}
+
+#[test]
+fn changing_one_viewers_ceiling_writes_the_new_file_and_removes_the_old() {
+    let before = [a_limit("203.0.113.10", "demo", 2_000_000)];
+    let after = [a_limit("203.0.113.10", "demo", 5_000_000)];
+    let p = plan(VIDEOS, &before, &after);
+    assert_eq!(p.descriptions, vec![(String::from("demo"), 5_000_000)]);
+    assert_eq!(
+        p.remove_files,
+        vec![file("demo", 2_000_000), legacy("demo")]
+    );
+    assert!(!p.remove_files.contains(&file("demo", 5_000_000)));
+}
+
+#[test]
+fn every_medium_named_before_or_after_loses_its_description_from_before_t602() {
+    // The file is written whole and every rule in it rewrites onto the new paths, so after
+    // any change nothing reaches any `_slow/<slug>/master.m3u8` — of the medium being
+    // changed or of any other.
+    let before = [
+        a_limit("203.0.113.10", "demo", 2_000_000),
+        a_limit("203.0.113.30", "other", 1_000_000),
+        a_limit("203.0.113.40", "gone", 1_000_000),
+    ];
+    let after = [
+        a_limit("203.0.113.10", "demo", 2_000_000),
+        a_limit("203.0.113.30", "other", 1_000_000),
+        a_limit("203.0.113.20", "fresh", 3_000_000),
+    ];
+    let p = plan(VIDEOS, &before, &after);
+    assert_eq!(
+        p.descriptions,
+        vec![
+            (String::from("demo"), 2_000_000),
+            (String::from("fresh"), 3_000_000),
+            (String::from("other"), 1_000_000),
+        ]
+    );
+    for slug in ["demo", "other", "gone", "fresh"] {
+        assert!(
+            p.remove_files.contains(&legacy(slug)),
+            "the pre-T602 file of {slug} is not removed: {:?}",
+            p.remove_files
+        );
+        assert!(p.remove_dirs_if_empty.contains(&slug_dir(slug)));
+    }
+    assert!(p.remove_files.contains(&file("gone", 1_000_000)));
+    // Nothing still named is removed, and `_slow/` itself never is.
+    for (slug, cap) in &p.descriptions {
+        assert!(!p.remove_files.contains(&file(slug, *cap)));
+        assert!(!p.remove_dirs_if_empty.contains(&cap_dir(slug, *cap)));
+    }
+    assert!(!p
+        .remove_dirs_if_empty
+        .iter()
+        .any(|d| d == &format!("{VIDEOS}/_slow")));
+}
+
+#[test]
+fn a_rule_naming_a_medium_that_would_leave_the_directory_is_left_alone() {
+    // The rules file is ours but the server is not: a hand-edited rule must not make the
+    // plan remove anything outside `_slow/<slug>/`.
+    let before = [
+        a_limit("203.0.113.10", "..", 2_000_000),
+        a_limit("203.0.113.11", "a/b", 2_000_000),
+    ];
+    let p = plan(VIDEOS, &before, &[]);
+    assert_eq!(p, SlowPlan::default());
 }

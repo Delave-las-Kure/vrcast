@@ -99,6 +99,15 @@ fn the_three_ways_of_serving_are_told_apart() {
     );
     // The shortened description a viewer under a limit is handed (Phase 6). Told apart so
     // that such a viewer does not look like someone asking for something unrecognised.
+    // One per ceiling since T602...
+    assert_eq!(
+        asked("/videos/_slow/demo/6000000/master.m3u8"),
+        Asked::SetDescription {
+            slug: String::from("demo"),
+            shortened: true
+        }
+    );
+    // ...and the one per medium from before, still in older logs.
     assert_eq!(
         asked("/videos/_slow/demo/master.m3u8"),
         Asked::SetDescription {

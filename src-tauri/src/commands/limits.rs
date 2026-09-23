@@ -119,8 +119,12 @@ pub mod api {
         let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
             .await?
             .conn;
-        let variants = ladder_of(&conn, &profile.video_dir, &request.slug).await?;
-        let short = shorten(&variants, request.cap_bps, SERVING_PREFIX, &request.slug);
+        // Asked before anything else, so a medium with no set is turned away with the
+        // same answer as ever; the transaction asks again under its lock (T602).
+        if let Err(e) = ladder_of(&conn, &profile.video_dir, &request.slug).await {
+            conn.close().await;
+            return Err(e);
+        }
 
         let check_url = crate::domain::links::for_path(
             &profile.domain,
@@ -142,26 +146,32 @@ pub mod api {
         // written whole, so what is not in this list stops existing.
         //
         // The generation is read alongside the list, from this exact SSH round-trip (T600):
-        // `apply()` below re-reads it fresh right before writing and refuses with
+        // `apply()` below re-reads it under its lock right before writing and refuses with
         // `LimitsConflict` if another change has landed on the server since this read —
         // without this, two concurrent `limit_set` calls on the same server could each read
         // the list, each add their own rule to their own in-memory copy, and whichever wrote
         // last would silently erase the other's rule.
-        let (existing, generation) = serving.limits().await.map_err(to_error)?;
-        let mut limits: Vec<Limit> = existing
-            .into_iter()
-            .filter(|l| !(l.ip == request.ip && l.slug == request.slug))
-            .collect();
-        limits.push(Limit {
-            ip: request.ip.clone(),
-            slug: request.slug.clone(),
-            cap_bps: request.cap_bps,
-            set_at: crate::store::db::now_rfc3339(),
-        });
-
-        let outcome = serving
-            .apply(&limits, &[(request.slug.clone(), short)], generation)
-            .await;
+        //
+        // The shortened descriptions are not made here (T602): `apply()` makes one for
+        // every (medium, ceiling) of the final list, from each medium's set as it is under
+        // the lock, and removes those no rule reaches any more.
+        let outcome = async {
+            let (existing, generation) = serving.limits().await?;
+            let mut limits: Vec<Limit> = existing
+                .into_iter()
+                .filter(|l| !(l.ip == request.ip && l.slug == request.slug))
+                .collect();
+            limits.push(Limit {
+                ip: request.ip.clone(),
+                slug: request.slug.clone(),
+                cap_bps: request.cap_bps,
+                set_at: crate::store::db::now_rfc3339(),
+            });
+            serving
+                .apply(&limits, Some(&request.slug), generation)
+                .await
+        }
+        .await;
         conn.close().await;
         outcome.map_err(to_error)
     }
@@ -191,14 +201,19 @@ pub mod api {
             owner: &format!("{}:{}", profile.user, profile.user),
         };
 
-        let (existing, generation) = serving.limits().await.map_err(to_error)?;
-        let remaining: Vec<Limit> = existing
-            .into_iter()
-            .filter(|l| !(l.ip == ip && l.slug == slug))
-            .collect();
-        // The shortened description goes only when nothing else still points at it —
-        // decided inside `clear()`'s own transaction (T603).
-        let outcome = serving.clear(&remaining, slug, generation).await;
+        // Taking a limit off is putting the list without it in force (T602): the rule goes,
+        // and a shortened description goes after the change is proven only if no rule
+        // left names that medium with that ceiling — worked out inside `apply()` from the
+        // rules before and after, under its lock.
+        let outcome = async {
+            let (existing, generation) = serving.limits().await?;
+            let remaining: Vec<Limit> = existing
+                .into_iter()
+                .filter(|l| !(l.ip == ip && l.slug == slug))
+                .collect();
+            serving.apply(&remaining, None, generation).await
+        }
+        .await;
         conn.close().await;
         outcome.map_err(to_error)
     }
@@ -267,6 +282,9 @@ fn to_error(e: LimitError) -> AppError {
         LimitError::Conflict { .. } | LimitError::Busy => {
             AppError::new(ErrorCode::LimitsConflict).with_cause(e)
         }
+        // The same refusal `ladder_of` gives before the change starts (T215); reached only
+        // if the set went away between that read and the one under the lock.
+        LimitError::NoLadder(slug) => AppError::new(ErrorCode::NoLadderForMedia).with_cause(slug),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }

@@ -24,7 +24,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::domain::limits_conf::{self, Limit};
-use crate::domain::slow_master::{slow_master_path, Shortened};
+use crate::domain::slow_master::{self, shorten, slow_master_path};
 use crate::ssh::{Connection, SshError};
 
 /// How long the serving is given to answer after a reload.
@@ -107,6 +107,11 @@ pub enum LimitError {
     #[error("the new rules could not be put in place, and nothing was changed: {0}")]
     WriteFailed(String),
 
+    /// The medium the change is about has no quality set to shorten (T215, T602): read
+    /// under the lock, just before anything would be written. Nothing was touched.
+    #[error("the medium {0} has no quality set to shorten")]
+    NoLadder(String),
+
     #[error(transparent)]
     Ssh(#[from] SshError),
 }
@@ -128,19 +133,16 @@ pub struct Serving<'a> {
     pub owner: &'a str,
 }
 
-/// What one change does to one shortened description.
+/// One shortened description one change writes (T603, T602).
 ///
-/// **A list of paths, not one file per medium** (T603, looking ahead to T602): keeping what
-/// was there and putting it back works over whatever paths this list names, so changing
-/// where the descriptions live changes only how the list is made.
-enum Change {
-    Write(String),
-    Remove,
-}
-
-struct ShortenedChange {
+/// **A list of paths, not one file per medium** (T603): keeping what was there and putting
+/// it back works over whatever paths this list names. Since T602 the list holds one entry
+/// per distinct (medium, ceiling) of the rules after the change, and only writes — what is
+/// no longer needed is removed after the change has been proven (`Serving::sweep`), never
+/// inside the part that may have to be undone.
+struct Description {
     path: String,
-    change: Change,
+    text: String,
 }
 
 /// Everything one transaction needs to name on the server.
@@ -150,7 +152,11 @@ struct Txn<'a> {
     /// The PID of the process holding the lock for this change.
     holder_pid: u32,
     base: u64,
-    changes: &'a [ShortenedChange],
+    changes: &'a [Description],
+    /// The directories the descriptions go into, each once, every parent before its
+    /// children (`_slow/<slug>` before `_slow/<slug>/<cap>`). Those this change had to make
+    /// are removed again if it is undone.
+    dirs: &'a [String],
 }
 
 impl Txn<'_> {
@@ -171,6 +177,8 @@ struct Prepared {
     had_conf: bool,
     /// For each shortened change, in order: whether the file existed before.
     present: Vec<bool>,
+    /// For each of `Txn::dirs`, in order: whether this change made it.
+    made: Vec<bool>,
 }
 
 /// The lock that makes a change one transaction (T603), held for as long as this lives.
@@ -237,12 +245,17 @@ impl Serving<'_> {
     ///
     /// **All of it is one transaction** (T603): from before the first file is touched until
     /// after the last check or the rollback, this change holds a lock on the server that
-    /// every other `apply()`/`clear()` of the same rules waits for. Between this change
-    /// putting its files in place and deciding whether they stay, nobody else changes either
-    /// the rules or the shortened descriptions. Under that lock, in this order:
+    /// every other `apply()` of the same rules waits for. Between this change putting its
+    /// files in place and deciding whether they stay, nobody else changes either the rules
+    /// or the shortened descriptions. Under that lock, in this order:
     ///
-    ///  1. the generation is checked against `base_generation` (T600); the shortened
-    ///     descriptions this change will replace are kept aside;
+    ///  0. the rules in force are read, and the change stops with `Conflict` before
+    ///     touching anything unless they are at `base_generation`; the quality set of every
+    ///     medium the new rules name is read, and one shortened description is made for
+    ///     each distinct (medium, ceiling) among them (T602, `Serving::descriptions`);
+    ///  1. the generation is checked again (T600); the directories the descriptions go into
+    ///     are made if they are missing, and the descriptions this change will replace are
+    ///     kept aside;
     ///  2. the new files are staged beside where they will go, not yet in force;
     ///  3. the rules file is kept as `.previous`, the shortened descriptions go in — before
     ///     the rules, since a rule pointing at a description that is not there yet would
@@ -253,12 +266,24 @@ impl Serving<'_> {
     ///     opinion of a configuration file is worth nothing;
     ///  5. it is reloaded;
     ///  6. the serving is asked for something a viewer would ask for, over the address a
-    ///     viewer uses — from here, not from the server (see `Serving::serving_answers`).
+    ///     viewer uses — from here, not from the server (see `Serving::serving_answers`);
+    ///  7. only now, still under the lock, what the new rules no longer reach is removed
+    ///     (`Serving::sweep`): the descriptions of ceilings no rule names any more, every
+    ///     pre-T602 `_slow/<slug>/master.m3u8` of a medium named before or after, and the
+    ///     directories left empty.
     ///
-    /// Any failure from step 2 on puts everything this change touched back (`undo`):
-    /// the rules as they were, under a **new** generation number, the shortened
-    /// descriptions as they were, or absent if they were absent. After any outcome the lock
-    /// is free again.
+    /// Any failure from step 1 on and before step 7 puts everything this change touched
+    /// back (`undo`): the rules as they were, under a **new** generation number, the
+    /// shortened descriptions as they were, or absent — with any directory this change made
+    /// for them — if they were absent. Nothing has been removed by then, so there is
+    /// nothing removed to bring back. After any outcome the lock is free again.
+    ///
+    /// **Why removing comes last (T602).** Until the reload the rules the web server holds
+    /// are the old ones, and they point at the old files; removing one of those before the
+    /// new rules are in force and proven would give a limited viewer nothing for as long as
+    /// that takes, and for good if the change is then rolled back. A removal that fails at
+    /// step 7 does not turn the change into a failure: the new rules are in force and
+    /// checked, and a file nothing reaches is untidy rather than wrong.
     ///
     /// **Why the checking happens after the file is in place and not before.** The main
     /// configuration imports this file by name; until the new content is under that name
@@ -274,73 +299,124 @@ impl Serving<'_> {
     /// change takes. The steps under it do **not** take the lock again: `flock` on a second
     /// descriptor of the same file would wait on our own holder, forever.
     ///
+    /// **`limits`** is the whole list to be in force afterwards — putting a limit on and
+    /// taking one off are the same thing here (`commands/limits.rs::api::limit_set`/
+    /// `limit_clear`). **`needs_ladder`** names the medium the person is changing: if it has
+    /// no quality set when the change reads it, the change stops with `NoLadder` having
+    /// touched nothing. Any other medium without one keeps whatever description it already
+    /// has (see `Serving::descriptions`).
+    ///
     /// **`base_generation`** must be the generation `Serving::limits()` returned alongside
-    /// the list this `limits` argument was built from (`commands/limits.rs::api::limit_set`/
-    /// `limit_clear` do exactly this). A mismatch returns `LimitError::Conflict` having
+    /// the list `limits` was made from. A mismatch returns `LimitError::Conflict` having
     /// written nothing. A match writes `generation = base_generation + 1`.
     pub async fn apply(
         &self,
         limits: &[Limit],
-        shortened: &[(String, Shortened)],
-        base_generation: u64,
-    ) -> Result<(), LimitError> {
-        let changes: Vec<ShortenedChange> = shortened
-            .iter()
-            .map(|(slug, short)| ShortenedChange {
-                path: slow_master_path(self.video_dir, slug),
-                change: Change::Write(short.text.clone()),
-            })
-            .collect();
-        self.transact(limits, &changes, base_generation).await
-    }
-
-    /// Take a limit off: the rule and the shortened description both (FR-065).
-    ///
-    /// The description goes as well as the rule. Left behind it is a file nobody reaches,
-    /// which is untidy — and worse, it is a file that would be served again the moment
-    /// somebody set a limit on that medium and expected a fresh one.
-    ///
-    /// **In the same transaction as the rules** (T603), and only when no rule that stays
-    /// still points at it. `remaining` is the list that will be in force afterwards, and it
-    /// was made from the file at `base_generation` — which the transaction confirms, under
-    /// the lock, is still the file in force. So "nothing in `remaining` names this medium"
-    /// is the same as "nothing in the rules in force after this change does". If the rules
-    /// go back, so does the description.
-    pub async fn clear(
-        &self,
-        remaining: &[Limit],
-        slug: &str,
-        base_generation: u64,
-    ) -> Result<(), LimitError> {
-        let changes: Vec<ShortenedChange> = if remaining.iter().any(|l| l.slug == slug) {
-            Vec::new()
-        } else {
-            vec![ShortenedChange {
-                path: slow_master_path(self.video_dir, slug),
-                change: Change::Remove,
-            }]
-        };
-        self.transact(remaining, &changes, base_generation).await
-    }
-
-    /// Hold the lock, do the change, give the lock back — whatever the change came to.
-    async fn transact(
-        &self,
-        limits: &[Limit],
-        changes: &[ShortenedChange],
+        needs_ladder: Option<&str>,
         base_generation: u64,
     ) -> Result<(), LimitError> {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let lock = self.lock(&id).await?;
-        let txn = Txn {
-            id,
-            holder_pid: lock.holder_pid,
-            base: base_generation,
-            changes,
-        };
-        let outcome = self.under_lock(&txn, limits).await;
+        let outcome = self
+            .locked(&id, lock.holder_pid, limits, needs_ladder, base_generation)
+            .await;
         lock.release().await;
         outcome
+    }
+
+    /// Step 0 and everything after it, the lock already held.
+    async fn locked(
+        &self,
+        id: &str,
+        holder_pid: u32,
+        limits: &[Limit],
+        needs_ladder: Option<&str>,
+        base_generation: u64,
+    ) -> Result<(), LimitError> {
+        // What is in force now, read under the lock: this is what the new rules replace,
+        // and so what decides what will no longer be reached.
+        let (before, current) = self.limits().await?;
+        if current != base_generation {
+            return Err(LimitError::Conflict {
+                base: base_generation,
+                current,
+            });
+        }
+        let plan = slow_master::plan(self.video_dir, &before, limits);
+        let changes = self.descriptions(&plan, needs_ladder).await?;
+        let dirs = dirs_for(self.video_dir, &changes);
+
+        let txn = Txn {
+            id: id.to_owned(),
+            holder_pid,
+            base: base_generation,
+            changes: &changes,
+            dirs: &dirs,
+        };
+        self.under_lock(&txn, limits).await?;
+        self.sweep(&txn, &plan).await;
+        Ok(())
+    }
+
+    /// One shortened description for each (medium, ceiling) the new rules name (T602),
+    /// each made from the medium's quality set as it is **now** — so a set that was rebuilt
+    /// since the limit was put on is what the limited viewer is shown.
+    ///
+    /// **A medium the change is not about that has no quality set any more** (it was
+    /// removed, or rebuilt as a single file) does not stop the change: the person is
+    /// changing a different medium's limit, and nothing they could do here would give that
+    /// one a set back. Nothing is written for it — whatever description of it is already
+    /// there stays as it is, and a rule that had none still leads nowhere, exactly as it
+    /// did before this change. Every unlimited viewer of such a medium is in the same place
+    /// (the address the rule matches serves nothing any more either).
+    async fn descriptions(
+        &self,
+        plan: &slow_master::SlowPlan,
+        needs_ladder: Option<&str>,
+    ) -> Result<Vec<Description>, LimitError> {
+        let mut ladders: std::collections::BTreeMap<&str, Vec<crate::domain::hls_master::Variant>> =
+            std::collections::BTreeMap::new();
+        for (slug, _) in &plan.descriptions {
+            if ladders.contains_key(slug.as_str()) {
+                continue;
+            }
+            let master = format!(
+                "{}/{slug}/master.m3u8",
+                self.video_dir.trim_end_matches('/')
+            );
+            let out = self
+                .conn
+                .exec(&format!(
+                    "cat {} 2>/dev/null || true",
+                    super::shell_quote(&master)
+                ))
+                .await?;
+            let variants = crate::domain::hls_master::parse(&out.stdout).unwrap_or_default();
+            if variants.is_empty() {
+                tracing::warn!(
+                    slug = %slug,
+                    "a limited medium has no quality set any more; its description is left as it is"
+                );
+            }
+            ladders.insert(slug.as_str(), variants);
+        }
+        if let Some(slug) = needs_ladder {
+            if !matches!(ladders.get(slug), Some(v) if !v.is_empty()) {
+                return Err(LimitError::NoLadder(slug.to_owned()));
+            }
+        }
+
+        Ok(plan
+            .descriptions
+            .iter()
+            .filter_map(|(slug, cap)| {
+                let variants = ladders.get(slug.as_str()).filter(|v| !v.is_empty())?;
+                Some(Description {
+                    path: slow_master_path(self.video_dir, slug, *cap),
+                    text: shorten(variants, *cap, self.serving_prefix, slug).text,
+                })
+            })
+            .collect())
     }
 
     /// Take the lock, waiting up to `LOCK_WAIT` for whoever holds it.
@@ -435,9 +511,11 @@ impl Serving<'_> {
         if let Err(LimitError::Conflict { base, current }) = swapped {
             // Only possible if somebody edited the file by hand without the lock: nothing
             // of ours was moved (the check is the first line of the step), so there is
-            // nothing to put back and nothing that is ours to put it over.
+            // nothing to put back and nothing that is ours to put it over — apart from the
+            // directories this change made for its descriptions, which go again.
             self.discard_staged(txn).await;
             self.discard_kept(txn).await;
+            self.unmake_dirs(txn, &prepared).await;
             return Err(LimitError::Conflict { base, current });
         }
         if let Err(e) = swapped {
@@ -461,10 +539,11 @@ impl Serving<'_> {
     }
 
     /// Step 1: check the generation, make room for the shortened descriptions, and keep
-    /// aside the ones this change will replace or remove.
+    /// aside the ones this change will replace.
     ///
-    /// On any failure this step removes what it had kept aside itself and nothing else has
-    /// been touched yet — there is nothing for `undo` to do.
+    /// On any failure this step removes what it had kept aside and the directories it had
+    /// made itself, and nothing else has been touched yet — there is nothing for `undo` to
+    /// do.
     async fn prepare(&self, txn: &Txn<'_>) -> Result<Prepared, LimitError> {
         let mut script = self.script_head(txn);
         let kept: Vec<String> = txn
@@ -472,17 +551,36 @@ impl Serving<'_> {
             .iter()
             .map(|c| super::shell_quote(&txn.kept(&c.path)))
             .collect();
-        script.push_str(&format!("discard() {{ rm -f {}; }}\n", kept.join(" ")));
+        // The directories this step made go again on its own failure, deepest first.
+        let mut unmake = String::new();
+        for (i, dir) in txn.dirs.iter().enumerate().rev() {
+            unmake.push_str(&format!(
+                " [ \"$m{i}\" = 1 ] && rmdir {} 2>/dev/null;",
+                super::shell_quote(dir)
+            ));
+        }
+        for i in 0..txn.dirs.len() {
+            script.push_str(&format!("m{i}=0\n"));
+        }
+        script.push_str(&format!(
+            "discard() {{ rm -f {};{unmake} true; }}\n",
+            kept.join(" ")
+        ));
+        // Parents first: a directory counts as made by this change only if it was not
+        // there a moment ago, so the ceiling's is asked about after the medium's is made.
+        for (i, dir) in txn.dirs.iter().enumerate() {
+            let dir = super::shell_quote(dir);
+            script.push_str(&format!(
+                "if [ -d {dir} ]; then echo 'DIR {i} OLD'; else\n\
+                 mkdir -p {dir} || {{ discard; echo FAIL_MAKE_ROOM; exit 5; }}\n\
+                 m{i}=1; echo 'DIR {i} MADE'\n\
+                 chown {owner} {dir} 2>/dev/null || true\n\
+                 fi\n",
+                owner = super::shell_quote(self.owner),
+            ));
+        }
         for (i, change) in txn.changes.iter().enumerate() {
             let path = super::shell_quote(&change.path);
-            if let Change::Write(_) = change.change {
-                let dir = super::shell_quote(parent_of(&change.path));
-                script.push_str(&format!(
-                    "mkdir -p {dir} || {{ discard; echo FAIL_MAKE_ROOM; exit 5; }}\n\
-                     chown {owner} {dir} 2>/dev/null || true\n",
-                    owner = super::shell_quote(self.owner),
-                ));
-            }
             script.push_str(&format!(
                 "if [ -e {path} ]; then\n\
                  cp -p {path} {kept} || {{ discard; echo FAIL_KEEP_SHORTENED; exit 5; }}\n\
@@ -508,19 +606,23 @@ impl Serving<'_> {
             return Err(LimitError::WriteFailed(unexpected("preparing", &out)));
         };
         let mut present = vec![false; txn.changes.len()];
+        let mut made = vec![false; txn.dirs.len()];
         for line in out.stdout.lines() {
             let mut parts = line.split_whitespace();
-            if parts.next() != Some("SHORTENED") {
-                continue;
-            }
+            let (slots, yes) = match parts.next() {
+                Some("SHORTENED") => (&mut present, "PRESENT"),
+                Some("DIR") => (&mut made, "MADE"),
+                _ => continue,
+            };
             let index = parts.next().and_then(|i| i.parse::<usize>().ok());
-            if let Some(slot) = index.and_then(|i| present.get_mut(i)) {
-                *slot = parts.next() == Some("PRESENT");
+            if let Some(slot) = index.and_then(|i| slots.get_mut(i)) {
+                *slot = parts.next() == Some(yes);
             }
         }
         Ok(Prepared {
             had_conf: had.trim() == "1",
             present,
+            made,
         })
     }
 
@@ -528,9 +630,8 @@ impl Serving<'_> {
     async fn stage(&self, txn: &Txn<'_>, rules: &str) -> Result<(), LimitError> {
         self.write_file(&self.staged_conf(txn), rules).await?;
         for change in txn.changes {
-            if let Change::Write(text) = &change.change {
-                self.write_file(&txn.staged(&change.path), text).await?;
-            }
+            self.write_file(&txn.staged(&change.path), &change.text)
+                .await?;
         }
         Ok(())
     }
@@ -552,22 +653,13 @@ impl Serving<'_> {
         ));
         for change in txn.changes {
             let path = super::shell_quote(&change.path);
-            match change.change {
-                Change::Write(_) => {
-                    let staged = super::shell_quote(&txn.staged(&change.path));
-                    script.push_str(&format!(
-                        "chown {owner} {staged} 2>/dev/null || true\n\
-                         chmod 644 {staged} || {{ echo FAIL_PUT_SHORTENED; exit 6; }}\n\
-                         mv -f {staged} {path} || {{ echo FAIL_PUT_SHORTENED; exit 6; }}\n",
-                        owner = super::shell_quote(self.owner),
-                    ));
-                }
-                Change::Remove => {
-                    script.push_str(&format!(
-                        "rm -f {path} || {{ echo FAIL_REMOVE_SHORTENED; exit 6; }}\n"
-                    ));
-                }
-            }
+            let staged = super::shell_quote(&txn.staged(&change.path));
+            script.push_str(&format!(
+                "chown {owner} {staged} 2>/dev/null || true\n\
+                 chmod 644 {staged} || {{ echo FAIL_PUT_SHORTENED; exit 6; }}\n\
+                 mv -f {staged} {path} || {{ echo FAIL_PUT_SHORTENED; exit 6; }}\n",
+                owner = super::shell_quote(self.owner),
+            ));
         }
         script.push_str(&format!(
             "mv -f {staged} {conf} || {{ echo FAIL_PUT_RULES; exit 7; }}\n\
@@ -620,17 +712,18 @@ impl Serving<'_> {
     /// third change could write that same number again, and the reader's compare-and-swap
     /// against it would pass over the third change and bring back the rolled-back rule.
     ///
-    /// The shortened descriptions come back as they were, or go if they were not there.
-    /// Staged files go in every case.
+    /// The shortened descriptions come back as they were, or go if they were not there —
+    /// and so do the directories this change made for them, so that everything under
+    /// `_slow/` is as it was (T602). Nothing was removed before this point (removing is
+    /// `sweep`, after success), so there is nothing removed to bring back. Staged files go
+    /// in every case.
     async fn undo(&self, txn: &Txn<'_>, prepared: &Prepared) -> Result<(), String> {
         let conf = super::shell_quote(self.conf_path);
         let restored = super::shell_quote(&format!("{}.{}.undo.tmp", self.conf_path, txn.id));
         let next = txn.new_generation() + 1;
         let mut staged = vec![super::shell_quote(&self.staged_conf(txn))];
         for change in txn.changes {
-            if let Change::Write(_) = change.change {
-                staged.push(super::shell_quote(&txn.staged(&change.path)));
-            }
+            staged.push(super::shell_quote(&txn.staged(&change.path)));
         }
         // This change's own staged files go first and whatever else happens: their names are
         // unique to it, so removing them is safe even with the lock gone.
@@ -676,6 +769,16 @@ impl Serving<'_> {
                 script_tail.push_str(&format!("rm -f {path} || fail=1\n"));
             }
         }
+        // Then the directories this change made, deepest first. Only empty ones: one that
+        // is not empty holds something that is not this change's, and is not ours to take.
+        for (i, dir) in txn.dirs.iter().enumerate().rev() {
+            if prepared.made.get(i).copied().unwrap_or(false) {
+                script_tail.push_str(&format!(
+                    "rmdir {} 2>/dev/null || true\n",
+                    super::shell_quote(dir)
+                ));
+            }
+        }
         script.push_str(&script_tail);
         script.push_str(&format!(
             "[ $fail = 0 ] || {{ echo FAIL_RESTORE_SHORTENED; exit 8; }}\n\
@@ -703,6 +806,38 @@ impl Serving<'_> {
         self.discard_kept(txn).await;
     }
 
+    /// Step 7 (T602): remove what the rules now in force no longer reach — only after they
+    /// have been loaded and the serving has answered, and still under the lock.
+    ///
+    /// Named files are removed one by one and directories only when empty (`rmdir`): no
+    /// recursive removal of a path worked out from a rule. `_slow/` itself is never among
+    /// them. A failure here is logged and nothing more: the new rules are in force and
+    /// checked, and a file nothing reaches does no harm (the next change removes it).
+    async fn sweep(&self, txn: &Txn<'_>, plan: &slow_master::SlowPlan) {
+        if plan.remove_files.is_empty() && plan.remove_dirs_if_empty.is_empty() {
+            return;
+        }
+        let mut script = self.script_head_without_check(txn);
+        script.push_str("fail=0\n");
+        for file in &plan.remove_files {
+            script.push_str(&format!("rm -f {} || fail=1\n", super::shell_quote(file)));
+        }
+        for dir in &plan.remove_dirs_if_empty {
+            let dir = super::shell_quote(dir);
+            script.push_str(&format!(
+                "if [ -d {dir} ] && [ -z \"$(ls -A {dir} 2>/dev/null)\" ]; then rmdir {dir} || fail=1; fi\n"
+            ));
+        }
+        script.push_str("[ $fail = 0 ] && echo SWEPT || echo SWEEP_INCOMPLETE\n");
+        match self.conn.exec(&script).await {
+            Ok(out) if verdict(&out.stdout) == "SWEPT" => {}
+            outcome => tracing::warn!(
+                ?outcome,
+                "shortened descriptions no rule reaches any more were not all removed"
+            ),
+        }
+    }
+
     /// Remove this change's own copies of the shortened descriptions. Their names are
     /// unique to this change, so nobody else's file can be among them.
     async fn discard_kept(&self, txn: &Txn<'_>) {
@@ -714,13 +849,28 @@ impl Serving<'_> {
         self.remove_own(kept).await;
     }
 
+    /// Remove, deepest first, the empty directories this change made (T602) — for when it
+    /// stops without `undo`.
+    async fn unmake_dirs(&self, txn: &Txn<'_>, prepared: &Prepared) {
+        let dirs: Vec<String> = txn
+            .dirs
+            .iter()
+            .zip(&prepared.made)
+            .rev()
+            .filter(|(_, made)| **made)
+            .map(|(dir, _)| format!("rmdir {} 2>/dev/null", super::shell_quote(dir)))
+            .collect();
+        if dirs.is_empty() {
+            return;
+        }
+        let _ = self.conn.exec(&format!("{}; true", dirs.join("; "))).await;
+    }
+
     /// Remove this change's own staged files, by the same reasoning.
     async fn discard_staged(&self, txn: &Txn<'_>) {
         let mut staged = vec![super::shell_quote(&self.staged_conf(txn))];
         for change in txn.changes {
-            if let Change::Write(_) = change.change {
-                staged.push(super::shell_quote(&txn.staged(&change.path)));
-            }
+            staged.push(super::shell_quote(&txn.staged(&change.path)));
         }
         self.remove_own(staged).await;
     }
@@ -869,6 +1019,36 @@ fn parent_of(path: &str) -> &str {
         Some((parent, _)) => parent,
         None => ".",
     }
+}
+
+/// The directories the descriptions go into, each once and every parent before its child:
+/// `_slow/<slug>`, then `_slow/<slug>/<cap>` (T602).
+///
+/// `_slow/` itself is not among them: it belongs to the serving, not to any one change,
+/// and is never removed — not even by the undoing of the first change that happened to
+/// make it (`mkdir -p` makes it along the way). An empty `_slow/` is what a fresh server
+/// has anyway, and the library already knows it as a service entry.
+fn dirs_for(video_dir: &str, changes: &[Description]) -> Vec<String> {
+    let slow_root = format!(
+        "{}/{}",
+        video_dir.trim_end_matches('/'),
+        slow_master::SLOW_DIR
+    );
+    let mut dirs: Vec<String> = Vec::new();
+    for change in changes {
+        let cap_dir = parent_of(&change.path);
+        let slug_dir = parent_of(cap_dir);
+        // Only what the plan made, which is always inside `_slow/`.
+        if parent_of(slug_dir) != slow_root {
+            continue;
+        }
+        for dir in [slug_dir, cap_dir] {
+            if !dirs.iter().any(|d| d == dir) {
+                dirs.push(dir.to_owned());
+            }
+        }
+    }
+    dirs
 }
 
 /// The last few lines of a complaint — the part that says what is wrong.
