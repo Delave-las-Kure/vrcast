@@ -31,6 +31,9 @@ pub const FROM_APT: [&str; 6] = ["ffmpeg", "curl", "tar", "ufw", "ca-certificate
 const CADDY_KEY: &str = "https://dl.cloudsmith.io/public/caddy/stable/gpg.key";
 const CADDY_LIST: &str = "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt";
 
+/// Where the Caddy repository's signing key goes — the path its list file names.
+pub const KEYRING: &str = "/usr/share/keyrings/caddy-stable-archive-keyring.gpg";
+
 pub fn step<'a>() -> Step<Context<'a>> {
     Step {
         id: StepId::Packages,
@@ -72,6 +75,13 @@ done
 fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
     Box::pin(async move {
         let names = FROM_APT.join(" ");
+        // ⚠ **`--batch --yes`, and written beside then moved** (T613). `gpg --dearmor -o` over
+        // a keyring that is already there asks whether to overwrite it — on a server with no
+        // terminal, `gpg: cannot open '/dev/tty'` — and the step failed on every repeat after
+        // any interruption that came after the key was written: a cancel, a broken link, a
+        // closed application. A repeat that cannot get past its own earlier half is exactly
+        // what constitution V forbids. Moved into place so a half-written keyring is never
+        // the one apt reads.
         let said = ctx
             .ran(&format!(
                 "set -e
@@ -79,7 +89,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq {names}
 if ! command -v caddy >/dev/null; then
-  curl -1sLf {CADDY_KEY} | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf {CADDY_KEY} | gpg --batch --yes --dearmor -o {KEYRING}.vrcast.tmp
+  mv -f {KEYRING}.vrcast.tmp {KEYRING}
   curl -1sLf {CADDY_LIST} > /etc/apt/sources.list.d/caddy-stable.list
   apt-get update -qq
   apt-get install -y -qq caddy
