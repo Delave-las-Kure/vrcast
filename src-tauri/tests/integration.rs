@@ -73,8 +73,8 @@ mod deploy_run_race;
 #[path = "integration/deploy_cancel_measure.rs"]
 mod deploy_cancel_measure;
 
-/// T609 phase B — a cancel waits for dpkg and confirms nothing of the run is left, and the
-/// SSH undo timer is spared.
+/// T609 phase B, T613, T614 — a cancel waits for dpkg and confirms nothing of the run is
+/// left; the repeat finishes an interrupted dpkg; a keyring already there; apt's own words.
 #[path = "integration/deploy_cancel.rs"]
 mod deploy_cancel;
 

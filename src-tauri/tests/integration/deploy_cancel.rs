@@ -1,4 +1,4 @@
-//! T609 phase B — cancelling a deployment on a real server with real apt and dpkg.
+//! T609 phase B, T613, T614 — cancelling a deployment on a real server with real apt and dpkg.
 //!
 //! What phase A measured (`deploy_cancel_measure.rs`) is what these hold the code to:
 //!
@@ -7,7 +7,12 @@
 //!   `dpkg --audit` is empty — and a repeat **at once** goes to the end (phase A: the old code
 //!   answered in 2.4 s, dpkg ran 17.8 s more, and the repeat died on `Could not get lock`);
 //! - (b) the SSH undo timer — the one process a run leaves behind on purpose — survives a
-//!   cancel that confirms nothing of the run is left.
+//!   cancel that confirms nothing of the run is left;
+//! - (c) dpkg left interrupted (killed mid-unpack, and on a serving server mid-configure of
+//!   fail2ban) is finished by the repeat itself, with nobody's hands on the server, and the
+//!   serving answers;
+//! - (d) T613: Packages over a Caddy keyring that is already there; T614: a failed apt
+//!   install is reported in apt's own words.
 //!
 //! Needs Docker and the Ubuntu archive. The harness fetches the packages ahead with
 //! `Acquire::Retries=10` (archive.ubuntu.com answered 503 on part of most batch downloads on
@@ -19,17 +24,20 @@ use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
 use vrcast_studio_lib::commands::error::ErrorCode;
+use vrcast_studio_lib::domain::deploy_steps::{Status, StepId};
 use vrcast_studio_lib::domain::dns_verdict::{Ipv6Choice, ServerAddresses};
-use vrcast_studio_lib::server::deploy::{machine, Context, Proofs, RunMark, RUN_VAR};
+use vrcast_studio_lib::server::deploy::{
+    self, fail2ban, machine, packages, Context, DeployError, Proofs, RunMark, RUN_VAR,
+};
 use vrcast_studio_lib::ssh::keygen;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::tasks::engine::TaskContext;
 
 use super::deploy_cancel_measure::{
-    connect, has_line, inside, prewarm, repeat_once, steps_for_a_container, unpacking, wait_until,
-    DOMAIN, DPKG_STATE, PS, SERVING,
+    configuring, connect, has_line, inside, launch_marked, packages_script, prewarm, repeat_once,
+    steps_for_a_container, unpacking, wait_until, DOMAIN, DPKG_STATE, PS, SERVING, STOP,
 };
-use super::deploy_clean::{key_works, no_second_try, password_refused, VIDEO_DIR};
+use super::deploy_clean::{by_password, key_works, no_second_try, password_refused, VIDEO_DIR};
 use super::deploy_fixture::{DeployTarget, Flavour};
 
 /// Every live process whose environment carries the run's mark, by `/proc` alone — the
@@ -252,4 +260,192 @@ async fn a_cancel_waits_for_dpkg_leaves_nothing_of_the_run_and_spares_the_undo_t
         inside(&name, SERVING)
     );
     println!("{}", inside(&name, DPKG_STATE));
+}
+
+/// (c) dpkg left interrupted — killed mid-unpack on a bare machine, then mid-configure of
+/// fail2ban on the serving one — is finished by the repeat itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_repeat_finishes_what_an_interrupted_dpkg_left_undone() {
+    let target = DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
+    let name = target.container_name().to_owned();
+    let made = keygen::make("vrcast-studio: T609").expect("no key");
+    prewarm(&name, "fail2ban unattended-upgrades");
+
+    launch_marked(&name, &packages_script());
+    wait_until(&name, unpacking, Duration::from_secs(900), None)
+        .expect("the unpack phase was never seen");
+    println!("{}", inside(&name, STOP));
+    let audit = inside(&name, "dpkg --audit 2>&1");
+    assert!(
+        !audit.trim().is_empty(),
+        "the kill did not leave dpkg interrupted — this test checks nothing: {audit}"
+    );
+    println!(
+        "--- after the kill in unpack:\n{}",
+        inside(&name, DPKG_STATE)
+    );
+    repeat_to_the_end(&target, &made, "repeat after a kill in unpack").await;
+    let code = http_code(&name);
+    assert!(
+        code != "000" && code != "?",
+        "no serving after the repeat (http {code})"
+    );
+    assert!(inside(&name, "dpkg --audit 2>&1").trim().is_empty());
+
+    // The same on a serving server, for fail2ban, killed while configuring.
+    println!(
+        "{}",
+        inside(
+            &name,
+            "systemctl stop fail2ban; export DEBIAN_FRONTEND=noninteractive; \
+             apt-get purge -y -qq fail2ban >/dev/null 2>&1; \
+             apt-get autoremove --purge -y -qq >/dev/null 2>&1; \
+             dpkg -l fail2ban 2>&1 | tail -n 1"
+        )
+    );
+    prewarm(&name, "fail2ban");
+    launch_marked(
+        &name,
+        "set -e\nDEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=10 install -y -qq fail2ban\necho done",
+    );
+    wait_until(&name, configuring, Duration::from_secs(600), None)
+        .expect("the configure phase was never seen");
+    println!("{}", inside(&name, STOP));
+    let audit = inside(&name, "dpkg --audit 2>&1");
+    assert!(
+        !audit.trim().is_empty(),
+        "the kill did not leave fail2ban's install interrupted — this checks nothing: {audit}"
+    );
+    let during = http_code(&name);
+    println!("--- serving right after the kill: http {during}");
+    repeat_to_the_end(
+        &target,
+        &made,
+        "repeat after a kill in fail2ban's configure",
+    )
+    .await;
+    assert!(inside(&name, "dpkg --audit 2>&1").trim().is_empty());
+    let guarding = inside(
+        &name,
+        "systemctl is-active fail2ban; fail2ban-client status sshd >/dev/null 2>&1 && echo guarding",
+    );
+    assert!(
+        guarding.contains("guarding"),
+        "fail2ban is not guarding after the repeat: {guarding}"
+    );
+    let code = http_code(&name);
+    assert!(
+        code != "000" && code != "?",
+        "no serving after the repeat (http {code})"
+    );
+}
+
+/// Run single steps on a bare machine, by password. A blocking step's failure ends the run
+/// as an `Err`; a non-blocking one's (Fail2ban) is only recorded — so the failures recorded
+/// along the way are handed back as well.
+async fn run_steps(
+    target: &DeployTarget,
+    made: &keygen::MadeKey,
+    only: &[StepId],
+) -> (Result<(), DeployError>, Vec<(StepId, String)>) {
+    let conn = by_password(target).await;
+    let facts = machine::look(&conn).await.expect("no machine facts");
+    let key_proof =
+        || -> BoxFuture<'_, bool> { Box::pin(key_works(target, &made.private_openssh)) };
+    let password_proof = || -> BoxFuture<'_, bool> { Box::pin(password_refused(target)) };
+    let ctx = Context {
+        conn: &conn,
+        domain: DOMAIN,
+        video_dir: VIDEO_DIR,
+        ipv6: Ipv6Choice::Keep,
+        server: ServerAddresses { v4: None, v6: None },
+        public_key: made.public_openssh.clone(),
+        machine: facts,
+        already_ours: false,
+        run: RunMark::fresh(),
+        proofs: Proofs {
+            key_works: &key_proof,
+            password_refused: &password_proof,
+        },
+    };
+    let steps: Vec<_> = deploy::all()
+        .into_iter()
+        .filter(|s| only.contains(&s.id))
+        .collect();
+    let never = || false;
+    let mut failures = Vec::new();
+    let outcome = deploy::run(&ctx, &steps, &never, &mut |s| {
+        if let Status::Failed { detail } = &s.status {
+            failures.push((s.id, detail.clone()));
+        }
+    })
+    .await;
+    conn.close().await;
+    (outcome.map(|_| ()), failures)
+}
+
+/// (d) T613: Packages over a Caddy keyring that is already there. T614: a failed apt
+/// install is reported in apt's words, not as what the step tripped over next.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn packages_go_over_an_existing_keyring_and_a_failed_install_says_what_apt_said() {
+    let target = DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
+    let name = target.container_name().to_owned();
+    let made = keygen::make("vrcast-studio: T613").expect("no key");
+    prewarm(&name, "");
+
+    // What an interrupted run leaves: the keyring written, Caddy not installed.
+    inside(
+        &name,
+        &format!(
+            "mkdir -p /usr/share/keyrings && printf 'left by an earlier run' > {}",
+            packages::KEYRING
+        ),
+    );
+    let mut outcome = Err(DeployError::Cancelled);
+    for attempt in 1..=3 {
+        outcome = run_steps(&target, &made, &[StepId::Packages]).await.0;
+        match &outcome {
+            Err(e)
+                if super::deploy_cancel_measure::looks_like_network(&e.to_string())
+                    && attempt < 3 =>
+            {
+                println!("[packages {attempt}] the archive: {e} — again");
+            }
+            _ => break,
+        }
+    }
+    if let Err(e) = &outcome {
+        panic!("Packages failed over an existing keyring (T613): {e}");
+    }
+    assert!(
+        inside(&name, "command -v caddy").contains("caddy"),
+        "Caddy is not installed after Packages"
+    );
+
+    // T614: fail2ban made impossible to install — the package lists emptied, so apt answers
+    // "Unable to locate package". The step must fail on the install, with apt's own
+    // complaint — not thirty seconds later, on a jail that cannot exist.
+    inside(&name, "rm -rf /var/lib/apt/lists/* && echo emptied");
+    let t0 = Instant::now();
+    let (outcome, failures) = run_steps(&target, &made, &[StepId::Fail2ban]).await;
+    let took = t0.elapsed();
+    println!(
+        "T614: {outcome:?}, failures {failures:?} ({:.1}s)",
+        took.as_secs_f64()
+    );
+    let [(StepId::Fail2ban, text)] = failures.as_slice() else {
+        panic!("fail2ban could not be installed and the step did not fail: {failures:?}");
+    };
+    assert!(
+        text.contains(fail2ban::PACKAGE) && text.contains("E:") && text.contains("apt failed"),
+        "the failure does not carry apt's own words: {text}"
+    );
+    assert!(
+        !text.contains("not guarding"),
+        "the failure reports the consequence instead of the cause: {text}"
+    );
+    assert!(
+        took < Duration::from_secs(25),
+        "the step waited for a jail that could not exist before failing ({took:?})"
+    );
 }

@@ -93,6 +93,83 @@ pub struct Context<'a> {
 /// reaches exactly the run's own work and never its safety net.
 pub const RUN_VAR: &str = "VRCAST_DEPLOY_RUN";
 
+/// Every `apt-get` a step runs (T614): with retries on the downloads.
+///
+/// Five, because on 2026-09-23 archive.ubuntu.com answered 503 to part of nearly every batch
+/// download while single requests went through — a deployment then failed at the first step
+/// that installs anything, for a reason that a second try a moment later did not have.
+pub const APT_GET: &str = "apt-get -o Acquire::Retries=5";
+
+/// What every apt step runs before it installs anything (T609): finish whatever dpkg was in
+/// the middle of when it was last interrupted.
+///
+/// A cancellation no longer interrupts dpkg — it waits for the command to end — but a broken
+/// connection, a closed application or a machine restarted under a deployment still can, and
+/// dpkg then refuses every later install with "dpkg was interrupted, you must manually run
+/// 'dpkg --configure -a'" until somebody does it by hand (measured, T609 phase A: 6 and 230
+/// packages left half-installed by a kill in unpack and in configure). Constitution V asks
+/// that a repeated deployment finish the job without anybody's hands on the server; these two
+/// lines are that, measured at 0.5–7.5 s after a kill and a fraction of a second on a server
+/// with nothing to mend.
+///
+/// On somebody else's half-installed package they do the same — finish its configuration —
+/// which is what apt itself would insist on before installing anything anyway.
+///
+/// **Only when dpkg has something unfinished** — `dpkg --audit` says so, or
+/// `/var/lib/dpkg/updates` holds records of an interrupted run, which is what apt itself
+/// checks before refusing with "dpkg was interrupted"; neither needs the lock to ask — and
+/// **retried while dpkg's lock is busy**: unlike `apt-get` in its own frontend, a bare
+/// `dpkg` does not wait for the lock, and on a freshly bought server `unattended-upgrades`
+/// is often mid-run during the first deployment. A repair that failed at once on the lock
+/// would be a new way for a healthy server's deployment to fail. Any other failure is not
+/// retried: it is the answer, and the step says it. Two minutes of tries at most, so the
+/// whole step still fits in one command's `EXEC_CEILING`.
+pub const APT_HEAL: &str = "\
+if [ -n \"$(dpkg --audit 2>/dev/null)\" ] || [ -n \"$(ls -A /var/lib/dpkg/updates 2>/dev/null)\" ]; then
+  healed=0
+  for _ in $(seq 1 24); do
+    if said=$(dpkg --configure -a 2>&1); then healed=1; break; fi
+    case \"$said\" in *lock*) sleep 5 ;; *) break ;; esac
+  done
+  if [ \"$healed\" != 1 ]; then
+    printf '%s\\n' \"$said\" >&2
+    echo 'E: dpkg --configure -a would not finish what an earlier install left undone' >&2
+    exit 1
+  fi
+fi
+apt-get -o Acquire::Retries=5 -f install -y -qq";
+
+/// How many of apt's last lines an apt step's failure carries.
+const APT_LINES: usize = 6;
+
+/// What a failed apt step says (T614): apt's own last lines, errors first.
+///
+/// Its standard error when it wrote any — that is where `E:` lines go — and its standard
+/// output otherwise; the last few lines, because the cause is at the end and the lines above
+/// it are progress. Public so it can be checked without a server.
+pub fn apt_complaint(said: &crate::ssh::CommandOutput) -> String {
+    let source = if said.stderr.trim().is_empty() {
+        &said.stdout
+    } else {
+        &said.stderr
+    };
+    let lines: Vec<&str> = source
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let tail = lines[lines.len().saturating_sub(APT_LINES)..].join("\n");
+    let code = match said.exit_code {
+        Some(c) => format!("exit {c}"),
+        None => String::from("no exit status, the channel broke"),
+    };
+    if tail.is_empty() {
+        format!("apt failed ({code}) and said nothing")
+    } else {
+        format!("apt failed ({code}): {tail}")
+    }
+}
+
 /// One run's mark on the server, and its state on this side (T609).
 ///
 /// **A cancellation does not interrupt a command; it stops the next one from starting.**
@@ -219,6 +296,30 @@ impl Context<'_> {
             return Ok(said.stdout);
         }
         Ok(format!("{}{}", said.stdout, said.stderr))
+    }
+
+    /// Install with apt, and fail with **apt's own words** when it fails (T614).
+    ///
+    /// `script` is the step's apt work, run under `set -e` after [`APT_HEAL`]; it must use
+    /// [`APT_GET`] for every `apt-get`. On a non-zero exit the step's error carries the last
+    /// lines apt wrote — "dpkg was interrupted", "Failed to fetch … 503", "has no
+    /// installation candidate" — and not whatever the step would have tripped over next: a
+    /// fail2ban step once reported "the sshd jail is not guarding" about a package that had
+    /// never been installed (T609 phase A).
+    pub async fn apt(&self, id: StepId, script: &str) -> Result<()> {
+        let said = self
+            .exec_marked(&format!(
+                "set -e\nexport DEBIAN_FRONTEND=noninteractive\n{APT_HEAL}\n{script}\necho done"
+            ))
+            .await?;
+        if said.ok() && said.stdout.lines().any(|l| l.trim() == "done") {
+            return Ok(());
+        }
+        Err(DeployError::Step {
+            id,
+            detail: apt_complaint(&said),
+            advice: None,
+        })
     }
 
     /// Ask the server a yes-or-no question.

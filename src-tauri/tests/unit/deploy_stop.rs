@@ -15,8 +15,8 @@
 //! (the profile has no confirmed fingerprint), which is not what is asked here.
 //!
 //! Also here: the pure pieces the mechanism rests on — reading the stop script's answer,
-//! the command wrapper that carries the mark, and how patient a stop is with a command that
-//! may still be running.
+//! the command wrapper that carries the mark, how patient a stop is with a command that may
+//! still be running, and how a failed apt step describes itself (T614).
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -31,8 +31,9 @@ use vrcast_studio_lib::domain::dns_verdict::Ipv6Choice;
 use vrcast_studio_lib::domain::marked::{read_stop, stop_script, StopReport, Stopped};
 use vrcast_studio_lib::domain::server_profile::{AuthKind, ServerProfile};
 use vrcast_studio_lib::domain::wording::DetailCode;
-use vrcast_studio_lib::server::deploy::{RunMark, RUN_VAR};
+use vrcast_studio_lib::server::deploy::{apt_complaint, RunMark, APT_HEAL, RUN_VAR};
 use vrcast_studio_lib::server::marked::{Patience, MAX_GRACE_S};
+use vrcast_studio_lib::ssh::CommandOutput;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::InMemorySecretStore;
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
@@ -321,4 +322,38 @@ fn a_stop_told_to_wait_says_running_and_that_is_not_a_confirmation() {
             elapsed_ms: Some(5210)
         }
     );
+}
+
+#[test]
+fn a_failed_apt_step_says_what_apt_said() {
+    let said = CommandOutput {
+        exit_code: Some(100),
+        stdout: String::from("Reading package lists...\n"),
+        stderr: String::from(
+            "W: some warning\nE: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\n",
+        ),
+    };
+    let text = apt_complaint(&said);
+    assert!(text.contains("exit 100"), "{text}");
+    assert!(text.contains("dpkg was interrupted"), "{text}");
+
+    let long: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    let text = apt_complaint(&CommandOutput {
+        exit_code: None,
+        stdout: String::new(),
+        stderr: long,
+    });
+    assert!(
+        text.contains("line 20") && !text.contains("line 14\n"),
+        "{text}"
+    );
+    assert!(text.contains("channel broke"), "{text}");
+}
+
+#[test]
+fn the_repair_runs_only_when_dpkg_has_something_unfinished_and_waits_for_its_lock() {
+    assert!(APT_HEAL.contains("dpkg --audit"));
+    assert!(APT_HEAL.contains("dpkg --configure -a"));
+    assert!(APT_HEAL.contains("-f install -y"));
+    assert!(APT_HEAL.contains("Acquire::Retries="));
 }
