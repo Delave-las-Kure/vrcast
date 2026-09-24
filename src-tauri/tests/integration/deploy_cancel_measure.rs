@@ -57,16 +57,18 @@ use vrcast_studio_lib::ssh::{fingerprint, keygen, Connection, Credentials};
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::tasks::engine::TaskContext;
 
-use super::deploy_clean::{address, by_password, key_works, password_refused, VIDEO_DIR};
+use super::deploy_clean::{
+    address, by_password, key_works, no_second_try, password_refused, VIDEO_DIR,
+};
 use super::deploy_fixture::{DeployTarget, Flavour};
 
-const DOMAIN: &str = "vrcast-container.invalid";
-const MARK: &str = "VRCAST_T609";
-const LOG: &str = "/root/t609.log";
+pub(super) const DOMAIN: &str = "vrcast-container.invalid";
+pub(super) const MARK: &str = "VRCAST_T609";
+pub(super) const LOG: &str = "/root/t609.log";
 
 /// Run a script inside the container and hand back everything it said, whatever its exit
 /// code — the measurement wants the complaint as much as the answer.
-fn inside(name: &str, script: &str) -> String {
+pub(super) fn inside(name: &str, script: &str) -> String {
     let out = Command::new("docker")
         .args(["exec", name, "bash", "-c", script])
         .output()
@@ -79,7 +81,7 @@ fn inside(name: &str, script: &str) -> String {
 }
 
 /// Put a file inside the container through stdin (no quoting games).
-fn put_inside(name: &str, path: &str, body: &str) {
+pub(super) fn put_inside(name: &str, path: &str, body: &str) {
     let mut child = Command::new("docker")
         .args(["exec", "-i", name, "bash", "-c", &format!("cat > {path}")])
         .stdin(Stdio::piped())
@@ -95,12 +97,13 @@ fn put_inside(name: &str, path: &str, body: &str) {
 }
 
 /// Every apt/dpkg-related process, with its group and session.
-const PS: &str = "ps -eo pid,pgid,sid,stat,etimes,args --no-headers \
+pub(super) const PS: &str = "ps -eo pid,pgid,sid,stat,etimes,args --no-headers \
     | grep -E 'apt-get|dpkg|/methods/|/var/lib/dpkg/info|unattended|gpg|curl|sleep 300' \
     | grep -v -E 'grep -E|ps -eo' | cut -c1-220";
 
 /// The state dpkg is left in.
-const DPKG_STATE: &str = "echo '--- dpkg --audit:'; dpkg --audit 2>&1; echo \"audit rc=$?\"
+pub(super) const DPKG_STATE: &str =
+    "echo '--- dpkg --audit:'; dpkg --audit 2>&1; echo \"audit rc=$?\"
 echo '--- dpkg -l (not ii):'; dpkg -l 2>/dev/null | grep -Ev '^(ii|Desired|\\||\\+)' | head -n 40
 echo \"--- not-ii count: $(dpkg -l 2>/dev/null | grep -Ev '^(ii|Desired|\\||\\+)' | wc -l)\"
 echo \"--- /var/lib/dpkg/updates: $(ls /var/lib/dpkg/updates | wc -l) files\"
@@ -109,13 +112,13 @@ echo \"--- caddy list: $(ls -la /etc/apt/sources.list.d/caddy-stable.list 2>&1)\
 
 /// Serving: is Caddy running and does it answer on port 80 (the container has no certificate
 /// for the made-up domain, so an HTTP answer — a redirect — is what "answers" means here).
-const SERVING: &str = "echo \"caddy: $(systemctl is-active caddy 2>&1)\"
+pub(super) const SERVING: &str = "echo \"caddy: $(systemctl is-active caddy 2>&1)\"
 echo \"http: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'Host: vrcast-container.invalid' http://127.0.0.1/ 2>&1)\"
 echo \"admin: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:2019/config/ 2>&1)\"";
 
 /// The harness's copy of the Packages step's apply — the production text exactly, except for
 /// the retries on apt's own downloads.
-fn packages_script() -> String {
+pub(super) fn packages_script() -> String {
     let names = deploy::packages::FROM_APT.join(" ");
     format!(
         "set -e
@@ -135,7 +138,7 @@ echo done"
 
 /// Fetch ahead what the Packages step installs from the distribution, so the killed install
 /// and the repeat reach dpkg without depending on the archive. Retried: the archive is flaky.
-fn prewarm(name: &str, extra: &str) {
+pub(super) fn prewarm(name: &str, extra: &str) {
     let names = deploy::packages::FROM_APT.join(" ");
     // The image's docker-clean hook deletes downloaded archives after every dpkg run; for
     // a measurement about dpkg the cache has to survive one run to the next.
@@ -164,7 +167,7 @@ apt-get $R update -qq 2>&1 && apt-get $R install --download-only -y -qq {names} 
 
 /// Start a script in a session and group of its own, carrying the mark in its environment —
 /// the shape phase B would give every remote command.
-fn launch_marked(name: &str, script: &str) {
+pub(super) fn launch_marked(name: &str, script: &str) {
     put_inside(name, "/root/t609-apply.sh", script);
     let out = Command::new("docker")
         .args([
@@ -182,7 +185,7 @@ fn launch_marked(name: &str, script: &str) {
 
 /// TERM to every group holding a marked process and to each marked process, wait up to 5 s,
 /// KILL whoever is left, wait up to 5 s — T605's `stop_script`, reduced. Prints what happened.
-const STOP: &str = r#"
+pub(super) const STOP: &str = r#"
 scan() {
   M=()
   local d p st e; local -a f env
@@ -215,7 +218,7 @@ for i in $(seq 1 50); do sleep 0.1; scan; [ ${#M[@]} -eq 0 ] && { echo "STOP kil
 echo "STOP alive ${M[*]}"
 "#;
 
-fn has_line(ps: &str, all: &[&str]) -> bool {
+pub(super) fn has_line(ps: &str, all: &[&str]) -> bool {
     ps.lines().any(|l| all.iter().all(|w| l.contains(w)))
 }
 
@@ -227,10 +230,10 @@ fn downloading(ps: &str) -> bool {
         && has_line(ps, &["/methods/http"])
         && !has_line(ps, &["dpkg", "--status-fd"])
 }
-fn unpacking(ps: &str) -> bool {
+pub(super) fn unpacking(ps: &str) -> bool {
     has_line(ps, &["dpkg", "--unpack"])
 }
-fn configuring(ps: &str) -> bool {
+pub(super) fn configuring(ps: &str) -> bool {
     has_line(ps, &["dpkg", "--configure"]) || has_line(ps, &["/var/lib/dpkg/info/", "configure"])
 }
 fn installing_caddy(ps: &str) -> bool {
@@ -242,7 +245,7 @@ fn apt_or_dpkg(ps: &str) -> bool {
 
 /// Poll until `wanted` holds of a `ps` snapshot. `None` when the patience ran out or `stop`
 /// was raised.
-fn wait_until(
+pub(super) fn wait_until(
     name: &str,
     wanted: fn(&str) -> bool,
     patience: Duration,
@@ -267,14 +270,14 @@ fn wait_until(
     None
 }
 
-fn steps_for_a_container<'a>() -> Vec<deploy::Step<Context<'a>>> {
+pub(super) fn steps_for_a_container<'a>() -> Vec<deploy::Step<Context<'a>>> {
     deploy::all()
         .into_iter()
         .filter(|s| !matches!(s.id, StepId::DnsCheck | StepId::Verify))
         .collect()
 }
 
-fn summary(steps: &[PlannedStep]) -> String {
+pub(super) fn summary(steps: &[PlannedStep]) -> String {
     steps
         .iter()
         .map(|s| {
@@ -291,7 +294,7 @@ fn summary(steps: &[PlannedStep]) -> String {
 }
 
 /// A connection by the application's key if it already works, by password otherwise.
-async fn connect(target: &DeployTarget, made: &keygen::MadeKey) -> Connection {
+pub(super) async fn connect(target: &DeployTarget, made: &keygen::MadeKey) -> Connection {
     let a = address(target).await;
     let fp = fingerprint::probe(&a).await.expect("no fingerprint");
     if let Ok(conn) = Connection::connect(
@@ -310,7 +313,7 @@ async fn connect(target: &DeployTarget, made: &keygen::MadeKey) -> Connection {
     by_password(target).await
 }
 
-fn looks_like_network(text: &str) -> bool {
+pub(super) fn looks_like_network(text: &str) -> bool {
     [
         "Failed to fetch",
         " 503 ",
@@ -325,7 +328,7 @@ fn looks_like_network(text: &str) -> bool {
 
 /// One repeat of the deployment with the **current** step code, through the task runner, on
 /// a fresh connection. Returns whether every step ended Applied/Skipped, and a description.
-async fn repeat_once(target: &DeployTarget, made: &keygen::MadeKey) -> (bool, String) {
+pub(super) async fn repeat_once(target: &DeployTarget, made: &keygen::MadeKey) -> (bool, String) {
     let conn = connect(target, made).await;
     let facts = machine::look(&conn).await.expect("no machine facts");
     let key_proof =
@@ -341,6 +344,7 @@ async fn repeat_once(target: &DeployTarget, made: &keygen::MadeKey) -> (bool, St
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -350,9 +354,15 @@ async fn repeat_once(target: &DeployTarget, made: &keygen::MadeKey) -> (bool, St
     let task = TaskContext::detached(Arc::new(Db::open_in_memory().unwrap()));
     let t0 = Instant::now();
     let mut last: Vec<PlannedStep> = Vec::new();
-    let outcome = vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |s| {
-        last = s.to_vec();
-    })
+    let outcome = vrcast_studio_lib::tasks::deploy::run(
+        &ctx,
+        &steps,
+        &task,
+        &mut |s| {
+            last = s.to_vec();
+        },
+        &no_second_try,
+    )
     .await;
     conn.close().await;
     let all_done = outcome.is_ok()
@@ -481,6 +491,7 @@ async fn t609_cancel_today_then_repeat_at_once() {
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -492,7 +503,9 @@ async fn t609_cancel_today_then_repeat_at_once() {
     let finished = Arc::new(AtomicBool::new(false));
     let finished_run = finished.clone();
     let run = async {
-        let r = vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |_| {}).await;
+        let r =
+            vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |_| {}, &no_second_try)
+                .await;
         finished_run.store(true, Ordering::SeqCst);
         r
     };
@@ -623,6 +636,7 @@ async fn t609_cancel_today_during_packages() {
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -637,7 +651,9 @@ async fn t609_cancel_today_during_packages() {
     let finished_run = finished.clone();
     let name_run = name.clone();
     let run = async {
-        let r = vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |_| {}).await;
+        let r =
+            vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |_| {}, &no_second_try)
+                .await;
         // The very moment the runner says it is over.
         let at = started.elapsed();
         finished_run.store(true, Ordering::SeqCst);

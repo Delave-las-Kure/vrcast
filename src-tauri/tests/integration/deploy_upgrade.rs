@@ -79,6 +79,7 @@ async fn an_upgrade_keeps_every_video_and_the_catalogue() {
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -108,6 +109,7 @@ sha256sum {VIDEO_DIR}/film.mp4 {VIDEO_DIR}/library.json | cut -d' ' -f1"
     // The upgrade: on a server already ours, this time.
     let ctx = Context {
         already_ours: true,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         ..ctx
     };
     let plan = upgrade::plan(&ctx, 1, &steps)
@@ -173,6 +175,7 @@ async fn a_rollback_puts_the_replaced_files_back() {
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -243,6 +246,7 @@ async fn a_configuration_edited_by_hand_is_refused_rather_than_overwritten() {
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -266,6 +270,7 @@ async fn a_configuration_edited_by_hand_is_refused_rather_than_overwritten() {
 
     let ctx = Context {
         already_ours: true,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         ..ctx
     };
     let outcome = deploy::run(&ctx, &steps, &never, &mut |_| {}).await;

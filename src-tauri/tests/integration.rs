@@ -73,6 +73,11 @@ mod deploy_run_race;
 #[path = "integration/deploy_cancel_measure.rs"]
 mod deploy_cancel_measure;
 
+/// T609 phase B — a cancel waits for dpkg and confirms nothing of the run is left, and the
+/// SSH undo timer is spared.
+#[path = "integration/deploy_cancel.rs"]
+mod deploy_cancel;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 

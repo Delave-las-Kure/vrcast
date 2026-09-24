@@ -29,6 +29,7 @@ pub mod limits_conf;
 pub mod links;
 pub mod log_digest;
 pub mod manifest;
+pub mod marked;
 pub mod measure_grid;
 pub mod measured_ladder;
 pub mod media;

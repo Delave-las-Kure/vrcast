@@ -396,6 +396,8 @@ export const ruCore: CatalogueCore = {
     STAGE_VERIFYING_LADDER: "проверяем, что отдаётся каждый вариант",
     STAGE_STOP_UNCONFIRMED:
       "останавливаем на сервере — остановка ещё не подтверждена, пробуем снова",
+    STAGE_STOPPING_AFTER_STEP:
+      "останавливаемся — ждём, пока закончится текущая команда на сервере",
     STAGE_DEPLOYING: "Разворачиваю сервер",
     STAGE_DONE: "готово",
 

@@ -187,6 +187,11 @@ detail_codes! {
     /// cutting's processes are gone (T605). The task stays running, and the stop is tried
     /// again until it is confirmed.
     StageStopUnconfirmed => "STAGE_STOP_UNCONFIRMED",
+    /// A deployment or upgrade was cancelled while a command was running on the server
+    /// (T609). The command is let finish — `dpkg` torn in half leaves the server unable to
+    /// install anything — no further one is started, and the task ends `Cancelled` once the
+    /// server confirms nothing of the run is left. At most one command's time.
+    StageStoppingAfterStep => "STAGE_STOPPING_AFTER_STEP",
     /// A deployment is under way. Which step it is on goes out as its own event: the
     /// screen shows the whole list with their states, and a single stage code could not.
     StageDeploying => "STAGE_DEPLOYING",

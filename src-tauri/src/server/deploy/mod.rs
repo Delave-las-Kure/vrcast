@@ -80,6 +80,82 @@ pub struct Context<'a> {
     /// own web server and found the application had quietly undone it would be right
     /// to stop trusting it.
     pub already_ours: bool,
+    /// This run's mark, and whether it has been asked to stop (T609). See [`RunMark`].
+    pub run: RunMark,
+}
+
+/// The environment variable every remote command of one deployment or upgrade carries (T609).
+///
+/// Set on each command [`Context`] sends, and so inherited by everything the command starts —
+/// `apt-get`, `dpkg`, the maintainer scripts, the lot. What is started through `systemctl`
+/// lives under PID 1 and does not carry it, and the one process a step leaves behind on
+/// purpose — the SSH undo timer — drops it explicitly (`env -u`), so a stop aimed at the mark
+/// reaches exactly the run's own work and never its safety net.
+pub const RUN_VAR: &str = "VRCAST_DEPLOY_RUN";
+
+/// One run's mark on the server, and its state on this side (T609).
+///
+/// **A cancellation does not interrupt a command; it stops the next one from starting.**
+/// A command already on its way — `dpkg` unpacking, say — is waited for to its natural end:
+/// killed halfway it leaves the package database interrupted (measured, T609 phase A), and a
+/// repeat then fails until somebody runs `dpkg --configure -a` by hand. So once
+/// [`RunMark::ask_to_stop`] is called, every further `ran`/`asks`/`put_file` answers
+/// [`DeployError::Cancelled`] without sending anything, and the one in flight is let finish.
+#[derive(Debug)]
+pub struct RunMark {
+    mark: String,
+    stopping: std::sync::atomic::AtomicBool,
+    /// When the command now running was sent, if one is — cleared only once the server has
+    /// said how it ended. A command whose answer was lost with its channel may still be
+    /// running, and is given until [`crate::ssh::exec::EXEC_CEILING`] after this moment.
+    in_flight: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl RunMark {
+    /// A mark for one run: unique, so a stop aimed at it cannot reach anybody else's run.
+    pub fn fresh() -> Self {
+        Self {
+            mark: uuid::Uuid::new_v4().simple().to_string(),
+            stopping: std::sync::atomic::AtomicBool::new(false),
+            in_flight: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.mark
+    }
+
+    /// No further command of this run is to start.
+    pub fn ask_to_stop(&self) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_stopping(&self) -> bool {
+        self.stopping.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Until when the command last sent may legitimately still be running on the server —
+    /// `None` when the server has already said it ended.
+    pub fn may_run_until(&self) -> Option<std::time::Instant> {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|sent| sent + crate::ssh::exec::EXEC_CEILING)
+    }
+
+    /// The command as it is sent: carrying the mark, in a session and group of its own.
+    ///
+    /// `setsid -w` rather than `setsid`: it waits for the command and hands back its exit
+    /// status, so the step reads the answer exactly as before. The command itself is run by
+    /// the login shell (`$SHELL`), as it was before T609, so no step's text changes meaning.
+    pub fn wrap(&self, command: &str) -> String {
+        format!(
+            "{RUN_VAR}={} setsid -w \"${{SHELL:-/bin/sh}}\" -c {}",
+            crate::server::shell_quote(&self.mark),
+            crate::server::shell_quote(command)
+        )
+    }
 }
 
 /// What has to be established by **opening a new connection**, not by reading a file.
@@ -101,6 +177,34 @@ pub struct Proofs<'a> {
 }
 
 impl Context<'_> {
+    /// Send one command of this run: marked, in a group of its own (T609).
+    ///
+    /// Refuses to send anything once the run has been asked to stop — **the only way a
+    /// cancellation acts on the server is by not starting the next command.** The one already
+    /// running is never interrupted from here; see [`RunMark`].
+    ///
+    /// The time it was sent is kept until the server has said how it ended (an exit status
+    /// came back). A command whose channel broke may still be running, and the stop that
+    /// follows waits for it rather than signalling it at once.
+    pub async fn exec_marked(&self, command: &str) -> Result<crate::ssh::CommandOutput> {
+        if self.run.is_stopping() {
+            return Err(DeployError::Cancelled);
+        }
+        self.send(command).await
+    }
+
+    /// The sending itself, whether or not a stop was asked — for the second half of an
+    /// operation that must not be left halved ([`Self::put_file`]).
+    async fn send(&self, command: &str) -> Result<crate::ssh::CommandOutput> {
+        *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(std::time::Instant::now());
+        let said = self.conn.exec(&self.run.wrap(command)).await?;
+        if said.exit_code.is_some() {
+            *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        Ok(said)
+    }
+
     /// Run something on the server and hand back what it said.
     ///
     /// **A failed command hands back its complaint as well.** The applies below all end
@@ -110,7 +214,7 @@ impl Context<'_> {
     /// for, and the person is left with the name of a step. Found by trimming a check and
     /// watching it fail with nothing to say (2026-08-27).
     pub async fn ran(&self, command: &str) -> Result<String> {
-        let said = self.conn.exec(command).await?;
+        let said = self.exec_marked(command).await?;
         if said.ok() || said.stderr.trim().is_empty() {
             return Ok(said.stdout);
         }
@@ -128,7 +232,7 @@ impl Context<'_> {
         // command's complaints would answer "no" whenever anything on the way wrote a warning
         // — which is how, for a few minutes, a perfectly configured fail2ban was reported as
         // not installed (2026-08-27). What helps a failure's message ruins an answer.
-        Ok(self.conn.exec(command).await?.stdout.trim() == "yes")
+        Ok(self.exec_marked(command).await?.stdout.trim() == "yes")
     }
 
     /// The answer for a step that cannot be settled in this environment (T246).
@@ -164,9 +268,17 @@ impl Context<'_> {
     /// Written beside and moved into place. A configuration written straight into its
     /// final path is readable half-written by whatever reloads next, and on a web
     /// server's main configuration that is the serving down rather than a bad edit.
+    ///
+    /// **One operation as far as a stop is concerned** (T609): refused before it starts once
+    /// the run is stopping, and — once started — carried through to the move (or the tidying
+    /// of the half-written copy) even if a stop is asked meanwhile. A stop between the two
+    /// halves would leave a `*.vrcast.tmp` beside the real file for nothing.
     pub async fn put_file(&self, path: &str, body: &str) -> Result<()> {
         use tokio::io::AsyncWriteExt;
 
+        if self.run.is_stopping() {
+            return Err(DeployError::Cancelled);
+        }
         let temp = format!("{path}.vrcast.tmp");
         let sftp = self.conn.sftp().await?;
         // `create` and not `write`: the library's `write` opens without creating, and on
@@ -183,14 +295,16 @@ impl Context<'_> {
 
         if let Err(e) = written {
             let _ = self
-                .ran(&format!("rm -f -- {}", crate::server::shell_quote(&temp)))
+                .send(&format!("rm -f -- {}", crate::server::shell_quote(&temp)))
                 .await;
             return Err(DeployError::Ssh(crate::ssh::SshError::sftp(
                 crate::store::redact::safe_display(&e),
             )));
         }
 
-        self.ran(&format!(
+        // Its answer is not read, as `ran`'s was not before T609: the step's check after the
+        // apply says whether the file is right, and that is what decides the step.
+        self.send(&format!(
             "mv -f -- {} {}",
             crate::server::shell_quote(&temp),
             crate::server::shell_quote(path)
@@ -344,6 +458,13 @@ pub async fn run<C>(
                             return Err(DeployError::NotTaken { id: step.id });
                         }
                     }
+                }
+                Err(DeployError::Cancelled) => {
+                    // Asked to stop while this step was under way: its command in flight was
+                    // let finish and the next one was not sent (T609). Not a failure of the
+                    // step — nothing about the server said no — so it is not reported as one,
+                    // and a repeat asks its check afresh.
+                    return Err(DeployError::Cancelled);
                 }
                 Err(e) => {
                     let detail = e.to_string();
