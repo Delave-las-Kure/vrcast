@@ -116,6 +116,7 @@ async fn the_password_is_refused_by_the_server_itself_after_the_hardening() {
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,

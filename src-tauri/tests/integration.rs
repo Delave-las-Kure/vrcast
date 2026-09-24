@@ -69,6 +69,15 @@ mod deploy_foreign;
 #[path = "integration/deploy_run_race.rs"]
 mod deploy_run_race;
 
+/// T609 phase A — an ignored measurement: cancelling/killing apt and dpkg mid-deployment.
+#[path = "integration/deploy_cancel_measure.rs"]
+mod deploy_cancel_measure;
+
+/// T609 phase B, T613, T614 — a cancel waits for dpkg and confirms nothing of the run is
+/// left; the repeat finishes an interrupted dpkg; a keyring already there; apt's own words.
+#[path = "integration/deploy_cancel.rs"]
+mod deploy_cancel;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 
@@ -141,6 +150,11 @@ mod manifest_conflict;
 /// still goes through on a current server of ours.
 #[path = "integration/rollback_refused.rs"]
 mod rollback_refused;
+
+/// T610 — a rollback leaves the quality-limit rules alone: a limit set after a run
+/// survives it, and a copy of the rules an earlier client took is passed by.
+#[path = "integration/rollback_keeps_limits.rs"]
+mod rollback_keeps_limits;
 
 #[path = "integration/process_tree.rs"]
 mod process_tree;

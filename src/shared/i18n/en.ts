@@ -400,6 +400,8 @@ export const en: Catalogue = {
     STAGE_VERIFYING_LADDER: "checking that every variant is served",
     STAGE_STOP_UNCONFIRMED:
       "stopping on the server — not confirmed yet, trying again",
+    STAGE_STOPPING_AFTER_STEP:
+      "stopping — waiting for the current command on the server to finish",
     STAGE_DEPLOYING: "Setting the server up",
     STAGE_DONE: "done",
 

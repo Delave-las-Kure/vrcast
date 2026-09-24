@@ -17,11 +17,14 @@
 
 use std::time::Duration;
 
-use crate::domain::hls_package::{self, CutFacts, GroupRecord, Progress, StopReport, ToCut};
+use crate::domain::hls_package::{self, CutFacts, GroupRecord, Progress, ToCut};
 use crate::ssh::{Connection, Result, SshError};
 use crate::tasks::engine::TaskContext;
 
+pub use super::marked::StopProblem;
 pub use crate::domain::hls_package::Stopped;
+
+use super::marked::Patience;
 
 /// What is being cut, and where.
 pub struct Cutting<'a> {
@@ -99,21 +102,6 @@ pub struct Started {
     pub group: GroupRecord,
 }
 
-/// Why a stop was not confirmed.
-#[derive(Debug, thiserror::Error)]
-pub enum StopProblem {
-    /// The server could not be asked at all.
-    #[error(transparent)]
-    Ssh(#[from] SshError),
-    /// Asked, and something of ours was still alive after KILL.
-    #[error("still alive after KILL: {0}")]
-    StillAlive(String),
-    /// Asked, and the answer was not one — `/proc` could not be read, or nothing came back
-    /// that the stop script says. Never read as "gone": silence is not a confirmation.
-    #[error("no readable answer: {0}")]
-    Unreadable(String),
-}
-
 /// A stop that has to be confirmed before the work may be reported as ended.
 #[derive(Debug)]
 pub struct PendingStop {
@@ -132,130 +120,31 @@ pub struct PendingStop {
 /// the thing that then fails is whatever the person does next.
 const ASK_EVERY: Duration = Duration::from_secs(5);
 
-/// How long the group is given to end on TERM before it is killed, in 100 ms ticks.
-///
-/// Measured in the test container (T605): `ffmpeg` in the middle of a `-c copy` remux, and
-/// the wrapper around it, are gone ~0.1 s after TERM. Five seconds is fifty times that —
-/// room for a loaded server and for `ffmpeg` finishing the segment it is writing — and short
-/// enough that a person pressing "stop" is not kept waiting long by something that ignores
-/// TERM altogether.
-const TERM_TICKS: u32 = 50;
-
-/// How long the group is given to disappear after KILL, in 100 ms ticks.
-///
-/// KILL cannot be caught; what is waited for is the kernel tearing the processes down. On
-/// the test container that is the very next scan. Five seconds leaves room for a process in
-/// uninterruptible sleep on a slow disk, which KILL reaches only once the disk answers.
-const KILL_TICKS: u32 = 50;
-
-/// The ceiling on one stop command, overall (T595's `exec_with_timeout`).
-///
-/// The TERM and KILL waits together are at most ten seconds, plus the scans between them.
-/// A ceiling well above that — but far below `exec`'s own 600 s — means a connection that
-/// died silently is found out in a minute rather than ten, and the next attempt goes
-/// through a fresh one ([`PendingStop::confirm`]).
-const STOP_CEILING: Duration = Duration::from_secs(60);
-
 /// The ceiling on the start command. The launcher itself waits up to five seconds for the
 /// wrapper's record (`RECORD_TICKS` in the domain module).
 const START_CEILING: Duration = Duration::from_secs(60);
 
-/// The ceiling on asking whether a cutting is alive — one scan of `/proc`.
-const PROBE_CEILING: Duration = Duration::from_secs(30);
-
-/// The first pause before an unconfirmed stop is tried again, and the ceiling the pause
-/// doubles up to.
-///
-/// Not measured, and there is nothing to measure: it is how long a person is kept waiting
-/// once the server is back, against how hard a server that is not back is knocked on. Two
-/// seconds answers a blip at once; a minute is how often an unreachable server is tried for
-/// as long as it stays unreachable — no tight loop, and no giving up either, because giving
-/// up would mean writing an end nobody has confirmed.
-const RETRY_FIRST: Duration = Duration::from_secs(2);
-const RETRY_CEILING: Duration = Duration::from_secs(60);
-
-/// Run one of the domain module's scripts with arguments, through `bash -c`.
-///
-/// `bash` by name rather than whatever the login shell is: the scripts use arrays and
-/// `mapfile -d`, and a server whose login shell is `sh` would otherwise read them as
-/// nonsense and answer with silence — which, for a question like "is it still running?",
-/// is the one answer that must never be taken at its word. The sentinel in front is what
-/// the scan checks itself against (see `SCAN` in the domain module).
+/// Run one of the domain module's scripts with arguments — see
+/// [`super::marked::bash_with_args`] for why `bash` by name and what the sentinel is.
 fn bash_with_args(script: &str, args: &[String]) -> String {
-    let mut cmd = format!(
-        "VRCAST_HLS_SELFCHECK=1 bash -c {} vrcast-hls",
-        super::shell_quote(script)
-    );
-    for arg in args {
-        cmd.push(' ');
-        cmd.push_str(&super::shell_quote(arg));
-    }
-    cmd
+    super::marked::bash_with_args("vrcast-hls", script, args)
 }
 
 /// Stop every process of one start on the server, and confirm it (T605).
 ///
-/// One command: TERM to the group(s) and to each marked process → wait, asking `/proc`
-/// every 100 ms → KILL whoever is left → wait → answer. A zombie counts as gone: it
-/// executes nothing and writes nothing.
-///
-/// The outcomes are kept apart on purpose — `Ok` is a confirmation (including "there was
-/// nothing to stop"), [`StopProblem::StillAlive`] and [`StopProblem::Unreadable`] are
-/// "asked, and not confirmed", [`StopProblem::Ssh`] is "could not ask". None of the last
-/// three may be reported upward as a stop.
+/// [`super::marked::stop_confirmed`] aimed at `VRCAST_HLS_JOB=<mark>`, signalling at once:
+/// a cutting is only ever redone, never left half-written in a way a repeat cannot mend, so
+/// there is nothing to wait for. See there for the outcomes; none but `Ok` is a stop.
 pub async fn stop_confirmed(
     conn: &Connection,
     mark: &JobMark,
 ) -> std::result::Result<Stopped, StopProblem> {
-    let out = conn
-        .exec_with_timeout(
-            &bash_with_args(
-                &hls_package::stop_script(),
-                &[
-                    mark.as_str().to_owned(),
-                    TERM_TICKS.to_string(),
-                    KILL_TICKS.to_string(),
-                ],
-            ),
-            STOP_CEILING,
-        )
-        .await?;
-    match hls_package::read_stop(&out.stdout) {
-        StopReport::Confirmed { how, elapsed_ms } => {
-            tracing::info!(
-                mark = mark.as_str(),
-                ?how,
-                ?elapsed_ms,
-                "the cutting's processes are gone"
-            );
-            Ok(how)
-        }
-        StopReport::StillAlive(who) => Err(StopProblem::StillAlive(who)),
-        StopReport::Unreadable(said) => Err(StopProblem::Unreadable(format!(
-            "{said} (exit {:?}, stderr: {})",
-            out.exit_code,
-            out.stderr.trim()
-        ))),
-    }
+    super::marked::stop_confirmed(conn, hls_package::JOB_VAR, mark.as_str(), Patience::NONE).await
 }
 
 /// Whether any live process carries this mark (a prefix: `base:` or `base:uuid`).
 async fn anything_alive(conn: &Connection, want: &str) -> Result<bool> {
-    let out = conn
-        .exec_with_timeout(
-            &bash_with_args(&hls_package::probe_script(), &[want.to_owned()]),
-            PROBE_CEILING,
-        )
-        .await?;
-    match out.trimmed().lines().last().map(str::trim) {
-        Some("VRCAST_RUNNING yes") => Ok(true),
-        Some("VRCAST_RUNNING no") => Ok(false),
-        _ => Err(SshError::Exec(format!(
-            "could not tell whether the cutting is running: {} {}",
-            out.stdout.trim(),
-            out.stderr.trim()
-        ))),
-    }
+    super::marked::anything_alive(conn, hls_package::JOB_VAR, want).await
 }
 
 impl PendingStop {
@@ -287,33 +176,12 @@ impl PendingStop {
         A: FnMut(JobMark) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<Stopped, String>>,
     {
-        let mut pause = RETRY_FIRST;
-        let mut tries = 1u32;
-        let mut why = self.why;
-        loop {
-            tracing::warn!(
-                mark = self.mark.as_str(),
-                tries,
-                why = %why,
-                retry_in_s = pause.as_secs(),
-                "the cutting's stop on the server is not confirmed yet"
-            );
-            tokio::time::sleep(pause).await;
-            pause = (pause * 2).min(RETRY_CEILING);
-            tries += 1;
-            match attempt(self.mark.clone()).await {
-                Ok(how) => {
-                    tracing::info!(
-                        mark = self.mark.as_str(),
-                        tries,
-                        ?how,
-                        "the cutting's stop on the server is confirmed"
-                    );
-                    return *self.then;
-                }
-                Err(e) => why = e,
-            }
-        }
+        let mark = self.mark.clone();
+        super::marked::retry_until_confirmed("cutting", self.mark.as_str(), self.why, || {
+            attempt(mark.clone())
+        })
+        .await;
+        *self.then
     }
 }
 

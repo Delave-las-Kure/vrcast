@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 
 use crate::domain::deploy_steps::{Change, Checked, StepId};
 
-use super::{Context, DeployError, Result, Step};
+use super::{Context, DeployError, Result, Step, APT_GET};
 
 /// What is installed. Public so that the inventory of the server side (T337) compares
 /// against this, and not against a copy of the name kept beside the check.
@@ -84,9 +84,15 @@ fn check<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<Checked>> {
 
 fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
     Box::pin(async move {
-        ctx.ran(&format!(
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {PACKAGE}"
-        ))
+        // Installed through `ctx.apt` (T614): with retries, after the interrupted-dpkg repair
+        // (T609), and — the point — failing **here**, with apt's own words, when apt fails.
+        // The result used to be thrown away, and a package that never got installed was
+        // reported thirty seconds later as "the sshd jail is not guarding … Found no
+        // accessible config files" (T609 phase A) — the consequence, with the cause gone.
+        ctx.apt(
+            StepId::Fail2ban,
+            &format!("{APT_GET} install -y -qq {PACKAGE}"),
+        )
         .await?;
         ctx.put_file(JAIL, JAIL_LOCAL).await?;
         // **Waiting for the jail, not for the unit.** `systemctl enable --now` comes back as

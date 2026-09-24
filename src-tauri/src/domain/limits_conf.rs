@@ -17,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::slow_master::SLOW_DIR;
+use super::slow_master::slow_master_address;
 
 /// One limit in force.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,13 +121,16 @@ pub fn build(limits: &[Limit], serving_prefix: &str, generation: u64) -> String 
         // A name of its own for each rule: Caddy matchers share one namespace, and two
         // rules under one name would silently become one.
         let key = matcher_name(&limit.ip, &limit.slug);
+        // Onto the description of this rule's own ceiling (T602), not one shared by every
+        // limited viewer of the medium.
+        let target = slow_master_address(prefix, &limit.slug, limit.cap_bps);
         out.push_str(&format!(
             "\n{MARK} {ip} {slug} {cap} {at}\n\
              @{key} {{\n\
              \tpath {prefix}/{slug}/master.m3u8\n\
              \tremote_ip {ip}\n\
              }}\n\
-             rewrite @{key} {prefix}/{SLOW_DIR}/{slug}/master.m3u8\n",
+             rewrite @{key} {target}\n",
             ip = limit.ip,
             slug = limit.slug,
             cap = limit.cap_bps,

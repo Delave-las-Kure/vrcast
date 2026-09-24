@@ -57,6 +57,11 @@ mod hls_package;
 #[path = "unit/cutting_stop.rs"]
 mod cutting_stop;
 
+/// T609 — a cancelled deployment is not ended, and keeps its server, until the stop is
+/// confirmed.
+#[path = "unit/deploy_stop.rs"]
+mod deploy_stop;
+
 #[path = "unit/measured_ladder.rs"]
 mod measured_ladder;
 

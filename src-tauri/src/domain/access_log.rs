@@ -242,7 +242,15 @@ pub fn what_was_asked_for(path: &str) -> Asked {
         [name] => Asked::DirectFile {
             name: (*name).to_owned(),
         },
-        // /videos/_slow/<slug>/master.m3u8
+        // /videos/_slow/<slug>/<cap_bps>/master.m3u8 — one per ceiling (T602). Nothing
+        // else is four parts long, but it is kept beside its older sibling on purpose.
+        [dir, slug, _cap, tail] if *dir == SHORTENED_DIR && *tail == SET_DESCRIPTION => {
+            Asked::SetDescription {
+                slug: (*slug).to_owned(),
+                shortened: true,
+            }
+        }
+        // /videos/_slow/<slug>/master.m3u8 — before T602, and still in the logs.
         [dir, slug, tail] if *dir == SHORTENED_DIR && *tail == SET_DESCRIPTION => {
             Asked::SetDescription {
                 slug: (*slug).to_owned(),

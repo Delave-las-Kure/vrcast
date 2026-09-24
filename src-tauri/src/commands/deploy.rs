@@ -150,6 +150,7 @@ pub mod api {
             public_key,
             machine: facts.clone(),
             already_ours: opened.state.kind == crate::domain::server_state::Kind::Managed,
+            run: crate::server::deploy::RunMark::fresh(),
             // Planning changes nothing and proves nothing: the two proofs open connections,
             // and a plan that logged in twice per step would be a plan nobody dared ask for.
             proofs: Proofs {
@@ -235,6 +236,7 @@ pub mod api {
             public_key,
             machine: facts,
             already_ours: true,
+            run: crate::server::deploy::RunMark::fresh(),
             proofs: Proofs {
                 key_works: &key_now,
                 password_refused: &password_now,
@@ -297,6 +299,7 @@ pub mod api {
             public_key,
             machine: facts,
             already_ours: true,
+            run: crate::server::deploy::RunMark::fresh(),
             proofs: Proofs {
                 key_works: &never,
                 password_refused: &never,
@@ -714,6 +717,7 @@ async fn start(
                 public_key,
                 machine: facts,
                 already_ours: kind == crate::tasks::deploy::Kind::Upgrade,
+                run: crate::server::deploy::RunMark::fresh(),
                 proofs: Proofs {
                     key_works: &key_works,
                     password_refused: &password_refused,
@@ -721,6 +725,49 @@ async fn start(
             };
 
             let steps = deploy::all();
+            // **T609 — one more try at confirming a cancelled run's stop, each through a
+            // fresh connection.** The run's own connection is the first witness; when it is
+            // gone (the reason a stop is ever unconfirmed), the next attempt goes through
+            // the same gate, with the same intent, as the run itself: stopping a process on
+            // the server is an action on the server, not a read (the lesson of T601). A
+            // refusal or a failure to connect is one more unconfirmed attempt, not an end.
+            let stop_again = {
+                let secrets = secrets.clone();
+                let profile = profile.clone();
+                move |mark: String,
+                      patience: crate::server::marked::Patience|
+                      -> futures::future::BoxFuture<
+                    'static,
+                    std::result::Result<crate::domain::marked::Stopped, String>,
+                > {
+                    let secrets = secrets.clone();
+                    let profile = profile.clone();
+                    Box::pin(async move {
+                        // ⚠ `Setup` refuses a server that is already ours and current —
+                        // which is exactly what a run cancelled during its last step (the
+                        // state file) leaves behind. Without the second door the stop would
+                        // be retried for ever against a server that will never say yes. That
+                        // server is one `Change` opens, and nothing else is let through.
+                        let opened =
+                            match gate::open(secrets.as_ref(), &profile, Intent::Setup).await {
+                                Err(crate::server::gate::Refusal::AlreadyDeployed) => {
+                                    gate::open(secrets.as_ref(), &profile, Intent::Change).await
+                                }
+                                other => other,
+                            }
+                            .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
+                        let stopped = crate::server::marked::stop_confirmed(
+                            &opened.conn,
+                            crate::server::deploy::RUN_VAR,
+                            &mark,
+                            patience,
+                        )
+                        .await;
+                        opened.conn.close().await;
+                        stopped.map_err(|problem| problem.to_string())
+                    })
+                }
+            };
             // Kept as well as sent: the profile has to be switched the moment the key is
             // known to be in, and that is known from the steps rather than from the run's
             // outcome — a run that failed later still put the key there.
@@ -732,7 +779,8 @@ async fn start(
                     steps: settled.to_vec(),
                 });
             };
-            let outcome = crate::tasks::deploy::run(&ctx, &steps, &task, &mut report).await;
+            let outcome =
+                crate::tasks::deploy::run(&ctx, &steps, &task, &mut report, &stop_again).await;
             opened.conn.close().await;
 
             if let Some(private) = &made_private {

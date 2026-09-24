@@ -71,7 +71,7 @@ impl CommandOutput {
 /// (`RUN_MUST_RETURN_WITHIN = 240s`, built around a keepalive that empties the channel in
 /// ~90-120s): that test's mechanism returns long before this one would ever fire, so the
 /// two timeouts do not race each other over the same failure.
-const EXEC_CEILING: Duration = Duration::from_secs(600);
+pub const EXEC_CEILING: Duration = Duration::from_secs(600);
 
 impl Connection {
     /// Run a command and wait for it to finish.

@@ -14,7 +14,14 @@
 use crate::commands::error::{AppError, ErrorCode, Result};
 use crate::domain::deploy_steps::{PlannedStep, Status, StepId};
 use crate::domain::wording::{Detail, DetailCode};
-use crate::server::deploy::{Context, DeployError, Step};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+
+use futures::future::BoxFuture;
+
+use crate::domain::marked::Stopped;
+use crate::server::deploy::{Context, DeployError, Step, RUN_VAR};
+use crate::server::marked::Patience;
 use crate::server::upgrade;
 use crate::tasks::engine::TaskContext;
 
@@ -27,23 +34,64 @@ pub enum Kind {
     Upgrade,
 }
 
+/// One more try at confirming a cancelled run's stop, through a **fresh** connection (T609).
+///
+/// Handed the run's mark and how patient to be; answers how the stop went, or why it could
+/// not be confirmed. The caller's to make because that is where the secrets, the profile and
+/// the gate are — production passes the gate with the same intent the run itself used
+/// (`Intent::Setup`): stopping a process on the server is an action on the server.
+pub type StopAgain<'s> = dyn Fn(String, Patience) -> BoxFuture<'s, std::result::Result<Stopped, String>>
+    + Send
+    + Sync
+    + 's;
+
 /// Carry a deployment out, reporting as it goes.
 ///
 /// `report` is handed each step as its outcome settles, so a screen is never a step behind.
+///
+/// ⚠ **T609 — a cancellation waits for the command on the server, then confirms nothing of
+/// the run is left, and only then answers `Cancelled`.** T595 raced the run against the
+/// cancel token and dropped it the moment the token fired: `Cancelled` came back in 2.4 s
+/// while `apt-get` and `dpkg` went on for another 17.8 s on the server holding dpkg's lock,
+/// and a person pressing "deploy" again at once got `Could not get lock` (measured, T609
+/// phase A). Killing them instead was measured too, and is worse: `dpkg` killed halfway
+/// leaves the package database interrupted and every later install refused.
+///
+/// So now, when the token fires:
+///
+/// 1. the run is asked to stop ([`crate::server::deploy::RunMark::ask_to_stop`]): no further
+///    command of it is sent, and the one in flight is **not** interrupted;
+/// 2. the stage becomes `STAGE_STOPPING_AFTER_STEP`; the task stays `running`, so
+///    `running_deploy_for` goes on refusing a second run of the same server;
+/// 3. the run is awaited to its natural end — at most one command's `EXEC_CEILING`;
+/// 4. the server is asked to confirm that no process carrying the run's mark is alive —
+///    TERM → KILL only for what is still marked after the command itself ended (a descendant
+///    that slipped away, say). A command whose answer was lost with its connection is given
+///    the rest of its `EXEC_CEILING` first, and only then signalled;
+/// 5. unconfirmed — [`confirm_stopped`].
+///
+/// A run that ends without a cancellation is reported as before.
 pub async fn run<'a>(
     ctx: &Context<'a>,
     steps: &[Step<Context<'a>>],
     task: &TaskContext,
     report: &mut (dyn FnMut(&[PlannedStep]) + Send),
+    stop_again: &StopAgain<'_>,
 ) -> Result<Vec<PlannedStep>> {
     let total = steps.len().max(1) as f64;
     let mut settled: Vec<PlannedStep> = Vec::new();
+    // How many steps have settled, readable while the run holds `settled` itself.
+    let done = AtomicUsize::new(0);
 
     let cancelled = || task.is_cancelled();
-    let outcome = {
+    let (outcome, stop_asked) = {
         let mut watch = |step: &PlannedStep| {
             settled.push(step.clone());
-            task.report(settled.len() as f64 / total, DetailCode::StageDeploying);
+            done.store(settled.len(), Ordering::SeqCst);
+            // Not overwritten once a stop is asked: "stopping" is the one thing to say then.
+            if !ctx.run.is_stopping() {
+                task.report(settled.len() as f64 / total, DetailCode::StageDeploying);
+            }
             report(&settled);
         };
         // ⚠ **Both kinds copy aside first** (T513, FR-095). Only the upgrade did, and the
@@ -59,38 +107,100 @@ pub async fn run<'a>(
         // still leaves a `latest` to roll back to, so the answer to "put it back" stops being
         // an internal error about a missing directory.
         let run_fut = upgrade::run(ctx, steps, &cancelled, &mut watch);
+        tokio::pin!(run_fut);
         let cancel_token = task.cancel_token();
 
-        // ⚠ **T595 — cancellation raced against the run itself, not only checked between
-        // steps.** `upgrade::run` (`server/deploy/mod.rs`) only calls `cancelled()` between
-        // steps: a cancel arriving while `(step.apply)(ctx).await` is already in flight is
-        // not seen until that await itself returns — which, on a step stuck behind a
-        // `Connection::exec` that has not hit its own `EXEC_CEILING` yet, could be minutes.
-        // This is the one production call site with a live `TaskContext`
-        // (`tasks/deploy.rs::run`, unlike the test fixtures that call `server::deploy::run`
-        // directly with `cancelled = || false`), so it is the one place this fix can land
-        // without touching `Step`'s signature — see the doc comment on `upgrade::run` for
-        // why that wider rework was deliberately not done here.
-        //
-        // **This is best-effort, not a hard guarantee.** When `task.cancel_token()` fires
-        // first, `run_fut` is dropped mid-flight — inside it, `Connection::exec`'s `Channel`
-        // is dropped along with it, which usually (not always: the server decides whether to
-        // signal the child at all) tears down the SSH channel the stuck command was running
-        // on. That is the same best-effort standing `upload::cleanup` already accepts for a
-        // remote process, and it is NOT the constitution's principle III guarantee — that
-        // one is about the LOCAL process tree via `kill_tree()`, not a command running on
-        // somebody else's machine. What this buys is real: the task itself answers
-        // `Cancelled` at once instead of waiting out `EXEC_CEILING`, so the "cancel" button
-        // stops lying about working. `opened.conn.close()` in `commands/deploy.rs` runs
-        // right after this returns, outside `tasks::deploy::run` entirely, so the connection
-        // itself is always closed regardless of which side of this race won.
+        // Raced against the token only to learn **when** the stop was asked — never to drop
+        // the run. Dropping it is what T595 did, and what left `dpkg` running behind a
+        // `Cancelled` (see above).
         tokio::select! {
-            result = run_fut => result,
-            _ = cancel_token.cancelled() => Err(DeployError::Cancelled),
+            result = &mut run_fut => (result, false),
+            _ = cancel_token.cancelled() => {
+                ctx.run.ask_to_stop();
+                task.report_important(
+                    done.load(Ordering::SeqCst) as f64 / total,
+                    DetailCode::StageStoppingAfterStep,
+                );
+                (run_fut.await, true)
+            }
         }
     };
 
-    outcome.map_err(|e| failed(e, &settled))
+    if !(stop_asked || task.is_cancelled()) {
+        return outcome.map_err(|e| failed(e, &settled));
+    }
+
+    // Cancelled. Whatever the run itself ended with — `Cancelled` from the next command it
+    // did not send, success because the last step had just finished, or a broken connection
+    // — the answer is `Cancelled`, and only once the stop is confirmed.
+    ctx.run.ask_to_stop();
+    let progress = settled.len() as f64 / total;
+    let mark = ctx.run.as_str().to_owned();
+    let first = crate::server::marked::stop_confirmed(
+        ctx.conn,
+        RUN_VAR,
+        &mark,
+        patience_until(ctx.run.may_run_until()),
+    )
+    .await
+    .map_err(|problem| problem.to_string());
+    confirm_stopped(
+        task,
+        progress,
+        &mark,
+        first,
+        &|| ctx.run.may_run_until(),
+        stop_again,
+    )
+    .await;
+    Err(failed(DeployError::Cancelled, &settled))
+}
+
+/// How patient a stop may be with a command that may still be running until `until`.
+fn patience_until(until: Option<Instant>) -> Patience {
+    match until {
+        None => Patience::NONE,
+        Some(until) => Patience::for_remaining(until.saturating_duration_since(Instant::now())),
+    }
+}
+
+/// Settle a cancelled run's stop: return only once the server has confirmed that nothing
+/// carrying the run's mark is alive (T609, by the pattern of T605's `settle_stop`).
+///
+/// `first` is how the first attempt went (through the run's own connection). Confirmed —
+/// return at once. Not — the stage becomes `STAGE_STOP_UNCONFIRMED` and the stop is tried
+/// again through `stop_again`, a fresh connection each time, pausing 2 s doubling to 60 s,
+/// **for as long as it takes**: the engine writes `Cancelled` only once the work returns, and
+/// this is the only way out of it. Meanwhile the task is `running`, and `running_deploy_for`
+/// refuses a second deployment or upgrade of the same server.
+///
+/// `may_run_until` says, at each attempt, until when the command last sent may still
+/// legitimately be running (its `EXEC_CEILING`); until then it is waited for, not signalled.
+///
+/// Public so it can be checked without a server, on the real task engine
+/// (`tests/unit/deploy_stop.rs`).
+pub async fn confirm_stopped(
+    task: &TaskContext,
+    progress: f64,
+    mark: &str,
+    first: std::result::Result<Stopped, String>,
+    may_run_until: &(dyn Fn() -> Option<Instant> + Sync),
+    stop_again: &StopAgain<'_>,
+) -> Stopped {
+    let why = match first {
+        Ok(how) => {
+            tracing::info!(mark, ?how, "the cancelled run's processes are gone");
+            return how;
+        }
+        Err(why) => why,
+    };
+    // Said out loud while it lasts: a person who pressed "stop" and sees the task still
+    // running is owed the reason, not a frozen bar.
+    task.report_important(progress, DetailCode::StageStopUnconfirmed);
+    crate::server::marked::retry_until_confirmed("deployment", mark, why, || {
+        stop_again(mark.to_owned(), patience_until(may_run_until()))
+    })
+    .await
 }
 
 /// Turn a deployment's failure into what the interface branches on.

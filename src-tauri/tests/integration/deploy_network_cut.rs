@@ -95,6 +95,7 @@ fn context_for<'a>(
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: key_proof,
             password_refused: password_proof,
@@ -192,9 +193,7 @@ async fn a_real_network_cut_mid_deployment_fails_cleanly_and_a_fresh_run_finishe
          closure ever returned true in this test, so this would mean a network death is \
          being misclassified as a voluntary cancel: {error:?}"
     );
-    eprintln!(
-        "network cut acknowledged after {elapsed:?} as: {error} (steps: {watched:?})"
-    );
+    eprintln!("network cut acknowledged after {elapsed:?} as: {error} (steps: {watched:?})");
 
     // 3. The resume: a fresh connection, a fresh run, no hand-fixing of the server.
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -205,7 +204,14 @@ async fn a_real_network_cut_mid_deployment_fails_cleanly_and_a_fresh_run_finishe
     let key_proof2 =
         || -> BoxFuture<'_, bool> { Box::pin(key_works(&target, &made.private_openssh)) };
     let password_proof2 = || -> BoxFuture<'_, bool> { Box::pin(password_refused(&target)) };
-    let ctx2 = context_for(&target, &conn2, &made, facts2, &key_proof2, &password_proof2);
+    let ctx2 = context_for(
+        &target,
+        &conn2,
+        &made,
+        facts2,
+        &key_proof2,
+        &password_proof2,
+    );
 
     let resumed = deploy::run(&ctx2, &steps, &never, &mut |_| {})
         .await

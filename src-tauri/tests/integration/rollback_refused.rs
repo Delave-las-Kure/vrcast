@@ -65,7 +65,7 @@ fn app_state() -> AppState {
     .expect("the application state would not assemble")
 }
 
-async fn setup() -> (TestServer, AppState, String) {
+pub(super) async fn setup() -> (TestServer, AppState, String) {
     let server = TestServer::start().expect("the container would not come up");
     let state = app_state();
     let input = ServerInput {

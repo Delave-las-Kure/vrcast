@@ -269,6 +269,40 @@ fn every_backed_up_file_has_a_way_back() {
     );
 }
 
+/// ⚠ **The quality-limit rules are neither copied aside nor put back** (T610).
+///
+/// They were, until 2026-09-23 — and a rollback then silently wiped every `limit_set` and
+/// `limit_clear` made since the run, and handed the file an OLD `# vrcast-generation`
+/// number, which is the ABA T603's compare-and-swap exists to rule out. The file's life
+/// belongs to the limit commands alone; the deployment only lays it down when it is absent,
+/// so a copy of it protects nothing a run changes.
+///
+/// Putting it back on the list "for completeness" is exactly the mistake this closes. And
+/// the missing arm is the other half: a `latest` left by an earlier client still holds the
+/// file, and it is the `case` having no arm for it — no default arm, no glob — that makes
+/// the restore pass it by.
+#[test]
+fn the_limit_rules_are_neither_copied_aside_nor_put_back() {
+    let owned = vrcast_studio_lib::server::upgrade::owned_files();
+    let arms = vrcast_studio_lib::server::upgrade::restore_arms();
+
+    assert!(
+        !owned.iter().any(|p| p == "/etc/caddy/vrcast-limits.conf"),
+        "the quality-limit rules are copied aside again, so a rollback would undo every limit \
+         set since the run and move their generation backwards"
+    );
+    assert!(
+        !arms.contains("vrcast-limits.conf)"),
+        "the restore has an arm for the quality-limit rules, so an earlier client's copy of \
+         them would be put back over the live ones:\n{arms}"
+    );
+    assert!(
+        !arms.contains("*)"),
+        "the restore has a catch-all arm, and a file with no arm of its own is no longer \
+         passed by:\n{arms}"
+    );
+}
+
 // ---------- what a step says it will change (T507, FR-122) ----------
 
 /// Every change says which it is, and the ones that carry values carry them.

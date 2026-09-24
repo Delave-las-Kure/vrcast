@@ -104,22 +104,34 @@ async fn a_hung_remote_command_is_given_up_on_rather_than_waited_for_forever() {
 
 /// **The deploy context: proof this is the same code path, not a separate one.**
 ///
-/// `Context::ran`/`Context::asks` (`src/server/deploy/mod.rs`) call `self.conn.exec(command)`
-/// directly — there is no second implementation of running a command for deploy steps to fall
-/// into. Grep rather than a second live-container run: a step stuck on `exec` for real (the
-/// `apt-get`/dpkg-lock scenario from the task) would cost minutes to reproduce honestly with a
-/// hung Docker container, for no more assurance than reading the one line that proves the same
-/// function is called. `nothing_unchecked.rs` and `cancelling.rs` make the identical trade for
-/// the identical reason: what a source read can state exactly, a slow behavioural test would
-/// only restate at a much higher price.
+/// `Context::ran`/`Context::asks` (`src/server/deploy/mod.rs`) go through
+/// `Context::exec_marked`, and it — like `put_file`'s own commands — through one private
+/// `send`, which calls `self.conn.exec(&self.run.wrap(command))` (T609: the same `exec`, the
+/// command marked and in a group of its own). There is no second implementation of running
+/// a command for deploy steps to fall into. Grep rather than a second live-container run: a
+/// step stuck on `exec` for real (the `apt-get`/dpkg-lock scenario from the task) would cost
+/// minutes to reproduce honestly with a hung Docker container, for no more assurance than
+/// reading the lines that prove the same function is called. `nothing_unchecked.rs` and
+/// `cancelling.rs` make the identical trade for the identical reason: what a source read can
+/// state exactly, a slow behavioural test would only restate at a much higher price.
 #[test]
 fn deploy_steps_run_commands_through_the_same_timeout_bounded_exec() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server/deploy/mod.rs");
     let text = std::fs::read_to_string(&path).expect("could not read server/deploy/mod.rs");
+    let why = "if a new path to run a remote command was added, it needs its own route through \
+               the T595 timeout, or this whole test needs to follow it";
+    assert_eq!(
+        text.matches("self.conn.exec").count(),
+        1,
+        "deploy/mod.rs runs remote commands in more than one place, or in none — {why}"
+    );
     assert!(
-        text.contains("self.conn.exec(command)"),
-        "Context::ran/Context::asks no longer call `conn.exec` directly — if a new path to \
-         run a remote command was added, it needs its own route through the T595 timeout, or \
-         this whole test needs to follow it"
+        text.contains("self.conn.exec(&self.run.wrap(command))"),
+        "the one send no longer calls `conn.exec` — {why}"
+    );
+    assert!(
+        text.contains("let said = self.exec_marked(command).await?;")
+            && text.contains("Ok(self.exec_marked(command).await?.stdout.trim() == \"yes\")"),
+        "Context::ran/Context::asks no longer go through `exec_marked` — {why}"
     );
 }

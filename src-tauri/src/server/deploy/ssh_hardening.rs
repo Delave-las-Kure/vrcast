@@ -18,7 +18,7 @@ use futures::future::BoxFuture;
 
 use crate::domain::deploy_steps::{Change, Checked, StepId};
 
-use super::{Context, DeployError, Result, Step};
+use super::{Context, DeployError, Result, Step, RUN_VAR};
 
 /// Our own drop-in. The distribution's files are left alone: they belong to the distribution,
 /// and a deployment that edits them fights every future upgrade of the package.
@@ -111,6 +111,12 @@ fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
 
         // Arm the undo first. Everything after this point is reversible without the person
         // touching a console.
+        //
+        // ⚠ **`env -u` — the timer must not carry the run's mark** (T609). Every command of a
+        // run carries it, and a cancellation confirms that nothing carrying it is left alive
+        // — killing what is. This one process is meant to outlive the run: it is what gives
+        // the server back its old way in if the new one does not work, and a cancel pressed
+        // between arming it and the proof would otherwise take the safety net down with it.
         ctx.ran(&format!(
             "set -e
 rm -f {OK_FLAG}
@@ -118,7 +124,7 @@ rm -rf {BACKUP}
 mkdir -p {BACKUP}
 cp -a /etc/ssh/sshd_config {BACKUP}/ 2>/dev/null || true
 cp -a /etc/ssh/sshd_config.d {BACKUP}/ 2>/dev/null || true
-setsid nohup sh -c 'sleep {UNDO_AFTER_SECONDS}
+env -u {RUN_VAR} setsid nohup sh -c 'sleep {UNDO_AFTER_SECONDS}
 if [ ! -f {OK_FLAG} ]; then
   cp -a {BACKUP}/sshd_config /etc/ssh/sshd_config 2>/dev/null || true
   rm -rf /etc/ssh/sshd_config.d

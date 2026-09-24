@@ -80,6 +80,159 @@ pub struct Context<'a> {
     /// own web server and found the application had quietly undone it would be right
     /// to stop trusting it.
     pub already_ours: bool,
+    /// This run's mark, and whether it has been asked to stop (T609). See [`RunMark`].
+    pub run: RunMark,
+}
+
+/// The environment variable every remote command of one deployment or upgrade carries (T609).
+///
+/// Set on each command [`Context`] sends, and so inherited by everything the command starts —
+/// `apt-get`, `dpkg`, the maintainer scripts, the lot. What is started through `systemctl`
+/// lives under PID 1 and does not carry it, and the one process a step leaves behind on
+/// purpose — the SSH undo timer — drops it explicitly (`env -u`), so a stop aimed at the mark
+/// reaches exactly the run's own work and never its safety net.
+pub const RUN_VAR: &str = "VRCAST_DEPLOY_RUN";
+
+/// Every `apt-get` a step runs (T614): with retries on the downloads.
+///
+/// Five, because on 2026-09-23 archive.ubuntu.com answered 503 to part of nearly every batch
+/// download while single requests went through — a deployment then failed at the first step
+/// that installs anything, for a reason that a second try a moment later did not have.
+pub const APT_GET: &str = "apt-get -o Acquire::Retries=5";
+
+/// What every apt step runs before it installs anything (T609): finish whatever dpkg was in
+/// the middle of when it was last interrupted.
+///
+/// A cancellation no longer interrupts dpkg — it waits for the command to end — but a broken
+/// connection, a closed application or a machine restarted under a deployment still can, and
+/// dpkg then refuses every later install with "dpkg was interrupted, you must manually run
+/// 'dpkg --configure -a'" until somebody does it by hand (measured, T609 phase A: 6 and 230
+/// packages left half-installed by a kill in unpack and in configure). Constitution V asks
+/// that a repeated deployment finish the job without anybody's hands on the server; these two
+/// lines are that, measured at 0.5–7.5 s after a kill and a fraction of a second on a server
+/// with nothing to mend.
+///
+/// On somebody else's half-installed package they do the same — finish its configuration —
+/// which is what apt itself would insist on before installing anything anyway.
+///
+/// **Only when dpkg has something unfinished** — `dpkg --audit` says so, or
+/// `/var/lib/dpkg/updates` holds records of an interrupted run, which is what apt itself
+/// checks before refusing with "dpkg was interrupted"; neither needs the lock to ask — and
+/// **retried while dpkg's lock is busy**: unlike `apt-get` in its own frontend, a bare
+/// `dpkg` does not wait for the lock, and on a freshly bought server `unattended-upgrades`
+/// is often mid-run during the first deployment. A repair that failed at once on the lock
+/// would be a new way for a healthy server's deployment to fail. Any other failure is not
+/// retried: it is the answer, and the step says it. Two minutes of tries at most, so the
+/// whole step still fits in one command's `EXEC_CEILING`.
+pub const APT_HEAL: &str = "\
+if [ -n \"$(dpkg --audit 2>/dev/null)\" ] || [ -n \"$(ls -A /var/lib/dpkg/updates 2>/dev/null)\" ]; then
+  healed=0
+  for _ in $(seq 1 24); do
+    if said=$(dpkg --configure -a 2>&1); then healed=1; break; fi
+    case \"$said\" in *lock*) sleep 5 ;; *) break ;; esac
+  done
+  if [ \"$healed\" != 1 ]; then
+    printf '%s\\n' \"$said\" >&2
+    echo 'E: dpkg --configure -a would not finish what an earlier install left undone' >&2
+    exit 1
+  fi
+fi
+apt-get -o Acquire::Retries=5 -f install -y -qq";
+
+/// How many of apt's last lines an apt step's failure carries.
+const APT_LINES: usize = 6;
+
+/// What a failed apt step says (T614): apt's own last lines, errors first.
+///
+/// Its standard error when it wrote any — that is where `E:` lines go — and its standard
+/// output otherwise; the last few lines, because the cause is at the end and the lines above
+/// it are progress. Public so it can be checked without a server.
+pub fn apt_complaint(said: &crate::ssh::CommandOutput) -> String {
+    let source = if said.stderr.trim().is_empty() {
+        &said.stdout
+    } else {
+        &said.stderr
+    };
+    let lines: Vec<&str> = source
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let tail = lines[lines.len().saturating_sub(APT_LINES)..].join("\n");
+    let code = match said.exit_code {
+        Some(c) => format!("exit {c}"),
+        None => String::from("no exit status, the channel broke"),
+    };
+    if tail.is_empty() {
+        format!("apt failed ({code}) and said nothing")
+    } else {
+        format!("apt failed ({code}): {tail}")
+    }
+}
+
+/// One run's mark on the server, and its state on this side (T609).
+///
+/// **A cancellation does not interrupt a command; it stops the next one from starting.**
+/// A command already on its way — `dpkg` unpacking, say — is waited for to its natural end:
+/// killed halfway it leaves the package database interrupted (measured, T609 phase A), and a
+/// repeat then fails until somebody runs `dpkg --configure -a` by hand. So once
+/// [`RunMark::ask_to_stop`] is called, every further `ran`/`asks`/`put_file` answers
+/// [`DeployError::Cancelled`] without sending anything, and the one in flight is let finish.
+#[derive(Debug)]
+pub struct RunMark {
+    mark: String,
+    stopping: std::sync::atomic::AtomicBool,
+    /// When the command now running was sent, if one is — cleared only once the server has
+    /// said how it ended. A command whose answer was lost with its channel may still be
+    /// running, and is given until [`crate::ssh::exec::EXEC_CEILING`] after this moment.
+    in_flight: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl RunMark {
+    /// A mark for one run: unique, so a stop aimed at it cannot reach anybody else's run.
+    pub fn fresh() -> Self {
+        Self {
+            mark: uuid::Uuid::new_v4().simple().to_string(),
+            stopping: std::sync::atomic::AtomicBool::new(false),
+            in_flight: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.mark
+    }
+
+    /// No further command of this run is to start.
+    pub fn ask_to_stop(&self) {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_stopping(&self) -> bool {
+        self.stopping.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Until when the command last sent may legitimately still be running on the server —
+    /// `None` when the server has already said it ended.
+    pub fn may_run_until(&self) -> Option<std::time::Instant> {
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|sent| sent + crate::ssh::exec::EXEC_CEILING)
+    }
+
+    /// The command as it is sent: carrying the mark, in a session and group of its own.
+    ///
+    /// `setsid -w` rather than `setsid`: it waits for the command and hands back its exit
+    /// status, so the step reads the answer exactly as before. The command itself is run by
+    /// the login shell (`$SHELL`), as it was before T609, so no step's text changes meaning.
+    pub fn wrap(&self, command: &str) -> String {
+        format!(
+            "{RUN_VAR}={} setsid -w \"${{SHELL:-/bin/sh}}\" -c {}",
+            crate::server::shell_quote(&self.mark),
+            crate::server::shell_quote(command)
+        )
+    }
 }
 
 /// What has to be established by **opening a new connection**, not by reading a file.
@@ -101,6 +254,34 @@ pub struct Proofs<'a> {
 }
 
 impl Context<'_> {
+    /// Send one command of this run: marked, in a group of its own (T609).
+    ///
+    /// Refuses to send anything once the run has been asked to stop — **the only way a
+    /// cancellation acts on the server is by not starting the next command.** The one already
+    /// running is never interrupted from here; see [`RunMark`].
+    ///
+    /// The time it was sent is kept until the server has said how it ended (an exit status
+    /// came back). A command whose channel broke may still be running, and the stop that
+    /// follows waits for it rather than signalling it at once.
+    pub async fn exec_marked(&self, command: &str) -> Result<crate::ssh::CommandOutput> {
+        if self.run.is_stopping() {
+            return Err(DeployError::Cancelled);
+        }
+        self.send(command).await
+    }
+
+    /// The sending itself, whether or not a stop was asked — for the second half of an
+    /// operation that must not be left halved ([`Self::put_file`]).
+    async fn send(&self, command: &str) -> Result<crate::ssh::CommandOutput> {
+        *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(std::time::Instant::now());
+        let said = self.conn.exec(&self.run.wrap(command)).await?;
+        if said.exit_code.is_some() {
+            *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        Ok(said)
+    }
+
     /// Run something on the server and hand back what it said.
     ///
     /// **A failed command hands back its complaint as well.** The applies below all end
@@ -110,11 +291,35 @@ impl Context<'_> {
     /// for, and the person is left with the name of a step. Found by trimming a check and
     /// watching it fail with nothing to say (2026-08-27).
     pub async fn ran(&self, command: &str) -> Result<String> {
-        let said = self.conn.exec(command).await?;
+        let said = self.exec_marked(command).await?;
         if said.ok() || said.stderr.trim().is_empty() {
             return Ok(said.stdout);
         }
         Ok(format!("{}{}", said.stdout, said.stderr))
+    }
+
+    /// Install with apt, and fail with **apt's own words** when it fails (T614).
+    ///
+    /// `script` is the step's apt work, run under `set -e` after [`APT_HEAL`]; it must use
+    /// [`APT_GET`] for every `apt-get`. On a non-zero exit the step's error carries the last
+    /// lines apt wrote — "dpkg was interrupted", "Failed to fetch … 503", "has no
+    /// installation candidate" — and not whatever the step would have tripped over next: a
+    /// fail2ban step once reported "the sshd jail is not guarding" about a package that had
+    /// never been installed (T609 phase A).
+    pub async fn apt(&self, id: StepId, script: &str) -> Result<()> {
+        let said = self
+            .exec_marked(&format!(
+                "set -e\nexport DEBIAN_FRONTEND=noninteractive\n{APT_HEAL}\n{script}\necho done"
+            ))
+            .await?;
+        if said.ok() && said.stdout.lines().any(|l| l.trim() == "done") {
+            return Ok(());
+        }
+        Err(DeployError::Step {
+            id,
+            detail: apt_complaint(&said),
+            advice: None,
+        })
     }
 
     /// Ask the server a yes-or-no question.
@@ -128,7 +333,7 @@ impl Context<'_> {
         // command's complaints would answer "no" whenever anything on the way wrote a warning
         // — which is how, for a few minutes, a perfectly configured fail2ban was reported as
         // not installed (2026-08-27). What helps a failure's message ruins an answer.
-        Ok(self.conn.exec(command).await?.stdout.trim() == "yes")
+        Ok(self.exec_marked(command).await?.stdout.trim() == "yes")
     }
 
     /// The answer for a step that cannot be settled in this environment (T246).
@@ -164,9 +369,17 @@ impl Context<'_> {
     /// Written beside and moved into place. A configuration written straight into its
     /// final path is readable half-written by whatever reloads next, and on a web
     /// server's main configuration that is the serving down rather than a bad edit.
+    ///
+    /// **One operation as far as a stop is concerned** (T609): refused before it starts once
+    /// the run is stopping, and — once started — carried through to the move (or the tidying
+    /// of the half-written copy) even if a stop is asked meanwhile. A stop between the two
+    /// halves would leave a `*.vrcast.tmp` beside the real file for nothing.
     pub async fn put_file(&self, path: &str, body: &str) -> Result<()> {
         use tokio::io::AsyncWriteExt;
 
+        if self.run.is_stopping() {
+            return Err(DeployError::Cancelled);
+        }
         let temp = format!("{path}.vrcast.tmp");
         let sftp = self.conn.sftp().await?;
         // `create` and not `write`: the library's `write` opens without creating, and on
@@ -183,14 +396,16 @@ impl Context<'_> {
 
         if let Err(e) = written {
             let _ = self
-                .ran(&format!("rm -f -- {}", crate::server::shell_quote(&temp)))
+                .send(&format!("rm -f -- {}", crate::server::shell_quote(&temp)))
                 .await;
             return Err(DeployError::Ssh(crate::ssh::SshError::sftp(
                 crate::store::redact::safe_display(&e),
             )));
         }
 
-        self.ran(&format!(
+        // Its answer is not read, as `ran`'s was not before T609: the step's check after the
+        // apply says whether the file is right, and that is what decides the step.
+        self.send(&format!(
             "mv -f -- {} {}",
             crate::server::shell_quote(&temp),
             crate::server::shell_quote(path)
@@ -344,6 +559,13 @@ pub async fn run<C>(
                             return Err(DeployError::NotTaken { id: step.id });
                         }
                     }
+                }
+                Err(DeployError::Cancelled) => {
+                    // Asked to stop while this step was under way: its command in flight was
+                    // let finish and the next one was not sent (T609). Not a failure of the
+                    // step — nothing about the server said no — so it is not reported as one,
+                    // and a repeat asks its check afresh.
+                    return Err(DeployError::Cancelled);
                 }
                 Err(e) => {
                     let detail = e.to_string();

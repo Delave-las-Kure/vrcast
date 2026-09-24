@@ -13,6 +13,9 @@
 //!   at all, by anything here;
 //! - **what is replaced can be put back** (FR-133): every file the application owns is copied
 //!   aside first, and one command restores it.
+//!
+//! **The quality-limit rules (`/etc/caddy/vrcast-limits.conf`) are the one exception** (T610):
+//! neither copied nor put back. Their life belongs to the limit commands; see [`OWNED`].
 
 use crate::domain::deploy_steps::{PlannedStep, Status};
 use crate::domain::server_state::APP_EXPECTS;
@@ -29,9 +32,15 @@ const LATEST: &str = "/etc/vrcast/backup/latest";
 /// work, not our configuration; an upgrade has no business copying them aside, and no line of
 /// this file may put them back either — a restore that "helpfully" reverted the catalogue
 /// would undo whatever was uploaded since (FR-131).
-const OWNED: [&str; 12] = [
+///
+/// ⚠ **So are the quality-limit rules, `/etc/caddy/vrcast-limits.conf`** (T610). Their whole
+/// life belongs to `limit_set`/`limit_clear` and the transaction under their lock (T603); the
+/// deployment's `configs` step only lays the file down when it is not there, so a copy of an
+/// existing one protects nothing a run changes. Putting it back would wipe every limit set
+/// since the run and hand the file an old `# vrcast-generation` — the backwards step the
+/// compare-and-swap relies on never happening. Do not add it back "for completeness".
+const OWNED: [&str; 11] = [
     "/etc/caddy/Caddyfile",
-    "/etc/caddy/vrcast-limits.conf",
     "/etc/vrcast/state.json",
     "/etc/sysctl.d/99-vrcast-net.conf",
     "/etc/sysctl.d/99-vrcast-ipv6.conf",
@@ -97,6 +106,8 @@ pub async fn plan<'a>(ctx: &Context<'a>, from: u32, steps: &[Step<Context<'a>>])
 ///
 /// Done **before** the first change and not as the run goes: copies made along the way are
 /// half a backup, and half a backup restores a server into a state it was never in.
+///
+/// Only what [`OWNED`] names — which is why the quality-limit rules are not in the copy (T610).
 pub async fn back_up(ctx: &Context<'_>) -> Result<String> {
     let stamp = ctx.ran("date -u +%Y%m%dT%H%M%SZ").await?.trim().to_owned();
     if stamp.is_empty() {
@@ -161,6 +172,10 @@ pub fn restore_arms() -> String {
 ///
 /// The services are reloaded afterwards rather than restarted: a restart drops every viewer,
 /// and somebody rolling an upgrade back is already having a bad enough time.
+///
+/// ⚠ **A file with no arm is passed by, and that is load-bearing** (T610): the `case` has no
+/// default arm, so the `vrcast-limits.conf` an earlier client copied into `latest` stays
+/// where it is and the live rules are not touched. No catch-all arm, no glob copy.
 pub async fn roll_back(ctx: &Context<'_>) -> Result<()> {
     let there = ctx
         .asks(&format!("test -d {LATEST} && echo yes || echo no"))

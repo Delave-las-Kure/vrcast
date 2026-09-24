@@ -48,6 +48,7 @@ async fn a_container_s_state_file_says_serving_was_not_verified() {
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,

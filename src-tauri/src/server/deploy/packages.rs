@@ -14,7 +14,7 @@ use futures::future::BoxFuture;
 
 use crate::domain::deploy_steps::{Change, Checked, StepId};
 
-use super::{Context, DeployError, Result, Step};
+use super::{Context, Result, Step, APT_GET};
 
 /// What is installed from the distribution's own archives.
 /// Public so `versions.json` can be checked against **this** list rather than a copy of it
@@ -30,6 +30,9 @@ pub const FROM_APT: [&str; 6] = ["ffmpeg", "curl", "tar", "ufw", "ca-certificate
 /// anything, and silently taking whatever came back is not a foundation.
 const CADDY_KEY: &str = "https://dl.cloudsmith.io/public/caddy/stable/gpg.key";
 const CADDY_LIST: &str = "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt";
+
+/// Where the Caddy repository's signing key goes — the path its list file names.
+pub const KEYRING: &str = "/usr/share/keyrings/caddy-stable-archive-keyring.gpg";
 
 pub fn step<'a>() -> Step<Context<'a>> {
     Step {
@@ -72,29 +75,30 @@ done
 fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
     Box::pin(async move {
         let names = FROM_APT.join(" ");
-        let said = ctx
-            .ran(&format!(
-                "set -e
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq {names}
+        // ⚠ **`--batch --yes`, and written beside then moved** (T613). `gpg --dearmor -o` over
+        // a keyring that is already there asks whether to overwrite it — on a server with no
+        // terminal, `gpg: cannot open '/dev/tty'` — and the step failed on every repeat after
+        // any interruption that came after the key was written: a cancel, a broken link, a
+        // closed application. A repeat that cannot get past its own earlier half is exactly
+        // what constitution V forbids. Moved into place so a half-written keyring is never
+        // the one apt reads.
+        //
+        // The apt work itself goes through `ctx.apt` (T614): retries on the downloads, the
+        // interrupted-dpkg repair first (T609), and apt's own words when it fails.
+        ctx.apt(
+            StepId::Packages,
+            &format!(
+                "{APT_GET} update -qq
+{APT_GET} install -y -qq {names}
 if ! command -v caddy >/dev/null; then
-  curl -1sLf {CADDY_KEY} | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  curl -1sLf {CADDY_KEY} | gpg --batch --yes --dearmor -o {KEYRING}.vrcast.tmp
+  mv -f {KEYRING}.vrcast.tmp {KEYRING}
   curl -1sLf {CADDY_LIST} > /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update -qq
-  apt-get install -y -qq caddy
-fi
-echo done"
-            ))
-            .await?;
-
-        if !said.contains("done") {
-            return Err(DeployError::Step {
-                id: StepId::Packages,
-                detail: said.trim().to_owned(),
-                advice: None,
-            });
-        }
-        Ok(())
+  {APT_GET} update -qq
+  {APT_GET} install -y -qq caddy
+fi"
+            ),
+        )
+        .await
     })
 }

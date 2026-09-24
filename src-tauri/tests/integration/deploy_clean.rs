@@ -30,6 +30,20 @@ use vrcast_studio_lib::ssh::keygen;
 
 pub const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 
+/// A `stop_again` for runs that are not expected to need one (T609): no cancellation, or a
+/// server that stays reachable so the first confirmation settles it. Asked all the same, it
+/// says so loudly rather than pretending to have confirmed anything.
+pub fn no_second_try(
+    mark: String,
+    _: vrcast_studio_lib::server::marked::Patience,
+) -> BoxFuture<'static, Result<vrcast_studio_lib::domain::marked::Stopped, String>> {
+    Box::pin(async move {
+        Err(format!(
+            "this test expected the first stop of {mark} to be confirmed, and it was not"
+        ))
+    })
+}
+
 pub async fn address(target: &DeployTarget) -> ServerAddress {
     let (host, port) = target.address();
     ServerAddress::new(host, port)
@@ -129,6 +143,7 @@ async fn a_bare_machine_is_deployed_and_a_repeat_does_nothing() {
         machine,
         // A bare machine: nothing here is anybody's work to preserve.
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -344,6 +359,7 @@ async fn a_first_deployment_copies_aside_what_it_is_about_to_change() {
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
@@ -358,7 +374,7 @@ async fn a_first_deployment_copies_aside_what_it_is_about_to_change() {
     // hands it.
     let task = TaskContext::detached(Arc::new(Db::open_in_memory().unwrap()));
 
-    vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |_| {})
+    vrcast_studio_lib::tasks::deploy::run(&ctx, &steps, &task, &mut |_| {}, &no_second_try)
         .await
         .expect("the first deployment failed");
 

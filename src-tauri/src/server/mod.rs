@@ -21,6 +21,7 @@ pub mod limits;
 pub mod listing;
 pub mod log_digest;
 pub mod manifest_io;
+pub mod marked;
 pub mod probe_moov;
 pub mod reconcile;
 pub mod upgrade;

@@ -12,7 +12,7 @@ use futures::future::BoxFuture;
 
 use crate::domain::deploy_steps::{Change, Checked, StepId};
 
-use super::{Context, DeployError, Result, Step};
+use super::{Context, DeployError, Result, Step, APT_GET};
 
 /// What is installed. Public for the same reason as in `fail2ban`: the inventory compares
 /// against the step, not against a copy of the name.
@@ -54,15 +54,26 @@ fn check<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<Checked>> {
 
 fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
     Box::pin(async move {
-        let said = ctx
-            .ran(
-                "set -e
-export DEBIAN_FRONTEND=noninteractive
-dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null | grep -q 'ok installed' \\
-  || apt-get install -y -qq unattended-upgrades
-systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
-echo done",
+        // Through `ctx.apt` (T609/T614) when there is something to install: the
+        // interrupted-dpkg repair first, retries on the download, apt's own words when it
+        // fails. A package cut off halfway through its own install is not "ok installed",
+        // so it comes this way too. When it is installed, apt is not touched at all, as
+        // before: on a live server the package's own timer may be holding apt's lock.
+        let installed = ctx
+            .asks(&format!(
+                "dpkg-query -W -f='${{Status}}' {PACKAGE} 2>/dev/null | grep -q 'ok installed' \\
+  && echo yes || echo no"
+            ))
+            .await?;
+        if !installed {
+            ctx.apt(
+                StepId::UnattendedUpgrades,
+                &format!("{APT_GET} install -y -qq {PACKAGE}"),
             )
+            .await?;
+        }
+        let said = ctx
+            .ran("systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true\necho done")
             .await?;
         if !said.contains("done") {
             return Err(DeployError::Step {

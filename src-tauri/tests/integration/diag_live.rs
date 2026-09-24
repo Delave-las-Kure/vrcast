@@ -92,6 +92,7 @@ async fn a_stopped_serving_is_seen_and_named() {
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
             password_refused: &password_proof,
