@@ -34,7 +34,8 @@ pub enum Kind {
     Upgrade,
 }
 
-/// One more try at confirming a cancelled run's stop, through a **fresh** connection (T609).
+/// One more try at confirming a cancelled or failed run's stop, through a **fresh**
+/// connection (T609, T615).
 ///
 /// Handed the run's mark and how patient to be; answers how the stop went, or why it could
 /// not be confirmed. The caller's to make because that is where the secrets, the profile and
@@ -70,7 +71,16 @@ pub type StopAgain<'s> = dyn Fn(String, Patience) -> BoxFuture<'s, std::result::
 ///    the rest of its `EXEC_CEILING` first, and only then signalled;
 /// 5. unconfirmed — [`confirm_stopped`].
 ///
-/// A run that ends without a cancellation is reported as before.
+/// ⚠ **T615 — a run that fails answers `Failed` only after the same confirmation.** A broken
+/// connection in the middle of a command used to be written down as `Failed` at once, while
+/// `apt-get`/`dpkg` of that command could still be running on the server — and a person
+/// pressing "deploy" again met them at dpkg's lock. Now any failure goes through steps 4–5
+/// above before it is handed back: the command whose answer was lost with its connection is
+/// waited for until its `EXEC_CEILING`, anything of the run still alive after that is
+/// stopped, and only then is the **step's own error** (not the stop's) returned. A step that
+/// failed on a healthy connection costs one scan of `/proc` more.
+///
+/// A run that ends well is reported as before: every command of it has said how it ended.
 pub async fn run<'a>(
     ctx: &Context<'a>,
     steps: &[Step<Context<'a>>],
@@ -106,7 +116,15 @@ pub async fn run<'a>(
         // that is not there. That is the right outcome — there was nothing to lose — and it
         // still leaves a `latest` to roll back to, so the answer to "put it back" stops being
         // an internal error about a missing directory.
-        let run_fut = upgrade::run(ctx, steps, &cancelled, &mut watch);
+        let run_fut = async {
+            // T615: what an earlier run interrupted between writing a file and moving it into
+            // place left beside the real one — see `leftovers_script` for why here.
+            let tidied = ctx.ran(&crate::server::deploy::leftovers_script()).await?;
+            if !tidied.trim().is_empty() {
+                tracing::info!(files = %tidied.trim(), "removed what an interrupted run left half-written");
+            }
+            upgrade::run(ctx, steps, &cancelled, &mut watch).await
+        };
         tokio::pin!(run_fut);
         let cancel_token = task.cancel_token();
 
@@ -126,34 +144,76 @@ pub async fn run<'a>(
         }
     };
 
-    if !(stop_asked || task.is_cancelled()) {
-        return outcome.map_err(|e| failed(e, &settled));
-    }
-
-    // Cancelled. Whatever the run itself ended with — `Cancelled` from the next command it
-    // did not send, success because the last step had just finished, or a broken connection
-    // — the answer is `Cancelled`, and only once the stop is confirmed.
-    ctx.run.ask_to_stop();
+    let cancelled = stop_asked || task.is_cancelled();
     let progress = settled.len() as f64 / total;
     let mark = ctx.run.as_str().to_owned();
-    let first = crate::server::marked::stop_confirmed(
-        ctx.conn,
-        RUN_VAR,
-        &mark,
-        patience_until(ctx.run.may_run_until()),
-    )
-    .await
-    .map_err(|problem| problem.to_string());
-    confirm_stopped(
+    let first = async {
+        // Nothing further of this run is to be sent, whatever it ended with.
+        ctx.run.ask_to_stop();
+        crate::server::marked::stop_confirmed(
+            ctx.conn,
+            RUN_VAR,
+            &mark,
+            patience_until(ctx.run.may_run_until()),
+        )
+        .await
+        .map_err(|problem| problem.to_string())
+    };
+    settle(
         task,
         progress,
         &mark,
+        outcome,
+        cancelled,
         first,
         &|| ctx.run.may_run_until(),
         stop_again,
     )
-    .await;
-    Err(failed(DeployError::Cancelled, &settled))
+    .await
+    .map_err(|e| failed(e, &settled))
+}
+
+/// How a finished run is handed back — the decision T609 and T615 rest on, apart from the
+/// connection so it can be checked without a server (`tests/unit/deploy_stop.rs`).
+///
+/// - Ended well, not cancelled: handed back at once. `first` is not asked.
+/// - Cancelled — whatever the run itself ended with (`Cancelled` from the next command it did
+///   not send, success because the last step had just finished, a broken connection):
+///   `DeployError::Cancelled`, once the stop is confirmed.
+/// - Failed (T615): **the run's own error, untouched**, once the stop is confirmed — never
+///   the stop's error, which says nothing about why the deployment failed.
+///
+/// "Confirmed" is [`confirm_stopped`]: `first` (through the run's own connection), then
+/// `stop_again` through fresh ones for as long as it takes. Until this returns, the task is
+/// `running` and `running_deploy_for` holds the server.
+#[allow(clippy::too_many_arguments)]
+pub async fn settle<T>(
+    task: &TaskContext,
+    progress: f64,
+    mark: &str,
+    outcome: std::result::Result<T, DeployError>,
+    cancelled: bool,
+    first: impl std::future::Future<Output = std::result::Result<Stopped, String>>,
+    may_run_until: &(dyn Fn() -> Option<Instant> + Sync),
+    stop_again: &StopAgain<'_>,
+) -> std::result::Result<T, DeployError> {
+    let outcome = match outcome {
+        // A future does nothing until awaited: `first` is never sent to the server here.
+        Ok(done) if !cancelled => return Ok(done),
+        other => other,
+    };
+    let first = first.await;
+    let how = confirm_stopped(task, progress, mark, first, may_run_until, stop_again).await;
+    match outcome {
+        _ if cancelled => Err(DeployError::Cancelled),
+        Err(e) => {
+            tracing::info!(mark, ?how, error = %e, "the failed run's processes are gone");
+            Err(e)
+        }
+        // Not reachable — an unasked success returned above — but written out rather than
+        // `unreachable!`: a success is a success.
+        Ok(done) => Ok(done),
+    }
 }
 
 /// How patient a stop may be with a command that may still be running until `until`.
@@ -164,15 +224,15 @@ fn patience_until(until: Option<Instant>) -> Patience {
     }
 }
 
-/// Settle a cancelled run's stop: return only once the server has confirmed that nothing
-/// carrying the run's mark is alive (T609, by the pattern of T605's `settle_stop`).
+/// Settle a cancelled or failed run's stop: return only once the server has confirmed that
+/// nothing carrying the run's mark is alive (T609, T615, by the pattern of T605's `settle_stop`).
 ///
 /// `first` is how the first attempt went (through the run's own connection). Confirmed —
 /// return at once. Not — the stage becomes `STAGE_STOP_UNCONFIRMED` and the stop is tried
 /// again through `stop_again`, a fresh connection each time, pausing 2 s doubling to 60 s,
-/// **for as long as it takes**: the engine writes `Cancelled` only once the work returns, and
-/// this is the only way out of it. Meanwhile the task is `running`, and `running_deploy_for`
-/// refuses a second deployment or upgrade of the same server.
+/// **for as long as it takes**: the engine writes `Cancelled` or `Failed` only once the work
+/// returns, and this is the only way out of it. Meanwhile the task is `running`, and
+/// `running_deploy_for` refuses a second deployment or upgrade of the same server.
 ///
 /// `may_run_until` says, at each attempt, until when the command last sent may still
 /// legitimately be running (its `EXEC_CEILING`); until then it is waited for, not signalled.
@@ -189,13 +249,14 @@ pub async fn confirm_stopped(
 ) -> Stopped {
     let why = match first {
         Ok(how) => {
-            tracing::info!(mark, ?how, "the cancelled run's processes are gone");
+            tracing::info!(mark, ?how, "the stopped run's processes are gone");
             return how;
         }
         Err(why) => why,
     };
-    // Said out loud while it lasts: a person who pressed "stop" and sees the task still
-    // running is owed the reason, not a frozen bar.
+    // Said out loud while it lasts: a person who pressed "stop" — or watches a deployment
+    // whose connection broke — and sees the task still running is owed the reason, not a
+    // frozen bar.
     task.report_important(progress, DetailCode::StageStopUnconfirmed);
     crate::server::marked::retry_until_confirmed("deployment", mark, why, || {
         stop_again(mark.to_owned(), patience_until(may_run_until()))

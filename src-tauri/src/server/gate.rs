@@ -127,10 +127,64 @@ pub async fn open(
     profile: &ServerProfile,
     intent: Intent,
 ) -> Result<Opened, Refusal> {
-    let conn = super::connect_raw(secrets, profile).await?;
-    let state = super::detect::detect(&conn, &profile.video_dir).await?;
+    let conn = super::connect_raw(secrets, profile, None).await?;
+    admit(conn, &profile.video_dir, intent, None).await
+}
 
-    if let Err(refusal) = allowed(&state, intent) {
+/// Open a session to stop what a deployment or upgrade left running (T609, T615).
+///
+/// Through the gate like everything else — stopping a process on the server is an action on
+/// it, not a read (the lesson of T601) — with the intent the run itself used, `Setup`, and
+/// `Change` **only** when `Setup` is refused as [`Refusal::AlreadyDeployed`]: a run stopped
+/// during its last step (the state file) leaves a server that is ours and current, and
+/// without the second door the stop would be retried for ever against a server that will
+/// never say yes. Nothing else is let through.
+///
+/// `made_key` (T615): the private key the run made and put on the server. A run that broke
+/// off after it turned password logins off leaves a profile still saying "password" (it is
+/// switched only once the run is over, and the run is over only once its stop is confirmed)
+/// — signing in with it would fail on every attempt, for ever. When given, the made key is
+/// tried first and the profile's own credentials only if it will not sign in.
+pub async fn open_to_stop(
+    secrets: &dyn SecretStore,
+    profile: &ServerProfile,
+    made_key: Option<&str>,
+) -> Result<Opened, Refusal> {
+    let conn = match made_key {
+        Some(key) => match super::connect_raw(secrets, profile, Some(key)).await {
+            Ok(conn) => conn,
+            Err(by_key) => {
+                tracing::warn!(error = %by_key, "the made key would not sign in; trying the profile's own way in");
+                super::connect_raw(secrets, profile, None).await?
+            }
+        },
+        None => super::connect_raw(secrets, profile, None).await?,
+    };
+    admit(
+        conn,
+        &profile.video_dir,
+        Intent::Setup,
+        Some(Intent::Change),
+    )
+    .await
+}
+
+/// Let an open connection through for `intent`, or refuse — closing it.
+///
+/// `fallback` is a second intent tried **only** when `intent` is refused as
+/// [`Refusal::AlreadyDeployed`] — asked on one detection rather than on two connections.
+async fn admit(
+    conn: Connection,
+    video_dir: &str,
+    intent: Intent,
+    fallback: Option<Intent>,
+) -> Result<Opened, Refusal> {
+    let state = super::detect::detect(&conn, video_dir).await?;
+    let verdict = match (allowed(&state, intent), fallback) {
+        (Err(Refusal::AlreadyDeployed), Some(second)) => allowed(&state, second),
+        (first, _) => first,
+    };
+    if let Err(refusal) = verdict {
         // The connection is closed here rather than left to be dropped: a refused session
         // holds a channel on a server it has no business being on, and on somebody else's
         // machine that is a login sitting open in their logs.

@@ -726,14 +726,28 @@ async fn start(
 
             let steps = deploy::all();
             // **T609 — one more try at confirming a cancelled run's stop, each through a
-            // fresh connection.** The run's own connection is the first witness; when it is
+            // fresh connection** — and, since T615, a failed run's: a connection that broke
+            // in the middle of a command leaves that command running on the server, and the
+            // task is not written down as `Failed` until it has ended. The run's own
+            // connection is the first witness; when it is
             // gone (the reason a stop is ever unconfirmed), the next attempt goes through
             // the same gate, with the same intent, as the run itself: stopping a process on
             // the server is an action on the server, not a read (the lesson of T601). A
             // refusal or a failure to connect is one more unconfirmed attempt, not an end.
+            // ⚠ **T615 — which key the next attempt signs in with.** The profile is switched to
+            // the made key only after the run returns, and the run returns only once its stop
+            // is confirmed. A connection that broke after `SshHardening` turned passwords off
+            // would leave every attempt below signing in with a password that no longer
+            // works — retried for ever, the server held for ever. So once `SshKey` is seen
+            // applied, an attempt signs in with the made key (from memory, the store is not
+            // touched until the run is over), and with the profile's own credentials only if
+            // that fails. A profile that was already on a key is not affected: no key is made.
+            let key_in = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let stop_again = {
                 let secrets = secrets.clone();
                 let profile = profile.clone();
+                let made_private = made_private.clone();
+                let key_in = key_in.clone();
                 move |mark: String,
                       patience: crate::server::marked::Patience|
                       -> futures::future::BoxFuture<
@@ -742,20 +756,14 @@ async fn start(
                 > {
                     let secrets = secrets.clone();
                     let profile = profile.clone();
+                    let made = made_private
+                        .clone()
+                        .filter(|_| key_in.load(std::sync::atomic::Ordering::SeqCst));
                     Box::pin(async move {
-                        // ⚠ `Setup` refuses a server that is already ours and current —
-                        // which is exactly what a run cancelled during its last step (the
-                        // state file) leaves behind. Without the second door the stop would
-                        // be retried for ever against a server that will never say yes. That
-                        // server is one `Change` opens, and nothing else is let through.
                         let opened =
-                            match gate::open(secrets.as_ref(), &profile, Intent::Setup).await {
-                                Err(crate::server::gate::Refusal::AlreadyDeployed) => {
-                                    gate::open(secrets.as_ref(), &profile, Intent::Change).await
-                                }
-                                other => other,
-                            }
-                            .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
+                            gate::open_to_stop(secrets.as_ref(), &profile, made.as_deref())
+                                .await
+                                .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
                         let stopped = crate::server::marked::stop_confirmed(
                             &opened.conn,
                             crate::server::deploy::RUN_VAR,
@@ -774,6 +782,12 @@ async fn start(
             let mut seen: Vec<PlannedStep> = Vec::new();
             let mut report = |settled: &[PlannedStep]| {
                 seen = settled.to_vec();
+                if settled.iter().any(|s| {
+                    s.id == crate::domain::deploy_steps::StepId::SshKey
+                        && matches!(s.status, crate::domain::deploy_steps::Status::Applied)
+                }) {
+                    key_in.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 let _ = events.send(super::AppEvent::DeployProgress {
                     server_id: server_id.clone(),
                     steps: settled.to_vec(),

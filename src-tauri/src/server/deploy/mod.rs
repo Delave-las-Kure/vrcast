@@ -100,6 +100,34 @@ pub const RUN_VAR: &str = "VRCAST_DEPLOY_RUN";
 /// that installs anything, for a reason that a second try a moment later did not have.
 pub const APT_GET: &str = "apt-get -o Acquire::Retries=5";
 
+/// What a half-written file of a run is called beside the real one: `put_file` and the
+/// Caddy keyring write there first and move into place.
+pub const TEMP_SUFFIX: &str = ".vrcast.tmp";
+
+/// Where a run ever writes a [`TEMP_SUFFIX`] file — every path `put_file` is handed, and the
+/// Caddy keyring. `put_file` checks it (debug builds, so every test run does).
+pub const TEMP_PLACES: [&str; 2] = ["/etc/", "/usr/share/keyrings/"];
+
+/// Remove what an interrupted run left half-written (T615), and say what that was.
+///
+/// **At the start of every run, not at the stop.** The stop after a broken connection is
+/// made through a fresh connection by `commands::deploy`'s `stop_again`, which knows the mark
+/// and nothing of the run's files; a tidy-up there would be a second thing to confirm, and a
+/// run killed with the application closed would never get it at all. The start of the next
+/// run is reached in every one of those cases, is the moment the file would get in the way
+/// (it would not: every write replaces it — but it is litter in `/etc` with our name on it),
+/// and runs after the previous run's processes are gone: a second run is refused while the
+/// first is still `running` (`running_deploy_for`), and the first ends only once its stop is
+/// confirmed. `-xdev` keeps the search on the root filesystem; the two directories are small.
+pub fn leftovers_script() -> String {
+    let places = TEMP_PLACES
+        .iter()
+        .map(|p| crate::server::shell_quote(p.trim_end_matches('/')))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("find {places} -xdev -type f -name '*{TEMP_SUFFIX}' -print -delete 2>/dev/null; true")
+}
+
 /// What every apt step runs before it installs anything (T609): finish whatever dpkg was in
 /// the middle of when it was last interrupted.
 ///
@@ -380,7 +408,11 @@ impl Context<'_> {
         if self.run.is_stopping() {
             return Err(DeployError::Cancelled);
         }
-        let temp = format!("{path}.vrcast.tmp");
+        debug_assert!(
+            TEMP_PLACES.iter().any(|p| path.starts_with(p)),
+            "{path} is outside TEMP_PLACES: a half-written copy of it would never be tidied"
+        );
+        let temp = format!("{path}{TEMP_SUFFIX}");
         let sftp = self.conn.sftp().await?;
         // `create` and not `write`: the library's `write` opens without creating, and on
         // a path that does not exist yet gives "no such file" — the name promises one
