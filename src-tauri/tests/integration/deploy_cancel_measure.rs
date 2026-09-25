@@ -321,6 +321,9 @@ pub(super) fn looks_like_network(text: &str) -> bool {
         "Could not connect",
         "Connection timed out",
         "Unable to fetch some archives",
+        // The mirror mid-sync (seen 2026-09-24): an index whose hash does not match yet.
+        "Hash Sum mismatch",
+        "Some index files failed to download",
     ]
     .iter()
     .any(|w| text.contains(w))

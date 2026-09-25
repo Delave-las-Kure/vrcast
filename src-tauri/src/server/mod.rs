@@ -84,9 +84,14 @@ pub(crate) fn join_remote(dir: &str, name: &str) -> String {
 /// The two callers here are the ones that must not be gated: this function, from the
 /// gate itself, and the step-by-step server test, which exists precisely to find out
 /// what is at the other end.
+///
+/// `made_key` (T615): sign in with this private key instead of what the profile holds — the
+/// key a deployment made and put on the server, before the profile has been switched to it.
+/// Only `gate::open_to_stop` passes one. The fingerprint rule is the same either way.
 pub(crate) async fn connect_raw(
     secrets: &dyn crate::store::secrets::SecretStore,
     profile: &crate::domain::server_profile::ServerProfile,
+    made_key: Option<&str>,
 ) -> crate::ssh::Result<crate::ssh::Connection> {
     use crate::domain::server_profile::AuthKind;
     use crate::ssh::{Connection, Credentials, ServerAddress, SshError};
@@ -100,24 +105,32 @@ pub(crate) async fn connect_raw(
         return Err(SshError::HostKeyUnconfirmed { addr });
     };
 
-    let secret = secrets
-        .get(&SecretRef::from_stored(&profile.secret_ref))
-        .map_err(|e| SshError::KeyUnreadable {
-            path: profile.secret_ref.clone(),
-            reason: e.to_string(),
-        })?;
-
-    let credentials = match profile.auth_kind {
-        AuthKind::Key => Credentials::Key {
-            path: profile.key_path.clone().unwrap_or_default().into(),
-            passphrase: Some(secret),
-        },
-        AuthKind::Password => Credentials::Password(secret),
-        // The whole key, out of the store. No file is looked for because none was made.
-        AuthKind::ManagedKey => Credentials::KeyText {
-            openssh: secret,
+    let credentials = match made_key {
+        Some(openssh) => Credentials::KeyText {
+            openssh: openssh.to_owned(),
             passphrase: None,
         },
+        None => {
+            let secret = secrets
+                .get(&SecretRef::from_stored(&profile.secret_ref))
+                .map_err(|e| SshError::KeyUnreadable {
+                    path: profile.secret_ref.clone(),
+                    reason: e.to_string(),
+                })?;
+
+            match profile.auth_kind {
+                AuthKind::Key => Credentials::Key {
+                    path: profile.key_path.clone().unwrap_or_default().into(),
+                    passphrase: Some(secret),
+                },
+                AuthKind::Password => Credentials::Password(secret),
+                // The whole key, out of the store. No file is looked for because none was made.
+                AuthKind::ManagedKey => Credentials::KeyText {
+                    openssh: secret,
+                    passphrase: None,
+                },
+            }
+        }
     };
 
     Connection::connect(addr, &profile.user, credentials, &expected).await

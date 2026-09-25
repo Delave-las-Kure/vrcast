@@ -27,11 +27,15 @@ use vrcast_studio_lib::commands::api as core;
 use vrcast_studio_lib::commands::deploy::api as deploy;
 use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
 use vrcast_studio_lib::commands::AppState;
+use vrcast_studio_lib::domain::deploy_steps::StepId;
 use vrcast_studio_lib::domain::dns_verdict::Ipv6Choice;
 use vrcast_studio_lib::domain::marked::{read_stop, stop_script, StopReport, Stopped};
 use vrcast_studio_lib::domain::server_profile::{AuthKind, ServerProfile};
 use vrcast_studio_lib::domain::wording::DetailCode;
-use vrcast_studio_lib::server::deploy::{apt_complaint, RunMark, APT_HEAL, RUN_VAR};
+use vrcast_studio_lib::server::deploy::{
+    apt_complaint, leftovers_script, DeployError, RunMark, APT_HEAL, RUN_VAR, TEMP_PLACES,
+    TEMP_SUFFIX,
+};
 use vrcast_studio_lib::server::marked::{Patience, MAX_GRACE_S};
 use vrcast_studio_lib::ssh::CommandOutput;
 use vrcast_studio_lib::store::db::Db;
@@ -193,6 +197,259 @@ async fn a_cancelled_deployment_is_not_cancelled_and_keeps_the_server_until_the_
         !second_run_refused(&state).await,
         "the server is still held after the stop was confirmed and the task ended"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_deployment_is_not_failed_and_keeps_the_server_until_the_stop_is_confirmed() {
+    // T615. The connection broke in the middle of a step's command: the run comes back with
+    // the step's failure, and dpkg of that command may still be running on the server. The
+    // same rule as a cancel: nothing final — here `Failed` — until the stop is confirmed.
+    let state = app_state();
+    let server_back = Arc::new(AtomicBool::new(false));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let first_asked = Arc::new(AtomicBool::new(false));
+
+    let id = {
+        let server_back = server_back.clone();
+        let attempts = attempts.clone();
+        let first_asked = first_asked.clone();
+        state
+            .tasks
+            .submit(TaskKind::Deploy, Some(SERVER.to_owned()), move |task| async move {
+                let stop_again = move |_mark: String, _patience: Patience| -> BoxFuture<'static, Result<Stopped, String>> {
+                    let server_back = server_back.clone();
+                    let attempts = attempts.clone();
+                    Box::pin(async move {
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        if server_back.load(Ordering::SeqCst) {
+                            Ok(Stopped::EndedOnItsOwn)
+                        } else {
+                            Err(String::from("could not reach the server"))
+                        }
+                    })
+                };
+                // What the engine hands back when a step's command lost its channel (the
+                // shape `deploy_network_cut.rs` measured: a step failure, not an SSH error).
+                let outcome: Result<(), DeployError> = Err(DeployError::Step {
+                    id: StepId::Packages,
+                    detail: String::from("apt failed (no exit status, the channel broke) and said nothing"),
+                    advice: None,
+                });
+                vrcast_studio_lib::tasks::deploy::settle(
+                    &task,
+                    0.2,
+                    "t615-mark",
+                    outcome,
+                    false,
+                    async {
+                        first_asked.store(true, Ordering::SeqCst);
+                        Err(String::from("the run's own connection is gone"))
+                    },
+                    &|| None,
+                    &stop_again,
+                )
+                .await
+                .map_err(|e| vrcast_studio_lib::tasks::deploy::failed(e, &[]))
+            })
+            .await
+            .expect("the task was not submitted")
+    };
+
+    // Past the first retry (2 s): at least one more attempt has failed by now.
+    tokio::time::sleep(Duration::from_millis(3_000)).await;
+    assert!(
+        first_asked.load(Ordering::SeqCst),
+        "a failed run was not asked to confirm its stop at all"
+    );
+    let task = core::task_get(&state, &id).unwrap();
+    assert_eq!(
+        task.state,
+        TaskState::Running,
+        "the deployment was written down as failed although nobody has confirmed that its \
+         commands on the server are gone — a repeat would meet them at dpkg's lock"
+    );
+    assert_eq!(task.stage, Some(DetailCode::StageStopUnconfirmed));
+    assert!(attempts.load(Ordering::SeqCst) >= 1);
+    assert!(
+        second_run_refused(&state).await,
+        "the server was let go while the failed run's commands may still be running on it"
+    );
+
+    server_back.store(true, Ordering::SeqCst);
+    let ended = wait_for_state(&state, &id, |s| s.is_final(), Duration::from_secs(15)).await;
+    assert_eq!(ended, TaskState::Failed);
+    let error = core::task_get(&state, &id)
+        .unwrap()
+        .error
+        .expect("no error was kept");
+    assert_eq!(
+        error.code,
+        ErrorCode::DeployStepFailed,
+        "the failure is not the step's own: {error:?}"
+    );
+    let cause = error.cause.unwrap_or_default();
+    assert!(
+        cause.contains("channel broke") && !cause.contains("could not reach"),
+        "the task failed with the stop's words rather than the step's: {cause}"
+    );
+    assert!(!second_run_refused(&state).await);
+}
+
+#[tokio::test]
+async fn a_failure_whose_stop_is_confirmed_at_once_keeps_its_own_error() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let task = vrcast_studio_lib::tasks::engine::TaskContext::detached(db);
+    let asked = Arc::new(AtomicUsize::new(0));
+    let asked_in = asked.clone();
+    let stop_again = move |_: String, _: Patience| -> BoxFuture<'static, Result<Stopped, String>> {
+        asked_in.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err(String::from("must not be asked")) })
+    };
+    let outcome: Result<(), DeployError> = Err(DeployError::NotTaken {
+        id: StepId::Firewall,
+    });
+    let settled = vrcast_studio_lib::tasks::deploy::settle(
+        &task,
+        0.5,
+        "m",
+        outcome,
+        false,
+        async { Ok(Stopped::AlreadyGone) },
+        &|| None,
+        &stop_again,
+    )
+    .await;
+    assert!(
+        matches!(
+            settled,
+            Err(DeployError::NotTaken {
+                id: StepId::Firewall
+            })
+        ),
+        "{settled:?}"
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_run_that_ended_well_is_not_stopped_and_a_cancelled_one_is_cancelled() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let task = vrcast_studio_lib::tasks::engine::TaskContext::detached(db);
+    let first_asked = AtomicBool::new(false);
+    let well = vrcast_studio_lib::tasks::deploy::settle(
+        &task,
+        1.0,
+        "m",
+        Ok(7),
+        false,
+        async {
+            first_asked.store(true, Ordering::SeqCst);
+            Err(String::from("must not be asked"))
+        },
+        &|| None,
+        &no_second_try,
+    )
+    .await;
+    assert_eq!(well.ok(), Some(7));
+    assert!(
+        !first_asked.load(Ordering::SeqCst),
+        "a run that ended well was sent a stop"
+    );
+
+    // Cancelled on the last step, which had just finished: still `Cancelled`, as in T609.
+    let cancelled = vrcast_studio_lib::tasks::deploy::settle(
+        &task,
+        1.0,
+        "m",
+        Ok(7),
+        true,
+        async { Ok(Stopped::AlreadyGone) },
+        &|| None,
+        &no_second_try,
+    )
+    .await;
+    assert!(
+        matches!(cancelled, Err(DeployError::Cancelled)),
+        "{cancelled:?}"
+    );
+    // And a cancelled run that also failed is `Cancelled`, not the failure.
+    let both = vrcast_studio_lib::tasks::deploy::settle::<()>(
+        &task,
+        0.5,
+        "m",
+        Err(DeployError::NotTaken {
+            id: StepId::Firewall,
+        }),
+        true,
+        async { Ok(Stopped::AlreadyGone) },
+        &|| None,
+        &no_second_try,
+    )
+    .await;
+    assert!(matches!(both, Err(DeployError::Cancelled)), "{both:?}");
+}
+
+fn no_second_try(_: String, _: Patience) -> BoxFuture<'static, Result<Stopped, String>> {
+    Box::pin(async { Err(String::from("must not be asked")) })
+}
+
+#[test]
+fn what_an_interrupted_write_left_is_looked_for_where_writes_happen() {
+    let script = leftovers_script();
+    assert!(
+        script.starts_with(
+            "find '/etc' '/usr/share/keyrings' -xdev -type f -name '*.vrcast.tmp' -print -delete"
+        ),
+        "{script}"
+    );
+    assert!(
+        script.ends_with("; true"),
+        "a tidy-up must never fail the run: {script}"
+    );
+    assert_eq!(TEMP_SUFFIX, ".vrcast.tmp");
+    // Every place a step's source writes one is under TEMP_PLACES. Read from the sources, so
+    // a new `put_file` elsewhere fails here rather than littering for ever.
+    for (name, source) in [
+        (
+            "configs",
+            include_str!("../../src/server/deploy/configs.rs"),
+        ),
+        (
+            "fail2ban",
+            include_str!("../../src/server/deploy/fail2ban.rs"),
+        ),
+        ("ipv6", include_str!("../../src/server/deploy/ipv6.rs")),
+        (
+            "ssh_hardening",
+            include_str!("../../src/server/deploy/ssh_hardening.rs"),
+        ),
+        (
+            "state_file",
+            include_str!("../../src/server/deploy/state_file.rs"),
+        ),
+        ("tuning", include_str!("../../src/server/deploy/tuning.rs")),
+        (
+            "packages",
+            include_str!("../../src/server/deploy/packages.rs"),
+        ),
+    ] {
+        for line in source.lines().filter(|l| {
+            l.trim_start().starts_with("const ") || l.trim_start().starts_with("pub const ")
+        }) {
+            let Some(path) = line.split('"').nth(1) else {
+                continue;
+            };
+            if path.starts_with('/')
+                && !path.starts_with("/root/")
+                && !path.starts_with("/swapfile")
+            {
+                assert!(
+                    TEMP_PLACES.iter().any(|p| path.starts_with(p)),
+                    "{name}: {path} is written outside {TEMP_PLACES:?}"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]

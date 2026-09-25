@@ -78,6 +78,11 @@ mod deploy_cancel_measure;
 #[path = "integration/deploy_cancel.rs"]
 mod deploy_cancel;
 
+/// T615 — a connection cut during dpkg: `Failed` only after dpkg ended and nothing of the
+/// run is left; a repeat at once to the end; a half-written file tidied by the next run.
+#[path = "integration/deploy_cut_stop.rs"]
+mod deploy_cut_stop;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 

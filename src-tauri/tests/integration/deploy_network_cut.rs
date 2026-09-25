@@ -45,14 +45,30 @@
 //!    every step `Applied` or cleanly `Skipped`, none `Failed` or left `NotApplied`. This is
 //!    SC-015's own wording: "довод[ится] до конца повторным запуском... без ручной правки
 //!    сервера."
+//!
+//! **T615 — through the task runner, as production runs it.** This test used to call the
+//! bare engine (`server::deploy::run`), which hands the step's failure back the moment the
+//! channel dies — while `apt-get` of that step goes on on the server, reconnected. On
+//! 2026-09-24 the resume here met it: `E: Could not get lock /var/lib/apt/lists/lock. It is
+//! held by process 161 (apt-get)` — T615's bug, in the test that exists for the cut. It now
+//! goes through `tasks::deploy::run`, which answers only once nothing of the run is left on
+//! the server; its `stop_again` is production's shape without the gate (a fresh connection,
+//! `stop_confirmed`), and puts the network back first — the moment "the server is reachable
+//! again". And at that answer, independently of the code: no apt/dpkg running.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
+use vrcast_studio_lib::commands::error::ErrorCode;
 use vrcast_studio_lib::domain::deploy_steps::{Status, StepId};
 use vrcast_studio_lib::domain::dns_verdict::{Ipv6Choice, ServerAddresses};
-use vrcast_studio_lib::server::deploy::{self, machine, Context, DeployError, Proofs};
+use vrcast_studio_lib::domain::marked::Stopped;
+use vrcast_studio_lib::server::deploy::{self, machine, Context, Proofs, RUN_VAR};
+use vrcast_studio_lib::server::marked::{stop_confirmed, Patience};
 use vrcast_studio_lib::ssh::keygen;
+use vrcast_studio_lib::store::db::Db;
+use vrcast_studio_lib::tasks::engine::TaskContext;
 
 use super::deploy_clean::{by_password, key_works, password_refused, VIDEO_DIR};
 use super::deploy_fixture::{DeployTarget, Flavour};
@@ -68,13 +84,16 @@ use super::deploy_fixture::{DeployTarget, Flavour};
 /// catch "a network-bound step is now in flight" than a short, generous wall-clock delay.
 const CUT_AFTER: Duration = Duration::from_secs(3);
 
-/// How long `deploy::run` is given to notice the network is gone and give up.
+/// How long the run is given to notice the network is gone, wait for what it left running on
+/// the server, and answer.
 ///
-/// Measured by hand at ~120.15 seconds, twice, agreeing to within 20 milliseconds — this
-/// leaves a wide margin (double) for a slower machine while still failing the test, rather
-/// than hanging the test suite forever, if the underlying mechanism (`russh`'s keepalive)
-/// stops detecting the cut at all.
-const RUN_MUST_RETURN_WITHIN: Duration = Duration::from_secs(240);
+/// Was 240 s — the keepalive (~120 s, measured by hand twice, agreeing to within 20 ms) with
+/// double margin — when the answer came the moment the channel died. Since T615 the answer
+/// waits for the step's command to end on the server; that command may legitimately run up
+/// to its `EXEC_CEILING` (600 s) from when it was sent, and is waited for, not killed. So the
+/// bound is that ceiling plus the keepalive plus room for the retries' pauses — still a
+/// bound: a hang past it fails the test rather than the suite.
+const RUN_MUST_RETURN_WITHIN: Duration = Duration::from_secs(900);
 
 /// Build a fresh `Context` against `target`, reusing the one key made for the whole test.
 fn context_for<'a>(
@@ -121,17 +140,53 @@ async fn a_real_network_cut_mid_deployment_fails_cleanly_and_a_fresh_run_finishe
         .filter(|s| !matches!(s.id, StepId::DnsCheck | StepId::Verify))
         .collect();
 
-    // Real network I/O has to be interrupted, not a request to stop: this closure never
-    // returns `true`. If the run below came back `Cancelled`, that would mean the failure
-    // was being misread as a voluntary cancel — the one thing this test exists to catch.
-    let never = || false;
+    // Real network I/O has to be interrupted, not a request to stop: nobody cancels this
+    // task. If the run below came back `Cancelled`, that would mean the failure was being
+    // misread as a voluntary cancel — the one thing this test exists to catch.
+    let task = TaskContext::detached(Arc::new(Db::open_in_memory().unwrap()));
+
+    // One more try at confirming the stop, as production makes it — a fresh connection —
+    // with the network put back first: the server "comes back".
+    let stop_again = |mark: String, patience: Patience| -> BoxFuture<'_, Result<Stopped, String>> {
+        let target = &target;
+        let name = container_name.clone();
+        Box::pin(async move {
+            let _ = std::process::Command::new("docker")
+                .args(["network", "connect", "bridge", &name])
+                .output();
+            let conn = super::deploy_cut_stop::fresh_connection(target).await?;
+            let stopped = stop_confirmed(&conn, RUN_VAR, &mark, patience)
+                .await
+                .map_err(|p| p.to_string());
+            conn.close().await;
+            eprintln!("stop_again ({patience:?}) -> {stopped:?}");
+            stopped
+        })
+    };
 
     let mut watched: Vec<(StepId, Status)> = Vec::new();
     let run_started = Instant::now();
-    let mut record_step = |planned: &vrcast_studio_lib::domain::deploy_steps::PlannedStep| {
-        watched.push((planned.id, planned.status.clone()));
+    let mut record_step = |settled: &[vrcast_studio_lib::domain::deploy_steps::PlannedStep]| {
+        watched = settled.iter().map(|p| (p.id, p.status.clone())).collect();
     };
-    let run_fut = deploy::run(&ctx, &steps, &never, &mut record_step);
+    let run_fut = async {
+        let r = vrcast_studio_lib::tasks::deploy::run(
+            &ctx,
+            &steps,
+            &task,
+            &mut record_step,
+            &stop_again,
+        )
+        .await;
+        // The very moment the runner answers: what is running on the server (docker exec
+        // needs no network — the independent witness).
+        let ps = target
+            .exec_inside(
+                "ps -eo pid,args --no-headers | grep -E 'apt-get|dpkg|/methods/' | grep -v grep || true",
+            )
+            .unwrap_or_else(|e| format!("could not look: {e}"));
+        (r, ps)
+    };
 
     let cutter = async {
         tokio::time::sleep(CUT_AFTER).await;
@@ -159,8 +214,10 @@ async fn a_real_network_cut_mid_deployment_fails_cleanly_and_a_fresh_run_finishe
     let reconnected = std::process::Command::new("docker")
         .args(["network", "connect", "bridge", &container_name])
         .output();
+    // `stop_again` (T615) has usually put it back already — that is not a failure here.
     assert!(
-        matches!(&reconnected, Ok(o) if o.status.success()),
+        matches!(&reconnected, Ok(o) if o.status.success()
+            || String::from_utf8_lossy(&o.stderr).contains("already exists")),
         "the network could not be reconnected after the cut, so nothing past this point can \
          be trusted: {reconnected:?}"
     );
@@ -181,19 +238,27 @@ async fn a_real_network_cut_mid_deployment_fails_cleanly_and_a_fresh_run_finishe
     );
 
     // 2. A real Err, and specifically not the voluntary-cancel shape.
-    let outcome = run_result.expect("checked above: not a timeout");
+    let (outcome, ps_then) = run_result.expect("checked above: not a timeout");
     let error = outcome.expect_err(
-        "deploy::run() returned Ok despite a real network cut mid-run — a step must have \
+        "the run returned Ok despite a real network cut mid-run — a step must have \
          been reported done without the server actually being asked, which is exactly the \
          six-month mistake `ssh_hardening.rs`'s own header describes",
     );
-    assert!(
-        !matches!(error, DeployError::Cancelled),
-        "a real network failure came back as DeployError::Cancelled — nobody's cancelled() \
-         closure ever returned true in this test, so this would mean a network death is \
-         being misclassified as a voluntary cancel: {error:?}"
+    assert_ne!(
+        error.code,
+        ErrorCode::TaskCancelled,
+        "a real network failure came back as a cancel — nobody cancelled this task, so \
+         this would mean a network death is being misclassified as a voluntary cancel: \
+         {error:?}"
     );
-    eprintln!("network cut acknowledged after {elapsed:?} as: {error} (steps: {watched:?})");
+    eprintln!("network cut acknowledged after {elapsed:?} as: {error:?} (steps: {watched:?})");
+
+    // 2a. T615: at that answer, nothing of apt/dpkg is left running on the server.
+    assert!(
+        ps_then.trim().is_empty(),
+        "the run answered `Failed` while apt/dpkg were still running on the server — a \
+         repeat at once would meet their lock:\n{ps_then}"
+    );
 
     // 3. The resume: a fresh connection, a fresh run, no hand-fixing of the server.
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -213,13 +278,30 @@ async fn a_real_network_cut_mid_deployment_fails_cleanly_and_a_fresh_run_finishe
         &password_proof2,
     );
 
-    let resumed = deploy::run(&ctx2, &steps, &never, &mut |_| {})
-        .await
-        .expect(
-            "the deployment could not be finished by a fresh run after the network came \
-             back — SC-015 promises exactly this for any interrupted step, and a real \
-             network death is one of the cases it has to cover, not only a voluntary cancel",
-        );
+    let never = || false;
+    // The mirror, not the code, may refuse a download on this resume (a 500 from the proxy, a
+    // Hash Sum mismatch while it syncs) — seen on 2026-09-24. Such a failure is tried again,
+    // at most twice; anything else — above all `Could not get lock`, T615's bug — fails the
+    // test on the first attempt.
+    let mut attempt = 0;
+    let resumed = loop {
+        attempt += 1;
+        match deploy::run(&ctx2, &steps, &never, &mut |_| {}).await {
+            Ok(resumed) => break resumed,
+            Err(e) => {
+                let text = format!("{e:?}");
+                eprintln!("[resume {attempt}] {text}");
+                assert!(
+                    attempt < 3 && super::deploy_cancel_measure::looks_like_network(&text),
+                    "the deployment could not be finished by a fresh run after the network \
+                     came back — SC-015 promises exactly this for any interrupted step, and a \
+                     real network death is one of the cases it has to cover, not only a \
+                     voluntary cancel: {text}"
+                );
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    };
 
     for step in &resumed {
         assert!(
