@@ -14,8 +14,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use futures::future::BoxFuture;
-use vrcast_studio_lib::domain::deploy_steps::{Change, Checked, SkipReason, Status, StepId, ORDER};
-use vrcast_studio_lib::server::deploy::{run, DeployError, Step};
+use vrcast_studio_lib::domain::deploy_steps::{
+    Change, Checked, PlannedStep, SkipReason, Status, StepId, ORDER,
+};
+use vrcast_studio_lib::server::deploy::{keeps_key_before, run, BeforeStep, DeployError, Step};
 
 /// What a step is handed here: a script of answers and a place to write down what happened.
 ///
@@ -31,6 +33,8 @@ struct Stand {
     says: Mutex<HashMap<StepId, Vec<Checked>>>,
     /// Steps whose apply fails.
     fails: Mutex<Vec<StepId>>,
+    /// T616: the run made a key, and keeping it answers this (`None` — no key was made).
+    keeping: Mutex<Option<Result<(), String>>>,
 }
 
 #[derive(Default)]
@@ -43,6 +47,8 @@ struct Inner {
     asked: Vec<StepId>,
     /// Which steps had their apply called, in order.
     applied: Vec<StepId>,
+    /// Everything that happened, in order: `check`, `apply` and (T616) `keep` of a step.
+    timeline: Vec<(&'static str, StepId)>,
 }
 
 impl Stand {
@@ -89,6 +95,7 @@ fn check(ctx: &Stand) -> BoxFuture<'_, vrcast_studio_lib::server::deploy::Result
         let answer = ctx.scripted(id);
         let mut inner = ctx.inner.lock().unwrap();
         inner.asked.push(id);
+        inner.timeline.push(("check", id));
         if inner.recheck_due {
             // The second look, after applying. Whatever it says, this step is settled.
             inner.recheck_due = false;
@@ -108,6 +115,7 @@ fn apply(ctx: &Stand) -> BoxFuture<'_, vrcast_studio_lib::server::deploy::Result
         let mut inner = ctx.inner.lock().unwrap();
         let id = ORDER.get(inner.at).copied().unwrap_or(StepId::State);
         inner.applied.push(id);
+        inner.timeline.push(("apply", id));
         if ctx.fails.lock().unwrap().contains(&id) {
             // A failed apply is not followed by a second check: the step is settled here.
             inner.recheck_due = false;
@@ -121,6 +129,36 @@ fn apply(ctx: &Stand) -> BoxFuture<'_, vrcast_studio_lib::server::deploy::Result
         Ok(())
     })
 }
+/// The real context's rule (`server::deploy::keeps_key_before`), with the keeping written down
+/// instead of done. A refusal settles the step as the real one does, so the stand moves past
+/// it: neither its check nor its apply will be asked.
+impl BeforeStep for Stand {
+    fn before_step<'a>(
+        &'a self,
+        id: StepId,
+        done: &'a [PlannedStep],
+    ) -> BoxFuture<'a, vrcast_studio_lib::server::deploy::Result<()>> {
+        Box::pin(async move {
+            let Some(answer) = self.keeping.lock().unwrap().clone() else {
+                return Ok(());
+            };
+            if !keeps_key_before(id, done) {
+                return Ok(());
+            }
+            let mut inner = self.inner.lock().unwrap();
+            inner.timeline.push(("keep", id));
+            answer.map_err(|why| {
+                inner.at += 1;
+                DeployError::Step {
+                    id,
+                    detail: why,
+                    advice: None,
+                }
+            })
+        })
+    }
+}
+
 fn no_changes(_: &Stand) -> Vec<Change> {
     Vec::new()
 }
@@ -285,6 +323,97 @@ async fn a_cancelled_run_stops_where_it_is() {
         stand.asked().is_empty(),
         "a cancelled run still asked the server about things"
     );
+}
+
+// ---------- T616: the made key is kept before password logins go ----------
+
+fn with_key_kept(answer: Result<(), String>) -> Stand {
+    let stand = Stand::saying(&[
+        (StepId::SshKey, &[Checked::NotApplied, Checked::Applied]),
+        (
+            StepId::SshHardening,
+            &[Checked::NotApplied, Checked::Applied],
+        ),
+    ]);
+    *stand.keeping.lock().unwrap() = Some(answer);
+    stand
+}
+
+fn position(timeline: &[(&'static str, StepId)], what: &str, id: StepId) -> Option<usize> {
+    timeline.iter().position(|(w, i)| *w == what && *i == id)
+}
+
+#[tokio::test]
+async fn the_made_key_is_kept_after_the_key_step_and_before_the_hardening_step_touches_anything() {
+    // QA-19 №1: the key used to be kept once the whole run had returned — long after
+    // `SshHardening` turned passwords off, so an application closed in between took the only
+    // copy of the key with it.
+    let stand = with_key_kept(Ok(()));
+    carry_out(&stand).await.expect("the run failed");
+    let timeline = stand.inner.lock().unwrap().timeline.clone();
+
+    let key_proved = position(&timeline, "apply", StepId::SshKey).expect("SshKey not applied");
+    let kept = position(&timeline, "keep", StepId::SshHardening).expect("the key was not kept");
+    let hardening_asked =
+        position(&timeline, "check", StepId::SshHardening).expect("SshHardening not checked");
+    let hardening_applied =
+        position(&timeline, "apply", StepId::SshHardening).expect("SshHardening not applied");
+    assert!(
+        key_proved < kept && kept < hardening_asked && hardening_asked < hardening_applied,
+        "the key was not kept between the key step and the hardening step: {timeline:?}"
+    );
+    assert_eq!(
+        timeline.iter().filter(|(w, _)| *w == "keep").count(),
+        1,
+        "the key was kept more than once: {timeline:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_key_that_could_not_be_kept_stops_the_run_before_the_hardening_step() {
+    let stand = with_key_kept(Err(String::from("the store said no")));
+    let outcome = carry_out(&stand).await;
+    match outcome {
+        Err(DeployError::Step { id, ref detail, .. }) => {
+            assert_eq!(id, StepId::SshHardening);
+            assert!(detail.contains("the store said no"), "{detail}");
+        }
+        other => panic!("a key that could not be kept did not stop the run: {other:?}"),
+    }
+    let timeline = stand.inner.lock().unwrap().timeline.clone();
+    assert!(
+        position(&timeline, "check", StepId::SshHardening).is_none()
+            && position(&timeline, "apply", StepId::SshHardening).is_none(),
+        "password logins were touched although the key could not be kept: {timeline:?}"
+    );
+    assert!(
+        !stand.applied().iter().any(|id| {
+            ORDER.iter().position(|s| s == id) > ORDER.iter().position(|s| *s == StepId::SshKey)
+        }),
+        "the run went on past the key step: {:?}",
+        stand.applied()
+    );
+}
+
+#[tokio::test]
+async fn no_key_is_kept_when_the_key_step_did_not_succeed_or_none_was_made() {
+    // The key step failed (blocking): the run ends there, nothing is kept.
+    let stand = with_key_kept(Ok(()));
+    stand.fails_at(StepId::SshKey);
+    assert!(carry_out(&stand).await.is_err());
+    let timeline = stand.inner.lock().unwrap().timeline.clone();
+    assert!(position(&timeline, "keep", StepId::SshHardening).is_none());
+
+    // No key was made (a profile already on a key): nothing to keep.
+    let stand = Stand::saying(&[]);
+    carry_out(&stand).await.expect("the run failed");
+    assert!(stand
+        .inner
+        .lock()
+        .unwrap()
+        .timeline
+        .iter()
+        .all(|(w, _)| *w != "keep"));
 }
 
 #[test]

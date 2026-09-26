@@ -83,6 +83,11 @@ mod deploy_cancel;
 #[path = "integration/deploy_cut_stop.rs"]
 mod deploy_cut_stop;
 
+/// T616 — a key made for a password profile is kept before password logins go: a run closed
+/// right after `SshHardening` leaves a profile a new start of the application signs in with.
+#[path = "integration/deploy_key_kept.rs"]
+mod deploy_key_kept;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 

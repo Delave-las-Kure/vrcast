@@ -86,8 +86,9 @@ pub(crate) fn join_remote(dir: &str, name: &str) -> String {
 /// what is at the other end.
 ///
 /// `made_key` (T615): sign in with this private key instead of what the profile holds — the
-/// key a deployment made and put on the server, before the profile has been switched to it.
-/// Only `gate::open_to_stop` passes one. The fingerprint rule is the same either way.
+/// key a deployment made and put on the server, before the profile has been switched to it
+/// (T616 switches it right after `SshKey`). Only `gate::open_to_stop` passes one. The
+/// fingerprint rule is the same either way.
 pub(crate) async fn connect_raw(
     secrets: &dyn crate::store::secrets::SecretStore,
     profile: &crate::domain::server_profile::ServerProfile,
