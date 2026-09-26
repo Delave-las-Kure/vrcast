@@ -47,6 +47,7 @@ async fn an_interrupted_deployment_is_finished_by_running_it_again() {
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,

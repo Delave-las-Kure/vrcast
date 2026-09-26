@@ -80,6 +80,12 @@ pub struct Context<'a> {
     /// own web server and found the application had quietly undone it would be right
     /// to stop trusting it.
     pub already_ours: bool,
+    /// Did the person agree, on the deployment screen, to replace a Caddyfile that is
+    /// somebody else's (T611)? Only a first deployment asks, and only it listens: on a server
+    /// already ours a hand-edited file is refused whatever this says (`configs::may_write`).
+    /// The file is in the copy the run makes before its first change, so this is consent to a
+    /// replacement that can be undone.
+    pub replace_caddyfile: bool,
     /// This run's mark, and whether it has been asked to stop (T609). See [`RunMark`].
     pub run: RunMark,
 }

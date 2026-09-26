@@ -76,6 +76,13 @@ export function DeployScreen({ serverId }: { serverId: string }) {
    */
   const [starting, setStarting] = useState(false);
   /**
+   * T611 — the person's answer to "replace somebody else's Caddyfile (a copy is kept)?".
+   * Asked only when the plan says the file is foreign (`preview.foreign_caddyfile`), and
+   * unticked until the person ticks it: without it the `configs` step refuses and leaves the
+   * file alone, which is the safe way round for a file that is somebody's work.
+   */
+  const [replaceCaddyfile, setReplaceCaddyfile] = useState(false);
+  /**
    * T590 — bumped once per `serverId` change, in the reset effect below. `start`
    * captures this at the moment it calls `deployRun` and checks it again when the
    * response comes back: if `serverId` has since moved on to a different server's own
@@ -135,6 +142,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
     setDone(false);
     setError(null);
     setStarting(false);
+    setReplaceCaddyfile(false);
   }, [serverId]);
 
   // The plan is asked for only once the domain is right. Asking earlier is possible, but a
@@ -192,8 +200,11 @@ export function DeployScreen({ serverId }: { serverId: string }) {
     const gen = genRef.current;
     setError(null);
     setLive(null);
+    // T611 — the answer counts only when the question was asked: a tick left over from a
+    // plan that no longer finds a foreign file must not travel with the run.
+    const replace = preview?.foreign_caddyfile === true && replaceCaddyfile;
     ipc
-      .deployRun(serverId, ipv6, true)
+      .deployRun(serverId, ipv6, true, replace)
       .then((taskId) => {
         if (gen === genRef.current) setRunning(taskId);
       })
@@ -206,7 +217,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
         // per-server meaning to protect.
         setStarting(false);
       });
-  }, [serverId, ipv6, starting]);
+  }, [serverId, ipv6, starting, preview, replaceCaddyfile]);
 
   if (done) {
     return (
@@ -244,6 +255,22 @@ export function DeployScreen({ serverId }: { serverId: string }) {
               and a person has a right to know such a file will appear on their server. */}
           <p>{words.machine(preview.memory_mb, preview.disk)}</p>
           <StepList steps={preview.steps} />
+          {/* T611 — somebody else's Caddyfile on a first deployment. Said before the button,
+              because it decides whether the run gets past the configuration step at all. */}
+          {preview.foreign_caddyfile && (
+            <div>
+              <p>{words.foreignCaddyfile}</p>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={replaceCaddyfile}
+                  onChange={(e) => setReplaceCaddyfile(e.target.checked)}
+                />{" "}
+                {words.replaceCaddyfile}
+              </label>
+              <p>{words.replaceCaddyfileMeans}</p>
+            </div>
+          )}
           <button type="button" onClick={start} disabled={!readyToStart || starting}>
             {words.agreeAndStart}
           </button>

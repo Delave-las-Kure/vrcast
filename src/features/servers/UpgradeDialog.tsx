@@ -45,6 +45,15 @@ export function UpgradeDialog({
    * second unasked upgrade slips through.
    */
   const [starting, setStarting] = useState(false);
+  /**
+   * T611 — the rollback asks first. It used to go at the first click, and what it does is
+   * narrower than its name: it puts the copied files back and nothing else. A person reaching
+   * for "put it back as it was" after something went wrong is owed the list of what it will
+   * not put back — files the run created, live state, the limit rules — before it runs.
+   */
+  const [confirmingRollback, setConfirmingRollback] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
+  const [rolledBack, setRolledBack] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -132,17 +141,59 @@ export function UpgradeDialog({
 
           {/* Rolling back stands beside upgrading rather than hiding: people reach for it
               just after an upgrade has gone wrong, and hunting for it at that moment is one
-              thing too many. */}
+              thing too many. It asks before it runs (T611): what comes back, and what does
+              not. */}
           <button
             type="button"
-            disabled={running !== null}
+            disabled={running !== null || rollingBack || confirmingRollback}
             onClick={() => {
               setError(null);
-              ipc.serverRollback(serverId).catch((e: AppError) => setError(e));
+              setRolledBack(false);
+              setConfirmingRollback(true);
             }}
           >
             {words.rollBack}
           </button>
+
+          {confirmingRollback && (
+            <div role="dialog" aria-label={words.rollBackTitle}>
+              <h4>{words.rollBackTitle}</h4>
+              <p>{words.rollBackReturns}</p>
+              <p>{words.rollBackKeeps}</p>
+              <button
+                type="button"
+                disabled={rollingBack}
+                onClick={() => {
+                  // Refused in the handler as well as by `disabled`, as the other buttons
+                  // here are (T593): a second click must not send a second rollback.
+                  if (rollingBack) return;
+                  setRollingBack(true);
+                  setError(null);
+                  ipc
+                    .serverRollback(serverId)
+                    .then(() => {
+                      setConfirmingRollback(false);
+                      setRolledBack(true);
+                    })
+                    .catch((e: AppError) => {
+                      setConfirmingRollback(false);
+                      setError(e);
+                    })
+                    .finally(() => setRollingBack(false));
+                }}
+              >
+                {words.rollBackConfirm}
+              </button>
+              <button
+                type="button"
+                disabled={rollingBack}
+                onClick={() => setConfirmingRollback(false)}
+              >
+                {words.cancel}
+              </button>
+            </div>
+          )}
+          {rolledBack && <p>{words.rollBackDone}</p>}
         </>
       )}
     </section>

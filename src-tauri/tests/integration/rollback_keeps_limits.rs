@@ -108,6 +108,7 @@ async fn a_limit_set_after_a_run_survives_a_rollback() {
         public_key: String::new(),
         machine: facts,
         already_ours: true,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &never,

@@ -114,6 +114,7 @@ fn context_for<'a>(
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: key_proof,

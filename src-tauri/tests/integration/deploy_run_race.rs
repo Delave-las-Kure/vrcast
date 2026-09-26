@@ -138,7 +138,7 @@ async fn a_second_deploy_of_the_same_server_is_refused_while_the_first_runs() {
     // Refused, and fast: the guard sits before `gate::open`/DNS, so this must not cost a
     // network trip at all.
     let started = std::time::Instant::now();
-    let err = deploy::deploy_run(&state, &id, Ipv6Choice::Keep, true)
+    let err = deploy::deploy_run(&state, &id, Ipv6Choice::Keep, true, false)
         .await
         .expect_err("a second concurrent deploy_run went through");
     assert!(

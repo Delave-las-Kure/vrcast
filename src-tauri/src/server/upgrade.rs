@@ -23,8 +23,36 @@ use crate::server::deploy::{self, Context, DeployError, Result, Step};
 
 /// Where copies go before an upgrade replaces anything.
 const BACKUP_ROOT: &str = "/etc/vrcast/backup";
-/// The one a rollback restores: the last upgrade's copies.
-const LATEST: &str = "/etc/vrcast/backup/latest";
+/// The one a rollback restores: the last run's copies.
+pub const LATEST: &str = "/etc/vrcast/backup/latest";
+
+/// Why a rollback did not happen (T611).
+#[derive(Debug)]
+pub enum RollbackError {
+    /// There is no copy to put back — no `/etc/vrcast/backup/latest`. Its own case, and
+    /// `ROLLBACK_NO_COPY` at the command layer, rather than an internal error: it is an answer
+    /// about this server, not a fault of the application, and nothing was touched.
+    NoCopy,
+    /// The copy is there and putting it back failed, or the server could not be asked.
+    Failed(DeployError),
+}
+
+impl From<DeployError> for RollbackError {
+    fn from(e: DeployError) -> Self {
+        Self::Failed(e)
+    }
+}
+
+impl std::fmt::Display for RollbackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoCopy => write!(f, "there is nothing to roll back to: no {LATEST}"),
+            Self::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for RollbackError {}
 
 /// Every file a deployment writes or changes, and therefore copies aside first.
 ///
@@ -176,14 +204,20 @@ pub fn restore_arms() -> String {
 /// ⚠ **A file with no arm is passed by, and that is load-bearing** (T610): the `case` has no
 /// default arm, so the `vrcast-limits.conf` an earlier client copied into `latest` stays
 /// where it is and the live rules are not touched. No catch-all arm, no glob copy.
-pub async fn roll_back(ctx: &Context<'_>) -> Result<()> {
+///
+/// **What it does not put back** (T611, decided by the owner 2026-09-23: described, not
+/// completed). Only files that were there before the run and so are in the copy. A file the
+/// run created — `99-vrcast-ipv6.conf` on a machine that had none, say — stays as the run left
+/// it; live state that the files only set at boot or on apply — `sysctl` values, the BBR
+/// module, the swap in use, ufw's rules and state, a running fail2ban — is not undone; and the
+/// quality-limit rules are not touched at all (T610). The rollback dialog says so before the
+/// person agrees.
+pub async fn roll_back(ctx: &Context<'_>) -> std::result::Result<(), RollbackError> {
     let there = ctx
         .asks(&format!("test -d {LATEST} && echo yes || echo no"))
         .await?;
     if !there {
-        return Err(DeployError::Ssh(crate::ssh::SshError::sftp(String::from(
-            "there is nothing to roll back to",
-        ))));
+        return Err(RollbackError::NoCopy);
     }
 
     let said = ctx
@@ -205,8 +239,8 @@ echo done",
         .await?;
 
     if !said.contains("done") {
-        return Err(DeployError::Ssh(crate::ssh::SshError::sftp(
-            said.trim().to_owned(),
+        return Err(RollbackError::Failed(DeployError::Ssh(
+            crate::ssh::SshError::sftp(said.trim().to_owned()),
         )));
     }
     Ok(())

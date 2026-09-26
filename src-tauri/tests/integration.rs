@@ -161,6 +161,11 @@ mod rollback_refused;
 #[path = "integration/rollback_keeps_limits.rs"]
 mod rollback_keeps_limits;
 
+/// T611 — a first deployment over somebody else's Caddyfile refuses without the tick, and
+/// with it replaces the file and keeps theirs in the copy.
+#[path = "integration/deploy_foreign_caddyfile.rs"]
+mod deploy_foreign_caddyfile;
+
 #[path = "integration/process_tree.rs"]
 mod process_tree;
 

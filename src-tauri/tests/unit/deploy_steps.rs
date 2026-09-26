@@ -385,3 +385,67 @@ fn every_change_says_which_it_is_and_carries_its_values() {
         );
     }
 }
+
+// ---------- somebody else's Caddyfile (T611) ----------
+
+/// Who may write over what, as a table — the rule `configs` applies before it writes.
+///
+/// ⚠ **The consent reaches exactly one cell.** A first deployment over a person's file is the
+/// only place the tick on the deployment screen changes anything. On a server already ours a
+/// hand-edited file is refused whatever was ticked (T285) — an upgrade has nobody on that
+/// screen to ask, and the file is a person's tuning of a serving that works.
+#[test]
+fn somebody_elses_caddyfile_is_replaced_only_on_a_first_deployment_and_only_when_agreed() {
+    use vrcast_studio_lib::server::deploy::configs::{may_write, Existing};
+
+    for replace in [false, true] {
+        for already_ours in [false, true] {
+            assert!(may_write(Existing::Nothing, already_ours, replace));
+            assert!(may_write(Existing::Ours, already_ours, replace));
+        }
+        // The caddy package's untouched default: nobody's work on a first deployment (the
+        // packages step of this very run puts it there), and not expected on ours.
+        assert!(may_write(Existing::PackageDefault, false, replace));
+        assert!(!may_write(Existing::PackageDefault, true, replace));
+        // A server already ours: a hand-edited file is refused, the tick does not reach here.
+        assert!(
+            !may_write(Existing::NotOurs, true, replace),
+            "a hand-edited Caddyfile on a server already ours was written over (replace = {replace})"
+        );
+    }
+    assert!(
+        !may_write(Existing::NotOurs, false, false),
+        "a first deployment wrote over somebody else's Caddyfile nobody agreed to replace"
+    );
+    assert!(
+        may_write(Existing::NotOurs, false, true),
+        "a first deployment refused a Caddyfile the person agreed to replace"
+    );
+}
+
+/// Our own file is recognised whether or not the reading kept its last newline.
+///
+/// `configs` reads the file with `cat` and trims the end; the references end in a newline.
+/// Compared as they were, our own file read back that way was "not ours" — dormant only while
+/// nothing asked. With the question now asked on every first deployment, it would have
+/// refused to rewrite a file of our own.
+#[test]
+fn our_own_caddyfile_is_recognised_however_its_end_was_read() {
+    use vrcast_studio_lib::server::deploy::{configs::caddyfile_for, references::is_ours};
+
+    let ours = caddyfile_for("stream.example.com");
+    assert!(
+        ours.ends_with('\n'),
+        "the reference no longer ends in a newline"
+    );
+    assert!(is_ours(&ours, "stream.example.com"));
+    assert!(is_ours(ours.trim_end_matches('\n'), "stream.example.com"));
+    assert!(
+        !is_ours(&ours, "other.example.com"),
+        "a Caddyfile for another domain was taken for this server's"
+    );
+    assert!(!is_ours(
+        &format!("{ours}# edited by hand\n"),
+        "stream.example.com"
+    ));
+}

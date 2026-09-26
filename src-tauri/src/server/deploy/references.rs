@@ -29,10 +29,19 @@ pub fn caddyfile(version: u32, domain: &str) -> Option<String> {
 ///
 /// The question an upgrade has to answer before replacing anything. A file that matches no
 /// version of ours belongs to whoever wrote it.
+///
+/// Compared with trailing newlines set aside on both sides (T611): the step reads the file
+/// back through `cat` and trims the end, the references end in a newline, and compared as they
+/// were no file of ours was ever recognised as ours — dormant only while `configs`' check
+/// happened to find the file already right and never asked.
 pub fn is_ours(text: &str, domain: &str) -> bool {
-    CADDYFILE_BY_VERSION
-        .iter()
-        .any(|(_, reference)| reference.replace("{$SERVER_DOMAIN}", domain) == text)
+    let text = text.trim_end_matches('\n');
+    CADDYFILE_BY_VERSION.iter().any(|(_, reference)| {
+        reference
+            .replace("{$SERVER_DOMAIN}", domain)
+            .trim_end_matches('\n')
+            == text
+    })
 }
 
 /// Every version this application knows how to have written.
