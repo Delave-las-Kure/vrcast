@@ -394,62 +394,110 @@ fn no_second_try(_: String, _: Patience) -> BoxFuture<'static, Result<Stopped, S
 }
 
 #[test]
-fn what_an_interrupted_write_left_is_looked_for_where_writes_happen() {
+fn what_an_interrupted_write_left_is_looked_for_by_name_where_writes_happen() {
     let script = leftovers_script();
-    assert!(
-        script.starts_with(
-            "find '/etc' '/usr/share/keyrings' -xdev -type f -name '*.vrcast.tmp' -print -delete"
-        ),
-        "{script}"
-    );
+    assert_eq!(TEMP_SUFFIX, ".vrcast.tmp");
+    // By name, never by search (T622): an administrator's `*.vrcast.tmp` elsewhere in /etc is
+    // not ours.
+    assert!(!script.contains("find "), "{script}");
+    assert!(!script.contains('*'), "{script}");
     assert!(
         script.ends_with("; true"),
         "a tidy-up must never fail the run: {script}"
     );
-    assert_eq!(TEMP_SUFFIX, ".vrcast.tmp");
-    // Every place a step's source writes one is under TEMP_PLACES. Read from the sources, so
-    // a new `put_file` elsewhere fails here rather than littering for ever.
-    for (name, source) in [
-        (
-            "configs",
-            include_str!("../../src/server/deploy/configs.rs"),
-        ),
-        (
-            "fail2ban",
-            include_str!("../../src/server/deploy/fail2ban.rs"),
-        ),
-        ("ipv6", include_str!("../../src/server/deploy/ipv6.rs")),
-        (
-            "ssh_hardening",
-            include_str!("../../src/server/deploy/ssh_hardening.rs"),
-        ),
-        (
-            "state_file",
-            include_str!("../../src/server/deploy/state_file.rs"),
-        ),
-        ("tuning", include_str!("../../src/server/deploy/tuning.rs")),
-        (
-            "packages",
-            include_str!("../../src/server/deploy/packages.rs"),
-        ),
-    ] {
-        for line in source.lines().filter(|l| {
-            l.trim_start().starts_with("const ") || l.trim_start().starts_with("pub const ")
-        }) {
-            let Some(path) = line.split('"').nth(1) else {
-                continue;
-            };
-            if path.starts_with('/')
-                && !path.starts_with("/root/")
-                && !path.starts_with("/swapfile")
-            {
-                assert!(
-                    TEMP_PLACES.iter().any(|p| path.starts_with(p)),
-                    "{name}: {path} is written outside {TEMP_PLACES:?}"
-                );
+    // Exactly one quoted word per written path, each `<path>.vrcast.tmp`.
+    let quoted: Vec<&str> = script.split('\'').skip(1).step_by(2).collect();
+    let expected: Vec<String> = TEMP_PLACES
+        .iter()
+        .map(|p| format!("{p}{TEMP_SUFFIX}"))
+        .collect();
+    assert_eq!(quoted, expected, "{script}");
+}
+
+/// Every path a run writes through a temp file beside it, read from the sources: each
+/// `put_file(CONST, …)` (the constant resolved in the same file) and each `{CONST}.vrcast.tmp`
+/// a shell script writes itself. Walks all of `src/`, so a new writer anywhere is seen.
+fn written_through_a_temp_file() -> std::collections::BTreeSet<String> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
             }
         }
     }
+    fn resolve(source: &str, name: &str, file: &std::path::Path) -> String {
+        let name = name.trim();
+        if let Some(literal) = name.strip_prefix('"') {
+            return literal.trim_end_matches('"').to_owned();
+        }
+        let wanted = format!("const {name}: &str = \"");
+        let line = source
+            .lines()
+            .find(|l| l.contains(&wanted))
+            .unwrap_or_else(|| panic!("{}: `{name}` is not a path constant here", file.display()));
+        line.split('"').nth(1).unwrap().to_owned()
+    }
+    let mut files = Vec::new();
+    walk(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    let put_file_itself = std::path::Path::new("server").join("deploy").join("mod.rs");
+    let mut found = std::collections::BTreeSet::new();
+    for file in files {
+        let source = std::fs::read_to_string(&file).unwrap();
+        for line in source.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            if let Some((_, rest)) = line.split_once(".put_file(") {
+                let arg = rest.split(',').next().unwrap();
+                found.insert(resolve(&source, arg, &file));
+            }
+            // `put_file` itself writes `{path}{TEMP_SUFFIX}` for whatever it is handed.
+            if file.ends_with(&put_file_itself) {
+                continue;
+            }
+            for suffix in [".vrcast.tmp", "{TEMP_SUFFIX}"] {
+                let mut rest = line;
+                while let Some(at) = rest.find(suffix) {
+                    let name = rest[..at]
+                        .strip_suffix('}')
+                        .and_then(|b| b.rsplit_once('{'))
+                        .map(|(_, n)| n)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{}: a temp file not named after a path constant: {line}",
+                                file.display()
+                            )
+                        });
+                    found.insert(resolve(&source, name, &file));
+                    rest = &rest[at + suffix.len()..];
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn the_tidied_places_are_exactly_the_places_written() {
+    let written = written_through_a_temp_file();
+    let listed: std::collections::BTreeSet<String> =
+        TEMP_PLACES.iter().map(|p| (*p).to_owned()).collect();
+    assert_eq!(
+        TEMP_PLACES.len(),
+        listed.len(),
+        "a path is listed twice in TEMP_PLACES"
+    );
+    // Both directions: a write missing from the list would never be tidied; a listed path
+    // nobody writes would be removed on a server where it is not ours.
+    assert_eq!(
+        written, listed,
+        "TEMP_PLACES and the writes in the sources differ"
+    );
+    assert!(listed.contains("/usr/share/keyrings/caddy-stable-archive-keyring.gpg"));
+    assert!(listed.contains("/etc/caddy/Caddyfile"));
 }
 
 #[tokio::test]

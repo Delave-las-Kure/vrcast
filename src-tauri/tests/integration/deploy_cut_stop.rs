@@ -51,8 +51,9 @@ const SLOW_S: u64 = 180;
 const SLOW_DEB: &str = "/root/vrcast-slow.deb";
 const SLOW_PKG: &str = "vrcast-slow";
 
-/// Where an earlier, interrupted `put_file` would have left its half-written copy.
-const LEFT_BEHIND: &str = "/etc/vrcast-t615-left-behind.conf";
+/// Where an earlier, interrupted `put_file` would have left its half-written copy — one of
+/// the paths a run really writes (`TEMP_PLACES`): since T622 only those are tidied.
+const LEFT_BEHIND: &str = "/etc/sysctl.d/99-vrcast-net.conf";
 
 fn make_slow_package(name: &str) {
     let said = inside(
@@ -185,7 +186,10 @@ async fn a_cut_during_dpkg_is_failed_only_after_dpkg_ended_and_a_repeat_goes_to_
     // For the repeat with the real steps afterwards; the slow package itself needs no archive.
     prewarm(&name, "fail2ban unattended-upgrades");
     make_slow_package(&name);
-    inside(&name, &format!("echo half > {LEFT_BEHIND}{TEMP_SUFFIX}"));
+    inside(
+        &name,
+        &format!("mkdir -p /etc/sysctl.d && echo half > {LEFT_BEHIND}{TEMP_SUFFIX}"),
+    );
 
     let conn = by_password(&target).await;
     let facts = machine::look(&conn).await.expect("no machine facts");

@@ -110,9 +110,24 @@ pub const APT_GET: &str = "apt-get -o Acquire::Retries=5";
 /// Caddy keyring write there first and move into place.
 pub const TEMP_SUFFIX: &str = ".vrcast.tmp";
 
-/// Where a run ever writes a [`TEMP_SUFFIX`] file — every path `put_file` is handed, and the
-/// Caddy keyring. `put_file` checks it (debug builds, so every test run does).
-pub const TEMP_PLACES: [&str; 2] = ["/etc/", "/usr/share/keyrings/"];
+/// Every path a run writes through a [`TEMP_SUFFIX`] file beside it — each path `put_file` is
+/// handed, and the Caddy keyring — and so the only places a half-written copy of ours can be
+/// (T622). `put_file` refuses any other path in debug builds (so every test run checks it),
+/// `leftovers_script` removes `<path>.vrcast.tmp` for these and nothing else, and
+/// `tests/unit/deploy_stop.rs` checks it against the steps' sources in both directions.
+pub const TEMP_PLACES: [&str; 11] = [
+    "/etc/caddy/Caddyfile",
+    "/etc/caddy/vrcast-limits.conf",
+    "/etc/fail2ban/jail.local",
+    "/etc/sysctl.d/99-vrcast-ipv6.conf",
+    "/etc/ssh/sshd_config.d/00-vrcast.conf",
+    state_file::PATH,
+    "/etc/sysctl.d/99-vrcast-net.conf",
+    "/etc/udev/rules.d/60-vrcast-readahead.rules",
+    "/etc/systemd/system/caddy.service.d/10-restart.conf",
+    "/etc/modules-load.d/bbr.conf",
+    packages::KEYRING,
+];
 
 /// Remove what an interrupted run left half-written (T615), and say what that was.
 ///
@@ -124,14 +139,15 @@ pub const TEMP_PLACES: [&str; 2] = ["/etc/", "/usr/share/keyrings/"];
 /// (it would not: every write replaces it — but it is litter in `/etc` with our name on it),
 /// and runs after the previous run's processes are gone: a second run is refused while the
 /// first is still `running` (`running_deploy_for`), and the first ends only once its stop is
-/// confirmed. `-xdev` keeps the search on the root filesystem; the two directories are small.
+/// confirmed. By name, not by search (T622): a `*.vrcast.tmp` anywhere else in `/etc` — an
+/// administrator's own copy, say — is not ours to remove, whatever it is called.
 pub fn leftovers_script() -> String {
     let places = TEMP_PLACES
         .iter()
-        .map(|p| crate::server::shell_quote(p.trim_end_matches('/')))
+        .map(|p| crate::server::shell_quote(&format!("{p}{TEMP_SUFFIX}")))
         .collect::<Vec<_>>()
         .join(" ");
-    format!("find {places} -xdev -type f -name '*{TEMP_SUFFIX}' -print -delete 2>/dev/null; true")
+    format!("for f in {places}; do [ -f \"$f\" ] && rm -f -- \"$f\" && echo \"$f\"; done; true")
 }
 
 /// What every apt step runs before it installs anything (T609): finish whatever dpkg was in
@@ -415,8 +431,8 @@ impl Context<'_> {
             return Err(DeployError::Cancelled);
         }
         debug_assert!(
-            TEMP_PLACES.iter().any(|p| path.starts_with(p)),
-            "{path} is outside TEMP_PLACES: a half-written copy of it would never be tidied"
+            TEMP_PLACES.contains(&path),
+            "{path} is not in TEMP_PLACES: a half-written copy of it would never be tidied"
         );
         let temp = format!("{path}{TEMP_SUFFIX}");
         let sftp = self.conn.sftp().await?;
