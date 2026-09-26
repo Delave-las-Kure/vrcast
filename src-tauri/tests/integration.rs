@@ -88,6 +88,11 @@ mod deploy_cut_stop;
 #[path = "integration/deploy_key_kept.rs"]
 mod deploy_key_kept;
 
+/// T617 — the mark of ours is the run's first change: a run broken off after `Packages` on a
+/// bare machine is stopped through the production gate, and a repeat goes to the end.
+#[path = "integration/deploy_cut_mark.rs"]
+mod deploy_cut_mark;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 

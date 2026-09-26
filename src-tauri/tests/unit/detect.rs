@@ -15,6 +15,38 @@ fn said(caddyfile: &str, video_dir: &str, serving: &str, name: &str, state: &str
     )
 }
 
+/// T617 — the mark a run makes first (`user_dirs::mark_ours_script`) is exactly the one this
+/// probe reads as ours, and with it a machine that has Caddy installed and serving — what a
+/// run broken off after `Packages` leaves — is `Unfinished`, not `Foreign`. Two texts naming
+/// the same path in two files: if one moves, a broken-off run is `Foreign` again and its stop
+/// is refused by the gate (QA-19 №2), with nothing else failing.
+#[test]
+fn the_mark_a_run_makes_first_is_the_one_the_probe_reads_as_ours() {
+    use vrcast_studio_lib::server::deploy::user_dirs::{mark_ours_script, marked, HOME};
+
+    let probe = command("/var/lib/vrcast/videos");
+    assert!(
+        probe.contains(&format!("-d {HOME} ")),
+        "the probe no longer asks for the mark a run makes ({HOME}):\n{probe}"
+    );
+    let script = mark_ours_script();
+    assert!(
+        script.starts_with(&format!("mkdir -p {HOME} ")),
+        "the mark is not made where the probe looks: {script}"
+    );
+    assert!(marked("marked\n") && !marked("mkdir: cannot create directory\n"));
+
+    // Caddy installed by `Packages`, serving on 80, its own Caddyfile — and our mark.
+    let facts = read(
+        "caddyfile=yes\nvideo_dir=no\nours=yes\nserving=1\nserver_name=caddy\n\
+         --vrcast-state--\n\n--vrcast-state--\n",
+    );
+    assert_eq!(judge(&facts).kind, Kind::Unfinished);
+    // Without it, the same machine is somebody else's — the refusal stays as it was.
+    let facts = read(&said("yes", "no", "1", "caddy", ""));
+    assert_eq!(judge(&facts).kind, Kind::Foreign);
+}
+
 #[test]
 fn a_bare_answer_is_read_as_a_bare_machine() {
     let facts = read(&said("no", "no", "0", "", ""));

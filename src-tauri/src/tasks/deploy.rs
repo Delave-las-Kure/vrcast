@@ -117,6 +117,30 @@ pub async fn run<'a>(
         // still leaves a `latest` to roll back to, so the answer to "put it back" stops being
         // an internal error about a missing directory.
         let run_fut = async {
+            // ⚠ **T617 — the mark of a deployment of ours, before anything else changes.**
+            // `Packages` installs Caddy, and a server running Caddy with a Caddyfile and no
+            // mark of ours is what a stranger's machine looks like: a run broken off after it
+            // was recognised as `Foreign`, the gate refused the stop T615 has to confirm, and
+            // the task held the server for ever (QA-19 №2). Made first, a run broken off at any
+            // later moment is `Unfinished` — ours, open to the stop and to being finished.
+            //
+            // **Before the copy, not after it.** The mark is a directory, not a settings file:
+            // it is not in the copy (`upgrade::OWNED`), a rollback does not take it away, and
+            // making it changes nothing the copy holds — so the copy is the same either way.
+            // What the order decides is only whether some moment of the run leaves a change of
+            // ours without the mark; mark first, there is none — the copy's own directory
+            // (`/etc/vrcast/backup/…`) and the tidy-up below included. On a server already
+            // ours the directory is there and this changes nothing.
+            let said = ctx
+                .ran(&crate::server::deploy::user_dirs::mark_ours_script())
+                .await?;
+            if !crate::server::deploy::user_dirs::marked(&said) {
+                return Err(DeployError::Ssh(crate::ssh::SshError::Exec(format!(
+                    "the mark of this deployment ({}) could not be made: {}",
+                    crate::server::deploy::user_dirs::HOME,
+                    said.trim()
+                ))));
+            }
             // T615: what an earlier run interrupted between writing a file and moving it into
             // place left beside the real one — see `leftovers_script` for why here.
             let tidied = ctx.ran(&crate::server::deploy::leftovers_script()).await?;
