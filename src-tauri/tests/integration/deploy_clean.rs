@@ -143,6 +143,7 @@ async fn a_bare_machine_is_deployed_and_a_repeat_does_nothing() {
         machine,
         // A bare machine: nothing here is anybody's work to preserve.
         already_ours: false,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
@@ -359,6 +360,7 @@ async fn a_first_deployment_copies_aside_what_it_is_about_to_change() {
         public_key: made.public_openssh.clone(),
         machine,
         already_ours: false,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,

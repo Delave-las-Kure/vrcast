@@ -155,7 +155,7 @@ async fn a_server_that_is_not_ours_is_the_same_afterwards_to_the_byte() {
     ));
     refusals.push((
         "deploy_run",
-        deploy::deploy_run(&state, &id, Ipv6Choice::Keep, true)
+        deploy::deploy_run(&state, &id, Ipv6Choice::Keep, true, false)
             .await
             .map_err(|e| format!("{:?}", e.code)),
     ));

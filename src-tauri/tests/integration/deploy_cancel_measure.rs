@@ -347,6 +347,7 @@ pub(super) async fn repeat_once(target: &DeployTarget, made: &keygen::MadeKey) -
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
@@ -494,6 +495,7 @@ async fn t609_cancel_today_then_repeat_at_once() {
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
@@ -639,6 +641,7 @@ async fn t609_cancel_today_during_packages() {
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        replace_caddyfile: false,
         run: vrcast_studio_lib::server::deploy::RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,

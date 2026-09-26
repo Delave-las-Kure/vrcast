@@ -7,7 +7,7 @@
  * half of T593, and its only job here is to prove it cannot happen.
  */
 
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderIn, ru } from "../../../test-utils";
@@ -15,6 +15,7 @@ import type { PlannedStep, UpgradePlan } from "../../../shared/contract";
 
 const mockPlan = vi.fn<() => Promise<UpgradePlan>>();
 const mockRun = vi.fn<(...a: unknown[]) => Promise<string>>();
+const mockRollback = vi.fn<(...a: unknown[]) => Promise<void>>();
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -26,6 +27,7 @@ vi.mock("../../../shared/ipc", async () => {
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       serverUpgradePlan: () => mockPlan(),
       serverUpgradeRun: (...a: unknown[]) => mockRun(...a),
+      serverRollback: (...a: unknown[]) => mockRollback(...a),
     }),
     onTaskDone: () => Promise.resolve(() => {}),
   };
@@ -48,6 +50,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPlan.mockResolvedValue(PLAN);
   mockRun.mockResolvedValue("task-1");
+  mockRollback.mockResolvedValue(undefined);
 });
 
 describe("T593 — UpgradeDialog guards agreeAndUpgrade against a repeat click", () => {
@@ -79,5 +82,59 @@ describe("T593 — UpgradeDialog guards agreeAndUpgrade against a repeat click",
 
     resolveRun("task-1");
     await waitFor(() => expect(mockRun).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("T611 — rolling back asks first, and says what it will not put back", () => {
+  it("does not roll back at the first click; shows what comes back and what does not", async () => {
+    renderIn(<UpgradeDialog serverId="s1" />, "ru");
+    const rollBack = await screen.findByText(ru.ui.upgrade.rollBack);
+    await waitFor(() => expect(rollBack).toBeEnabled());
+
+    fireEvent.click(rollBack);
+
+    // Nothing sent yet: the first click only opens the question.
+    expect(mockRollback).not.toHaveBeenCalled();
+    expect(screen.getByText(ru.ui.upgrade.rollBackReturns)).toBeTruthy();
+    const keeps = screen.getByText(ru.ui.upgrade.rollBackKeeps);
+    // The three things the owner asked to be named (T611): a file the run created, live
+    // state, and the limit rules T610 keeps out of the copy.
+    expect(keeps.textContent).toContain("99-vrcast-ipv6.conf");
+    expect(keeps.textContent).toContain("sysctl");
+    expect(keeps.textContent).toContain("ufw");
+  });
+
+  it("cancelling sends nothing", async () => {
+    renderIn(<UpgradeDialog serverId="s1" />, "ru");
+    fireEvent.click(await screen.findByText(ru.ui.upgrade.rollBack));
+
+    const dialog = screen.getByRole("dialog", { name: ru.ui.upgrade.rollBackTitle });
+    fireEvent.click(within(dialog).getByText(ru.ui.upgrade.cancel));
+
+    expect(screen.queryByText(ru.ui.upgrade.rollBackKeeps)).toBeNull();
+    expect(mockRollback).not.toHaveBeenCalled();
+  });
+
+  it("rolls back once on agreement, however many clicks, and says it is done", async () => {
+    let resolveRollback: () => void = () => {};
+    mockRollback.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRollback = resolve;
+        }),
+    );
+    renderIn(<UpgradeDialog serverId="s1" />, "ru");
+    fireEvent.click(await screen.findByText(ru.ui.upgrade.rollBack));
+
+    const confirm = screen.getByText(ru.ui.upgrade.rollBackConfirm);
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    expect(mockRollback).toHaveBeenCalledTimes(1);
+    expect(mockRollback.mock.calls[0]?.[0]).toBe("s1");
+
+    resolveRollback();
+    await waitFor(() => expect(screen.getByText(ru.ui.upgrade.rollBackDone)).toBeTruthy());
+    expect(screen.queryByText(ru.ui.upgrade.rollBackKeeps)).toBeNull();
   });
 });

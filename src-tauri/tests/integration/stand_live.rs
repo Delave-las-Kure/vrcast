@@ -253,13 +253,13 @@ async fn the_stand_is_deployed_and_serves_over_its_domain() {
     require_bare(&state, &id).await;
 
     // Without a yes, nothing happens (FR-122).
-    let refused = deploy_api::deploy_run(&state, &id, Ipv6Choice::Disable, false).await;
+    let refused = deploy_api::deploy_run(&state, &id, Ipv6Choice::Disable, false, false).await;
     assert!(
         refused.is_err(),
         "a deployment ran without anybody agreeing"
     );
 
-    let task_id = deploy_api::deploy_run(&state, &id, Ipv6Choice::Disable, true)
+    let task_id = deploy_api::deploy_run(&state, &id, Ipv6Choice::Disable, true, false)
         .await
         .expect("the deployment would not start");
     println!("task {task_id}");
@@ -296,7 +296,7 @@ async fn a_deployed_stand_has_no_work_left_and_serves() {
 
     // Deploying again is refused — and refused as "already deployed", which is the
     // opposite of "nothing is deployed" and used to arrive with those very words.
-    let again = deploy_api::deploy_run(&state, &id, Ipv6Choice::Disable, true).await;
+    let again = deploy_api::deploy_run(&state, &id, Ipv6Choice::Disable, true, false).await;
     assert!(
         again.is_err(),
         "a working server was deployed over the top of itself"

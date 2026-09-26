@@ -86,24 +86,99 @@ fn check<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<Checked>> {
     })
 }
 
+/// What lies at `/etc/caddy/Caddyfile` before the step writes it (T611).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Existing {
+    /// No file, or an empty one: nothing to preserve.
+    Nothing,
+    /// Some version of this application wrote it ([`super::references::is_ours`]).
+    Ours,
+    /// Exactly what the `caddy` package itself laid down, untouched — its md5 is the one dpkg
+    /// recorded for the conffile. Nobody's work: the `packages` step of this very deployment
+    /// puts it there on a bare machine, and a first deployment that stopped at it would
+    /// otherwise ask about a file it installed itself.
+    PackageDefault,
+    /// None of the above: written or edited by a person.
+    NotOurs,
+}
+
+/// May the step write its reference over what is there? (T285, T611)
+///
+/// Pure, so the rule can be checked without a server (`tests/unit/deploy_steps.rs`).
+///
+/// - **A server already ours**: only over nothing or over a version of ours. A file that
+///   matches no version we wrote was edited by a person — noticed, said, left alone. The
+///   consent to replace does **not** reach here: it is asked on the first deployment's
+///   screen about somebody else's file, and a later upgrade has nobody there to ask.
+/// - **A first deployment** (`Clean`/`Unfinished`): also over the package's untouched
+///   default; over a person's file only with `replace` — the tick on the deployment screen
+///   (`deploy_run`'s `replace_caddyfile`). The file is in the copy the run makes before its
+///   first change (`upgrade::OWNED`, `back_up`), so the consent is to a replacement that can
+///   be undone.
+pub fn may_write(existing: Existing, already_ours: bool, replace: bool) -> bool {
+    match existing {
+        Existing::Nothing | Existing::Ours => true,
+        Existing::PackageDefault => !already_ours,
+        Existing::NotOurs => !already_ours && replace,
+    }
+}
+
+/// Look at what is at `/etc/caddy/Caddyfile` now.
+pub async fn existing(ctx: &Context<'_>) -> Result<Existing> {
+    let there = ctx
+        .ran(&format!("cat {CADDYFILE} 2>/dev/null || true"))
+        .await?;
+    let there = there.trim_end_matches('\n');
+    if there.is_empty() {
+        return Ok(Existing::Nothing);
+    }
+    if super::references::is_ours(there, ctx.domain) {
+        return Ok(Existing::Ours);
+    }
+    // dpkg's own record of the conffile, compared with the file's digest. Asked of dpkg and
+    // not of a copy of the default kept here: the default changes between Caddy releases,
+    // and the repository hands out whichever is current.
+    let untouched = ctx
+        .asks(&format!(
+            r#"want=$(dpkg-query -W -f='${{Conffiles}}\n' caddy 2>/dev/null | awk '$1 == "{CADDYFILE}" {{ print $2 }}')
+have=$(md5sum < {CADDYFILE} 2>/dev/null | cut -d' ' -f1)
+[ -n "$want" ] && [ "$want" = "$have" ] && echo yes || echo no"#
+        ))
+        .await?;
+    Ok(if untouched {
+        Existing::PackageDefault
+    } else {
+        Existing::NotOurs
+    })
+}
+
+/// Will this run's `configs` step refuse unless the person agrees to replace the file?
+///
+/// What `deploy_plan` says as `foreign_caddyfile` (T611): true exactly when the tick on the
+/// deployment screen decides the outcome — a first deployment, and a Caddyfile that is a
+/// person's. On a server already ours a hand-edited file is refused whatever is ticked, and
+/// this says false: there is no choice to offer.
+pub async fn needs_consent(ctx: &Context<'_>) -> Result<bool> {
+    if ctx.already_ours {
+        return Ok(false);
+    }
+    Ok(existing(ctx).await? == Existing::NotOurs)
+}
+
 fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
     Box::pin(async move {
-        // **A file somebody edited is not ours to replace** (T285). On a server already
-        // ours, a main configuration that matches no version we ever wrote was written
-        // by a person — and the contract says we notice it, say so, and leave it alone.
-        // On a bare machine there is nothing to preserve and this does not apply.
-        if ctx.already_ours {
-            let there = ctx
-                .ran(&format!("cat {CADDYFILE} 2>/dev/null || true"))
-                .await?;
-            let there = there.trim_end_matches('\n');
-            if !there.is_empty() && !super::references::is_ours(there, ctx.domain) {
-                return Err(DeployError::Step {
-                    id: StepId::Configs,
-                    detail: format!("{CADDYFILE} was edited by hand and is not being overwritten"),
-                    advice: None,
-                });
-            }
+        // **A file somebody edited is not ours to replace** (T285, T611). On a server already
+        // ours, a main configuration that matches no version we ever wrote was written by a
+        // person — and the contract says we notice it, say so, and leave it alone. On a first
+        // deployment the same file is somebody else's, and is replaced only when the person
+        // agreed to it on the deployment screen (the copy the run made first keeps it).
+        let found = existing(ctx).await?;
+        if !may_write(found, ctx.already_ours, ctx.replace_caddyfile) {
+            return Err(DeployError::Step {
+                id: StepId::Configs,
+                detail: format!("{CADDYFILE} was edited by hand and is not being overwritten"),
+                advice: None,
+            });
         }
 
         // The rules file first: the main configuration imports it, and a configuration

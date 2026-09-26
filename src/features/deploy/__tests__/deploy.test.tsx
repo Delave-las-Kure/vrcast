@@ -103,6 +103,7 @@ const PREVIEW: DeployPreview = {
     step("Swap", "NotApplied"),
     step("Tuning", { Skipped: { why: { NotPossibleHere: { detail: "not in a container" } } } }),
   ],
+  foreign_caddyfile: false,
 };
 
 beforeEach(() => {
@@ -388,5 +389,56 @@ describe("what a step says it will do", () => {
 
     await screen.findByText(ru.ui.deploySteps.Ipv6);
     expect(container.querySelector(".step__changes")).toBeNull();
+  });
+});
+
+describe("T611 — somebody else's Caddyfile on a first deployment", () => {
+  const FOREIGN: DeployPreview = { ...PREVIEW, foreign_caddyfile: true };
+
+  it("says nothing and sends `false` when the file is not somebody else's", async () => {
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeEnabled());
+
+    expect(screen.queryByText(ru.ui.deploy.foreignCaddyfile)).toBeNull();
+    expect(screen.queryByLabelText(ru.ui.deploy.replaceCaddyfile)).toBeNull();
+
+    fireEvent.click(screen.getByText(ru.ui.deploy.agreeAndStart));
+    await waitFor(() => expect(mockRun).toHaveBeenCalled());
+    expect(mockRun.mock.calls[0]?.[3]).toBe(false);
+  });
+
+  it("warns, leaves the box unticked, and without a tick sends `false`", async () => {
+    // Unticked by default: the file is somebody's work, and the safe way round is that the
+    // run stops at the configuration step and leaves it alone unless a person said otherwise.
+    mockPlan.mockResolvedValue(FOREIGN);
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.foreignCaddyfile)).toBeTruthy());
+
+    const box = screen.getByLabelText(ru.ui.deploy.replaceCaddyfile);
+    expect(box).not.toBeChecked();
+    // Warning or not, the deployment itself can still be started — it will refuse at the
+    // configuration step, which is what the warning says.
+    expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeEnabled();
+
+    fireEvent.click(screen.getByText(ru.ui.deploy.agreeAndStart));
+    await waitFor(() => expect(mockRun).toHaveBeenCalled());
+    expect(mockRun.mock.calls[0]?.[3]).toBe(false);
+  });
+
+  it("sends `true` once the box is ticked", async () => {
+    mockPlan.mockResolvedValue(FOREIGN);
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+    const box = await screen.findByLabelText(ru.ui.deploy.replaceCaddyfile);
+
+    fireEvent.click(box);
+    expect(box).toBeChecked();
+    fireEvent.click(screen.getByText(ru.ui.deploy.agreeAndStart));
+
+    await waitFor(() => expect(mockRun).toHaveBeenCalled());
+    expect(mockRun.mock.calls[0]?.[2]).toBe(true);
+    expect(mockRun.mock.calls[0]?.[3]).toBe(true);
   });
 });

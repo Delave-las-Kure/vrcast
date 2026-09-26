@@ -52,6 +52,13 @@ pub struct DeployPreview {
     /// machine gets a swap file, and a container is told plainly what cannot be done in it.
     pub memory_mb: u32,
     pub disk: String,
+    /// There is a main web-server configuration at `/etc/caddy/Caddyfile` that is somebody
+    /// else's — neither a version of ours nor the `caddy` package's untouched default — and
+    /// this is a first deployment (T611). The screen then asks whether to replace it; the
+    /// answer goes to `deploy_run` as `replace_caddyfile`, and without it the `configs` step
+    /// refuses and leaves the file alone. Always false on a server already ours: a hand-edited
+    /// file there is refused whatever is ticked, so there is nothing to ask.
+    pub foreign_caddyfile: bool,
 }
 
 pub mod api {
@@ -150,6 +157,8 @@ pub mod api {
             public_key,
             machine: facts.clone(),
             already_ours: opened.state.kind == crate::domain::server_state::Kind::Managed,
+            // A plan applies nothing, so what the person will answer does not matter here.
+            replace_caddyfile: false,
             run: crate::server::deploy::RunMark::fresh(),
             // Planning changes nothing and proves nothing: the two proofs open connections,
             // and a plan that logged in twice per step would be a plan nobody dared ask for.
@@ -160,6 +169,9 @@ pub mod api {
         };
         let steps = deploy::all();
         let plan = deploy::plan(&ctx, &steps).await.map_err(step_error)?;
+        let foreign_caddyfile = deploy::configs::needs_consent(&ctx)
+            .await
+            .map_err(step_error)?;
         opened.conn.close().await;
 
         Ok(DeployPreview {
@@ -167,6 +179,7 @@ pub mod api {
             steps: plan,
             memory_mb: facts.memory_mb,
             disk: facts.disk,
+            foreign_caddyfile,
         })
     }
 
@@ -175,16 +188,28 @@ pub mod api {
     /// `confirmed` is not a formality: this installs packages, rewrites the way in and turns
     /// a firewall on, and FR-122 says none of it happens until a person has seen the list and
     /// said yes.
+    ///
+    /// `replace_caddyfile` (T611): the person agreed, on the deployment screen, to replace a
+    /// Caddyfile that is somebody else's (`DeployPreview::foreign_caddyfile`). Read only by a
+    /// first deployment's `configs` step; on a server already ours it changes nothing.
     pub async fn deploy_run(
         state: &super::super::AppState,
         server_id: &str,
         ipv6: Ipv6Choice,
         confirmed: bool,
+        replace_caddyfile: bool,
     ) -> Result<String> {
         if !confirmed {
             return Err(AppError::new(ErrorCode::ConfirmationRequired));
         }
-        start(state, server_id, ipv6, crate::tasks::deploy::Kind::Fresh).await
+        start(
+            state,
+            server_id,
+            ipv6,
+            crate::tasks::deploy::Kind::Fresh,
+            replace_caddyfile,
+        )
+        .await
     }
 
     /// What an upgrade would change (FR-129).
@@ -236,6 +261,7 @@ pub mod api {
             public_key,
             machine: facts,
             already_ours: true,
+            replace_caddyfile: false,
             run: crate::server::deploy::RunMark::fresh(),
             proofs: Proofs {
                 key_works: &key_now,
@@ -271,6 +297,9 @@ pub mod api {
             server_id,
             ipv6_choice_of(&profile),
             crate::tasks::deploy::Kind::Upgrade,
+            // An upgrade has nobody on the deployment screen to ask, and on a server already
+            // ours a hand-edited Caddyfile is refused whatever this says.
+            false,
         )
         .await
     }
@@ -299,13 +328,14 @@ pub mod api {
             public_key,
             machine: facts,
             already_ours: true,
+            replace_caddyfile: false,
             run: crate::server::deploy::RunMark::fresh(),
             proofs: Proofs {
                 key_works: &never,
                 password_refused: &never,
             },
         };
-        let outcome = upgrade::roll_back(&ctx).await.map_err(step_error);
+        let outcome = upgrade::roll_back(&ctx).await.map_err(rollback_error);
         opened.conn.close().await;
         if outcome.is_ok() {
             // "At change" (`contracts/ipc-commands.md`): a rollback moves the server side
@@ -528,6 +558,22 @@ fn step_error(e: crate::server::deploy::DeployError) -> AppError {
     }
 }
 
+/// A rollback that did not happen, as a contract code (T611).
+///
+/// "There is no copy" has its own code, `ROLLBACK_NO_COPY`: it is an answer about this
+/// server, not a fault of the application — it used to arrive as `INTERNAL` with the words in
+/// `cause` — and it sends a person somewhere different: there is nothing to put back, so the
+/// way on is a deployment or an upgrade, each of which makes a copy first. Public so the
+/// mapping is checked without a server (`tests/contract/deploy.rs`).
+pub fn rollback_error(e: upgrade::RollbackError) -> AppError {
+    match e {
+        upgrade::RollbackError::NoCopy => {
+            AppError::new(ErrorCode::RollbackNoCopy).with_cause(upgrade::LATEST)
+        }
+        upgrade::RollbackError::Failed(e) => step_error(e),
+    }
+}
+
 /// Whether a deploy or upgrade for this server is already running.
 ///
 /// The same gap `running_build_for` (T591) and `running_upload_for` document and
@@ -562,6 +608,7 @@ async fn start(
     server_id: &str,
     ipv6: Ipv6Choice,
     kind: crate::tasks::deploy::Kind,
+    replace_caddyfile: bool,
 ) -> Result<String> {
     let profile = super::library::api::profile_of(state, server_id)?;
 
@@ -717,6 +764,7 @@ async fn start(
                 public_key,
                 machine: facts,
                 already_ours: kind == crate::tasks::deploy::Kind::Upgrade,
+                replace_caddyfile: kind == crate::tasks::deploy::Kind::Fresh && replace_caddyfile,
                 run: crate::server::deploy::RunMark::fresh(),
                 proofs: Proofs {
                     key_works: &key_works,
@@ -891,8 +939,18 @@ pub mod ipc {
         server_id: String,
         ipv6: Ipv6Choice,
         confirmed: bool,
+        replace_caddyfile: Option<bool>,
     ) -> Result<String> {
-        api::deploy_run(&state, &server_id, ipv6, confirmed).await
+        // `Option` so a caller that sends nothing — an older interface — is read as "did not
+        // agree": the safe answer, and the one every run before T611 behaved as.
+        api::deploy_run(
+            &state,
+            &server_id,
+            ipv6,
+            confirmed,
+            replace_caddyfile.unwrap_or(false),
+        )
+        .await
     }
 
     #[tauri::command]

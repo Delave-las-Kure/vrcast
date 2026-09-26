@@ -85,6 +85,10 @@ error_codes! {
     SwapFailed => "SWAP_FAILED",
     /// A deploy or upgrade for this server is already running (T593).
     DeployAlreadyRunning => "DEPLOY_ALREADY_RUNNING",
+    /// `server_rollback` found no copy to put back — no `/etc/vrcast/backup/latest` (T611).
+    /// Nothing was touched. Not `Internal`: it is an answer about the server, and the way on
+    /// is a deployment or an upgrade (each makes a copy first), not a bug report.
+    RollbackNoCopy => "ROLLBACK_NO_COPY",
 
     // --- library ---
     SlugTaken => "SLUG_TAKEN",

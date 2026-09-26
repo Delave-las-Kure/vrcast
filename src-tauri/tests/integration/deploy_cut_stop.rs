@@ -201,6 +201,7 @@ async fn a_cut_during_dpkg_is_failed_only_after_dpkg_ended_and_a_repeat_goes_to_
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        replace_caddyfile: false,
         run: RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,

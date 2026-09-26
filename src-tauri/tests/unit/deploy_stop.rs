@@ -76,7 +76,7 @@ fn app_state() -> AppState {
 /// Is a second deployment and a second upgrade of the same server refused as "already
 /// running"? Both, or neither — they are checked together (`running_deploy_for`).
 async fn second_run_refused(state: &AppState) -> bool {
-    let deploy_again = deploy::deploy_run(state, SERVER, Ipv6Choice::Keep, true).await;
+    let deploy_again = deploy::deploy_run(state, SERVER, Ipv6Choice::Keep, true, false).await;
     let upgrade_again = deploy::server_upgrade_run(state, SERVER, true).await;
     let refused = |r: &Result<String, AppError>| matches!(r, Err(e) if e.code == ErrorCode::DeployAlreadyRunning);
     assert_eq!(

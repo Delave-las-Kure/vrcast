@@ -35,6 +35,7 @@ export type ErrorCode =
   | "DEPLOY_STEP_FAILED"
   | "SWAP_FAILED"
   | "DEPLOY_ALREADY_RUNNING"
+  | "ROLLBACK_NO_COPY"
   // library
   | "SLUG_TAKEN"
   | "MANIFEST_CONFLICT"
@@ -691,6 +692,12 @@ export interface DeployPreview {
   steps: PlannedStep[];
   memory_mb: number;
   disk: string;
+  /** T611 — a first deployment, and `/etc/caddy/Caddyfile` is somebody else's: neither a
+   *  version of ours nor the `caddy` package's untouched default. The screen asks whether to
+   *  replace it (a copy is kept); the answer goes to `deploy_run` as `replaceCaddyfile`, and
+   *  without it the `configs` step refuses and leaves the file alone. Always `false` on a
+   *  server already ours — a hand-edited file there is refused whatever is ticked. */
+  foreign_caddyfile: boolean;
 }
 
 // --- diagnostics (FR-070 to FR-073) ---

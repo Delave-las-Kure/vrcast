@@ -91,6 +91,10 @@ export const en: Catalogue = {
       message: "A deployment or upgrade of this server is already running",
       hint: "Wait for the current operation to finish — starting it again would repeat the same steps on the server once more.",
     },
+    ROLLBACK_NO_COPY: {
+      message: "Nothing to put back: the server has no copy of its settings",
+      hint: "A copy is taken at the start of every deployment and upgrade. There is none here — this application has not run on the server, or the copy was removed. Nothing on the server was changed.",
+    },
 
     // --- library ---
     SLUG_TAKEN: {
@@ -837,6 +841,12 @@ export const en: Catalogue = {
       stepFailed: "failed",
       stepNotNeeded: "not needed on this server",
       stepNotHere: "cannot be established here",
+
+      foreignCaddyfile:
+        "This server already has somebody else’s serving configuration — /etc/caddy/Caddyfile. This application did not write it: either it was edited by hand, or somebody’s serving lived here. Without your agreement the deployment will stop at the configuration step and leave the file alone.",
+      replaceCaddyfile: "Replace it (a copy is kept)",
+      replaceCaddyfileMeans:
+        "Before the first change the file is copied to /etc/vrcast/backup; “Put it back as it was”, used right after this deployment, restores it.",
     },
 
     deploySteps: {
@@ -1042,6 +1052,13 @@ export const en: Catalogue = {
       agreeAndUpgrade: "Agreed — update",
       rollBack: "Put it back as it was",
       cancel: "Cancel",
+      rollBackTitle: "Restore the settings from the copy?",
+      rollBackReturns:
+        "What comes back: the settings files from the copy taken before the last deployment or upgrade — the ones that were on the server before it. The serving and SSH re-read them without a restart.",
+      rollBackKeeps:
+        "What does not: files that did not exist before the run — 99-vrcast-ipv6.conf, for example — stay as they are; the server’s live state — sysctl values, ufw’s rules and state, the swap in use, the loaded BBR module, a running fail2ban; the quality-limit rules — the caps you set are kept. The videos, the catalogue and the login keys are not touched.",
+      rollBackConfirm: "Understood — put it back",
+      rollBackDone: "The settings were restored from the copy.",
     },
     limits: {
       title: "Capping quality",

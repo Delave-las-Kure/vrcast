@@ -104,6 +104,7 @@ async fn run_and_cancel_when(
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        replace_caddyfile: false,
         run: RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,
@@ -362,6 +363,7 @@ async fn run_steps(
         public_key: made.public_openssh.clone(),
         machine: facts,
         already_ours: false,
+        replace_caddyfile: false,
         run: RunMark::fresh(),
         proofs: Proofs {
             key_works: &key_proof,

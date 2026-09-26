@@ -127,13 +127,22 @@ export const ipc = {
   /** What would be done, while nothing is done (FR-122). */
   deployPlan: (serverId: string, ipv6: Ipv6Choice) =>
     call<DeployPreview>("deploy_plan", { serverId, ipv6 }),
-  /** Deploy. Refused without `confirmed`. Returns a task number (FR-080). */
-  deployRun: (serverId: string, ipv6: Ipv6Choice, confirmed: boolean) =>
-    call<string>("deploy_run", { serverId, ipv6, confirmed }),
+  /** Deploy. Refused without `confirmed`. Returns a task number (FR-080).
+   *
+   *  `replaceCaddyfile` (T611): the person ticked "replace it (a copy is kept)" for a
+   *  Caddyfile that is somebody else's (`DeployPreview.foreign_caddyfile`). Without it the
+   *  `configs` step refuses and leaves the file alone. */
+  deployRun: (
+    serverId: string,
+    ipv6: Ipv6Choice,
+    confirmed: boolean,
+    replaceCaddyfile: boolean,
+  ) => call<string>("deploy_run", { serverId, ipv6, confirmed, replaceCaddyfile }),
   serverUpgradePlan: (serverId: string) => call<UpgradePlan>("server_upgrade_plan", { serverId }),
   serverUpgradeRun: (serverId: string, confirmed: boolean) =>
     call<string>("server_upgrade_run", { serverId, confirmed }),
-  /** Put back what the last upgrade replaced (FR-133). */
+  /** Put back the files the last deployment or upgrade copied aside (FR-133). Files that run
+   *  created and live state (sysctl, ufw, swap) are not undone — the dialog says so first. */
   serverRollback: (serverId: string) => call<void>("server_rollback", { serverId }),
 
   // --- diagnostics ---
