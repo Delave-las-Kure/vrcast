@@ -368,6 +368,25 @@ pub struct TaskEngine {
     events: broadcast::Sender<TaskEvent>,
     /// The place the next task submitted will get.
     next_position: Arc<std::sync::atomic::AtomicI64>,
+    /// Keys taken by [`TaskEngine::claim`] (T621). Shared by every clone, like `live`.
+    claims: Arc<Mutex<std::collections::HashSet<String>>>,
+}
+
+/// The right to do one thing, held by one caller at a time (T621).
+///
+/// Taken by [`TaskEngine::claim`], given back when dropped — on every way out of the command
+/// that took it before its task exists, and, once moved into the task's work, when that work
+/// ends.
+pub struct Claim {
+    claims: Arc<Mutex<std::collections::HashSet<String>>>,
+    key: String,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let mut claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
+        claims.remove(&self.key);
+    }
 }
 
 impl TaskEngine {
@@ -386,7 +405,21 @@ impl TaskEngine {
             limits: Arc::new(std::sync::RwLock::new(LaneLimits::default())),
             events,
             next_position: Arc::new(std::sync::atomic::AtomicI64::new(next)),
+            claims: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Take `key` for this caller, or `None` when somebody holds it already (T621).
+    ///
+    /// Check-and-take under one lock: of two callers at the same instant exactly one gets it.
+    /// This is what a scan of the task list cannot give a command that does slow work (a
+    /// connection, a DNS wait) between its check and its `submit`.
+    pub fn claim(&self, key: &str) -> Option<Claim> {
+        let mut claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
+        claims.insert(key.to_owned()).then(|| Claim {
+            claims: self.claims.clone(),
+            key: key.to_owned(),
+        })
     }
 
     /// Set the per-lane limits at construction — used by `AppState::with_db` (T546) to

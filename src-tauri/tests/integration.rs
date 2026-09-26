@@ -83,6 +83,11 @@ mod deploy_cancel;
 #[path = "integration/deploy_cut_stop.rs"]
 mod deploy_cut_stop;
 
+/// T622 — the next run removes our own half-written `*.vrcast.tmp` by name; a foreign one in
+/// `/etc` survives.
+#[path = "integration/deploy_leftovers.rs"]
+mod deploy_leftovers;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 

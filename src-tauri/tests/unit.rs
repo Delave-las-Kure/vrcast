@@ -62,6 +62,10 @@ mod cutting_stop;
 #[path = "unit/deploy_stop.rs"]
 mod deploy_stop;
 
+/// T621 — two overlapping starts of a deployment of one server: the second is refused.
+#[path = "unit/deploy_run_claim.rs"]
+mod deploy_run_claim;
+
 #[path = "unit/measured_ladder.rs"]
 mod measured_ladder;
 
