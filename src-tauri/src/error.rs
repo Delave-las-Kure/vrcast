@@ -389,6 +389,31 @@ impl From<crate::server::manifest_io::ManifestIoError> for AppError {
             M::Malformed(_) => AppError::new(ErrorCode::Internal)
                 .detail(DetailCode::ManifestMalformed)
                 .with_cause(e),
+            // A move a rename carried with its catalogue write was refused (T620): nothing
+            // was changed, the same answer the old per-file `mv` gave.
+            M::MoveFailed {
+                ref old, ref new, ..
+            } => {
+                let detail = crate::domain::wording::Detail::new(DetailCode::RenameFailed)
+                    .with("old", old.clone())
+                    .with("new", new.clone());
+                AppError::new(ErrorCode::Internal)
+                    .with_detail(detail)
+                    .with_cause(e)
+            }
+            // …and moving back failed too: named by the first entry still under its new
+            // name, every one of them in the cause.
+            M::MovedBackIncompletely { ref stuck, .. } => {
+                let mut err = AppError::new(ErrorCode::Internal);
+                if let Some((old, new)) = stuck.first() {
+                    err = err.with_detail(
+                        crate::domain::wording::Detail::new(DetailCode::RenameFailed)
+                            .with("old", old.clone())
+                            .with("new", new.clone()),
+                    );
+                }
+                err.with_cause(e)
+            }
             M::Ssh(inner) => AppError::from(inner),
         }
     }

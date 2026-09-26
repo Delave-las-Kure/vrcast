@@ -1627,3 +1627,213 @@ async fn a_change_that_fails_its_check_leaves_everything_under_slow_as_it_was() 
     assert!(lock_frees_within(&server, Duration::from_secs(5)).await);
     assert_eq!(offered(&a, "demo"), vec![all[2].bandwidth]);
 }
+
+// ---------- T618: the lock is renewed for as long as the change is alive ----------
+//
+// T603's holder was `timeout 300 cat`: a fixed lease. One command of a change may run up to
+// `EXEC_CEILING` (600 s), so a live change could lose its lock in the middle — another took
+// it and wrote over the first, or the first one's rollback was refused (`LOST_LOCK`) and its
+// failed rules stayed in force (QA-19 №3).
+
+/// How long the web server's own checking is made to take — longer than T603's lease.
+const SLOW_VALIDATE_S: u64 = 330;
+
+/// Put a `caddy` in front of the real one whose `validate` takes `SLOW_VALIDATE_S` and then
+/// refuses; everything else passes through. The real one is in `/usr/local/bin`, so this one
+/// goes into `/usr/local/sbin`, which comes first in the PATH sshd gives a command.
+fn install_slow_refusing_validate(server: &TestServer) {
+    server
+        .exec_inside(&format!(
+            "printf '%s\\n' '#!/bin/bash' \
+             'if [ \"$1\" = validate ]; then sleep {SLOW_VALIDATE_S}; echo \"validate refused on purpose\"; exit 1; fi' \
+             'exec /usr/local/bin/caddy \"$@\"' > /usr/local/sbin/caddy && chmod 755 /usr/local/sbin/caddy"
+        ))
+        .expect("the slow caddy would not go in");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_longer_than_the_old_lease_keeps_its_lock_to_the_end_of_its_rollback() {
+    // T618. A's checking takes 330 s and fails. All that time B keeps trying and is turned
+    // away (`Busy` — `LIMITS_CONFLICT` to the caller) — including across the 300 s mark,
+    // where the old lease let B in to write over A. Then A's rollback runs under the lock
+    // it still holds, and succeeds.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    one_limit_in_force(&server, &all).await;
+    let conf_before = contents(&server, CONF);
+    let slow_before = slow_snapshot(&server);
+    install_slow_refusing_validate(&server);
+    {
+        let conn = connect(&server).await;
+        let which = conn
+            .exec("command -v caddy")
+            .await
+            .expect("the server would not answer");
+        conn.close().await;
+        assert_eq!(
+            which.trimmed(),
+            "/usr/local/sbin/caddy",
+            "the slow caddy is not the one a command finds"
+        );
+    }
+
+    let started = std::time::Instant::now();
+    let a_done = std::sync::atomic::AtomicBool::new(false);
+    let a = async {
+        let outcome = add_a_second_limit(&server, &all).await;
+        let took = started.elapsed();
+        // What A's rollback left, before anybody else may take the lock after it.
+        let conf = contents(&server, CONF);
+        a_done.store(true, std::sync::atomic::Ordering::SeqCst);
+        (outcome, took, conf)
+    };
+    let b = async {
+        // A's rules are in place and A is inside `caddy validate` by then.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let url = good_url(&server);
+        let mut tries: Vec<(Duration, Duration, String)> = Vec::new();
+        while !a_done.load(std::sync::atomic::Ordering::SeqCst) {
+            let from = started.elapsed();
+            let outcome = put_limit(&server, "203.0.113.99", "demo", all[1].bandwidth, &url).await;
+            let to = started.elapsed();
+            eprintln!(
+                "B tried from {:.1}s to {:.1}s: {outcome:?}",
+                from.as_secs_f64(),
+                to.as_secs_f64()
+            );
+            let got_in = !matches!(outcome, Err(LimitError::Busy));
+            tries.push((from, to, format!("{outcome:?}")));
+            if got_in {
+                break;
+            }
+        }
+        tries
+    };
+    let ((outcome_a, took_a, conf_after), tries) = tokio::join!(a, b);
+    server
+        .exec_inside("/usr/bin/rm -f /usr/local/sbin/caddy")
+        .expect("the slow caddy would not come out");
+    eprintln!(
+        "A took {:.1}s and ended {outcome_a:?}",
+        took_a.as_secs_f64()
+    );
+
+    assert!(
+        took_a > Duration::from_secs(300),
+        "A was not longer than the old lease: {took_a:?}"
+    );
+    match &outcome_a {
+        Err(LimitError::ValidateFailed(said)) => assert!(said.contains("refused on purpose")),
+        other => panic!(
+            "A's rollback did not go through under its own lock (LOST_LOCK would read as \
+             RollbackFailed): {other:?}"
+        ),
+    }
+    // Every try of B that ended while A was still at it was turned away, and one of them
+    // was waiting across the 300 s mark.
+    for (from, to, said) in &tries {
+        if *to < took_a {
+            assert_eq!(
+                said, "Err(Busy)",
+                "B got in while A still held the lock ({from:?}–{to:?})"
+            );
+        }
+    }
+    assert!(
+        tries.iter().any(|(from, to, _)| *from < Duration::from_secs(300)
+            && *to > Duration::from_secs(300)),
+        "no try of B spanned the moment the old lease would have run out: {tries:?}"
+    );
+
+    // What A's rollback left: the rules as before (under a new number), nothing of A's new
+    // rule or of B's, `_slow/` to the byte, nothing staged, the lock free.
+    assert_eq!(
+        without_generation(&conf_after),
+        without_generation(&conf_before)
+    );
+    assert!(!conf_after.contains("203.0.113.99"));
+    assert!(!conf_after.contains("203.0.113.8"));
+    // B's last try — the one that got the lock once A let go — read the rules while A's
+    // were still in place, so it must have been refused as a conflict, not written.
+    if let Some((_, _, said)) = tries.last() {
+        assert!(
+            said == "Err(Busy)" || said.starts_with("Err(Conflict"),
+            "B wrote over the rules A was rolling back: {said}"
+        );
+    }
+    assert_eq!(slow_snapshot(&server), slow_before);
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_frees_within(&server, Duration::from_secs(20)).await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_holder_that_hears_nothing_lets_the_lock_go_after_the_silence() {
+    // T618. A client that took the lock and then went silent without its channel closing —
+    // a half-open connection, or a client frozen in place. The very holder the application
+    // runs, on a real SSH channel of ours that stays open and never says a word: the server
+    // must let the lock go after `LOCK_SILENCE`, not hold it for ever and not five minutes.
+    use vrcast_studio_lib::server::limits::{holder_command, LOCK_SILENCE};
+
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+
+    let conn = connect(&server).await;
+    let started = std::time::Instant::now();
+    let silent = async {
+        let out = conn
+            .exec_with_timeout(
+                &holder_command("silentclient", LOCK),
+                LOCK_SILENCE + Duration::from_secs(60),
+            )
+            .await;
+        (out, started.elapsed())
+    };
+    let watch = async {
+        // Held while the silence lasts...
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let early = lock_is_free(&server);
+        tokio::time::sleep(LOCK_SILENCE - Duration::from_secs(15)).await;
+        let late = lock_is_free(&server);
+        // ...and a change started now, while the silent client still holds the lock, gets
+        // it once the silence has run out — well within its own wait.
+        let b_from = started.elapsed();
+        let b = put_limit(
+            &server,
+            "203.0.113.60",
+            "demo",
+            all[1].bandwidth,
+            &good_url(&server),
+        )
+        .await;
+        (early, late, b_from, b, started.elapsed())
+    };
+    let ((out, freed_at), (early, late, b_from, b, b_to)) = tokio::join!(silent, watch);
+    conn.close().await;
+    eprintln!(
+        "the silent holder ended after {:.1}s; B from {:.1}s to {:.1}s: {b:?}",
+        freed_at.as_secs_f64(),
+        b_from.as_secs_f64(),
+        b_to.as_secs_f64()
+    );
+
+    let out = out.expect("the silent holder's channel failed");
+    assert!(
+        out.stdout.starts_with("LOCKED "),
+        "the silent client never had the lock: {out:?}"
+    );
+    assert!(
+        !early && !late,
+        "the lock was let go while the silence lasted"
+    );
+    assert!(
+        freed_at >= LOCK_SILENCE - Duration::from_secs(1)
+            && freed_at <= LOCK_SILENCE + Duration::from_secs(15),
+        "the lock was let go after {freed_at:?}, not after the silence ({LOCK_SILENCE:?})"
+    );
+    b.expect("a change behind a silent client did not get the lock after the silence");
+    assert!(b_to >= freed_at, "B got in before the silent holder let go");
+    assert!(lock_is_free(&server));
+    assert_eq!(leftovers(&server), "");
+}

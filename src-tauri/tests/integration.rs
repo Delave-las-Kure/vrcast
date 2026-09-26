@@ -139,6 +139,11 @@ mod media_rename_during_active_build;
 #[path = "integration/media_rename_onto_active_upload.rs"]
 mod media_rename_onto_active_upload;
 
+/// T620 — `media_rename` checks the catalogue, moves the files and writes the catalogue as
+/// one step on the server, under the catalogue's lock.
+#[path = "integration/media_rename_atomic.rs"]
+mod media_rename_atomic;
+
 #[path = "integration/library_ops.rs"]
 mod library_ops;
 

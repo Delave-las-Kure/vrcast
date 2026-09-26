@@ -619,6 +619,12 @@ pub mod api {
     /// the rename is refused with `FILE_IN_USE` unless `confirmed` (FR-019a) — the same
     /// mechanism `media_delete` already has for the same reason: a `mv` on the server
     /// would drop an active download without warning.
+    ///
+    /// **One step on the server** (T620): the generation is checked, the entries are moved
+    /// and the catalogue is written under the catalogue's lock, together
+    /// (`manifest_io::write_moving`). A catalogue changed by somebody else meanwhile is
+    /// `MANIFEST_CONFLICT` with nothing moved — read again and retry works; a move that is
+    /// refused moves back what was moved and changes nothing.
     pub async fn media_rename(
         state: &AppState,
         server_id: &str,
@@ -658,6 +664,7 @@ pub mod api {
         }
 
         let mut next = manifest.prepared_for_write();
+        let mut moves: Vec<(String, String)> = Vec::new();
         let media = &mut next.media[index];
         if let Some(t) = new_title {
             media.title = t.to_owned();
@@ -713,61 +720,32 @@ pub mod api {
                     conn.close().await;
                     return Err(err);
                 }
-                rename_entries(&conn, &profile.video_dir, media, plan).await?;
+                // ⚠ **T620 — the moves go with the catalogue write, not before it.** They
+                // used to run here, one `mv` per entry, and the catalogue was written after:
+                // a catalogue somebody changed in between was refused as `MANIFEST_CONFLICT`
+                // with the files already under their new names, and "read again and
+                // retry" looked for the old ones. Now `write_moving` checks the generation,
+                // moves, and writes in one step on the server under the catalogue's lock
+                // (the same lock T604 put on every catalogue write); a conflict stops it
+                // before anything is moved, and a failed move moves back what was moved.
+                moves = plan.renames;
+                media.files = plan.files;
+                media.ladders = plan.ladders;
                 media.slug = s.to_owned();
             }
         }
 
-        manifest_io::write(&conn, &profile.video_dir, &next, manifest.generation).await?;
+        manifest_io::write_moving(
+            &conn,
+            &profile.video_dir,
+            &next,
+            manifest.generation,
+            &moves,
+        )
+        .await?;
         conn.close().await;
 
         invalidate(state, server_id);
-        Ok(())
-    }
-
-    /// Rename the catalogue entries to follow a short name.
-    ///
-    /// The renaming happens **before** the catalogue is written: should it fail, the
-    /// catalogue stays as it was and still matches what is on the server. The other order
-    /// would give a catalogue pointing at files that do not exist.
-    async fn rename_entries(
-        conn: &Connection,
-        video_dir: &str,
-        media: &mut Media,
-        plan: media::RenamePlan,
-    ) -> Result<()> {
-        use crate::server::{join_remote, shell_quote};
-
-        // The top-level entries to rename and the medium's paths afterwards are worked out
-        // by `media::rename_plan` before this is called (T606): the busy-guard needs the
-        // destinations before any `mv` runs, not after.
-        let media::RenamePlan {
-            renames,
-            files: new_files,
-            ladders: new_ladders,
-        } = plan;
-
-        for (old, new) in &renames {
-            let out = conn
-                .exec(&format!(
-                    "mv -n -- {} {}",
-                    shell_quote(&join_remote(video_dir, old)),
-                    shell_quote(&join_remote(video_dir, new))
-                ))
-                .await?;
-            if !out.ok() {
-                return Err(AppError::new(ErrorCode::Internal)
-                    .with_detail(
-                        Detail::new(DetailCode::RenameFailed)
-                            .with("old", old.to_string())
-                            .with("new", new.to_string()),
-                    )
-                    .with_cause(out.stderr.trim()));
-            }
-        }
-
-        media.files = new_files;
-        media.ladders = new_ladders;
         Ok(())
     }
 

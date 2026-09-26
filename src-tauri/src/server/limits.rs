@@ -43,17 +43,40 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(20);
 /// left staring at a spinner for longer than they would believe.
 const LOCK_WAIT: Duration = Duration::from_secs(120);
 
-/// The longest the server keeps the lock for a change that never gave it back (T603).
+/// How long the server keeps the lock with nothing heard from its holder (T618).
 ///
-/// The lock lives as long as one process on the server does, and that process ends the
-/// moment our channel to it closes — a client that crashed, or a connection that dropped,
-/// frees the lock by itself. This ceiling is for the one case that does not: a connection
-/// that is neither alive nor closed, which the server may not notice for hours (the test
-/// server's sshd has no `ClientAliveInterval`, and TCP keepalive defaults to two hours).
-/// Well above `LOCK_WAIT` and seven times the measured worst case, so a healthy change
-/// never runs into it; if one somehow did, every later step of it would notice the lock was
-/// gone (`guard`) and stop rather than go on without it.
-const LOCK_LEASE: Duration = Duration::from_secs(300);
+/// The lock lives as long as one process on the server does. That process ends the moment
+/// our channel to it closes — a client that crashed, or a connection that dropped, frees the
+/// lock by itself — and, since T618, also when it has heard nothing from us for this long.
+/// The second is for the one case the first does not catch: a connection that is neither
+/// alive nor closed, which the server may not notice for hours (the test server's sshd has
+/// no `ClientAliveInterval`, and TCP keepalive defaults to two hours).
+///
+/// **Silence, not age.** T603 bounded the holder with a fixed `timeout 300`, and a change
+/// that was still alive and working — one command may run up to `EXEC_CEILING`, 600 s —
+/// lost its lock in the middle: another change took it and wrote over the first, or the
+/// first one's rollback was refused (`LOST_LOCK`) and its failed rules stayed in force
+/// (QA-19 №3). Now the lock is held for exactly as long as the client keeps saying it is
+/// alive (`RENEW_EVERY`), however long the change takes, its rollback included.
+///
+/// **Why 60 s.** It must be below `LOCK_WAIT`, so a change queued behind a connection that
+/// went silent still gets the lock within its own wait instead of being turned away. And
+/// it must be well above `RENEW_EVERY`: what the server has to see is the gap between two
+/// renewals **arriving**, and that is `RENEW_EVERY` plus however much later the second
+/// was delivered than the first. On a healthy link that is milliseconds; what stretches it
+/// is TCP retransmission over a flapping link, and the renewal queued behind other data on
+/// the same connection (an upload's SFTP writes share it, R-04) — seconds to tens of seconds
+/// on a slow uplink. 60 s leaves 45 s of such delay before a live change is taken for a
+/// dead one, and frees a truly silent one within a minute rather than five.
+pub const LOCK_SILENCE: Duration = Duration::from_secs(60);
+
+/// How often the client tells the lock's holder it is still alive (T618).
+///
+/// A quarter of `LOCK_SILENCE`: three renewals in a row may be lost to delay before the
+/// server lets the lock go, and each costs one byte on a channel of its own — nothing next
+/// to the viewers' watching or an upload. Shorter would buy nothing (the delay that matters
+/// is the link's, not ours); longer would eat into the margin above.
+pub const RENEW_EVERY: Duration = Duration::from_secs(15);
 
 /// How long giving the lock back is waited on before being left to the channel's closing.
 const RELEASE_WAIT: Duration = Duration::from_secs(15);
@@ -183,35 +206,151 @@ struct Prepared {
 
 /// The lock that makes a change one transaction (T603), held for as long as this lives.
 ///
-/// Held by a process on the server — `flock` running `cat` on our channel — rather than by
-/// a lock file we create and remove: that process ends the moment the channel closes, so a
-/// client that crashed or a connection that dropped never leaves the lock behind. Dropping
-/// this without `TxnLock::release` closes the channel (russh's `ChannelStream` closes it
-/// on drop), which frees the lock the same way.
+/// Held by a process on the server — `flock` running a shell that waits on our channel —
+/// rather than by a lock file we create and remove: that process ends the moment the channel
+/// closes, so a client that crashed or a connection that dropped never leaves the lock
+/// behind. Since T618 the channel itself belongs to a task that renews the lock every
+/// `RENEW_EVERY` (`renew_until`) until it is told to give the lock back. Dropping this
+/// without `TxnLock::release` drops that task's stop signal, and the task closes the
+/// channel at once (russh's `ChannelStream` closes it on drop), which frees the lock the
+/// same way.
 struct TxnLock {
-    stream: russh::ChannelStream<russh::client::Msg>,
     holder_pid: u32,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    renewing: tokio::task::JoinHandle<Renewal>,
 }
 
 impl TxnLock {
     /// Give the lock back, and wait until the server really has.
     ///
-    /// End-of-input ends `cat`, `cat` ends `flock`, and only then does the server close its
-    /// side of the channel — so the end of the channel means the lock is free, not that it
-    /// is about to be.
+    /// End-of-input ends the holder's loop, the loop ends `flock`, and only then does the
+    /// server close its side of the channel — so the end of the channel means the lock is
+    /// free, not that it is about to be.
     async fn release(mut self) {
-        let _ = self.stream.shutdown().await;
-        let mut rest = Vec::new();
-        if tokio::time::timeout(RELEASE_WAIT, self.stream.read_to_end(&mut rest))
-            .await
-            .is_err()
-        {
-            tracing::warn!(
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        match (&mut self.renewing).await {
+            Ok(Renewal {
+                given_back: true, ..
+            }) => {}
+            outcome => tracing::warn!(
+                ?outcome,
                 "the server did not confirm the limits lock was given back; closing the channel"
-            );
+            ),
         }
     }
+}
+
+/// What renewing a lock came to, once it stopped (T618).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Renewal {
+    /// How many renewals were written.
+    pub sent: u32,
+    /// Whether one could not be written: the channel is gone, and with it — by the time
+    /// the server notices — the lock. Every later step finds that out for itself (`guard`).
+    pub failed: bool,
+    /// Whether the lock was given back and the server confirmed it by closing the channel.
+    pub given_back: bool,
+}
+
+/// Keep a lock's holder told that we are alive, until told to stop (T618).
+///
+/// Writes one newline every `every` to `stream` — the holder's input — which is what the
+/// holder waits on (`holder_command`): a line within `LOCK_SILENCE` and it keeps the lock,
+/// none and it lets go. Runs on its own, beside whatever step of the change is under way,
+/// so a step that takes minutes (a slow `caddy validate`, the rollback after it) is covered
+/// for its whole length.
+///
+/// `stop` sent: gives the lock back — end of input — and waits up to `RELEASE_WAIT` for the
+/// server to close the channel, i.e. for the lock to be really free. `stop` dropped (the
+/// change was abandoned without `release`): the stream is dropped at once, which closes the
+/// channel and frees the lock the same way.
+///
+/// `pub` for the unit test, which drives it over an in-memory pipe.
+pub async fn renew_until<S>(
+    mut stream: S,
+    every: Duration,
+    mut stop: tokio::sync::oneshot::Receiver<()>,
+) -> Renewal
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let mut renewal = Renewal {
+        sent: 0,
+        failed: false,
+        given_back: false,
+    };
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            asked = &mut stop => {
+                if asked.is_ok() {
+                    let _ = stream.shutdown().await;
+                    let mut rest = Vec::new();
+                    let closed =
+                        tokio::time::timeout(RELEASE_WAIT, stream.read_to_end(&mut rest))
+                            .await
+                            .is_ok_and(|r| r.is_ok());
+                    // A lock whose channel had already failed was lost, not given back.
+                    renewal.given_back = closed && !renewal.failed;
+                }
+                return renewal;
+            }
+            _ = tick.tick(), if !renewal.failed => {
+                // Bounded, so a write stuck on a channel that is not taking anything does
+                // not keep the stop from being heard. A write that is only slow is tried
+                // again at the next tick — the link may come back within `LOCK_SILENCE`,
+                // and until the server has gone that long without a line the lock is still
+                // ours. Only a write the channel refuses outright (it is closed) ends the
+                // renewing: nothing written after that could reach the holder.
+                let wrote = tokio::time::timeout(every, async {
+                    stream.write_all(b"\n").await?;
+                    stream.flush().await
+                })
+                .await;
+                match wrote {
+                    Ok(Ok(())) => renewal.sent += 1,
+                    Ok(Err(e)) => {
+                        renewal.failed = true;
+                        tracing::warn!(
+                            error = %e,
+                            "the limits lock could not be renewed: its channel is closed, so \
+                             the lock is gone and the next step of the change will stop"
+                        );
+                    }
+                    Err(_) => tracing::warn!(
+                        "renewing the limits lock is slow; trying again at the next tick"
+                    ),
+                }
+            }
+        }
+    }
+}
+
+/// The command that takes the lock and holds it (T603, T618).
+///
+/// `flock` itself, with the change's mark in its environment, runs a `bash` that says
+/// `LOCKED <flock's PID>` (`$PPID` of the shell `flock` runs is `flock`) and then reads its
+/// input a line at a time, waiting at most `LOCK_SILENCE` for each: every renewal restarts
+/// the wait; end of input (ours on release, or the server's when the connection dies) or a
+/// wait that runs out ends the loop, the shell, `flock`, and the lock. `bash` by name, not
+/// `sh`: `read -t` is not in every `sh` (Ubuntu's `dash` has none), and a holder that
+/// cannot wait would either never let go or never hold.
+///
+/// `pub` so the Docker test can run the very same holder with an input that stays open and
+/// says nothing — a client that went silent without its channel closing.
+pub fn holder_command(id: &str, lock_path: &str) -> String {
+    format!(
+        "env {TXN_ENV}={id} flock -x -w {wait} -E 75 {lock} \
+         bash -c 'echo \"LOCKED $PPID\"; while IFS= read -r -t {silence} _; do :; done' \
+         || echo \"NOT_LOCKED $?\"",
+        wait = LOCK_WAIT.as_secs(),
+        silence = LOCK_SILENCE.as_secs(),
+        lock = super::shell_quote(lock_path),
+    )
 }
 
 impl Serving<'_> {
@@ -421,28 +560,23 @@ impl Serving<'_> {
 
     /// Take the lock, waiting up to `LOCK_WAIT` for whoever holds it.
     ///
-    /// The holder is `flock` itself, with our mark in its environment, running `cat` on
-    /// this channel: `cat` ends on end-of-input — ours, or the server's when the connection
-    /// dies — and `flock` with it. `timeout` bounds the rest (see `LOCK_LEASE`). The
-    /// holder names its own PID (`$PPID` of the shell `flock` runs is `flock`) so later
-    /// steps can check it is still there and still ours.
+    /// The holder (`holder_command`) is `flock` itself, with our mark in its environment,
+    /// waiting on this channel for a sign of life: it ends on end-of-input — ours, or the
+    /// server's when the connection dies — or after `LOCK_SILENCE` with nothing heard, and
+    /// `flock` with it (T618). From the moment the lock is ours a task of its own renews it
+    /// every `RENEW_EVERY` (`renew_until`), until `TxnLock::release`. The holder names its
+    /// own PID (`$PPID` of the shell `flock` runs is `flock`) so later steps can check it is
+    /// still there and still ours.
     ///
     /// The channel takes an ordinary place, not a standing one: it lasts as long as one
     /// change, and the watching of viewers keeps both of its places (T153). A change uses
-    /// at most two places at once — this one and the step running under it.
+    /// at most two places at once — this one and the step running under it. The place goes
+    /// with the renewing task and is given back when it ends.
     async fn lock(&self, id: &str) -> Result<TxnLock, LimitError> {
         let permit = self.conn.acquire_channel().await?;
         let channel = self.conn.open_session().await?;
-        let command = format!(
-            "env {TXN_ENV}={id} flock -x -w {wait} -E 75 {lock} \
-             sh -c 'echo \"LOCKED $PPID\"; exec timeout {lease} cat >/dev/null' \
-             || echo \"NOT_LOCKED $?\"",
-            wait = LOCK_WAIT.as_secs(),
-            lease = LOCK_LEASE.as_secs(),
-            lock = super::shell_quote(&self.lock_path()),
-        );
         channel
-            .exec(true, command)
+            .exec(true, holder_command(id, &self.lock_path()))
             .await
             .map_err(SshError::protocol)?;
         let mut stream = channel.into_stream();
@@ -459,16 +593,21 @@ impl Serving<'_> {
             }
             // The server's own wait is shorter than ours; getting here means it did not say
             // anything at all. Dropping the stream closes the channel, and a lock taken
-            // after that is given straight back (`cat` reads a closed input).
+            // after that is given straight back (the holder reads a closed input).
             Err(_) => return Err(LimitError::Busy),
         };
 
         if let Some(pid) = line.strip_prefix("LOCKED ") {
             if let Ok(holder_pid) = pid.trim().parse::<u32>() {
+                let (stop, stopped) = tokio::sync::oneshot::channel();
+                let renewing = tokio::spawn(async move {
+                    let _permit = permit;
+                    renew_until(stream, RENEW_EVERY, stopped).await
+                });
                 return Ok(TxnLock {
-                    stream,
                     holder_pid,
-                    _permit: permit,
+                    stop: Some(stop),
+                    renewing,
                 });
             }
         }
@@ -961,7 +1100,8 @@ impl Serving<'_> {
 /// The line every writing step starts with: go on only while our lock holder is alive.
 ///
 /// Checked by the mark in the holder's environment, not by the PID alone: a holder that
-/// ended (the lease ran out) may have had its PID given to another process since.
+/// ended (its channel closed, or it heard nothing for `LOCK_SILENCE`, T618) may have had its
+/// PID given to another process since.
 fn guard(txn: &Txn<'_>) -> String {
     format!(
         "tr '\\0' '\\n' < /proc/{pid}/environ 2>/dev/null | grep -qx '{TXN_ENV}={id}' \

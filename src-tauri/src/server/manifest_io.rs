@@ -62,6 +62,27 @@ pub enum ManifestIoError {
     #[error("catalogue could not be parsed: {0}")]
     Malformed(String),
 
+    /// Moving one of the entries a write carries with it was refused on the server (T620):
+    /// its source was not there, its destination already was, or `mv` said no. Everything
+    /// moved before it **was moved back**, and the catalogue was not written — the server
+    /// is exactly as it was before the call.
+    #[error("{old} could not be moved to {new} ({why}); nothing was changed")]
+    MoveFailed {
+        old: String,
+        new: String,
+        why: String,
+    },
+
+    /// A move failed and moving back what had already been moved failed too (T620). The
+    /// catalogue was not written; the entries named here are still under their **new**
+    /// names, which the catalogue does not know about. Told apart from `MoveFailed` on
+    /// purpose: this one needs a person to go and look.
+    #[error("the library's files were being moved and not all could be moved back; still under the new names: {stuck:?} ({why})")]
+    MovedBackIncompletely {
+        stuck: Vec<(String, String)>,
+        why: String,
+    },
+
     #[error(transparent)]
     Ssh(#[from] crate::ssh::SshError),
 }
@@ -152,6 +173,34 @@ pub async fn write(
     manifest: &Manifest,
     base_generation: u64,
 ) -> Result<()> {
+    write_moving(conn, video_dir, manifest, base_generation, &[]).await
+}
+
+/// Write the catalogue **together with moving entries of the serving directory** it
+/// describes (T620) — `(old, new)` top-level names, relative to `video_dir`, moved in order.
+///
+/// The moves happen on the server **inside the same step, under the same lock** as the
+/// replacement (see `write` and `replace_script`): the catalogue is checked first, and a
+/// catalogue somebody else changed meanwhile stops everything before a single entry is
+/// moved (`Conflict`); then the entries are moved one by one; then the catalogue is
+/// replaced. A move that is refused, or a replacement that fails after the moves, moves
+/// back everything already moved, newest first, and the catalogue is left as it was
+/// (`MoveFailed`, or the replacement's own error); a move-back that fails too is
+/// `MovedBackIncompletely`.
+///
+/// This is what `media_rename` needs (QA-19 №5): it used to move the files and **then**
+/// write the catalogue, so a catalogue changed in between was refused as a conflict with
+/// the files already under their new names — a catalogue pointing at names that were gone,
+/// and a "read again and retry" that could not work, because the retry looked for them.
+///
+/// An empty `moves` is exactly `write`.
+pub async fn write_moving(
+    conn: &Connection,
+    video_dir: &str,
+    manifest: &Manifest,
+    base_generation: u64,
+    moves: &[(String, String)],
+) -> Result<()> {
     // The check comes BEFORE the staged file is created. Otherwise a refusal would
     // leave litter in the serving directory — and a person sees that directory as
     // their library.
@@ -201,7 +250,7 @@ pub async fn write(
 
     // Replacement by renaming specifically: it is atomic within a file system — a
     // reader sees either the whole old catalogue or the whole new one.
-    let script = replace_script(video_dir, &target, &temp, &expected);
+    let script = replace_script(video_dir, &target, &temp, &expected, moves);
     let out = match conn.exec(&script).await {
         Ok(out) => out,
         Err(e) => {
@@ -218,9 +267,34 @@ pub async fn write(
         tracing::info!(
             generation = manifest.generation,
             media = manifest.media.len(),
+            moved = moves.len(),
             "library catalogue written"
         );
         return Ok(());
+    }
+    let stuck = stuck_in(&out.stdout, moves);
+    let complaint = if out.stderr.trim().is_empty() {
+        String::new()
+    } else {
+        format!(", complained {:?}", out.stderr.trim())
+    };
+    if !stuck.is_empty() {
+        return Err(ManifestIoError::MovedBackIncompletely {
+            stuck,
+            why: format!("{verdict}{complaint}"),
+        });
+    }
+    if let Some(rest) = verdict.strip_prefix("MOVE_FAILED ") {
+        let mut words = rest.split_whitespace();
+        let index = words.next().and_then(|i| i.parse::<usize>().ok());
+        let why = words.next().unwrap_or("refused");
+        if let Some((old, new)) = index.and_then(|i| moves.get(i)) {
+            return Err(ManifestIoError::MoveFailed {
+                old: old.clone(),
+                new: new.clone(),
+                why: format!("{why}{complaint}"),
+            });
+        }
     }
     if verdict.starts_with("CONFLICT") {
         // Somebody else's catalogue stands. Which generation it carries is read again
@@ -263,10 +337,71 @@ pub async fn write(
 /// The block is a compound command on purpose: a failed redirection on `exec 9<` would end
 /// a non-interactive `sh` on the spot, before it could remove the staged file; on `{ }`
 /// it only skips the block.
-fn replace_script(video_dir: &str, target: &str, temp: &str, expected: &str) -> String {
+///
+/// **The moves (T620)** come after the check and before the replacement, under the same
+/// lock. Each is checked before and after: the source must be there and the destination
+/// must not (a `mv -n` onto a name that exists does nothing and may still exit 0 — the
+/// old code's `mv -n` could "succeed" without moving anything), and afterwards the source
+/// must be gone and the destination there. Any move that does not hold, and a replacement
+/// that fails after the moves, runs `undo`: what was moved goes back, newest first, each
+/// move-back checked the same way; one that does not hold prints `STUCK <i>` and the rest
+/// are still tried. Then `MOVE_FAILED <i> <why>` (or `FAIL_REPLACE`) — the catalogue was
+/// not replaced.
+fn replace_script(
+    video_dir: &str,
+    target: &str,
+    temp: &str,
+    expected: &str,
+    moves: &[(String, String)],
+) -> String {
     let dir = shell_quote(video_dir);
     let target = shell_quote(target);
     let temp = shell_quote(temp);
+    let there = |p: &str| format!("{{ [ -e {p} ] || [ -L {p} ]; }}");
+    let quoted: Vec<(String, String)> = moves
+        .iter()
+        .map(|(old, new)| {
+            (
+                shell_quote(&join_remote(video_dir, old)),
+                shell_quote(&join_remote(video_dir, new)),
+            )
+        })
+        .collect();
+
+    let mut undo = String::from("undo() {\n");
+    for (i, (src, dst)) in quoted.iter().enumerate().rev() {
+        undo.push_str(&format!(
+            "if [ $moved -gt {i} ]; then\n\
+             if ! {dst_there} || {src_there}; then echo 'STUCK {i}'; \
+             else mv -n -- {dst} {src}; \
+             if {dst_there} || ! {src_there}; then echo 'STUCK {i}'; fi; fi\n\
+             fi\n",
+            dst_there = there(dst),
+            src_there = there(src),
+        ));
+    }
+    undo.push_str(":\n}\n");
+
+    let mut moving = String::new();
+    for (i, (src, dst)) in quoted.iter().enumerate() {
+        let failed = |why: &str| {
+            format!("{{ undo; rm -f -- {temp}; echo 'MOVE_FAILED {i} {why}'; exit 7; }}")
+        };
+        moving.push_str(&format!(
+            "{src_there} || {missing}\n\
+             ! {dst_there} || {exists}\n\
+             mv -n -- {src} {dst} || {refused}\n\
+             if {src_there} || ! {dst_there}; then {refused}; fi\n\
+             moved={next}\n",
+            src_there = there(src),
+            dst_there = there(dst),
+            missing = failed("missing"),
+            exists = failed("exists"),
+            refused = failed("refused"),
+            next = i + 1,
+        ));
+    }
+
     format!(
         "{{\n\
          flock -x -w {LOCK_WAIT_SECS} -E {LOCK_TIMEOUT_EXIT} 9; rc=$?\n\
@@ -277,7 +412,10 @@ fn replace_script(video_dir: &str, target: &str, temp: &str, expected: &str) -> 
          sum=${{sum%% *}}\n\
          else sum={ABSENT}; fi\n\
          if [ \"$sum\" != '{expected}' ]; then rm -f -- {temp}; echo CONFLICT; exit 3; fi\n\
-         mv -f -- {temp} {target} || {{ rm -f -- {temp}; echo FAIL_REPLACE; exit 6; }}\n\
+         moved=0\n\
+         {undo}\
+         {moving}\
+         mv -f -- {temp} {target} || {{ undo; rm -f -- {temp}; echo FAIL_REPLACE; exit 6; }}\n\
          echo REPLACED\n\
          exit 0\n\
          }} 9< {dir}\n\
@@ -285,6 +423,16 @@ fn replace_script(video_dir: &str, target: &str, temp: &str, expected: &str) -> 
          echo FAIL_LOCK_OPEN\n\
          exit 4\n"
     )
+}
+
+/// The moves the script says it could not put back (`STUCK <i>`), as `(old, new)`.
+fn stuck_in(stdout: &str, moves: &[(String, String)]) -> Vec<(String, String)> {
+    stdout
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("STUCK "))
+        .filter_map(|i| i.trim().parse::<usize>().ok())
+        .filter_map(|i| moves.get(i).cloned())
+        .collect()
 }
 
 /// The last line the step printed — it ends by saying how it went.
