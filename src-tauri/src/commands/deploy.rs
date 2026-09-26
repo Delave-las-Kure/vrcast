@@ -576,12 +576,12 @@ pub fn rollback_error(e: upgrade::RollbackError) -> AppError {
 
 /// Whether a deploy or upgrade for this server is already running.
 ///
-/// The same gap `running_build_for` (T591) and `running_upload_for` document and
-/// accept, for the same reason: this is not the last line of defence, and closing it
-/// with a lock held for the whole submission costs more than the case is worth — two
-/// deploys begun at the very same instant would both pass this check. What it closes
-/// is the realistic case: a repeat click on "agree, deploy" before `running` reaches
-/// the UI. Unlike `running_build_for`'s `slug`, there is nothing narrower than the
+/// On its own this left a gap: two calls could both pass it before either reached `submit`
+/// (`gate::open` and the DNS look lie in between). Since T621 `start` takes the server's
+/// claim in the task engine first (`TaskEngine::claim`), which closes it. This scan stays
+/// for what the claim does not see: the moment between a run's work ending (the claim given
+/// back) and its task being written final, and anything else still unfinished in the list.
+/// Unlike `running_build_for`'s `slug`, there is nothing narrower than the
 /// server itself to scope this to — a fresh deploy and an upgrade of the SAME server
 /// are the same class of dangerous, unrepeatable, real-machine work (create the
 /// system user, open the firewall, rewrite the SSH configuration), so BOTH kinds are
@@ -617,6 +617,19 @@ async fn start(
     // own cheap preflight because that preflight still needs a connection anyway. Here
     // `gate::open` is a real SSH connection and `look_at_domain` further down can cost
     // up to 30 seconds on DNS (T593) — a doomed second call should not pay for either.
+    // T621: the check and the taking are one act, under the engine's lock — two calls at the
+    // same instant cannot both get past here. Held until the task exists and then by its work
+    // (moved in below); dropped on every early return in between (refused door, DNS, key), so
+    // a failed attempt does not block the next one.
+    let Some(claim) = state.tasks.claim(&format!("deploy:{server_id}")) else {
+        // The other call may not have its task yet (still connecting, still asking DNS): then
+        // there is no identifier to name.
+        let mut refused = AppError::new(ErrorCode::DeployAlreadyRunning);
+        if let Some(busy) = running_deploy_for(state, server_id)? {
+            refused = refused.with_cause(busy);
+        }
+        return Err(refused);
+    };
     if let Some(busy) = running_deploy_for(state, server_id)? {
         return Err(AppError::new(ErrorCode::DeployAlreadyRunning).with_cause(busy));
     }
@@ -662,6 +675,7 @@ async fn start(
     let task_id = state
         .tasks
         .submit(task_kind, Some(server_id.clone()), move |task| async move {
+            let _claim = claim;
             let opened = gate::open(secrets.as_ref(), &profile, intent).await?;
             let facts: Machine = machine::look(&opened.conn).await?;
             let address = ServerAddress::new(&profile.host, profile.port);
