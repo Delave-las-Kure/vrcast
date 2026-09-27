@@ -407,6 +407,7 @@ export const en: Catalogue = {
     STAGE_STOPPING_AFTER_STEP:
       "stopping — waiting for the current command on the server to finish",
     STAGE_DEPLOYING: "Setting the server up",
+    STAGE_WAITING_UNHEARD_COMMAND: "Waiting for an interrupted command on the server to finish",
     STAGE_DONE: "done",
 
     // --- what closing the application would do ---

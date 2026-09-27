@@ -151,6 +151,26 @@ describe("filling a wording in", () => {
     expect(shown.message).toContain("film.mp4");
     expect(shown.message).toContain("CDN");
   });
+
+  it("says what a deployment is waiting for when a command's end was not heard", () => {
+    // T624: up to ten minutes with a bar that does not move — the stage has to say why,
+    // and not in the words of "deploying" or of a stop the person did not ask for.
+    const detail = { key: "STAGE_WAITING_UNHEARD_COMMAND" as const };
+    expect(renderDetail(detail, ru, "ru")).toBe(
+      "Ждём, пока на сервере закончится прерванная команда",
+    );
+    expect(renderDetail(detail, en, "en")).toBe(
+      "Waiting for an interrupted command on the server to finish",
+    );
+    for (const catalogue of [ru, en]) {
+      expect(catalogue.details.STAGE_WAITING_UNHEARD_COMMAND).not.toBe(
+        catalogue.details.STAGE_DEPLOYING,
+      );
+      expect(catalogue.details.STAGE_WAITING_UNHEARD_COMMAND).not.toBe(
+        catalogue.details.STAGE_STOPPING_AFTER_STEP,
+      );
+    }
+  });
 });
 
 describe("what is said about falling back to the processor", () => {

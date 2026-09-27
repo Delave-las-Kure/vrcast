@@ -613,6 +613,9 @@ fn step_error(e: crate::server::deploy::DeployError) -> AppError {
     use crate::server::deploy::DeployError as E;
     match e {
         E::Ssh(inner) => inner.into(),
+        // Outside a run (a plan, a rollback) no step is named, and it reads as it did before
+        // T625: the connection's own error.
+        E::Unsettled { error, .. } => error.into(),
         E::Cancelled => AppError::new(ErrorCode::TaskCancelled),
         other => AppError::new(ErrorCode::DeployStepFailed).with_cause(other),
     }

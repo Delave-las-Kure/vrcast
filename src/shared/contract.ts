@@ -194,6 +194,7 @@ export type DetailCode =
   | "STAGE_STOP_UNCONFIRMED"
   | "STAGE_STOPPING_AFTER_STEP"
   | "STAGE_DEPLOYING"
+  | "STAGE_WAITING_UNHEARD_COMMAND"
   | "STAGE_DONE"
 
   // what closing the application would do to a task (FR-086)
