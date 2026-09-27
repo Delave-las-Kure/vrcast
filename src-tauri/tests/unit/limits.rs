@@ -457,3 +457,145 @@ fn a_rule_naming_a_medium_that_would_leave_the_directory_is_left_alone() {
     let p = plan(VIDEOS, &before, &[]);
     assert_eq!(p, SlowPlan::default());
 }
+
+// ---------- T618: a lock renewed for as long as the change is alive ----------
+
+use std::time::Duration;
+
+use tokio::io::AsyncReadExt;
+use vrcast_studio_lib::server::limits::{
+    holder_command, renew_until, Renewal, LOCK_SILENCE, RENEW_EVERY,
+};
+
+#[test]
+fn the_renewal_period_and_the_silence_it_guards_against_are_what_the_contract_says() {
+    // Three renewals may be lost to a slow link before the server lets go, and a change
+    // queued behind a silent one still gets the lock within its own two-minute wait.
+    assert_eq!(RENEW_EVERY, Duration::from_secs(15));
+    assert_eq!(LOCK_SILENCE, Duration::from_secs(60));
+    assert!(RENEW_EVERY * 4 <= LOCK_SILENCE);
+    assert!(
+        LOCK_SILENCE < Duration::from_secs(120),
+        "must stay under LOCK_WAIT"
+    );
+}
+
+#[test]
+fn the_holder_waits_for_signs_of_life_rather_than_for_a_fixed_time() {
+    let cmd = holder_command("abc123", "/etc/caddy/vrcast-limits.conf.lock");
+    assert!(
+        !cmd.contains("timeout "),
+        "a fixed lease is back — a live change would lose its lock: {cmd}"
+    );
+    assert!(
+        cmd.contains("read -r -t 60"),
+        "the holder does not wait on silence: {cmd}"
+    );
+    assert!(
+        cmd.contains("bash -c"),
+        "`read -t` needs bash, not sh: {cmd}"
+    );
+    assert!(cmd.contains("VRCAST_LIMITS_TXN=abc123"));
+    assert!(cmd.contains("flock -x -w 120 -E 75 '/etc/caddy/vrcast-limits.conf.lock'"));
+    assert!(cmd.contains("echo \"LOCKED $PPID\""), "{cmd}");
+}
+
+#[tokio::test]
+async fn renewals_keep_coming_until_the_lock_is_given_back() {
+    let (ours, mut holder) = tokio::io::duplex(1024);
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let renewing = tokio::spawn(renew_until(ours, Duration::from_millis(50), stopped));
+
+    // The holder's side: a line at a time, and never more than a few periods apart.
+    let started = std::time::Instant::now();
+    let mut byte = [0u8; 1];
+    for _ in 0..6 {
+        let n = tokio::time::timeout(Duration::from_millis(500), holder.read(&mut byte))
+            .await
+            .expect("the holder heard nothing for ten periods")
+            .expect("the holder's input failed");
+        assert_eq!(n, 1, "the input ended while the change was still alive");
+        assert_eq!(byte[0], b'\n');
+    }
+    assert!(
+        started.elapsed() >= Duration::from_millis(250),
+        "renewals came faster than asked: {:?}",
+        started.elapsed()
+    );
+
+    // Giving back: end of input on the holder's side, and a wait for the holder to end.
+    stop.send(()).expect("the renewing ended by itself");
+    let mut rest = Vec::new();
+    holder
+        .read_to_end(&mut rest)
+        .await
+        .expect("the holder's input did not end");
+    assert!(rest.iter().all(|b| *b == b'\n'));
+    drop(holder); // the holder ended: the server closes the channel
+    let renewal = renewing.await.expect("the renewing panicked");
+    assert!(renewal.sent >= 6);
+    assert!(!renewal.failed);
+    assert!(
+        renewal.given_back,
+        "the channel closed and giving back was not confirmed: {renewal:?}"
+    );
+}
+
+#[tokio::test]
+async fn giving_back_is_not_confirmed_until_the_holder_has_ended() {
+    // The holder took the end of input but is still there: no confirmation yet, and none
+    // assumed.
+    let (ours, mut holder) = tokio::io::duplex(1024);
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let renewing = tokio::spawn(renew_until(ours, Duration::from_millis(20), stopped));
+    tokio::time::sleep(Duration::from_millis(70)).await;
+    stop.send(()).expect("the renewing ended by itself");
+    let mut rest = Vec::new();
+    holder
+        .read_to_end(&mut rest)
+        .await
+        .expect("no end of input");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !renewing.is_finished(),
+        "giving back was taken as confirmed while the holder was still there"
+    );
+    drop(holder);
+    assert!(renewing.await.expect("panicked").given_back);
+}
+
+#[tokio::test]
+async fn a_closed_channel_ends_renewing_and_says_so() {
+    let (ours, holder) = tokio::io::duplex(1024);
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let renewing = tokio::spawn(renew_until(ours, Duration::from_millis(20), stopped));
+    tokio::time::sleep(Duration::from_millis(70)).await;
+    drop(holder); // the connection went: nothing more can reach the holder
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    stop.send(()).expect("the renewing ended by itself");
+    let renewal: Renewal = renewing.await.expect("panicked");
+    assert!(
+        renewal.failed,
+        "a write into a closed channel passed: {renewal:?}"
+    );
+    assert!(!renewal.given_back);
+}
+
+#[tokio::test]
+async fn an_abandoned_change_lets_the_lock_go_at_once() {
+    // `TxnLock` dropped without `release`: the stop signal goes, and the channel with it.
+    let (ours, mut holder) = tokio::io::duplex(1024);
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let renewing = tokio::spawn(renew_until(ours, Duration::from_secs(60), stopped));
+    drop(stop);
+    let renewal = tokio::time::timeout(Duration::from_secs(2), renewing)
+        .await
+        .expect("an abandoned change kept its channel open")
+        .expect("panicked");
+    assert!(!renewal.given_back);
+    let mut rest = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), holder.read_to_end(&mut rest))
+        .await
+        .expect("the holder's input never ended")
+        .expect("the holder's input failed");
+}

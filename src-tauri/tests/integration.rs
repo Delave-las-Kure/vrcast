@@ -93,6 +93,11 @@ mod deploy_key_kept;
 #[path = "integration/deploy_cut_mark.rs"]
 mod deploy_cut_mark;
 
+/// T622 — the next run removes our own half-written `*.vrcast.tmp` by name; a foreign one in
+/// `/etc` survives.
+#[path = "integration/deploy_leftovers.rs"]
+mod deploy_leftovers;
+
 #[path = "integration/detect_live.rs"]
 mod detect_live;
 
@@ -148,6 +153,11 @@ mod media_rename_during_active_build;
 /// about to enter serving under — T599 checked only the names being moved away from.
 #[path = "integration/media_rename_onto_active_upload.rs"]
 mod media_rename_onto_active_upload;
+
+/// T620 — `media_rename` checks the catalogue, moves the files and writes the catalogue as
+/// one step on the server, under the catalogue's lock.
+#[path = "integration/media_rename_atomic.rs"]
+mod media_rename_atomic;
 
 #[path = "integration/library_ops.rs"]
 mod library_ops;
