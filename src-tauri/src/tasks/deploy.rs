@@ -360,6 +360,19 @@ pub fn failed(e: DeployError, settled: &[PlannedStep]) -> AppError {
         // The link broke rather than a step refusing: the connection's own error says what
         // happened, and no step owns the failure.
         DeployError::Ssh(inner) => AppError::from(inner).with_detail(where_it_stopped(None)),
+        // T625: a command of the run whose end was not heard, its stop not confirmed, at a
+        // step — that step is named, as any step's failure is (FR-123). `cause` is the stop's
+        // own words, as it was when this came back as `INTERNAL`. Before any step (the mark,
+        // the tidy-up, an upgrade's copy) there is no step to name, and it reads as it did.
+        DeployError::Unsettled {
+            id: Some(id),
+            error,
+        } => AppError::new(ErrorCode::DeployStepFailed)
+            .with_detail(where_it_stopped(Some(id)))
+            .with_cause(error),
+        DeployError::Unsettled { id: None, error } => {
+            AppError::from(error).with_detail(where_it_stopped(None))
+        }
         DeployError::NotTaken { id } => AppError::new(ErrorCode::DeployStepFailed)
             .with_detail(where_it_stopped(Some(id)))
             .with_cause("it was applied and the check still says it was not"),

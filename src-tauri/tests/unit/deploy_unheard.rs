@@ -123,7 +123,10 @@ async fn an_unconfirmed_stop_sends_nothing_further_and_keeps_the_record() {
         ))))
     })
     .await;
-    assert!(matches!(r, Err(DeployError::Ssh(_))), "{r:?}");
+    assert!(
+        matches!(r, Err(DeployError::Unsettled { id: None, .. })),
+        "{r:?}"
+    );
     assert_eq!(
         run.may_run_until(),
         Some(sent + EXEC_CEILING),

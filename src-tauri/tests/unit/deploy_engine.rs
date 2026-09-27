@@ -18,6 +18,7 @@ use vrcast_studio_lib::domain::deploy_steps::{
     Change, Checked, PlannedStep, SkipReason, Status, StepId, ORDER,
 };
 use vrcast_studio_lib::server::deploy::{keeps_key_before, run, BeforeStep, DeployError, Step};
+use vrcast_studio_lib::ssh::SshError;
 
 /// What a step is handed here: a script of answers and a place to write down what happened.
 ///
@@ -35,6 +36,20 @@ struct Stand {
     fails: Mutex<Vec<StepId>>,
     /// T616: the run made a key, and keeping it answers this (`None` — no key was made).
     keeping: Mutex<Option<Result<(), String>>>,
+    /// T625: where a command of the run whose end was not heard fails to be settled —
+    /// `("check" | "apply" | "recheck", step)`.
+    unsettles: Mutex<Option<(&'static str, StepId)>>,
+}
+
+/// What `settle_unheard` hands back when the stop of an unheard command is not confirmed.
+fn unsettled() -> DeployError {
+    DeployError::Unsettled {
+        id: None,
+        error: SshError::Exec(String::from(
+            "a command of this run whose end was not heard may still be running, and its stop \
+             could not be confirmed: dpkg 77",
+        )),
+    }
 }
 
 #[derive(Default)]
@@ -96,6 +111,14 @@ fn check(ctx: &Stand) -> BoxFuture<'_, vrcast_studio_lib::server::deploy::Result
         let mut inner = ctx.inner.lock().unwrap();
         inner.asked.push(id);
         inner.timeline.push(("check", id));
+        let at = if inner.recheck_due {
+            "recheck"
+        } else {
+            "check"
+        };
+        if *ctx.unsettles.lock().unwrap() == Some((at, id)) {
+            return Err(unsettled());
+        }
         if inner.recheck_due {
             // The second look, after applying. Whatever it says, this step is settled.
             inner.recheck_due = false;
@@ -116,6 +139,9 @@ fn apply(ctx: &Stand) -> BoxFuture<'_, vrcast_studio_lib::server::deploy::Result
         let id = ORDER.get(inner.at).copied().unwrap_or(StepId::State);
         inner.applied.push(id);
         inner.timeline.push(("apply", id));
+        if *ctx.unsettles.lock().unwrap() == Some(("apply", id)) {
+            return Err(unsettled());
+        }
         if ctx.fails.lock().unwrap().contains(&id) {
             // A failed apply is not followed by a second check: the step is settled here.
             inner.recheck_due = false;
@@ -492,4 +518,123 @@ fn a_failure_with_no_step_says_so_rather_than_naming_one() {
         !cancelled.says(DetailCode::DeployStoppedAtStep),
         "a cancellation blamed a step, and a person would go and look at it"
     );
+}
+
+// ---------- T625: an unheard command whose stop was not confirmed names its step ----------
+
+/// Run the whole deployment with the stop of an unheard command failing at `at` of `id`;
+/// hand back what the run ended with and every step it reported, in order.
+async fn unsettled_run(
+    at: &'static str,
+    id: StepId,
+) -> (
+    vrcast_studio_lib::server::deploy::Result<Vec<PlannedStep>>,
+    Vec<PlannedStep>,
+    Stand,
+) {
+    let stand = match at {
+        "check" => Stand::saying(&[]),
+        "apply" => Stand::saying(&[(id, &[Checked::NotApplied])]),
+        _ => Stand::saying(&[(id, &[Checked::NotApplied, Checked::Applied])]),
+    };
+    *stand.unsettles.lock().unwrap() = Some((at, id));
+    let steps = all_steps();
+    let never = || false;
+    let mut seen: Vec<PlannedStep> = Vec::new();
+    let outcome = run(&stand, &steps, &never, &mut |p| seen.push(p.clone())).await;
+    (outcome, seen, stand)
+}
+
+/// FR-123 over every step and every place in a step a command is sent from — the check, the
+/// apply, the check after the apply — and so over the non-blocking steps (`Fail2ban`,
+/// `UnattendedUpgrades`, `Tuning`) as much as the blocking ones: the run ends at that step,
+/// the step is reported `Failed` with the stop's words, and the failure is `DEPLOY_STEP_FAILED`
+/// naming it, with the stop's words as `cause` (they used to arrive as `INTERNAL`, no step).
+#[tokio::test]
+async fn an_unsettled_unheard_command_fails_the_step_it_happened_at_and_names_it() {
+    use vrcast_studio_lib::commands::error::ErrorCode;
+    use vrcast_studio_lib::domain::wording::DetailCode;
+    use vrcast_studio_lib::tasks::deploy::failed;
+
+    for at in ["check", "apply", "recheck"] {
+        for id in ORDER {
+            let (outcome, seen, stand) = unsettled_run(at, id).await;
+            let what = format!("{id:?} at its {at}");
+
+            match &outcome {
+                Err(DeployError::Unsettled {
+                    id: Some(named), ..
+                }) => {
+                    assert_eq!(*named, id, "{what}: the error names another step")
+                }
+                other => panic!("{what}: the run did not end unsettled at its step: {other:?}"),
+            }
+
+            // Reported, and last: nothing of any later step was reported, asked or applied.
+            let last = seen
+                .last()
+                .unwrap_or_else(|| panic!("{what}: nothing was reported"));
+            assert_eq!(last.id, id, "{what}: {seen:?}");
+            match &last.status {
+                Status::Failed { detail } => assert!(
+                    detail.contains("its stop could not be confirmed"),
+                    "{what}: the step's failure lost the stop's words: {detail}"
+                ),
+                other => panic!("{what}: the step was reported {other:?}, not failed"),
+            }
+            let place = ORDER.iter().position(|s| *s == id).unwrap();
+            assert!(
+                stand
+                    .asked()
+                    .iter()
+                    .chain(stand.applied().iter())
+                    .all(|s| ORDER.iter().position(|o| o == s).unwrap() <= place),
+                "{what}: the run went on past the step: asked {:?}, applied {:?}",
+                stand.asked(),
+                stand.applied()
+            );
+
+            let error = failed(outcome.unwrap_err(), &seen);
+            assert_eq!(error.code, ErrorCode::DeployStepFailed, "{what}");
+            let named = error
+                .details
+                .iter()
+                .find(|d| d.key == DetailCode::DeployStoppedAtStep)
+                .unwrap_or_else(|| panic!("{what}: the error does not say which step"));
+            assert_eq!(
+                named.params.get("step"),
+                Some(&serde_json::json!(format!("{id:?}"))),
+                "{what}"
+            );
+            assert_eq!(
+                named.params.get("done"),
+                Some(&serde_json::json!(place as u64)),
+                "{what}: how far it got is not the steps before it"
+            );
+            assert!(
+                error
+                    .cause
+                    .as_deref()
+                    .is_some_and(|c| c.contains("its stop could not be confirmed")),
+                "{what}: the cause is not the stop's own words: {:?}",
+                error.cause
+            );
+        }
+    }
+}
+
+/// Before any step — the mark of ours, the tidy-up, an upgrade's copy — there is no step to
+/// name, and none is claimed: the connection's own error, as before T625.
+#[test]
+fn an_unsettled_unheard_command_before_any_step_names_none() {
+    use vrcast_studio_lib::domain::wording::DetailCode;
+    use vrcast_studio_lib::tasks::deploy::failed;
+
+    let error = failed(unsettled(), &[]);
+    assert!(error.says(DetailCode::DeployStoppedAfter));
+    assert!(!error.says(DetailCode::DeployStoppedAtStep));
+    assert!(error
+        .cause
+        .as_deref()
+        .is_some_and(|c| c.contains("its stop could not be confirmed")));
 }
