@@ -24,8 +24,7 @@ import { DomainCheck } from "./DomainCheck";
 import { Ipv6Choice } from "./Ipv6Choice";
 import { StepList } from "./StepList";
 import { ErrorNotice } from "../shared/ErrorNotice";
-import { toInput } from "../servers/EditServerDialog";
-import { useServerById } from "../servers/store";
+import { useServers } from "../servers/store";
 import { useT } from "../../shared/i18n";
 import { ipc, onDeployProgress, onTaskDone } from "../../shared/ipc";
 import type {
@@ -49,7 +48,7 @@ function choiceToMode(choice: Choice): Ipv6Mode {
 export function DeployScreen({ serverId }: { serverId: string }) {
   const t = useT();
   const words = t.ui.deploy;
-  const profile = useServerById(serverId);
+  const reloadServers = useServers((s) => s.reload);
 
   // **`null` means nobody has chosen yet** (T525(1)). `deploy/ipv6.rs` in the core says it
   // plainly in its own header: two paths, and neither of them is a default — a default here
@@ -108,17 +107,21 @@ export function DeployScreen({ serverId }: { serverId: string }) {
   // deployment itself: it is a side effect of the choice, not a precondition for using it —
   // so it is attempted silently and its failure does not surface as an `ErrorNotice`,
   // exactly as it would not stop `start` below from running with the in-memory `ipv6`.
+  //
+  // ⚠ **That field alone** (T626, QA-20 №1). It used to go through `serverUpdate` with the
+  // whole profile as this screen held it — and a deployment switches a password profile to
+  // `managed_key` in the middle of its run (T616). A choice changed after the run sent the
+  // old `auth_kind = password` back over a store now holding the key, and every later sign-in
+  // sent the key as a password. Nothing but the IPv6 column is this screen's to write.
   const chooseIpv6 = useCallback(
     (choice: Choice) => {
       setIpv6(choice);
-      if (!profile) return;
-      const input = { ...toInput(profile), ipv6_mode: choiceToMode(choice) };
-      void ipc.serverUpdate(serverId, input, null).catch(() => {
+      void ipc.serverSetIpv6Mode(serverId, choiceToMode(choice)).catch(() => {
         // Silent: see the comment above `chooseIpv6`. The person's choice still drives
         // this run of the deploy screen either way.
       });
     },
-    [profile, serverId],
+    [serverId],
   );
 
 
@@ -175,6 +178,12 @@ export function DeployScreen({ serverId }: { serverId: string }) {
     const finish = onTaskDone((event) => {
       if (!alive || event.id !== running) return;
       setRunning(null);
+      // T626 — the run may have changed the profile underneath this screen: a password
+      // profile is switched to the key the run made (T616), and that holds whether the run
+      // then finished, failed or was cancelled. Every screen reading the profiles reads them
+      // from the store, so the store is brought up to date here rather than left saying
+      // "password" until somebody happens to open the list of servers.
+      void reloadServers();
       if (event.error) setError(event.error);
       else setDone(true);
     });
@@ -183,7 +192,7 @@ export function DeployScreen({ serverId }: { serverId: string }) {
       void steps.then((off) => off());
       void finish.then((off) => off());
     };
-  }, [running, serverId]);
+  }, [running, serverId, reloadServers]);
 
   const start = useCallback(() => {
     // T593 — checked synchronously, before anything else: a second click that lands

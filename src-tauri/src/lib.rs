@@ -241,6 +241,7 @@ pub fn run() {
             commands::servers::ipc::server_set_active,
             commands::servers::ipc::server_test,
             commands::servers::ipc::server_fingerprint_confirm,
+            commands::servers::ipc::server_set_ipv6_mode,
             commands::servers::ipc::server_import_suggestion,
             commands::viewers::ipc::viewers_watch_start,
             commands::viewers::ipc::viewers_watch_stop,

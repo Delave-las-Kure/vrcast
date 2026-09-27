@@ -8,16 +8,26 @@
  * nor tuning would read as a success.
  */
 
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderIn, ru } from "../../../test-utils";
-import type { DeployPreview, DomainAnswer, PlannedStep, ServerProfile } from "../../../shared/contract";
+import { en, renderIn, ru } from "../../../test-utils";
+import type {
+  DeployPreview,
+  DomainAnswer,
+  PlannedStep,
+  ServerProfile,
+  TaskDoneEvent,
+} from "../../../shared/contract";
 
 const mockDnsCheck = vi.fn<() => Promise<DomainAnswer>>();
 const mockPlan = vi.fn<() => Promise<DeployPreview>>();
 const mockRun = vi.fn<(...a: unknown[]) => Promise<string>>();
 const mockServerUpdate = vi.fn<(...a: unknown[]) => Promise<void>>();
+const mockSetIpv6Mode = vi.fn<(...a: unknown[]) => Promise<void>>();
+const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
+/** The screen's own `task:done` listener, held so a test can end a run (T626). */
+let sendTaskDone: ((e: TaskDoneEvent) => void) | null = null;
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -31,9 +41,14 @@ vi.mock("../../../shared/ipc", async () => {
       deployPlan: () => mockPlan(),
       deployRun: (...a: unknown[]) => mockRun(...a),
       serverUpdate: (...a: unknown[]) => mockServerUpdate(...a),
+      serverSetIpv6Mode: (...a: unknown[]) => mockSetIpv6Mode(...a),
+      serversList: () => mockServersList(),
     }),
     onDeployProgress: () => Promise.resolve(() => {}),
-    onTaskDone: () => Promise.resolve(() => {}),
+    onTaskDone: (handler: (e: TaskDoneEvent) => void) => {
+      sendTaskDone = handler;
+      return Promise.resolve(() => {});
+    },
   };
 });
 
@@ -112,6 +127,9 @@ beforeEach(() => {
   mockPlan.mockResolvedValue(PREVIEW);
   mockRun.mockResolvedValue("task-1");
   mockServerUpdate.mockResolvedValue(undefined);
+  mockSetIpv6Mode.mockResolvedValue(undefined);
+  mockServersList.mockResolvedValue([profile()]);
+  sendTaskDone = null;
   useServers.setState({ profiles: [profile()], loading: false, error: null });
 });
 
@@ -223,27 +241,21 @@ describe("deployment", () => {
     renderIn(<DeployScreen serverId="s1" />, "ru");
     chooseIpv6("Disable");
 
-    await waitFor(() => expect(mockServerUpdate).toHaveBeenCalled());
-    // The first argument is which profile, the second is the full ServerInput with the
-    // choice folded in, the third is `null` — the accepted way of saying "leave the secret
-    // alone" (EditServerDialog does the same when its secret field is left empty).
-    expect(mockServerUpdate.mock.calls[0]?.[0]).toBe("s1");
-    expect((mockServerUpdate.mock.calls[0]?.[1] as { ipv6_mode: string }).ipv6_mode).toBe(
-      "disable",
-    );
-    expect(mockServerUpdate.mock.calls[0]?.[2]).toBeNull();
+    // That field alone, through its own command (T626): the whole profile is never written
+    // back from here, so nothing this screen holds can go stale in the database.
+    await waitFor(() => expect(mockSetIpv6Mode).toHaveBeenCalledWith("s1", "disable"));
+    expect(mockServerUpdate).not.toHaveBeenCalled();
   });
 
   it("saves the other IPv6 choice with its own value, not always the same one", async () => {
     renderIn(<DeployScreen serverId="s1" />, "ru");
     chooseIpv6("Keep");
 
-    await waitFor(() => expect(mockServerUpdate).toHaveBeenCalled());
-    expect((mockServerUpdate.mock.calls[0]?.[1] as { ipv6_mode: string }).ipv6_mode).toBe("keep");
+    await waitFor(() => expect(mockSetIpv6Mode).toHaveBeenCalledWith("s1", "keep"));
   });
 
   it("does not let a failed save of the IPv6 choice block starting the deployment", async () => {
-    mockServerUpdate.mockRejectedValue(new Error("offline"));
+    mockSetIpv6Mode.mockRejectedValue(new Error("offline"));
     renderIn(<DeployScreen serverId="s1" />, "ru");
     chooseIpv6("Disable");
 
@@ -440,5 +452,93 @@ describe("T611 — somebody else's Caddyfile on a first deployment", () => {
     await waitFor(() => expect(mockRun).toHaveBeenCalled());
     expect(mockRun.mock.calls[0]?.[2]).toBe(true);
     expect(mockRun.mock.calls[0]?.[3]).toBe(true);
+  });
+
+  it.each([
+    ["ru", ru.ui.deploy.replaceCaddyfileMeans, "только если", "вручную"],
+    ["en", en.ui.deploy.replaceCaddyfileMeans, "only if", "by hand"],
+  ] as const)(
+    "says, beside the box, that rollback brings the file back only after a full run (T631, %s)",
+    async (lang, means, onlyIf, byHand) => {
+      // The owner's decision of 2026-09-27: a server whose run broke off is `Unfinished` and
+      // not let through to `server_rollback`. A person agreeing to the replacement is owed that
+      // condition, and where the old file then lies, before they tick the box.
+      mockPlan.mockResolvedValue(FOREIGN);
+      renderIn(<DeployScreen serverId="s1" />, lang);
+      chooseIpv6("Disable");
+
+      expect(await screen.findByText(means)).toBeInTheDocument();
+      expect(means).toContain(onlyIf);
+      expect(means).toContain(byHand);
+      expect(means).toContain("/etc/vrcast/backup/");
+      expect(means).toContain("/Caddyfile");
+    },
+  );
+});
+
+describe("T626 — the profile a run switched to its own key is not put back on password", () => {
+  /** Start a run and wait until the screen listens for its end. */
+  async function startRun() {
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.agreeAndStart)).toBeEnabled());
+    fireEvent.click(screen.getByText(ru.ui.deploy.agreeAndStart));
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.running)).toBeInTheDocument());
+    await waitFor(() => expect(sendTaskDone).not.toBeNull());
+  }
+
+  function end(error: TaskDoneEvent["error"]) {
+    act(() =>
+      sendTaskDone?.({
+        event: "done",
+        id: "task-1",
+        state: error ? "failed" : "completed",
+        error,
+        notices: [],
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    // A password profile, as a person creates it for a bought server — and what the core
+    // answers once the run has kept its key (T616).
+    useServers.setState({
+      profiles: [profile({ auth_kind: "password" })],
+      loading: false,
+      error: null,
+    });
+    mockServersList.mockResolvedValue([profile({ auth_kind: "managed_key" })]);
+  });
+
+  it("reads the profiles again when the run fails, and a changed IPv6 choice sends no auth_kind", async () => {
+    await startRun();
+    mockSetIpv6Mode.mockClear();
+
+    end({ code: "DEPLOY_STEP_FAILED", details: [], cause: "step Fail2ban failed" });
+
+    await waitFor(() => expect(mockServersList).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(useServers.getState().profiles[0]?.auth_kind).toBe("managed_key"),
+    );
+
+    // The choice is open again after a failure; changing it writes that field alone.
+    chooseIpv6("Keep");
+    await waitFor(() => expect(mockSetIpv6Mode).toHaveBeenCalledWith("s1", "keep"));
+    expect(mockServerUpdate).not.toHaveBeenCalled();
+    for (const call of mockSetIpv6Mode.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("auth_kind");
+    }
+  });
+
+  it("reads the profiles again when the run finishes", async () => {
+    await startRun();
+
+    end(null);
+
+    await waitFor(() => expect(screen.getByText(ru.ui.deploy.finished)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(useServers.getState().profiles[0]?.auth_kind).toBe("managed_key"),
+    );
+    expect(mockServerUpdate).not.toHaveBeenCalled();
   });
 });

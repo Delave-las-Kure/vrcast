@@ -125,6 +125,40 @@ pub(crate) fn no_such_server(id: &str) -> AppError {
         .with_cause(id)
 }
 
+/// ⚠ **T626 (QA-20 №1) — a way of signing in is not moved to or from `managed_key` without a
+/// new secret.**
+///
+/// A profile becomes `managed_key` in the middle of a deployment (T616): the made key
+/// **replaces** the password under the same entry of the operating system's store. A screen
+/// still holding the profile as it was before — the deploy screen, an edit form opened
+/// earlier — sends `auth_kind = password` with no secret, and writing that as given leaves a
+/// profile saying "password" over a store holding a private key: every later connection sends
+/// the key as a password, and after `SshHardening` nothing lets the person in.
+///
+/// So the change is refused unless a secret comes with it — the one case where the new way of
+/// signing in and what the store holds agree again. The same the other way round: a profile
+/// declared `managed_key` over a store still holding a password would send the password as a
+/// key. An empty secret counts as none — the interface sends one only when a field was filled.
+fn refuse_stale_sign_in(
+    existing: &ServerProfile,
+    input: &ServerInput,
+    secret: Option<&str>,
+) -> Result<()> {
+    let moves = existing.auth_kind != input.auth_kind
+        && (existing.auth_kind == AuthKind::ManagedKey || input.auth_kind == AuthKind::ManagedKey);
+    let has_secret = secret.is_some_and(|s| !s.is_empty());
+    if moves && !has_secret {
+        return Err(AppError::new(ErrorCode::InvalidInput)
+            .with_detail(
+                Detail::new(DetailCode::ProfileAuthNeedsSecret)
+                    .with("from", existing.auth_kind.as_str())
+                    .with("to", input.auth_kind.as_str()),
+            )
+            .with_cause("auth_kind"));
+    }
+    Ok(())
+}
+
 pub mod api {
     use super::*;
     use crate::store::profiles;
@@ -177,6 +211,7 @@ pub mod api {
         secret: Option<&str>,
     ) -> Result<()> {
         let existing = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
+        refuse_stale_sign_in(&existing, &input, secret)?;
 
         let mut profile = profile_from(input, existing.id.clone(), existing.secret_ref.clone());
         // The active mark is a deliberate act of a person's own and editing a field is not a
@@ -295,6 +330,20 @@ pub mod api {
             }))
     }
 
+    /// Remember the IPv6 choice made on the deploy screen (FR-135, T525(3)) — that field alone
+    /// (T626).
+    ///
+    /// Its own command rather than `server_update` with the whole profile: the screen's copy of
+    /// the profile goes out of date during a deployment (T616 switches a password profile to
+    /// `managed_key`), and a whole-profile write would put the old way of signing in back.
+    pub fn server_set_ipv6_mode(state: &AppState, id: &str, mode: Ipv6Mode) -> Result<()> {
+        if profiles::set_ipv6_mode(&state.db, id, mode)? {
+            Ok(())
+        } else {
+            Err(no_such_server(id))
+        }
+    }
+
     /// Confirm a server's fingerprint (FR-092).
     pub fn server_fingerprint_confirm(state: &AppState, id: &str, fingerprint: &str) -> Result<()> {
         let fingerprint = fingerprint.trim();
@@ -361,6 +410,15 @@ pub mod ipc {
         fingerprint: String,
     ) -> Result<()> {
         api::server_fingerprint_confirm(&state, &id, &fingerprint)
+    }
+
+    #[tauri::command]
+    pub fn server_set_ipv6_mode(
+        state: State<'_, AppState>,
+        id: String,
+        mode: Ipv6Mode,
+    ) -> Result<()> {
+        api::server_set_ipv6_mode(&state, &id, mode)
     }
 
     #[tauri::command]

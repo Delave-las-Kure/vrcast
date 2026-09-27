@@ -38,9 +38,13 @@ import { useServers } from "./store";
 type Stage = "form" | "fingerprint" | "test";
 
 /** `ServerProfile → ServerInput`, keeping every field but the ones the core never hands
- *  back (the secret) or manages itself (`id`, `is_active`, `host_fingerprint`). Shared
- *  with `DeployScreen` (T525(3)), which saves a single field this same way rather than
- *  inventing a second conversion. */
+ *  back (the secret) or manages itself (`id`, `is_active`, `host_fingerprint`).
+ *
+ *  ⚠ **For this form only** (T626). `DeployScreen` used to save its IPv6 choice through this
+ *  and `serverUpdate`, which wrote the whole profile back as the screen held it — including
+ *  an `auth_kind` a deployment had changed since. A single field has its own command now
+ *  (`serverSetIpv6Mode`); and the core refuses a move to or from `managed_key` that brings
+ *  no new secret, so a form opened before a deployment cannot quietly undo it either. */
 export function toInput(profile: ServerProfile): ServerInput {
   return {
     name: profile.name,
@@ -83,7 +87,10 @@ export function EditServerDialog({
     setBusy(true);
     setError(null);
     try {
-      await ipc.serverUpdate(profile.id, input, secret === "" ? null : secret);
+      // T626 — the made key is not typed by anybody: whatever is left in the (hidden) secret
+      // field from a moment on another way of signing in must not replace it in the store.
+      const newSecret = input.auth_kind === "managed_key" || secret === "" ? null : secret;
+      await ipc.serverUpdate(profile.id, input, newSecret);
       setSecret("");
       const addressChanged = input.host !== profile.host || input.port !== profile.port;
       if (addressChanged) {
@@ -144,6 +151,7 @@ export function EditServerDialog({
           busyLabel={s.saving}
           onSubmit={() => void save()}
           onCancel={onClose}
+          offerManagedKey={profile.auth_kind === "managed_key"}
         />
       )}
 

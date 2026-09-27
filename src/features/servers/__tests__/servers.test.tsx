@@ -374,6 +374,68 @@ describe("editing a server profile", () => {
     );
     await waitFor(() => expect(mockServerTest).toHaveBeenCalledWith("srv_1"));
   });
+
+  it("keeps a profile on the made key when an unrelated field is edited (T626)", async () => {
+    // Before T626 the list offered only "By key"/"By password", so a `managed_key` profile
+    // opened as "By key" with an empty key path — and whatever a person then saved was not
+    // the way this server lets them in any more.
+    mockServersList.mockResolvedValue([makeProfile({ auth_kind: "managed_key", key_path: null })]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    expect(await screen.findByLabelText(ru.ui.wizard.fieldAuth)).toHaveValue("managed_key");
+    expect(screen.getByText(ru.ui.wizard.authManagedKeyNote)).toBeInTheDocument();
+    // Nothing to type for a key nobody types: no secret field that could overwrite it.
+    expect(screen.queryByLabelText(ru.ui.wizard.fieldPassword)).toBeNull();
+    expect(screen.queryByLabelText(ru.ui.wizard.fieldPassphrase)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldName), {
+      target: { value: "Мой сервер 2" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ name: "Мой сервер 2", auth_kind: "managed_key", key_path: null }),
+        null,
+      ),
+    );
+  });
+
+  it("does not offer the made key to a profile that never had one (T626)", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    const select = await screen.findByLabelText(ru.ui.wizard.fieldAuth);
+    expect(select.querySelector("option[value='managed_key']")).toBeNull();
+  });
+
+  it("shows the core's refusal of a stale way of signing in rather than closing (T626)", async () => {
+    mockServersList.mockResolvedValue([makeProfile({ auth_kind: "managed_key", key_path: null })]);
+    mockServerUpdate.mockRejectedValue({
+      code: "INVALID_INPUT",
+      details: [
+        { key: "PROFILE_AUTH_NEEDS_SECRET", params: { from: "managed_key", to: "password" } },
+      ],
+      cause: "auth_kind",
+    });
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldAuth), {
+      target: { value: "password" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    expect(
+      await screen.findByText(ru.details.PROFILE_AUTH_NEEDS_SECRET, { exact: false }),
+    ).toBeInTheDocument();
+    // Still on the form: nothing was saved.
+    expect(screen.getByText(ru.ui.servers.save)).toBeInTheDocument();
+  });
 });
 
 function managedState(over: Partial<ServerState> = {}): ServerState {
