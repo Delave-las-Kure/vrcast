@@ -14,6 +14,12 @@
 //! secret store. A new application state over those two signs in through the production gate
 //! (`server_detect`, `gate::open`, `connect_raw` with the profile's own credentials).
 //!
+//! T627 (QA-20 №2): and then **the real `deploy_run`** over the same two, to the end — the
+//! repeat SC-015 promises. With the profile on the kept managed key, `SshKey`'s proof used to
+//! have nothing to sign in with and said "no" without trying, so the repeat failed there. The
+//! domain is `<address>.sslip.io` for the container's own address, so the production DNS look
+//! and `DnsCheck` pass for real (needs the network to reach the root servers and sslip.io).
+//!
 //! Needs Docker and the Ubuntu archive (the Packages step installs for real).
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +37,8 @@ use vrcast_studio_lib::server::deploy::{self, machine, Context, Proofs, RunMark}
 use vrcast_studio_lib::ssh::keygen;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretStore};
+use vrcast_studio_lib::tasks::state::TaskState;
+use vrcast_studio_lib::tasks::store::TaskRecord;
 
 use super::deploy_clean::{by_password, key_works, password_refused, VIDEO_DIR};
 use super::deploy_fixture::{DeployTarget, Flavour, ROOT_PASSWORD};
@@ -40,6 +48,9 @@ async fn a_run_closed_after_the_hardening_step_leaves_a_profile_that_signs_in_wi
     let target = DeployTarget::start(Flavour::Clean).expect("the bare container would not come up");
     let db = Arc::new(Db::open_in_memory().unwrap());
     let secrets: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+    // T627: a domain that really points at the container, so the repeat below can go through
+    // the production `deploy_run` — its DNS look and `DnsCheck` included — to the end.
+    let domain = domain_of(&target);
 
     let id = {
         let state = AppState::with_db(db.clone(), secrets.clone()).expect("no state");
@@ -52,7 +63,7 @@ async fn a_run_closed_after_the_hardening_step_leaves_a_profile_that_signs_in_wi
                 user: String::from("root"),
                 auth_kind: AuthKind::Password,
                 key_path: None,
-                domain: String::from("vrcast-container.invalid"),
+                domain: domain.clone(),
                 video_dir: None,
                 cdn_base: None,
                 ipv6_mode: None,
@@ -78,7 +89,7 @@ async fn a_run_closed_after_the_hardening_step_leaves_a_profile_that_signs_in_wi
         let password_proof = || -> BoxFuture<'_, bool> { Box::pin(password_refused(&target)) };
         let ctx = Context {
             conn: &conn,
-            domain: "vrcast-container.invalid",
+            domain: &domain,
             video_dir: VIDEO_DIR,
             ipv6: Ipv6Choice::Keep,
             server: ServerAddresses { v4: None, v6: None },
@@ -150,4 +161,64 @@ async fn a_run_closed_after_the_hardening_step_leaves_a_profile_that_signs_in_wi
         Kind::Unfinished,
         "the half-deployed server was not recognised as ours and unfinished: {found:?}"
     );
+
+    // T627 (QA-20 №2): **the repeat is a real `deploy_run`**, the production path end to end,
+    // with the kept key the only way in. It used to fail at `SshKey`: the proof that a fresh
+    // login with the key works had nothing to sign in with for a managed key and said "no"
+    // without trying — "a fresh login with it does not work", and the server was never
+    // finished (SC-015).
+    let task_id = deploy_api::deploy_run(&state, &id, Ipv6Choice::Keep, true, false)
+        .await
+        .expect("the repeat deployment would not start");
+    let ended = wait_for_final(&state, &task_id).await;
+    assert_eq!(
+        ended.state,
+        TaskState::Completed,
+        "the repeat deployment with the kept key did not finish: {:?}",
+        ended.error
+    );
+    let found = deploy_api::server_detect(&state, &id)
+        .await
+        .expect("the finished server would not say what it is");
+    assert_eq!(
+        found.kind,
+        Kind::Managed,
+        "the repeat did not finish the server: {found:?}"
+    );
+    assert!(
+        password_refused(&target).await,
+        "the server takes a password again"
+    );
+}
+
+/// The domain `<a-b-c-d>.sslip.io` for the address the container knows itself by — the one
+/// `machine::look` reads, and so the one `DnsCheck` compares the A record with.
+fn domain_of(target: &DeployTarget) -> String {
+    let ip = target
+        .exec_inside("ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n 1")
+        .expect("the container would not say its address");
+    let ip = ip.trim();
+    assert!(
+        ip.parse::<std::net::Ipv4Addr>().is_ok(),
+        "not an IPv4 address: {ip:?}"
+    );
+    format!("{}.sslip.io", ip.replace('.', "-"))
+}
+
+async fn wait_for_final(state: &AppState, task_id: &str) -> TaskRecord {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(480);
+    loop {
+        let task = vrcast_studio_lib::commands::api::task_get(state, task_id)
+            .expect("the task disappeared");
+        if task.state.is_final() {
+            return task;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the repeat deployment did not end within eight minutes: {:?} {:?}",
+            task.state,
+            task.stage
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
 }

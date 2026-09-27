@@ -665,6 +665,51 @@ fn running_deploy_for(state: &super::AppState, server_id: &str) -> Result<Option
     Ok(None)
 }
 
+/// What `key_works` — the proof that a fresh login with our key works — signs in with (T627).
+///
+/// - A key made by this run (a password profile, T290a): that key itself. The profile still
+///   says "password" when the run begins, and asking it would prove the password works — which
+///   is not the question.
+/// - A profile on a key the application keeps (`ManagedKey`): **that key, read from the
+///   operating system's store** — `secret` is the private key itself. Before T627 this case
+///   had nothing to sign in with, and the proof said "no" without trying: a password run cut
+///   after `SshHardening` (T616 had switched the profile) could never be finished by a second
+///   run — `SshKey` was not seen applied, and its apply failed with "a fresh login with it does
+///   not work" (QA-20 №2). The same branch serves an upgrade.
+/// - A profile on a key file (`Key`): the file, with `secret` as its passphrase.
+/// - Anything else: `None`, said by the proof as "no" — the step above it refuses on the same
+///   footing, and there it can say why.
+///
+/// Pure, so the choice is checked without a server (`tests/unit/deploy_proof_key.rs`).
+pub fn proof_credentials(
+    auth_kind: AuthKind,
+    made_private: Option<&str>,
+    key_path: Option<&std::path::Path>,
+    secret: Option<&str>,
+) -> Option<Credentials> {
+    if let Some(openssh) = made_private {
+        return Some(Credentials::KeyText {
+            openssh: openssh.to_owned(),
+            passphrase: None,
+        });
+    }
+    match auth_kind {
+        AuthKind::ManagedKey => {
+            secret
+                .filter(|s| !s.trim().is_empty())
+                .map(|openssh| Credentials::KeyText {
+                    openssh: openssh.to_owned(),
+                    passphrase: None,
+                })
+        }
+        AuthKind::Key => key_path.map(|path| Credentials::Key {
+            path: path.to_path_buf(),
+            passphrase: secret.filter(|s| !s.is_empty()).map(str::to_owned),
+        }),
+        AuthKind::Password => None,
+    }
+}
+
 /// Start a deployment or an upgrade as a task.
 async fn start(
     state: &super::AppState,
@@ -743,12 +788,12 @@ async fn start(
             let facts: Machine = machine::look(&opened.conn).await?;
             let address = ServerAddress::new(&profile.host, profile.port);
             let user = profile.user.clone();
-            // What the proof signs in with. For a key we just made, the key itself: the
-            // profile still says "password" at this point, and asking it would prove the
-            // password works — which is not the question.
+            // What the proof signs in with — `proof_credentials` (T627): the key just made for a
+            // password profile, the managed key out of the store, or the key file.
             let made_private = made_private.clone();
+            let auth_kind = profile.auth_kind;
             let key_path = profile.key_path.clone().map(std::path::PathBuf::from);
-            let passphrase = secrets
+            let secret = secrets
                 .get(&SecretRef::from_stored(&profile.secret_ref))
                 .ok()
                 .filter(|s| !s.is_empty());
@@ -776,30 +821,26 @@ async fn start(
                 let address = address.clone();
                 let user = user.clone();
                 let key_path = key_path.clone();
-                let passphrase = passphrase.clone();
+                let secret = secret.clone();
                 let made_private = made_private.clone();
                 let expected_host = expected_host.clone();
                 move || -> futures::future::BoxFuture<'_, bool> {
                     let address = address.clone();
                     let user = user.clone();
                     let key_path = key_path.clone();
-                    let passphrase = passphrase.clone();
+                    let secret = secret.clone();
                     let made_private = made_private.clone();
                     let expected_host = expected_host.clone();
                     Box::pin(async move {
-                        let credentials = match (&made_private, &key_path) {
-                            (Some(openssh), _) => Credentials::KeyText {
-                                openssh: openssh.clone(),
-                                passphrase: None,
-                            },
-                            (None, Some(path)) => Credentials::Key {
-                                path: path.clone(),
-                                passphrase,
-                            },
-                            // Nothing to sign in with. Said as "no" rather than as a
-                            // failure: the step above it refuses on the same footing, and
-                            // there it can say why.
-                            (None, None) => return false,
+                        // Nothing to sign in with: said as "no" rather than as a failure — the
+                        // step above it refuses on the same footing, and there it can say why.
+                        let Some(credentials) = proof_credentials(
+                            auth_kind,
+                            made_private.as_deref(),
+                            key_path.as_deref(),
+                            secret.as_deref(),
+                        ) else {
+                            return false;
                         };
                         // Closed explicitly on success, matching `password_refused` below
                         // (`passwords_are_off`, which does the same after its own successful
