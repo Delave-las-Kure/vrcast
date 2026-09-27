@@ -11,7 +11,7 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderIn, ru } from "../../../test-utils";
+import { en, renderIn, ru } from "../../../test-utils";
 import type {
   DeployPreview,
   DomainAnswer,
@@ -453,6 +453,27 @@ describe("T611 — somebody else's Caddyfile on a first deployment", () => {
     expect(mockRun.mock.calls[0]?.[2]).toBe(true);
     expect(mockRun.mock.calls[0]?.[3]).toBe(true);
   });
+
+  it.each([
+    ["ru", ru.ui.deploy.replaceCaddyfileMeans, "только если", "вручную"],
+    ["en", en.ui.deploy.replaceCaddyfileMeans, "only if", "by hand"],
+  ] as const)(
+    "says, beside the box, that rollback brings the file back only after a full run (T631, %s)",
+    async (lang, means, onlyIf, byHand) => {
+      // The owner's decision of 2026-09-27: a server whose run broke off is `Unfinished` and
+      // not let through to `server_rollback`. A person agreeing to the replacement is owed that
+      // condition, and where the old file then lies, before they tick the box.
+      mockPlan.mockResolvedValue(FOREIGN);
+      renderIn(<DeployScreen serverId="s1" />, lang);
+      chooseIpv6("Disable");
+
+      expect(await screen.findByText(means)).toBeInTheDocument();
+      expect(means).toContain(onlyIf);
+      expect(means).toContain(byHand);
+      expect(means).toContain("/etc/vrcast/backup/");
+      expect(means).toContain("/Caddyfile");
+    },
+  );
 });
 
 describe("T626 — the profile a run switched to its own key is not put back on password", () => {

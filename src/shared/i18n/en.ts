@@ -848,7 +848,7 @@ export const en: Catalogue = {
         "This server already has somebody else’s serving configuration — /etc/caddy/Caddyfile. This application did not write it: either it was edited by hand, or somebody’s serving lived here. Without your agreement the deployment will stop at the configuration step and leave the file alone.",
       replaceCaddyfile: "Replace it (a copy is kept)",
       replaceCaddyfileMeans:
-        "Before the first change the file is copied to /etc/vrcast/backup; “Put it back as it was”, used right after this deployment, restores it.",
+        "Before the first change the file is copied to /etc/vrcast/backup/<time>/Caddyfile. “Put it back as it was” restores it only if this deployment runs to the end. If it breaks off, the application will not bring this file back — not even after deploying again: it has to be put back by hand from the copy of the run that broke off, /etc/vrcast/backup/<its start time>/Caddyfile.",
     },
 
     deploySteps: {
