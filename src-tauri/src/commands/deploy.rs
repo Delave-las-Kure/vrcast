@@ -519,23 +519,27 @@ fn public_key_to_deploy_with(
 
 /// Put the made key in the store and point the profile at it.
 ///
-/// Called the moment the `ssh-key` step is known to have worked — **not** when the whole
-/// run ends. A deployment that fails after the hardening step leaves a server whose
-/// password no longer works; a profile still saying "password" would then be a person
-/// locked out of their own machine by a half-finished run.
+/// Called before the `ssh-hardening` step turns password logins off, once the `ssh-key` step
+/// has proved the key (T616, through [`key_keeper`]) — **not** when the whole run ends. A
+/// deployment that is closed, crashes or fails after the hardening step leaves a server whose
+/// password no longer works; a profile still saying "password" would then be a person locked
+/// out of their own machine by a half-finished run.
+///
+/// **Whole or not at all.** The key replaces the password under the same reference; should
+/// the profile then refuse to be switched, the password is put back, so the store and the
+/// profile never disagree — a profile saying "password" over a store holding a key would send
+/// the key as a password, and every later connection would fail.
 fn switch_to_managed_key(
-    state: &super::AppState,
+    secrets: &dyn SecretStore,
+    db: &crate::store::db::Db,
     profile: &ServerProfile,
     private_openssh: &str,
 ) -> Result<()> {
     let reference = SecretRef::from_stored(&profile.secret_ref);
-    state
-        .secrets
-        .set(&reference, private_openssh)
-        .map_err(|e| {
-            AppError::new(ErrorCode::KeyUnreadable)
-                .with_cause(crate::store::redact::safe_display(&e))
-        })?;
+    let before = secrets.get(&reference).ok();
+    secrets.set(&reference, private_openssh).map_err(|e| {
+        AppError::new(ErrorCode::KeyUnreadable).with_cause(crate::store::redact::safe_display(&e))
+    })?;
 
     let switched = ServerProfile {
         auth_kind: AuthKind::ManagedKey,
@@ -544,8 +548,64 @@ fn switch_to_managed_key(
         key_path: None,
         ..profile.clone()
     };
-    crate::store::profiles::update(&state.db, &switched)?;
+    if let Err(e) = crate::store::profiles::update(db, &switched) {
+        let _ = match &before {
+            Some(old) => secrets.set(&reference, old),
+            None => secrets.delete(&reference),
+        };
+        return Err(e.into());
+    }
     Ok(())
+}
+
+/// What a run of a password profile keeps its made key with (T616): the store and the profile,
+/// through [`switch_to_managed_key`], at the moment `server::deploy` asks — after `SshKey`, and
+/// before `SshHardening` changes anything. Public so the check on a container keeps the key
+/// exactly as a deployment does (`tests/integration/deploy_key_kept.rs`).
+pub fn key_keeper(
+    state: &super::AppState,
+    profile: &ServerProfile,
+    private_openssh: String,
+) -> crate::server::deploy::KeepKey {
+    let secrets = state.secrets.clone();
+    let db = state.db.clone();
+    let profile = profile.clone();
+    Box::new(move || {
+        switch_to_managed_key(secrets.as_ref(), &db, &profile, &private_openssh)
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// One attempt at confirming a run's stop through a fresh connection — what production's
+/// `stop_again` does (T609, T615), and public so the check on a container goes through the
+/// same door (`tests/integration/deploy_cut_mark.rs`, T617).
+///
+/// Through the gate like everything else (`gate::open_to_stop`): stopping a process on the
+/// server is an action on the server, not a read (the lesson of T601). A refusal or a failure
+/// to connect is one more unconfirmed attempt, not an end. The profile is read afresh from the
+/// database each time (T616: a password profile is switched to the made key during the run),
+/// and `made_key`, when given, is tried first.
+pub async fn stop_through_gate(
+    state: &super::AppState,
+    profile: &ServerProfile,
+    made_key: Option<&str>,
+    mark: &str,
+    patience: crate::server::marked::Patience,
+) -> std::result::Result<crate::domain::marked::Stopped, String> {
+    let profile =
+        super::library::api::profile_of(state, &profile.id).unwrap_or_else(|_| profile.clone());
+    let opened = gate::open_to_stop(state.secrets.as_ref(), &profile, made_key)
+        .await
+        .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
+    let stopped = crate::server::marked::stop_confirmed(
+        &opened.conn,
+        crate::server::deploy::RUN_VAR,
+        mark,
+        patience,
+    )
+    .await;
+    opened.conn.close().await;
+    stopped.map_err(|problem| problem.to_string())
 }
 
 /// A failure inside the deployment layer, as a contract code.
@@ -779,7 +839,13 @@ async fn start(
                 machine: facts,
                 already_ours: kind == crate::tasks::deploy::Kind::Upgrade,
                 replace_caddyfile: kind == crate::tasks::deploy::Kind::Fresh && replace_caddyfile,
-                run: crate::server::deploy::RunMark::fresh(),
+                // T616: a key made for a password profile is kept — store and profile — before
+                // `SshHardening` turns passwords off, not after the run.
+                run: match &made_private {
+                    Some(private) => crate::server::deploy::RunMark::fresh()
+                        .keeping_key(key_keeper(&inner, &profile, private.clone())),
+                    None => crate::server::deploy::RunMark::fresh(),
+                },
                 proofs: Proofs {
                     key_works: &key_works,
                     password_refused: &password_refused,
@@ -796,17 +862,17 @@ async fn start(
             // the same gate, with the same intent, as the run itself: stopping a process on
             // the server is an action on the server, not a read (the lesson of T601). A
             // refusal or a failure to connect is one more unconfirmed attempt, not an end.
-            // ⚠ **T615 — which key the next attempt signs in with.** The profile is switched to
-            // the made key only after the run returns, and the run returns only once its stop
-            // is confirmed. A connection that broke after `SshHardening` turned passwords off
-            // would leave every attempt below signing in with a password that no longer
-            // works — retried for ever, the server held for ever. So once `SshKey` is seen
-            // applied, an attempt signs in with the made key (from memory, the store is not
-            // touched until the run is over), and with the profile's own credentials only if
-            // that fails. A profile that was already on a key is not affected: no key is made.
+            // ⚠ **T615/T616 — which key the next attempt signs in with.** The profile is read
+            // afresh from the database at each attempt: since T616 a password profile is
+            // switched to the made key (store and profile) before `SshHardening` turns
+            // passwords off, so a copy taken when the task began would go on signing in with a
+            // password the server no longer takes — retried for ever, the server held for ever.
+            // Once `SshKey` is seen applied, the made key (from memory) is tried first as well,
+            // and the profile's own credentials only if that fails. A profile that was already
+            // on a key is not affected: no key is made.
             let key_in = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let stop_again = {
-                let secrets = secrets.clone();
+                let inner = inner.clone();
                 let profile = profile.clone();
                 let made_private = made_private.clone();
                 let key_in = key_in.clone();
@@ -816,34 +882,20 @@ async fn start(
                     'static,
                     std::result::Result<crate::domain::marked::Stopped, String>,
                 > {
-                    let secrets = secrets.clone();
+                    let inner = inner.clone();
                     let profile = profile.clone();
                     let made = made_private
                         .clone()
                         .filter(|_| key_in.load(std::sync::atomic::Ordering::SeqCst));
                     Box::pin(async move {
-                        let opened =
-                            gate::open_to_stop(secrets.as_ref(), &profile, made.as_deref())
-                                .await
-                                .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
-                        let stopped = crate::server::marked::stop_confirmed(
-                            &opened.conn,
-                            crate::server::deploy::RUN_VAR,
-                            &mark,
-                            patience,
-                        )
-                        .await;
-                        opened.conn.close().await;
-                        stopped.map_err(|problem| problem.to_string())
+                        stop_through_gate(&inner, &profile, made.as_deref(), &mark, patience).await
                     })
                 }
             };
-            // Kept as well as sent: the profile has to be switched the moment the key is
-            // known to be in, and that is known from the steps rather than from the run's
-            // outcome — a run that failed later still put the key there.
-            let mut seen: Vec<PlannedStep> = Vec::new();
+            // Seen so a stop through a fresh connection knows the made key is on the server.
+            // The profile is no longer switched from here (T616): the run keeps the key
+            // itself, before `SshHardening`.
             let mut report = |settled: &[PlannedStep]| {
-                seen = settled.to_vec();
                 if settled.iter().any(|s| {
                     s.id == crate::domain::deploy_steps::StepId::SshKey
                         && matches!(s.status, crate::domain::deploy_steps::Status::Applied)
@@ -859,15 +911,6 @@ async fn start(
                 crate::tasks::deploy::run(&ctx, &steps, &task, &mut report, &stop_again).await;
             opened.conn.close().await;
 
-            if let Some(private) = &made_private {
-                let key_is_in = seen.iter().any(|s| {
-                    s.id == crate::domain::deploy_steps::StepId::SshKey
-                        && matches!(s.status, crate::domain::deploy_steps::Status::Applied)
-                });
-                if key_is_in {
-                    switch_to_managed_key(&inner, &profile, private)?;
-                }
-            }
             if outcome.is_ok() {
                 // "At change" (`contracts/ipc-commands.md`): a deployment or an upgrade
                 // that finished may have moved the server's version. `server_detect` reads

@@ -83,6 +83,16 @@ mod deploy_cancel;
 #[path = "integration/deploy_cut_stop.rs"]
 mod deploy_cut_stop;
 
+/// T616 — a key made for a password profile is kept before password logins go: a run closed
+/// right after `SshHardening` leaves a profile a new start of the application signs in with.
+#[path = "integration/deploy_key_kept.rs"]
+mod deploy_key_kept;
+
+/// T617 — the mark of ours is the run's first change: a run broken off after `Packages` on a
+/// bare machine is stopped through the production gate, and a repeat goes to the end.
+#[path = "integration/deploy_cut_mark.rs"]
+mod deploy_cut_mark;
+
 /// T622 — the next run removes our own half-written `*.vrcast.tmp` by name; a foreign one in
 /// `/etc` survives.
 #[path = "integration/deploy_leftovers.rs"]

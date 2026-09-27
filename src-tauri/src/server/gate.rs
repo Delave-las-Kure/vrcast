@@ -140,11 +140,11 @@ pub async fn open(
 /// without the second door the stop would be retried for ever against a server that will
 /// never say yes. Nothing else is let through.
 ///
-/// `made_key` (T615): the private key the run made and put on the server. A run that broke
-/// off after it turned password logins off leaves a profile still saying "password" (it is
-/// switched only once the run is over, and the run is over only once its stop is confirmed)
-/// — signing in with it would fail on every attempt, for ever. When given, the made key is
-/// tried first and the profile's own credentials only if it will not sign in.
+/// `made_key` (T615): the private key the run made and put on the server. Since T616 the
+/// profile is switched to it (store and profile) before `SshHardening` turns password logins
+/// off, and the caller reads the profile afresh at each attempt — so this is a second way in,
+/// for the moment between the key being put on the server and it being kept. When given, the
+/// made key is tried first and the profile's own credentials only if it will not sign in.
 pub async fn open_to_stop(
     secrets: &dyn SecretStore,
     profile: &ServerProfile,
