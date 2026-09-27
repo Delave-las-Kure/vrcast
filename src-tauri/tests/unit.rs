@@ -62,6 +62,11 @@ mod cutting_stop;
 #[path = "unit/deploy_stop.rs"]
 mod deploy_stop;
 
+/// T619 — a command whose end was not heard is settled before the run goes on, and a run that
+/// ended well with one is not `Completed` until its stop is confirmed.
+#[path = "unit/deploy_unheard.rs"]
+mod deploy_unheard;
+
 #[path = "unit/measured_ladder.rs"]
 mod measured_ladder;
 

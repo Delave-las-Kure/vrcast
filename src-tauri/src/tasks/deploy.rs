@@ -200,7 +200,12 @@ pub async fn run<'a>(
 /// How a finished run is handed back — the decision T609 and T615 rest on, apart from the
 /// connection so it can be checked without a server (`tests/unit/deploy_stop.rs`).
 ///
-/// - Ended well, not cancelled: handed back at once. `first` is not asked.
+/// - Ended well, not cancelled, **every command's end heard**: handed back at once. `first` is
+///   not asked.
+/// - Ended well with a command whose end was not heard (`may_run_until` is `Some` — T619: a
+///   non-blocking step's command given up on at `EXEC_CEILING`, or its answer lost, and
+///   nothing sent after it that would have settled it): the success, once the stop is
+///   confirmed. Until then the task is `running` and holds the server, as for a failure.
 /// - Cancelled — whatever the run itself ended with (`Cancelled` from the next command it did
 ///   not send, success because the last step had just finished, a broken connection):
 ///   `DeployError::Cancelled`, once the stop is confirmed.
@@ -223,7 +228,7 @@ pub async fn settle<T>(
 ) -> std::result::Result<T, DeployError> {
     let outcome = match outcome {
         // A future does nothing until awaited: `first` is never sent to the server here.
-        Ok(done) if !cancelled => return Ok(done),
+        Ok(done) if !cancelled && may_run_until().is_none() => return Ok(done),
         other => other,
     };
     let first = first.await;
@@ -234,9 +239,11 @@ pub async fn settle<T>(
             tracing::info!(mark, ?how, error = %e, "the failed run's processes are gone");
             Err(e)
         }
-        // Not reachable — an unasked success returned above — but written out rather than
-        // `unreachable!`: a success is a success.
-        Ok(done) => Ok(done),
+        // A run that ended well with a command unheard (T619), now confirmed gone.
+        Ok(done) => {
+            tracing::info!(mark, ?how, "the run's unheard command is gone");
+            Ok(done)
+        }
     }
 }
 

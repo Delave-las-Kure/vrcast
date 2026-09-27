@@ -267,6 +267,14 @@ impl RunMark {
         self
     }
 
+    /// A run whose last command was sent at `sent` and whose end was never heard — what a
+    /// lost answer or a command given up on at `EXEC_CEILING` leaves (T619). For a stand-in
+    /// run in the checks without a server; a real run gets here only through `send`.
+    pub fn with_unheard_command(self, sent: std::time::Instant) -> Self {
+        *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = Some(sent);
+        self
+    }
+
     pub fn as_str(&self) -> &str {
         &self.mark
     }
@@ -341,9 +349,26 @@ impl Context<'_> {
 
     /// The sending itself, whether or not a stop was asked — for the second half of an
     /// operation that must not be left halved ([`Self::put_file`]).
+    ///
+    /// ⚠ **T619 — a command whose end was not heard is settled before the next one goes.**
+    /// A command that came back without an exit status — the answer lost with its channel, or
+    /// given up on at `EXEC_CEILING` while the connection lived — may still be running on the
+    /// server. That is not the step saying no, and it used to be treated as if it were: the
+    /// step was marked failed, and if it was one that does not stop the run (`Fail2ban`,
+    /// `UnattendedUpgrades`, `Tuning`) the run went on; the next command overwrote the one
+    /// record of when the first was sent, the next exit status cleared it, the run returned
+    /// `Ok` and the task was written `Completed` over an apt still running under our mark
+    /// (QA-19 №4). Now `in_flight` is left as it is, and before anything else of this run is
+    /// sent the stop of what carries the mark is confirmed ([`settle_unheard`]) — waited for,
+    /// not signalled, until that command's `EXEC_CEILING`, as a cancelled run's is (T609).
     async fn send(&self, command: &str) -> Result<crate::ssh::CommandOutput> {
+        settle_unheard(&self.run, |patience| {
+            crate::server::marked::stop_confirmed(self.conn, RUN_VAR, &self.run.mark, patience)
+        })
+        .await?;
         *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(std::time::Instant::now());
+        // On an error the time stays: whatever the error, the command may have been started.
         let said = self.conn.exec(&self.run.wrap(command)).await?;
         if said.exit_code.is_some() {
             *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -485,6 +510,63 @@ impl Context<'_> {
         ))
         .await?;
         Ok(())
+    }
+}
+
+/// Settle a command of this run whose end was not heard, before anything else of the run is
+/// sent (T619, see `Context::send`).
+///
+/// Nothing unheard (`in_flight` empty) — `Ok` at once, `stop` not asked. Otherwise `stop` is
+/// asked, patient with the command for what is left of its `EXEC_CEILING` (no signal until
+/// then — T609), and asked again for as long as it answers "still running" within that time.
+/// Confirmed — `in_flight` is cleared and the run may go on. Not confirmed (the server could
+/// not be asked, or something survived KILL, or the answer was unreadable) — `Err`, and
+/// `in_flight` stays: nothing further is sent, the run ends at the next check, and the task's
+/// own stop (`tasks::deploy::settle`, through fresh connections, for as long as it takes)
+/// takes over with the same record. A stop asked meanwhile — `Cancelled`, the same hand-over.
+///
+/// Public, with the stop passed in, so it is checked without a server
+/// (`tests/unit/deploy_unheard.rs`).
+pub async fn settle_unheard<F, Fut>(run: &RunMark, stop: F) -> Result<()>
+where
+    F: Fn(crate::server::marked::Patience) -> Fut,
+    Fut: std::future::Future<
+        Output = std::result::Result<
+            crate::domain::marked::Stopped,
+            crate::server::marked::StopProblem,
+        >,
+    >,
+{
+    use crate::server::marked::{Patience, StopProblem};
+    loop {
+        let Some(until) = run.may_run_until() else {
+            return Ok(());
+        };
+        if run.is_stopping() {
+            return Err(DeployError::Cancelled);
+        }
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        let patience = if left.is_zero() {
+            Patience::NONE
+        } else {
+            Patience::for_remaining(left)
+        };
+        match stop(patience).await {
+            Ok(how) => {
+                tracing::info!(mark = %run.mark, ?how, "a command whose end was not heard is gone");
+                *run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return Ok(());
+            }
+            // Still within its time and waited for, not signalled: ask again.
+            Err(StopProblem::StillRunning(_)) => continue,
+            Err(StopProblem::Ssh(e)) => return Err(DeployError::Ssh(e)),
+            Err(problem) => {
+                return Err(DeployError::Ssh(SshError::Exec(format!(
+                    "a command of this run whose end was not heard may still be running, and \
+                     its stop could not be confirmed: {problem}"
+                ))))
+            }
+        }
     }
 }
 
