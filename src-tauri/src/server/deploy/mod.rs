@@ -238,7 +238,26 @@ pub struct RunMark {
     /// What keeps the key this run made, before password logins are turned off (T616). See
     /// [`RunMark::keeping_key`].
     keep_key: Option<KeepKey>,
+    /// Who is told when the run starts and stops waiting for a command whose end was not
+    /// heard (T624). See [`RunMark::tell_unheard_waits`].
+    on_unheard_wait: std::sync::OnceLock<OnUnheardWait>,
 }
+
+/// Where a run is with a command of its own whose end was not heard (T624), as
+/// [`settle_unheard`] tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnheardWait {
+    /// The run has begun waiting for the command to end on the server before it sends
+    /// anything else — up to that command's `EXEC_CEILING`.
+    Waiting,
+    /// Its stop is confirmed, and the run goes on. Not told when the wait ended otherwise:
+    /// a stop asked meanwhile has its own stage (`STAGE_STOPPING_AFTER_STEP`), and an
+    /// unconfirmed stop ends the run.
+    Settled,
+}
+
+/// What is told about [`UnheardWait`] — the task's stage, in a real run.
+pub type OnUnheardWait = Box<dyn Fn(UnheardWait) + Send + Sync>;
 
 impl std::fmt::Debug for RunMark {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -264,6 +283,27 @@ impl RunMark {
             stopping: std::sync::atomic::AtomicBool::new(false),
             in_flight: std::sync::Mutex::new(None),
             keep_key: None,
+            on_unheard_wait: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Tell `tell` when this run starts and stops waiting for a command whose end was not
+    /// heard (T624). Once per run: a second call is ignored and answers `false`.
+    ///
+    /// The wait lasts up to one command's `EXEC_CEILING` — ten minutes — and a person
+    /// watching a bar stand still under "deploying" for that long is owed the reason.
+    pub fn tell_unheard_waits(&self, tell: OnUnheardWait) -> bool {
+        self.on_unheard_wait.set(tell).is_ok()
+    }
+
+    /// Told only while the run has not been asked to stop: once it has, the stage is
+    /// `STAGE_STOPPING_AFTER_STEP`, and neither the wait nor its end may say otherwise.
+    fn told(&self, what: UnheardWait) {
+        if self.is_stopping() {
+            return;
+        }
+        if let Some(tell) = self.on_unheard_wait.get() {
+            tell(what);
         }
     }
 
@@ -541,6 +581,11 @@ impl Context<'_> {
 /// own stop (`tasks::deploy::settle`, through fresh connections, for as long as it takes)
 /// takes over with the same record. A stop asked meanwhile — `Cancelled`, the same hand-over.
 ///
+/// T624: the run is told ([`RunMark::tell_unheard_waits`]) [`UnheardWait::Waiting`] once, when
+/// the waiting begins, and [`UnheardWait::Settled`] when the stop is confirmed — the task shows
+/// `STAGE_WAITING_UNHEARD_COMMAND` in between and `STAGE_DEPLOYING` again after. Neither is
+/// told once the run has been asked to stop.
+///
 /// Public, with the stop passed in, so it is checked without a server
 /// (`tests/unit/deploy_unheard.rs`).
 pub async fn settle_unheard<F, Fut>(run: &RunMark, stop: F) -> Result<()>
@@ -554,12 +599,18 @@ where
     >,
 {
     use crate::server::marked::{Patience, StopProblem};
+    // Said once, when the waiting begins — not at each ask of the loop below (T624).
+    let mut waiting = false;
     loop {
         let Some(until) = run.may_run_until() else {
             return Ok(());
         };
         if run.is_stopping() {
             return Err(DeployError::Cancelled);
+        }
+        if !waiting {
+            waiting = true;
+            run.told(UnheardWait::Waiting);
         }
         let left = until.saturating_duration_since(std::time::Instant::now());
         let patience = if left.is_zero() {
@@ -571,6 +622,7 @@ where
             Ok(how) => {
                 tracing::info!(mark = %run.mark, ?how, "a command whose end was not heard is gone");
                 *run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                run.told(UnheardWait::Settled);
                 return Ok(());
             }
             // Still within its time and waited for, not signalled: ask again.

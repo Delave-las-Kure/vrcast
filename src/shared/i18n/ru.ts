@@ -403,6 +403,7 @@ export const ruCore: CatalogueCore = {
     STAGE_STOPPING_AFTER_STEP:
       "останавливаемся — ждём, пока закончится текущая команда на сервере",
     STAGE_DEPLOYING: "Разворачиваю сервер",
+    STAGE_WAITING_UNHEARD_COMMAND: "Ждём, пока на сервере закончится прерванная команда",
     STAGE_DONE: "готово",
 
     // --- что будет при закрытии приложения ---

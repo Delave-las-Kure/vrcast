@@ -18,7 +18,7 @@ use vrcast_studio_lib::commands::AppState;
 use vrcast_studio_lib::domain::marked::Stopped;
 use vrcast_studio_lib::domain::server_profile::{AuthKind, ServerProfile};
 use vrcast_studio_lib::domain::wording::DetailCode;
-use vrcast_studio_lib::server::deploy::{settle_unheard, DeployError, RunMark};
+use vrcast_studio_lib::server::deploy::{settle_unheard, DeployError, RunMark, UnheardWait};
 use vrcast_studio_lib::server::marked::{Patience, StopProblem};
 use vrcast_studio_lib::ssh::exec::EXEC_CEILING;
 use vrcast_studio_lib::ssh::SshError;
@@ -285,4 +285,181 @@ async fn a_run_that_ended_well_with_everything_heard_is_not_stopped() {
     .await;
     assert_eq!(r.ok(), Some(3));
     assert!(!first_asked.load(Ordering::SeqCst));
+}
+
+// ---------- T624: the wait for an unheard command is said, and unsaid ----------
+
+/// What the run was told about waiting, in order.
+fn telling(run: &RunMark) -> Arc<Mutex<Vec<UnheardWait>>> {
+    let told: Arc<Mutex<Vec<UnheardWait>>> = Arc::default();
+    let sink = told.clone();
+    assert!(run.tell_unheard_waits(Box::new(move |w| sink.lock().unwrap().push(w))));
+    told
+}
+
+#[tokio::test]
+async fn the_wait_is_said_once_when_it_begins_and_unsaid_once_the_stop_is_confirmed() {
+    let run = unheard_a_minute_ago();
+    let told = telling(&run);
+    let answers = Mutex::new(vec![
+        Err(StopProblem::StillRunning(String::from("apt-get 4242"))),
+        Err(StopProblem::StillRunning(String::from("apt-get 4242"))),
+        Ok(Stopped::EndedOnItsOwn),
+    ]);
+    let seen_while_asked: Mutex<Vec<Vec<UnheardWait>>> = Mutex::default();
+    let r = settle_unheard(&run, |_| {
+        seen_while_asked
+            .lock()
+            .unwrap()
+            .push(told.lock().unwrap().clone());
+        let answer = answers.lock().unwrap().remove(0);
+        async move { answer }
+    })
+    .await;
+    assert!(r.is_ok(), "{r:?}");
+    let seen = seen_while_asked.lock().unwrap().clone();
+    assert!(
+        seen.len() == 3 && seen.iter().all(|t| *t == vec![UnheardWait::Waiting]),
+        "the wait was not said before the server was asked, or was said again at each ask: \
+         {seen:?}"
+    );
+    assert_eq!(
+        *told.lock().unwrap(),
+        vec![UnheardWait::Waiting, UnheardWait::Settled]
+    );
+}
+
+#[tokio::test]
+async fn nothing_is_said_when_nothing_is_unheard_or_a_stop_was_asked() {
+    // Nothing unheard: no wait, nothing to say.
+    let run = RunMark::fresh();
+    let told = telling(&run);
+    settle_unheard(&run, |_| async { Ok(Stopped::AlreadyGone) })
+        .await
+        .unwrap();
+    assert!(
+        told.lock().unwrap().is_empty(),
+        "{:?}",
+        told.lock().unwrap()
+    );
+
+    // A stop already asked: `STAGE_STOPPING_AFTER_STEP` is what the task says, untouched.
+    let run = unheard_a_minute_ago();
+    let told = telling(&run);
+    run.ask_to_stop();
+    let r = settle_unheard(&run, |_| async { Ok(Stopped::AlreadyGone) }).await;
+    assert!(matches!(r, Err(DeployError::Cancelled)), "{r:?}");
+    assert!(
+        told.lock().unwrap().is_empty(),
+        "{:?}",
+        told.lock().unwrap()
+    );
+
+    // A stop asked during the wait: the wait was said, its end is not — "deploying" must not
+    // come back over "stopping".
+    let run = unheard_a_minute_ago();
+    let told = telling(&run);
+    let r = settle_unheard(&run, |_| {
+        run.ask_to_stop();
+        async { Ok(Stopped::EndedOnItsOwn) }
+    })
+    .await;
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(*told.lock().unwrap(), vec![UnheardWait::Waiting]);
+}
+
+#[tokio::test]
+async fn an_unconfirmed_wait_is_not_unsaid() {
+    // The stop could not be confirmed: the run ends, and the task's own stop takes over with
+    // `STAGE_STOP_UNCONFIRMED` — "deploying" is not said in between.
+    let run = unheard_a_minute_ago();
+    let told = telling(&run);
+    let r = settle_unheard(&run, |_| async {
+        Err(StopProblem::StillAlive(String::from("dpkg 77")))
+    })
+    .await;
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(*told.lock().unwrap(), vec![UnheardWait::Waiting]);
+}
+
+/// On the real task engine, as a person would see it: the task's stage is
+/// `STAGE_WAITING_UNHEARD_COMMAND` for as long as the run waits, and `STAGE_DEPLOYING` again
+/// once the unheard command is confirmed gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_task_shows_the_wait_while_it_lasts_and_deploying_after() {
+    let state = app_state();
+    let gone = Arc::new(AtomicBool::new(false));
+    let asks = Arc::new(AtomicUsize::new(0));
+    let finish = Arc::new(tokio::sync::Notify::new());
+
+    let id = {
+        let gone = gone.clone();
+        let asks = asks.clone();
+        let finish = finish.clone();
+        state
+            .tasks
+            .submit(
+                TaskKind::Deploy,
+                Some(SERVER.to_owned()),
+                move |task| async move {
+                    let run = unheard_a_minute_ago();
+                    task.report(3.0 / 15.0, DetailCode::StageDeploying);
+                    run.tell_unheard_waits(
+                        vrcast_studio_lib::tasks::deploy::stage_on_unheard_wait(
+                            task.clone(),
+                            Arc::new(AtomicUsize::new(3)),
+                            15.0,
+                        ),
+                    );
+                    let r = settle_unheard(&run, |_| {
+                        asks.fetch_add(1, Ordering::SeqCst);
+                        let gone = gone.load(Ordering::SeqCst);
+                        async move {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            if gone {
+                                Ok(Stopped::EndedOnItsOwn)
+                            } else {
+                                Err(StopProblem::StillRunning(String::from("apt-get 4242")))
+                            }
+                        }
+                    })
+                    .await;
+                    assert!(r.is_ok(), "{r:?}");
+                    // Held open so the stage after the wait is read before the task ends.
+                    finish.notified().await;
+                    Ok(())
+                },
+            )
+            .await
+            .expect("the task was not submitted")
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while asks.load(Ordering::SeqCst) < 2 {
+        assert!(Instant::now() < deadline, "the server was never asked");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let task = core::task_get(&state, &id).unwrap();
+    assert_eq!(task.state, TaskState::Running);
+    assert_eq!(
+        task.stage,
+        Some(DetailCode::StageWaitingUnheardCommand),
+        "a run waiting for an unheard command still said something else"
+    );
+
+    gone.store(true, Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let t = core::task_get(&state, &id).unwrap();
+        if t.stage == Some(DetailCode::StageDeploying) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stage stayed {:?} after the unheard command was confirmed gone",
+            t.stage
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    finish.notify_one();
 }

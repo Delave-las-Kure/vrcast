@@ -20,7 +20,7 @@ use std::time::Instant;
 use futures::future::BoxFuture;
 
 use crate::domain::marked::Stopped;
-use crate::server::deploy::{Context, DeployError, Step, RUN_VAR};
+use crate::server::deploy::{Context, DeployError, Step, UnheardWait, RUN_VAR};
 use crate::server::marked::Patience;
 use crate::server::upgrade;
 use crate::tasks::engine::TaskContext;
@@ -91,7 +91,13 @@ pub async fn run<'a>(
     let total = steps.len().max(1) as f64;
     let mut settled: Vec<PlannedStep> = Vec::new();
     // How many steps have settled, readable while the run holds `settled` itself.
-    let done = AtomicUsize::new(0);
+    let done = std::sync::Arc::new(AtomicUsize::new(0));
+
+    // T624: while the run waits for a command of its own whose end was not heard (up to that
+    // command's `EXEC_CEILING`), the stage says so rather than "deploying" over a bar that
+    // does not move; once its stop is confirmed, back to "deploying".
+    ctx.run
+        .tell_unheard_waits(stage_on_unheard_wait(task.clone(), done.clone(), total));
 
     let cancelled = || task.is_cancelled();
     let (outcome, stop_asked) = {
@@ -195,6 +201,29 @@ pub async fn run<'a>(
     )
     .await
     .map_err(|e| failed(e, &settled))
+}
+
+/// What a deployment's task shows while its run waits for a command of its own whose end was
+/// not heard (T624): `STAGE_WAITING_UNHEARD_COMMAND` from the moment the waiting begins, and
+/// `STAGE_DEPLOYING` again once that command's stop is confirmed. Progress stays where the
+/// settled steps put it (`done` of `total`).
+///
+/// Nothing is said once the run has been asked to stop (`RunMark::told`):
+/// `STAGE_STOPPING_AFTER_STEP` is the one thing to say then, and a cancellation during the
+/// wait ends as any other does. Public so it is checked on the real task engine without a
+/// server (`tests/unit/deploy_unheard.rs`).
+pub fn stage_on_unheard_wait(
+    task: TaskContext,
+    done: std::sync::Arc<AtomicUsize>,
+    total: f64,
+) -> crate::server::deploy::OnUnheardWait {
+    Box::new(move |what: UnheardWait| {
+        let stage = match what {
+            UnheardWait::Waiting => DetailCode::StageWaitingUnheardCommand,
+            UnheardWait::Settled => DetailCode::StageDeploying,
+        };
+        task.report_important(done.load(Ordering::SeqCst) as f64 / total, stage);
+    })
 }
 
 /// How a finished run is handed back — the decision T609 and T615 rest on, apart from the

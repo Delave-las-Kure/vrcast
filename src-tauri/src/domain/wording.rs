@@ -195,6 +195,11 @@ detail_codes! {
     /// A deployment is under way. Which step it is on goes out as its own event: the
     /// screen shows the whole list with their states, and a single stage code could not.
     StageDeploying => "STAGE_DEPLOYING",
+    /// A command of the deployment came back without saying how it ended (its answer lost,
+    /// or given up on at its time limit), and before anything else is sent the run waits for
+    /// it to end on the server — up to that command's time limit, ten minutes (T619, T624).
+    /// Back to `STAGE_DEPLOYING` once its end is confirmed.
+    StageWaitingUnheardCommand => "STAGE_WAITING_UNHEARD_COMMAND",
     StageDone => "STAGE_DONE",
 
     // --- what closing the application would do to a task (FR-086) ---
