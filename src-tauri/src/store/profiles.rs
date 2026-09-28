@@ -185,3 +185,21 @@ pub fn set_fingerprint(db: &Db, id: &str, fingerprint: &str) -> Result<bool, DbE
         Ok(changed > 0)
     })
 }
+
+/// Remember the IPv6 choice made on the deploy screen (FR-135) — **this one column and no
+/// other** (T626).
+///
+/// The screen used to save it through [`update`], sending back the whole profile as it held
+/// it. A deployment switches a password profile to `managed_key` in the middle of its run
+/// (T616), so the profile the screen held was out of date by the time the choice was saved
+/// again, and the stale `auth_kind = password` went back into the database over a store that
+/// now held the key.
+pub fn set_ipv6_mode(db: &Db, id: &str, mode: Ipv6Mode) -> Result<bool, DbError> {
+    db.with_conn(|c| {
+        let changed = c.execute(
+            "UPDATE server_profiles SET ipv6_mode = ?2 WHERE id = ?1",
+            rusqlite::params![id, mode.as_str()],
+        )?;
+        Ok(changed > 0)
+    })
+}

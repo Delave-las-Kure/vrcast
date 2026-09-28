@@ -67,6 +67,9 @@ detail_codes! {
     ProfileSecretRefEmpty => "PROFILE_SECRET_REF_EMPTY",
     ProfileKeyPathRequired => "PROFILE_KEY_PATH_REQUIRED",
     ProfileKeyPathUnused => "PROFILE_KEY_PATH_UNUSED",
+    /// T626 — the way of signing in moves to or from `managed_key` and no new secret came
+    /// with it. `from`, `to` — the two `auth_kind` values.
+    ProfileAuthNeedsSecret => "PROFILE_AUTH_NEEDS_SECRET",
     ProfileNotFound => "PROFILE_NOT_FOUND",
     FingerprintEmpty => "FINGERPRINT_EMPTY",
 
