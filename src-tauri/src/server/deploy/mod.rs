@@ -830,6 +830,15 @@ pub enum DeployError {
         id: Option<StepId>,
         error: SshError,
     },
+    /// The copy of the settings made before the first change (`upgrade::back_up`, FR-095,
+    /// FR-133) did not happen whole — a file that is there would not copy, or the block did not
+    /// finish (T629). Nothing of the steps has run and `latest` was not moved: a run that went
+    /// on would replace files — a Caddyfile the person agreed to replace because a copy would
+    /// be kept, say — with no copy to put back. `detail` says which file and what the server
+    /// said.
+    NotBackedUp {
+        detail: String,
+    },
     Cancelled,
 }
 
@@ -849,6 +858,7 @@ impl std::fmt::Display for DeployError {
             ),
             Self::Ssh(e) => write!(f, "{e}"),
             Self::Unsettled { error, .. } => write!(f, "{error}"),
+            Self::NotBackedUp { detail } => f.write_str(detail),
             Self::Cancelled => f.write_str("cancelled"),
         }
     }

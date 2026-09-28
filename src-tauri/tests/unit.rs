@@ -117,6 +117,10 @@ mod updater_config;
 #[path = "unit/upgrade_keeps_state.rs"]
 mod upgrade_keeps_state;
 
+/// T629 — the copy before a run's first change is read, not assumed.
+#[path = "unit/upgrade_backup.rs"]
+mod upgrade_backup;
+
 #[path = "unit/transfer.rs"]
 mod transfer;
 
