@@ -81,10 +81,45 @@ pub const RENEW_EVERY: Duration = Duration::from_secs(15);
 /// How long giving the lock back is waited on before being left to the channel's closing.
 const RELEASE_WAIT: Duration = Duration::from_secs(15);
 
-/// The mark the lock's holder process carries in its environment, so a step of the change
-/// can tell "the lock is held by us" from "the lock is held by somebody" or "a process with
-/// the PID we were told now belongs to somebody else".
+/// The mark of the lock's **door**: the process that listens for the renewals, and lives
+/// exactly as long as the client is heard from (T603, T628). A step going **forward**
+/// starts only while it is there (`guard`), so a step can tell "the lock is held by us, and
+/// we are alive" from "the lock is held by somebody" or "a process with the PID we were told
+/// now belongs to somebody else".
+///
+/// Before T628 the mark sat on `flock` itself, and `flock` ended with the silence: the lock
+/// went at the same instant as the door closed, whatever this change still had running.
 const TXN_ENV: &str = "VRCAST_LIMITS_TXN";
+
+/// The mark of the holder itself — the process `flock` waits on — for as long as this
+/// change **holds** the lock (T628): from the moment it is taken until the holder has
+/// waited once for every step of the change; then the holder drops it (`exec env -u`, the
+/// same PID) and looks once more.
+///
+/// Putting back (`undo`) goes in under it (`guard_held`) rather than under the door: a
+/// change nobody hears from must not go forward, but one whose client comes back while the
+/// holder is still waiting for its steps may still undo what it did — the lock is still its
+/// own, and the holder waits for the undo too (it carries `WRITE_ENV`).
+const HELD_ENV: &str = "VRCAST_LIMITS_HELD";
+
+/// The mark every step a change runs under the lock carries in its environment, from the
+/// moment it starts on the server (T628, the same idea as `VRCAST_DEPLOY_RUN` in T609):
+/// `<id>.f` for a step going forward, `<id>.u` for one putting back (`Txn::forward`,
+/// `Txn::back`).
+///
+/// The holder waits for every live process whose mark starts with its own change's `<id>`
+/// before it lets the lock go: a step already sent goes on running on the server whatever
+/// happens to the client — a laptop asleep, a client frozen, a link gone — and letting the
+/// next change in while it runs is what mixed two changes together (QA-20 №4).
+pub const WRITE_ENV: &str = "VRCAST_LIMITS_WRITE";
+
+/// How long the holder waits for the steps of its change, once nobody is heard from,
+/// before it stops them (T628).
+///
+/// A step is one command, and the client itself gives one up after `EXEC_CEILING`; a step
+/// still running that long after the door closed is taken for hung and stopped — TERM,
+/// then KILL (`domain::marked::stop_script`, as T609 stops a deployment's command).
+pub const DRAIN_CEILING: Duration = crate::ssh::exec::EXEC_CEILING;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LimitError {
@@ -170,10 +205,11 @@ struct Description {
 
 /// Everything one transaction needs to name on the server.
 struct Txn<'a> {
-    /// Unique to this change: names its staged files and marks its lock holder.
+    /// Unique to this change: names its staged files, marks its lock holder and every
+    /// writing step it sends (T628).
     id: String,
-    /// The PID of the process holding the lock for this change.
-    holder_pid: u32,
+    /// The processes on the server that say the lock is this change's.
+    holder: Holder,
     base: u64,
     changes: &'a [Description],
     /// The directories the descriptions go into, each once, every parent before its
@@ -192,6 +228,14 @@ impl Txn<'_> {
     fn kept(&self, path: &str) -> String {
         format!("{path}.{}.was.tmp", self.id)
     }
+    /// The mark of a step going forward (T628).
+    fn forward(&self) -> String {
+        format!("{}.f", self.id)
+    }
+    /// The mark of a step putting back (T628).
+    fn back(&self) -> String {
+        format!("{}.u", self.id)
+    }
 }
 
 /// What the preparing step found, needed to put things back.
@@ -206,16 +250,17 @@ struct Prepared {
 
 /// The lock that makes a change one transaction (T603), held for as long as this lives.
 ///
-/// Held by a process on the server — `flock` running a shell that waits on our channel —
-/// rather than by a lock file we create and remove: that process ends the moment the channel
-/// closes, so a client that crashed or a connection that dropped never leaves the lock
-/// behind. Since T618 the channel itself belongs to a task that renews the lock every
+/// Held by a process on the server — `flock` running a shell whose door waits on our
+/// channel — rather than by a lock file we create and remove: the door closes the moment the
+/// channel closes, so a client that crashed or a connection that dropped never leaves the
+/// lock behind for longer than its own steps still running on the server take (T628).
+/// Since T618 the channel itself belongs to a task that renews the lock every
 /// `RENEW_EVERY` (`renew_until`) until it is told to give the lock back. Dropping this
 /// without `TxnLock::release` drops that task's stop signal, and the task closes the
 /// channel at once (russh's `ChannelStream` closes it on drop), which frees the lock the
 /// same way.
 struct TxnLock {
-    holder_pid: u32,
+    holder: Holder,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     renewing: tokio::task::JoinHandle<Renewal>,
 }
@@ -223,9 +268,10 @@ struct TxnLock {
 impl TxnLock {
     /// Give the lock back, and wait until the server really has.
     ///
-    /// End-of-input ends the holder's loop, the loop ends `flock`, and only then does the
-    /// server close its side of the channel — so the end of the channel means the lock is
-    /// free, not that it is about to be.
+    /// End-of-input closes the door, the holder waits for this change's steps (none are
+    /// left by now, unless one was given up on at `EXEC_CEILING`), ends, `flock` with it,
+    /// and only then does the server close its side of the channel — so the end of the
+    /// channel means the lock is free, not that it is about to be.
     async fn release(mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
@@ -240,6 +286,33 @@ impl TxnLock {
             ),
         }
     }
+}
+
+/// The two processes of a lock's holder that the steps of the change look at (T628; see
+/// `holder_command`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Holder {
+    /// The door: alive, carrying `TXN_ENV=<id>`, while the client is heard from. A step
+    /// going forward starts only while it is (`guard`).
+    pub door: u32,
+    /// The holder itself: carrying `HELD_ENV=<id>` from the moment the lock is taken until
+    /// it has waited once for every step of the change going forward. Putting back starts
+    /// only while it does (`guard_held`).
+    pub held: u32,
+}
+
+/// Read the holder's first line: `LOCKED <door> <holder>` (T628).
+///
+/// `None` for anything else — including the T618 holder's `LOCKED <pid>`, which cannot be
+/// what this application's own holder says.
+pub fn read_locked(line: &str) -> Option<Holder> {
+    let mut words = line.trim().strip_prefix("LOCKED ")?.split_whitespace();
+    let door = words.next()?.parse().ok()?;
+    let held = words.next()?.parse().ok()?;
+    if words.next().is_some() || door == 0 || held == 0 {
+        return None;
+    }
+    Some(Holder { door, held })
 }
 
 /// What renewing a lock came to, once it stopped (T618).
@@ -330,26 +403,86 @@ where
     }
 }
 
-/// The command that takes the lock and holds it (T603, T618).
+/// The command that takes the lock and holds it (T603, T618, T628).
 ///
-/// `flock` itself, with the change's mark in its environment, runs a `bash` that says
-/// `LOCKED <flock's PID>` (`$PPID` of the shell `flock` runs is `flock`) and then reads its
-/// input a line at a time, waiting at most `LOCK_SILENCE` for each: every renewal restarts
-/// the wait; end of input (ours on release, or the server's when the connection dies) or a
-/// wait that runs out ends the loop, the shell, `flock`, and the lock. `bash` by name, not
-/// `sh`: `read -t` is not in every `sh` (Ubuntu's `dash` has none), and a holder that
-/// cannot wait would either never let go or never hold.
+/// `flock` runs a `bash` — the **holder**, carrying `HELD_ENV=<id>` — and the lock is free
+/// the moment that process ends. The holder, in this order:
+///
+///  1. ignores HUP and PIPE: a client that vanished must not take the holder with it while
+///     a step of its change is still running;
+///  2. runs the **door** (`TXN_ENV=<id>`) in the foreground: it says `LOCKED <door> <holder>`
+///     and reads its input a line at a time, waiting at most `LOCK_SILENCE` for each —
+///     every renewal restarts the wait; end of input (ours on release, or the server's when
+///     the connection dies) or a wait that runs out closes the door (T618);
+///  3. **waits for every live step of this change going forward** — processes carrying
+///     `WRITE_ENV=<id>.f`, still running on the server — for up to `DRAIN_CEILING`, then
+///     stops whatever is left, TERM and then KILL: `domain::marked::stop_script`, the stop
+///     of T609 (T628);
+///  4. replaces itself (`exec`, the same PID — `flock` is still waiting on it) by the same
+///     wait **without** `HELD_ENV`, for every step of the change (`WRITE_ENV=<id>…`): a
+///     putting back that got in before the mark went is waited for — with a `DRAIN_CEILING`
+///     of its own, counted from here — and none can get in after;
+///  5. ends — and with it `flock`, and the lock.
+///
+/// **Why nothing slips past.** Every step carries its mark from its first instruction, and
+/// checks the door or the holder's mark only after that (`write_step`, `guard`,
+/// `guard_held`). A step going forward that found the door open existed before the door
+/// closed, and 3 looks for it after; one putting back that found `HELD_ENV` existed before
+/// 4 dropped it, and 4 looks for it after. A step that found them gone does nothing.
+///
+/// Nothing but `flock` holds the lock's descriptor past the holder: every process the
+/// holder starts ends before it does. The holder's output after the door goes nowhere —
+/// the channel may be gone by then. `bash` by name, not `sh`: `read -t` is not in every
+/// `sh` (Ubuntu's `dash` has none), and the stop script needs `mapfile -d` (bash 4.4).
 ///
 /// `pub` so the Docker test can run the very same holder with an input that stays open and
 /// says nothing — a client that went silent without its channel closing.
 pub fn holder_command(id: &str, lock_path: &str) -> String {
-    format!(
-        "env {TXN_ENV}={id} flock -x -w {wait} -E 75 {lock} \
-         bash -c 'echo \"LOCKED $PPID\"; while IFS= read -r -t {silence} _; do :; done' \
-         || echo \"NOT_LOCKED $?\"",
-        wait = LOCK_WAIT.as_secs(),
+    let door = format!(
+        "echo \"LOCKED $$ $1\"; while IFS= read -r -t {silence} _; do :; done",
         silence = LOCK_SILENCE.as_secs(),
+    );
+    let wait_args = format!(
+        "{term} {kill} {grace} signal",
+        term = super::marked::TERM_TICKS,
+        kill = super::marked::KILL_TICKS,
+        grace = DRAIN_CEILING.as_secs(),
+    );
+    let holder = format!(
+        "trap '' HUP PIPE\n\
+         id=$1\n\
+         stop={stop}\n\
+         {TXN_ENV}=\"$id\" bash -c {door} vrcast-limits-door \"$$\"\n\
+         exec </dev/null >/dev/null 2>&1\n\
+         {selfcheck} bash -c \"$stop\" vrcast-limits-wait \"$id.f\" {wait_args}\n\
+         exec env -u {HELD_ENV} {selfcheck} bash -c \"$stop\" vrcast-limits-last \"$id\" {wait_args}\n",
+        stop = super::shell_quote(&crate::domain::marked::stop_script(WRITE_ENV)),
+        door = super::shell_quote(&door),
+        selfcheck = crate::domain::marked::SELFCHECK,
+    );
+    let id = super::shell_quote(id);
+    format!(
+        "flock -x -w {wait} -E 75 {lock} env {HELD_ENV}={id} bash -c {holder} \
+         vrcast-limits-holder {id} || echo \"NOT_LOCKED $?\"",
+        wait = LOCK_WAIT.as_secs(),
         lock = super::shell_quote(lock_path),
+        holder = super::shell_quote(&holder),
+    )
+}
+
+/// A step of change `id`, as it is sent (T628): carrying `WRITE_ENV=<id>` from its first
+/// instruction, so the lock's holder waits for it — and everything it starts — before it
+/// lets the lock go.
+///
+/// Run by the login shell (`$SHELL`), as the step was before T628, so no step's text
+/// changes meaning; its answer and its exit status are the step's own.
+///
+/// `pub` so the Docker test can send a slow step of a change exactly as the change does.
+pub fn write_step(id: &str, script: &str) -> String {
+    format!(
+        "{WRITE_ENV}={} \"${{SHELL:-/bin/sh}}\" -c {}",
+        super::shell_quote(id),
+        super::shell_quote(script)
     )
 }
 
@@ -457,7 +590,7 @@ impl Serving<'_> {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let lock = self.lock(&id).await?;
         let outcome = self
-            .locked(&id, lock.holder_pid, limits, needs_ladder, base_generation)
+            .locked(&id, lock.holder, limits, needs_ladder, base_generation)
             .await;
         lock.release().await;
         outcome
@@ -467,7 +600,7 @@ impl Serving<'_> {
     async fn locked(
         &self,
         id: &str,
-        holder_pid: u32,
+        holder: Holder,
         limits: &[Limit],
         needs_ladder: Option<&str>,
         base_generation: u64,
@@ -487,7 +620,7 @@ impl Serving<'_> {
 
         let txn = Txn {
             id: id.to_owned(),
-            holder_pid,
+            holder,
             base: base_generation,
             changes: &changes,
             dirs: &dirs,
@@ -560,13 +693,14 @@ impl Serving<'_> {
 
     /// Take the lock, waiting up to `LOCK_WAIT` for whoever holds it.
     ///
-    /// The holder (`holder_command`) is `flock` itself, with our mark in its environment,
-    /// waiting on this channel for a sign of life: it ends on end-of-input — ours, or the
-    /// server's when the connection dies — or after `LOCK_SILENCE` with nothing heard, and
-    /// `flock` with it (T618). From the moment the lock is ours a task of its own renews it
-    /// every `RENEW_EVERY` (`renew_until`), until `TxnLock::release`. The holder names its
-    /// own PID (`$PPID` of the shell `flock` runs is `flock`) so later steps can check it is
-    /// still there and still ours.
+    /// The holder (`holder_command`) takes the lock and opens its **door**, which waits on
+    /// this channel for a sign of life: the door closes on end-of-input — ours, or the
+    /// server's when the connection dies — or after `LOCK_SILENCE` with nothing heard
+    /// (T618). The lock itself goes only after that, once every step of this change still
+    /// running on the server has ended (T628). From the moment the lock is ours a task of
+    /// its own renews it every `RENEW_EVERY` (`renew_until`), until `TxnLock::release`. The
+    /// holder names the door's PID and its own (`read_locked`) so later steps can check
+    /// they are still there and still ours.
     ///
     /// The channel takes an ordinary place, not a standing one: it lasts as long as one
     /// change, and the watching of viewers keeps both of its places (T153). A change uses
@@ -597,19 +731,17 @@ impl Serving<'_> {
             Err(_) => return Err(LimitError::Busy),
         };
 
-        if let Some(pid) = line.strip_prefix("LOCKED ") {
-            if let Ok(holder_pid) = pid.trim().parse::<u32>() {
-                let (stop, stopped) = tokio::sync::oneshot::channel();
-                let renewing = tokio::spawn(async move {
-                    let _permit = permit;
-                    renew_until(stream, RENEW_EVERY, stopped).await
-                });
-                return Ok(TxnLock {
-                    holder_pid,
-                    stop: Some(stop),
-                    renewing,
-                });
-            }
+        if let Some(holder) = read_locked(&line) {
+            let (stop, stopped) = tokio::sync::oneshot::channel();
+            let renewing = tokio::spawn(async move {
+                let _permit = permit;
+                renew_until(stream, RENEW_EVERY, stopped).await
+            });
+            return Ok(TxnLock {
+                holder,
+                stop: Some(stop),
+                renewing,
+            });
         }
         if line.trim() == "NOT_LOCKED 75" {
             return Err(LimitError::Busy);
@@ -664,7 +796,7 @@ impl Serving<'_> {
             });
         }
 
-        if let Err(e) = self.check_and_reload().await {
+        if let Err(e) = self.check_and_reload(txn).await {
             self.roll_back(txn, &prepared).await?;
             return Err(e);
         }
@@ -733,7 +865,7 @@ impl Serving<'_> {
             conf = super::shell_quote(self.conf_path),
         ));
 
-        let out = self.conn.exec(&script).await?;
+        let out = self.step(&txn.forward(), &script).await?;
         let verdict = verdict(&out.stdout);
         if let Some(current) = conflict_in(verdict) {
             return Err(LimitError::Conflict {
@@ -766,6 +898,11 @@ impl Serving<'_> {
     }
 
     /// Step 2: the new files, beside where they will go.
+    ///
+    /// Over SFTP, not as a marked step (T628): the SFTP server is not a process of this
+    /// change and the holder cannot wait for it — but every name written here is unique to
+    /// this change (`Txn::staged`), so a write still landing after the lock has passed on
+    /// can only leave a file of ours lying about, never touch another change's.
     async fn stage(&self, txn: &Txn<'_>, rules: &str) -> Result<(), LimitError> {
         self.write_file(&self.staged_conf(txn), rules).await?;
         for change in txn.changes {
@@ -806,7 +943,7 @@ impl Serving<'_> {
             staged = super::shell_quote(&self.staged_conf(txn)),
         ));
 
-        let out = self.conn.exec(&script).await?;
+        let out = self.step(&txn.forward(), &script).await?;
         let verdict = verdict(&out.stdout);
         if verdict == "SWAPPED" && out.ok() {
             return Ok(());
@@ -867,7 +1004,10 @@ impl Serving<'_> {
         // This change's own staged files go first and whatever else happens: their names are
         // unique to it, so removing them is safe even with the lock gone.
         let mut script = format!("rm -f {}\n", staged.join(" "));
-        script.push_str(&self.script_head_without_check(txn));
+        // Under the holder's mark rather than the door's (T628): a change whose client was
+        // not heard from for a while may still put back what it did for as long as the
+        // holder has not let the lock go — and it will not before this step has ended.
+        script.push_str(&format!("{}\n", guard_held(txn)));
         script.push_str(&format!(
             "cur=$(grep -m1 '^# vrcast-generation ' {conf} 2>/dev/null | awk '{{print $3}}')\n\
              cur=${{cur:-0}}\n\
@@ -929,8 +1069,7 @@ impl Serving<'_> {
         ));
 
         let out = self
-            .conn
-            .exec(&script)
+            .step(&txn.back(), &script)
             .await
             .map_err(|e| format!("putting back could not be run: {e}"))?;
         if verdict(&out.stdout) == "UNDONE" && out.ok() {
@@ -968,7 +1107,7 @@ impl Serving<'_> {
             ));
         }
         script.push_str("[ $fail = 0 ] && echo SWEPT || echo SWEEP_INCOMPLETE\n");
-        match self.conn.exec(&script).await {
+        match self.step(&txn.forward(), &script).await {
             Ok(out) if verdict(&out.stdout) == "SWEPT" => {}
             outcome => tracing::warn!(
                 ?outcome,
@@ -985,11 +1124,13 @@ impl Serving<'_> {
             .iter()
             .map(|c| super::shell_quote(&txn.kept(&c.path)))
             .collect();
-        self.remove_own(kept).await;
+        self.remove_own(txn, kept).await;
     }
 
     /// Remove, deepest first, the empty directories this change made (T602) — for when it
-    /// stops without `undo`.
+    /// stops without `undo`. A putting back like `undo`, and under the same mark (T628): a
+    /// directory is shared by every change, and once the lock has passed on it may be the
+    /// next change's.
     async fn unmake_dirs(&self, txn: &Txn<'_>, prepared: &Prepared) {
         let dirs: Vec<String> = txn
             .dirs
@@ -1002,7 +1143,8 @@ impl Serving<'_> {
         if dirs.is_empty() {
             return;
         }
-        let _ = self.conn.exec(&format!("{}; true", dirs.join("; "))).await;
+        let script = format!("{}\n{}; true", guard_held(txn), dirs.join("; "));
+        let _ = self.step(&txn.back(), &script).await;
     }
 
     /// Remove this change's own staged files, by the same reasoning.
@@ -1011,14 +1153,18 @@ impl Serving<'_> {
         for change in txn.changes {
             staged.push(super::shell_quote(&txn.staged(&change.path)));
         }
-        self.remove_own(staged).await;
+        self.remove_own(txn, staged).await;
     }
 
-    async fn remove_own(&self, quoted: Vec<String>) {
+    /// Remove files whose names are this change's alone — with no check of the lock, since
+    /// nobody else's file can be among them, but marked like every step (T628).
+    async fn remove_own(&self, txn: &Txn<'_>, quoted: Vec<String>) {
         if quoted.is_empty() {
             return;
         }
-        let outcome = self.conn.exec(&format!("rm -f {}", quoted.join(" "))).await;
+        let outcome = self
+            .step(&txn.forward(), &format!("rm -f {}", quoted.join(" ")))
+            .await;
         if !matches!(&outcome, Ok(out) if out.ok()) {
             tracing::warn!(?outcome, "files of a change of the rules were not removed");
         }
@@ -1043,24 +1189,33 @@ impl Serving<'_> {
     }
 
     /// Ask the web server to check the configuration, then to take it.
-    async fn check_and_reload(&self) -> Result<(), LimitError> {
+    ///
+    /// Both marked as steps of the change (T628). The reload also checks the door first: it
+    /// makes the web server take what this change wrote, and a change nobody hears from
+    /// must not do that — it fails (`LOST_LOCK`) and the change is put back instead.
+    async fn check_and_reload(&self, txn: &Txn<'_>) -> Result<(), LimitError> {
         let validate = self
-            .conn
-            .exec(&format!(
-                "caddy validate --config {} --adapter caddyfile 2>&1",
-                super::shell_quote(self.main_conf)
-            ))
+            .step(
+                &txn.forward(),
+                &format!(
+                    "caddy validate --config {} --adapter caddyfile 2>&1",
+                    super::shell_quote(self.main_conf)
+                ),
+            )
             .await?;
         if !validate.ok() {
             return Err(LimitError::ValidateFailed(last_words(&validate.stdout)));
         }
 
         let reload = self
-            .conn
-            .exec(&format!(
-                "caddy reload --config {} --adapter caddyfile 2>&1",
-                super::shell_quote(self.main_conf)
-            ))
+            .step(
+                &txn.forward(),
+                &format!(
+                    "{}\ncaddy reload --config {} --adapter caddyfile 2>&1",
+                    guard(txn),
+                    super::shell_quote(self.main_conf)
+                ),
+            )
             .await?;
         if !reload.ok() {
             return Err(LimitError::ReloadFailed(last_words(&reload.stdout)));
@@ -1095,19 +1250,47 @@ impl Serving<'_> {
         written
             .map_err(|e| LimitError::Ssh(SshError::sftp(crate::store::redact::safe_display(&*e))))
     }
+
+    /// Run one step of change `txn` on the server, carrying `mark` (`Txn::forward` or
+    /// `Txn::back`) from its first instruction (`write_step`), so the lock's holder waits
+    /// for it before it lets the lock go (T628).
+    ///
+    /// Every command a change runs under the lock after step 0 goes through here. What only
+    /// reads — the rules and the quality sets read in step 0 — need not: nothing it does
+    /// outlives it, and nothing it does can be mixed into another change.
+    async fn step(&self, mark: &str, script: &str) -> Result<crate::ssh::CommandOutput, SshError> {
+        self.conn.exec(&write_step(mark, script)).await
+    }
 }
 
-/// The line every writing step starts with: go on only while our lock holder is alive.
+/// The line every step going forward starts with: go on only while the lock's door is open
+/// — the client is still heard from (T618, T628).
 ///
-/// Checked by the mark in the holder's environment, not by the PID alone: a holder that
-/// ended (its channel closed, or it heard nothing for `LOCK_SILENCE`, T618) may have had its
-/// PID given to another process since.
+/// Checked by the mark in the door's environment, not by the PID alone: a door that closed
+/// (its channel closed, or it heard nothing for `LOCK_SILENCE`) may have had its PID given
+/// to another process since. Runs after the step's own mark is set (`write_step`), so a
+/// step that passes it is one the holder will wait for.
 fn guard(txn: &Txn<'_>) -> String {
+    alive_with(txn.holder.door, TXN_ENV, &txn.id)
+}
+
+/// The line a step putting back starts with: go on only while the holder still has not
+/// begun its last wait — the lock is still this change's, and will stay so until this step
+/// has ended (T628).
+///
+/// A change whose client was silent for longer than `LOCK_SILENCE` and then came back finds
+/// the door closed; if the holder is still waiting for a step of the change, the lock is
+/// still its own and it may put back what it did. Once the holder has let go (or dropped
+/// its mark just before), the undo is refused (`LOST_LOCK`) — never silently, and never
+/// over a change that may already have taken the lock.
+fn guard_held(txn: &Txn<'_>) -> String {
+    alive_with(txn.holder.held, HELD_ENV, &txn.id)
+}
+
+fn alive_with(pid: u32, var: &str, id: &str) -> String {
     format!(
-        "tr '\\0' '\\n' < /proc/{pid}/environ 2>/dev/null | grep -qx '{TXN_ENV}={id}' \
-         || {{ echo LOST_LOCK; exit 9; }}",
-        pid = txn.holder_pid,
-        id = txn.id,
+        "tr '\\0' '\\n' < /proc/{pid}/environ 2>/dev/null | grep -qx '{var}={id}' \
+         || {{ echo LOST_LOCK; exit 9; }}"
     )
 }
 
