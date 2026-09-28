@@ -1837,3 +1837,140 @@ async fn a_holder_that_hears_nothing_lets_the_lock_go_after_the_silence() {
     assert!(lock_is_free(&server));
     assert_eq!(leftovers(&server), "");
 }
+
+// ---------- T628: the lock is let go only once the change's own steps have ended ----------
+//
+// T618 let the lock go the moment its client went quiet for `LOCK_SILENCE`, even with a step
+// of that change still running on the server: the next change took the lock and the two
+// wrote into each other (QA-20 №4). Now the holder waits for every step carrying the
+// change's mark before `flock` lets go.
+
+/// How long A's step runs: well past `LOCK_SILENCE`, and ending inside B's own wait.
+const A_STEP_S: u64 = 100;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_silent_clients_step_keeps_the_lock_until_it_has_ended() {
+    // A takes the lock with the very holder the application runs, on a channel that stays
+    // open and says nothing — a laptop gone to sleep. Before going quiet it has sent one
+    // slow step of its change, marked the way the change marks them (`write_step`). B asks
+    // for the lock meanwhile. B must not get it at the silence (60 s), only once A's step
+    // has ended — and A's step, the last thing it does, writes; B's rules go in after it.
+    use vrcast_studio_lib::server::limits::{holder_command, write_step, LOCK_SILENCE};
+
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    let id = "silentwriter";
+
+    let conn = connect(&server).await;
+    let started = std::time::Instant::now();
+    let holder = async {
+        let out = conn
+            .exec_with_timeout(
+                &holder_command(id, LOCK),
+                Duration::from_secs(A_STEP_S) + LOCK_SILENCE + Duration::from_secs(60),
+            )
+            .await;
+        (out, started.elapsed())
+    };
+    let a_step = async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let out = conn
+            .exec_with_timeout(
+                &write_step(
+                    &format!("{id}.f"),
+                    &format!("sleep {A_STEP_S}; date +%s%N > /tmp/a_step_end; echo A_WROTE"),
+                ),
+                Duration::from_secs(A_STEP_S + 30),
+            )
+            .await;
+        (out, started.elapsed())
+    };
+    let watch = async {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        let early = lock_is_free(&server);
+        // Past the silence, with A's step still running: T618 had let go by now.
+        tokio::time::sleep(LOCK_SILENCE + Duration::from_secs(5) - Duration::from_secs(10)).await;
+        let after_silence = lock_is_free(&server);
+        let checked_at = started.elapsed();
+        (early, after_silence, checked_at)
+    };
+    let b = async {
+        // B starts after A's step is under way, early enough that A's step ends inside
+        // B's own wait (`LOCK_WAIT`, 120 s).
+        tokio::time::sleep(Duration::from_secs(15)).await;
+        let from = started.elapsed();
+        let outcome = put_limit(
+            &server,
+            "203.0.113.61",
+            "demo",
+            all[1].bandwidth,
+            &good_url(&server),
+        )
+        .await;
+        (from, outcome, started.elapsed())
+    };
+    let (
+        (held, freed_at),
+        (step, step_done),
+        (early, after_silence, checked_at),
+        (b_from, b, b_to),
+    ) = tokio::join!(holder, a_step, watch, b);
+    conn.close().await;
+
+    let a_end: u128 = server
+        .exec_inside("cat /tmp/a_step_end")
+        .expect("A's step left no mark")
+        .trim()
+        .parse()
+        .expect("A's step's end is not a number");
+    let conf_written: u128 = server
+        .exec_inside(&format!("stat -c %.9Y '{CONF}' | tr -d ."))
+        .expect("the rules would not be looked at")
+        .trim()
+        .parse()
+        .expect("the rules' time is not a number");
+    eprintln!(
+        "A's step ended at {:.1}s; the holder let go at {:.1}s; lock free at {:.1}s: {after_silence}; \
+         B from {:.1}s to {:.1}s: {b:?}; B's rules written {:.3}s after A's step ended",
+        step_done.as_secs_f64(),
+        freed_at.as_secs_f64(),
+        checked_at.as_secs_f64(),
+        b_from.as_secs_f64(),
+        b_to.as_secs_f64(),
+        (conf_written as f64 - a_end as f64) / 1e9,
+    );
+
+    let held = held.expect("the holder's channel failed");
+    assert!(
+        held.stdout.starts_with("LOCKED "),
+        "A never had the lock: {held:?}"
+    );
+    let step = step.expect("A's step's channel failed");
+    assert_eq!(
+        step.trimmed(),
+        "A_WROTE",
+        "A's step did not run to its end: {step:?}"
+    );
+    assert!(!early, "the lock was free while A was still heard from");
+    assert!(
+        !after_silence,
+        "the lock was let go at the silence while A's step was still running"
+    );
+    assert!(
+        freed_at >= step_done.saturating_sub(Duration::from_secs(1)),
+        "the holder let go at {freed_at:?}, before A's step ended at {step_done:?}"
+    );
+    assert!(
+        freed_at <= step_done + Duration::from_secs(10),
+        "the holder kept the lock long after A's step ended: {freed_at:?} vs {step_done:?}"
+    );
+    b.expect("B did not get the lock once A's step had ended");
+    assert!(b_to >= step_done, "B was done before A's step ended");
+    assert!(
+        conf_written > a_end,
+        "B's rules were written before A's step ended"
+    );
+    assert!(lock_is_free(&server));
+    assert_eq!(leftovers(&server), "");
+}

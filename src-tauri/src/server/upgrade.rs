@@ -86,9 +86,10 @@ const OWNED: [&str; 11] = [
     // an owner had there. The other three are edited in place or appended to, which is gentler
     // and no less irreversible without a copy.
     //
-    // A file that is not there when the copy is taken is simply skipped — `back_up` guards
-    // each one with `[ -e "$f" ]` — so on a truly bare server this costs nothing and saves
-    // nothing, which is right: there was nothing to lose.
+    // A file that is not there when the copy is taken is simply skipped — `back_up` answers
+    // `absent` for it — so on a truly bare server this costs nothing and saves nothing, which
+    // is right: there was nothing to lose. A file that is there and will not copy is not
+    // skipped: the run stops before its first change (T629).
     "/etc/default/ufw",
     "/etc/fstab",
     "/etc/fail2ban/jail.local",
@@ -136,6 +137,17 @@ pub async fn plan<'a>(ctx: &Context<'a>, from: u32, steps: &[Step<Context<'a>>])
 /// half a backup, and half a backup restores a server into a state it was never in.
 ///
 /// Only what [`OWNED`] names — which is why the quality-limit rules are not in the copy (T610).
+///
+/// ⚠ **T629 — a copy that did not happen stops the run, before anything is changed.** The
+/// script used to say `[ -e "$f" ] && cp -a … || true` for each file, which silenced not only
+/// "this file is not there" but also "this file is there and would not copy", and the block's
+/// own exit status was never read (`ran` hands back text whatever the code): `latest` was moved
+/// onto a copy missing the file, `Ok` came back, and the run went on to replace it — the very
+/// Caddyfile T611's "replace (a copy is kept)" had promised to keep (QA-20 №5). Now every file
+/// answers `absent` or `copied`, a failed `cp` removes the half-made copy and exits non-zero,
+/// `latest` is moved last and only then, and [`backup_outcome`] accepts nothing short of exit 0,
+/// `done`, and an answer for every file. Anything else is [`DeployError::NotBackedUp`]:
+/// nothing of the steps has run, and `latest` still points at the previous copy.
 pub async fn back_up(ctx: &Context<'_>) -> Result<String> {
     let stamp = ctx.ran("date -u +%Y%m%dT%H%M%SZ").await?.trim().to_owned();
     if stamp.is_empty() {
@@ -144,22 +156,92 @@ pub async fn back_up(ctx: &Context<'_>) -> Result<String> {
         ))));
     }
     let dir = format!("{BACKUP_ROOT}/{stamp}");
-    let files = OWNED.join(" ");
+    let said = ctx.exec_marked(&back_up_script(&dir)).await?;
+    backup_outcome(&said)
+}
 
-    ctx.ran(&format!(
+/// The copy's shell block (T629), into `dir` — or, if a directory of that name is already there
+/// (two runs in one second), `dir-2`, `dir-3`…: a directory already there is not this copy's to
+/// fill, nor to remove if the copy fails. It says where it copied to (`into <dir>`), each file's
+/// fate (`absent`/`copied`/`failed <path>`), and `done` once `latest` points at it. Public so its
+/// shape is checked without a server.
+pub fn back_up_script(dir: &str) -> String {
+    let files = OWNED.join(" ");
+    let dir = crate::server::shell_quote(dir);
+    format!(
         "set -e
-mkdir -p {dir}
+mkdir -p -- {BACKUP_ROOT}
+d={dir}; n=1
+until mkdir -- \"$d\" 2>/dev/null; do
+  # Not there and still not made: let mkdir say why, and stop.
+  [ -e \"$d\" ] || {{ mkdir -- \"$d\" || exit 1; break; }}
+  n=$((n+1)); d={dir}-$n
+done
+echo \"into $d\"
 for f in {files}; do
   # Missing files are skipped rather than faked: a backup holding an empty stand-in for a
   # file that did not exist would, on restore, create it — and a configuration file that
-  # appears from nowhere is worse than one that is absent.
-  [ -e \"$f\" ] && cp -a \"$f\" {dir}/ || true
+  # appears from nowhere is worse than one that is absent. But only a file that is not there
+  # is skipped: one that is there and would not copy ends the copy, and the run.
+  if [ ! -e \"$f\" ]; then
+    echo \"absent $f\"
+  elif cp -a -- \"$f\" \"$d\"/; then
+    echo \"copied $f\"
+  else
+    echo \"failed $f\"
+    rm -rf -- \"$d\"
+    exit 1
+  fi
 done
-ln -sfn {dir} {LATEST}
+ln -sfn -- \"$d\" {LATEST}
 echo done"
-    ))
-    .await?;
-    Ok(dir)
+    )
+}
+
+/// Did the copy happen, whole (T629)? `Ok` with the directory it went into.
+///
+/// Yes only if the block exited `0`, said where it copied to, said `copied` or `absent` for
+/// **every** file of [`OWNED`], and said `done` (so `latest` was moved). Otherwise
+/// [`DeployError::NotBackedUp`], naming the file that would not copy when there is one, and
+/// carrying what the server said. Public so it is checked without a server
+/// (`tests/unit/upgrade_backup.rs`).
+pub fn backup_outcome(said: &crate::ssh::CommandOutput) -> Result<String> {
+    let lines: Vec<&str> = said.stdout.lines().map(str::trim).collect();
+    let answered = |f: &str| {
+        lines
+            .iter()
+            .any(|l| *l == format!("copied {f}") || *l == format!("absent {f}"))
+    };
+    let into = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("into "))
+        .filter(|d| d.starts_with(BACKUP_ROOT));
+    let failed = lines.iter().find_map(|l| l.strip_prefix("failed "));
+    let unanswered: Vec<&str> = OWNED.iter().copied().filter(|f| !answered(f)).collect();
+    if let Some(dir) = into {
+        if said.ok() && lines.contains(&"done") && unanswered.is_empty() && failed.is_none() {
+            return Ok(dir.to_owned());
+        }
+    }
+    let code = match said.exit_code {
+        Some(c) => format!("exit {c}"),
+        None => String::from("no exit status"),
+    };
+    let complaint = said.stderr.trim();
+    let what = match failed {
+        Some(f) => format!("{f} would not be copied"),
+        None if into.is_none() => format!("no directory for the copy under {BACKUP_ROOT}"),
+        None if !unanswered.is_empty() => {
+            format!("the copy stopped before {}", unanswered[0])
+        }
+        None => format!("the copy did not finish ({LATEST} not moved)"),
+    };
+    let mut detail = format!("the settings could not be copied aside ({code}): {what}");
+    if !complaint.is_empty() {
+        detail.push_str(": ");
+        detail.push_str(complaint);
+    }
+    Err(DeployError::NotBackedUp { detail })
 }
 
 /// Carry the upgrade out.

@@ -495,9 +495,72 @@ fn the_holder_waits_for_signs_of_life_rather_than_for_a_fixed_time() {
         cmd.contains("bash -c"),
         "`read -t` needs bash, not sh: {cmd}"
     );
-    assert!(cmd.contains("VRCAST_LIMITS_TXN=abc123"));
+    assert!(cmd.contains("VRCAST_LIMITS_TXN="), "{cmd}");
+    assert!(
+        cmd.contains("env VRCAST_LIMITS_HELD='abc123' bash -c"),
+        "{cmd}"
+    );
     assert!(cmd.contains("flock -x -w 120 -E 75 '/etc/caddy/vrcast-limits.conf.lock'"));
-    assert!(cmd.contains("echo \"LOCKED $PPID\""), "{cmd}");
+    assert!(cmd.contains("LOCKED $$ $1"), "{cmd}");
+}
+
+// ---------- T628: the lock is let go only once the change's steps have ended ----------
+
+use vrcast_studio_lib::server::limits::{
+    read_locked, write_step, Holder, DRAIN_CEILING, WRITE_ENV,
+};
+
+#[test]
+fn the_holder_waits_for_the_changes_steps_before_it_lets_go() {
+    let cmd = holder_command("abc123", "/etc/caddy/vrcast-limits.conf.lock");
+    // The very stop of T609, over the change's own mark: the steps going forward first,
+    // then — the holder's mark dropped, the same PID — every step of the change.
+    assert!(cmd.contains(WRITE_ENV), "{cmd}");
+    assert!(
+        cmd.contains("vrcast-limits-wait \"$id.f\" 50 50 600 signal"),
+        "{cmd}"
+    );
+    assert!(
+        cmd.contains("exec env -u VRCAST_LIMITS_HELD VRCAST_HLS_SELFCHECK=1 bash -c \"$stop\" vrcast-limits-last \"$id\" 50 50 600 signal"),
+        "{cmd}"
+    );
+    // The wait comes after the door, never before it.
+    let door = cmd.find("vrcast-limits-door").expect("no door");
+    let wait = cmd.find("vrcast-limits-wait").expect("no wait");
+    let last = cmd.find("vrcast-limits-last").expect("no last wait");
+    assert!(door < wait && wait < last, "{cmd}");
+    // A client that vanished does not take the holder with it (the holder's script is
+    // single-quoted inside the command, so its own quotes come out escaped).
+    assert!(cmd.contains(" HUP PIPE"), "{cmd}");
+}
+
+#[test]
+fn a_stuck_step_is_waited_for_as_long_as_one_command_may_run_and_no_longer() {
+    assert_eq!(DRAIN_CEILING, vrcast_studio_lib::ssh::exec::EXEC_CEILING);
+}
+
+#[test]
+fn every_step_carries_the_changes_mark_from_its_first_instruction() {
+    let step = write_step("abc123.f", "echo 'hi'; exit 3");
+    assert!(
+        step.starts_with("VRCAST_LIMITS_WRITE='abc123.f' \"${SHELL:-/bin/sh}\" -c "),
+        "{step}"
+    );
+    assert!(step.ends_with(r#"'echo '\''hi'\''; exit 3'"#), "{step}");
+}
+
+#[test]
+fn the_holder_names_its_door_and_itself() {
+    assert_eq!(
+        read_locked("LOCKED 41 40\n"),
+        Some(Holder { door: 41, held: 40 })
+    );
+    // The T618 holder's line, or anything else, is not a lock of ours.
+    assert_eq!(read_locked("LOCKED 41"), None);
+    assert_eq!(read_locked("LOCKED 41 40 39"), None);
+    assert_eq!(read_locked("LOCKED 0 40"), None);
+    assert_eq!(read_locked("NOT_LOCKED 75"), None);
+    assert_eq!(read_locked(""), None);
 }
 
 #[tokio::test]

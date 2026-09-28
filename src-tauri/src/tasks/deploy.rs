@@ -376,6 +376,11 @@ pub fn failed(e: DeployError, settled: &[PlannedStep]) -> AppError {
         DeployError::NotTaken { id } => AppError::new(ErrorCode::DeployStepFailed)
             .with_detail(where_it_stopped(Some(id)))
             .with_cause("it was applied and the check still says it was not"),
+        // T629: the copy before the first change did not happen whole, so no step ran — none
+        // is named, and how far it got (`done`: 0) says that nothing was changed.
+        DeployError::NotBackedUp { detail } => AppError::new(ErrorCode::DeployStepFailed)
+            .with_detail(where_it_stopped(None))
+            .with_cause(detail),
         DeployError::Step { id, detail, advice } => {
             let code = code_for(id);
             let error = AppError::new(code)

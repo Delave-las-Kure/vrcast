@@ -71,6 +71,10 @@ mod deploy_unheard;
 #[path = "unit/deploy_run_claim.rs"]
 mod deploy_run_claim;
 
+/// T627 — the proof that a fresh login with our key works signs in with a managed key too.
+#[path = "unit/deploy_proof_key.rs"]
+mod deploy_proof_key;
+
 #[path = "unit/measured_ladder.rs"]
 mod measured_ladder;
 
@@ -112,6 +116,10 @@ mod updater_config;
 
 #[path = "unit/upgrade_keeps_state.rs"]
 mod upgrade_keeps_state;
+
+/// T629 — the copy before a run's first change is read, not assumed.
+#[path = "unit/upgrade_backup.rs"]
+mod upgrade_backup;
 
 #[path = "unit/transfer.rs"]
 mod transfer;

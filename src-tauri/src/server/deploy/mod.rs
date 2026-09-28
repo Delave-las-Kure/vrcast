@@ -400,11 +400,12 @@ impl Context<'_> {
         if self.run.is_stopping() {
             return Err(DeployError::Cancelled);
         }
-        self.send(command).await
+        self.send(Sending::New, command).await
     }
 
-    /// The sending itself, whether or not a stop was asked — for the second half of an
-    /// operation that must not be left halved ([`Self::put_file`]).
+    /// The sending itself — a new command ([`Sending::New`], refused once a stop was asked,
+    /// T630) or the second half of an operation that must not be left halved
+    /// ([`Sending::Finishing`], sent whether or not a stop was asked — [`Self::put_file`]).
     ///
     /// ⚠ **T619 — a command whose end was not heard is settled before the next one goes.**
     /// A command that came back without an exit status — the answer lost with its channel, or
@@ -417,19 +418,24 @@ impl Context<'_> {
     /// (QA-19 №4). Now `in_flight` is left as it is, and before anything else of this run is
     /// sent the stop of what carries the mark is confirmed ([`settle_unheard`]) — waited for,
     /// not signalled, until that command's `EXEC_CEILING`, as a cancelled run's is (T609).
-    async fn send(&self, command: &str) -> Result<crate::ssh::CommandOutput> {
-        settle_unheard(&self.run, |patience| {
-            crate::server::marked::stop_confirmed(self.conn, RUN_VAR, &self.run.mark, patience)
-        })
-        .await?;
-        *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(std::time::Instant::now());
-        // On an error the time stays: whatever the error, the command may have been started.
-        let said = self.conn.exec(&self.run.wrap(command)).await?;
-        if said.exit_code.is_some() {
-            *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        }
-        Ok(said)
+    ///
+    /// ⚠ **T630 — a stop asked during that wait holds back a new command.** The wait can last
+    /// up to the unheard command's `EXEC_CEILING`; `exec_marked` asked `is_stopping` before
+    /// it began, and a cancel that came in meanwhile used to be let through the moment the
+    /// stop was confirmed — the command not yet started when the person cancelled (the first
+    /// changing block of an apply, say) went to the server anyway (QA-20 №6). See
+    /// [`send_settled`].
+    async fn send(&self, sending: Sending, command: &str) -> Result<crate::ssh::CommandOutput> {
+        let wrapped = self.run.wrap(command);
+        send_settled(
+            &self.run,
+            sending,
+            |patience| {
+                crate::server::marked::stop_confirmed(self.conn, RUN_VAR, &self.run.mark, patience)
+            },
+            || self.conn.exec(&wrapped),
+        )
+        .await
     }
 
     /// Run something on the server and hand back what it said.
@@ -524,9 +530,21 @@ impl Context<'_> {
     /// the run is stopping, and — once started — carried through to the move (or the tidying
     /// of the half-written copy) even if a stop is asked meanwhile. A stop between the two
     /// halves would leave a `*.vrcast.tmp` beside the real file for nothing.
+    ///
+    /// T630: the first half is a new operation like any command — an unheard command of this
+    /// run is settled first ([`settle_unheard`]), and a stop asked during that wait refuses it
+    /// before anything is written. Only the second half (the move, or the tidying) goes
+    /// whatever was asked ([`Sending::Finishing`]).
     pub async fn put_file(&self, path: &str, body: &str) -> Result<()> {
         use tokio::io::AsyncWriteExt;
 
+        if self.run.is_stopping() {
+            return Err(DeployError::Cancelled);
+        }
+        settle_unheard(&self.run, |patience| {
+            crate::server::marked::stop_confirmed(self.conn, RUN_VAR, &self.run.mark, patience)
+        })
+        .await?;
         if self.run.is_stopping() {
             return Err(DeployError::Cancelled);
         }
@@ -550,7 +568,10 @@ impl Context<'_> {
 
         if let Err(e) = written {
             let _ = self
-                .send(&format!("rm -f -- {}", crate::server::shell_quote(&temp)))
+                .send(
+                    Sending::Finishing,
+                    &format!("rm -f -- {}", crate::server::shell_quote(&temp)),
+                )
                 .await;
             return Err(DeployError::Ssh(crate::ssh::SshError::sftp(
                 crate::store::redact::safe_display(&e),
@@ -559,14 +580,68 @@ impl Context<'_> {
 
         // Its answer is not read, as `ran`'s was not before T609: the step's check after the
         // apply says whether the file is right, and that is what decides the step.
-        self.send(&format!(
-            "mv -f -- {} {}",
-            crate::server::shell_quote(&temp),
-            crate::server::shell_quote(path)
-        ))
+        self.send(
+            Sending::Finishing,
+            &format!(
+                "mv -f -- {} {}",
+                crate::server::shell_quote(&temp),
+                crate::server::shell_quote(path)
+            ),
+        )
         .await?;
         Ok(())
     }
+}
+
+/// What [`send_settled`] is sending (T630).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sending {
+    /// A command not yet begun: refused ([`DeployError::Cancelled`]) if a stop was asked by the
+    /// time it would go — including during the wait for an unheard command before it.
+    New,
+    /// The second half of an operation already begun and not to be left halved (the move or
+    /// the tidying of [`Context::put_file`]): sent whether or not a stop was asked.
+    Finishing,
+}
+
+/// Send one command of a run once whatever of it went unheard is settled (T619, T630).
+///
+/// First [`settle_unheard`] with `stop`. Then — for [`Sending::New`] — the stop is asked about
+/// **again**: the wait may have lasted up to an unheard command's `EXEC_CEILING`, and a cancel
+/// that came in during it is honoured by not starting the command (QA-20 №6); the check before
+/// the wait (`exec_marked`) cannot see it. [`Sending::Finishing`] goes regardless. `exec` is
+/// sent only then; the time it was sent is kept until an exit status comes back (on an error
+/// too: whatever the error, it may have been started).
+///
+/// Public, with the stop and the sending passed in, so it is checked without a server
+/// (`tests/unit/deploy_unheard.rs`).
+pub async fn send_settled<F, Fut, E, EFut>(
+    run: &RunMark,
+    sending: Sending,
+    stop: F,
+    exec: E,
+) -> Result<crate::ssh::CommandOutput>
+where
+    F: Fn(crate::server::marked::Patience) -> Fut,
+    Fut: std::future::Future<
+        Output = std::result::Result<
+            crate::domain::marked::Stopped,
+            crate::server::marked::StopProblem,
+        >,
+    >,
+    E: FnOnce() -> EFut,
+    EFut: std::future::Future<Output = std::result::Result<crate::ssh::CommandOutput, SshError>>,
+{
+    settle_unheard(run, stop).await?;
+    if sending == Sending::New && run.is_stopping() {
+        return Err(DeployError::Cancelled);
+    }
+    *run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+    let said = exec().await?;
+    if said.exit_code.is_some() {
+        *run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    Ok(said)
 }
 
 /// Settle a command of this run whose end was not heard, before anything else of the run is
@@ -755,6 +830,15 @@ pub enum DeployError {
         id: Option<StepId>,
         error: SshError,
     },
+    /// The copy of the settings made before the first change (`upgrade::back_up`, FR-095,
+    /// FR-133) did not happen whole — a file that is there would not copy, or the block did not
+    /// finish (T629). Nothing of the steps has run and `latest` was not moved: a run that went
+    /// on would replace files — a Caddyfile the person agreed to replace because a copy would
+    /// be kept, say — with no copy to put back. `detail` says which file and what the server
+    /// said.
+    NotBackedUp {
+        detail: String,
+    },
     Cancelled,
 }
 
@@ -774,6 +858,7 @@ impl std::fmt::Display for DeployError {
             ),
             Self::Ssh(e) => write!(f, "{e}"),
             Self::Unsettled { error, .. } => write!(f, "{error}"),
+            Self::NotBackedUp { detail } => f.write_str(detail),
             Self::Cancelled => f.write_str("cancelled"),
         }
     }

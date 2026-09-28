@@ -18,10 +18,12 @@ use vrcast_studio_lib::commands::AppState;
 use vrcast_studio_lib::domain::marked::Stopped;
 use vrcast_studio_lib::domain::server_profile::{AuthKind, ServerProfile};
 use vrcast_studio_lib::domain::wording::DetailCode;
-use vrcast_studio_lib::server::deploy::{settle_unheard, DeployError, RunMark, UnheardWait};
+use vrcast_studio_lib::server::deploy::{
+    send_settled, settle_unheard, DeployError, RunMark, Sending, UnheardWait,
+};
 use vrcast_studio_lib::server::marked::{Patience, StopProblem};
 use vrcast_studio_lib::ssh::exec::EXEC_CEILING;
-use vrcast_studio_lib::ssh::SshError;
+use vrcast_studio_lib::ssh::{CommandOutput, SshError};
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::InMemorySecretStore;
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
@@ -465,4 +467,109 @@ async fn the_task_shows_the_wait_while_it_lasts_and_deploying_after() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     finish.notify_one();
+}
+
+// ---------- T630: a stop asked during the wait holds back the next command ----------
+
+fn answered() -> Result<CommandOutput, SshError> {
+    Ok(CommandOutput {
+        exit_code: Some(0),
+        stdout: String::from("done"),
+        stderr: String::new(),
+    })
+}
+
+/// QA-20 №6: `exec_marked` asked "stopping?" before the wait; the person cancelled while the
+/// run waited for an unheard command; the stop was confirmed — and the command that had not
+/// begun when they cancelled went to the server anyway. Now it is refused, and nothing is sent.
+#[tokio::test]
+async fn a_stop_asked_during_the_wait_keeps_the_next_new_command_from_going() {
+    let run = unheard_a_minute_ago();
+    let sent = AtomicBool::new(false);
+    let r = send_settled(
+        &run,
+        Sending::New,
+        |_| {
+            // The cancel comes in while the server is being asked about the unheard command.
+            run.ask_to_stop();
+            async { Ok(Stopped::EndedOnItsOwn) }
+        },
+        || {
+            sent.store(true, Ordering::SeqCst);
+            async { answered() }
+        },
+    )
+    .await;
+    assert!(matches!(r, Err(DeployError::Cancelled)), "{r:?}");
+    assert!(
+        !sent.load(Ordering::SeqCst),
+        "a command not begun when the run was cancelled was sent after the wait"
+    );
+    assert_eq!(
+        run.may_run_until(),
+        None,
+        "the confirmed stop of the unheard command was not recorded"
+    );
+}
+
+/// The second half of an operation already begun (`put_file`'s move or tidying) still goes,
+/// whatever was asked during the wait: a stop between the halves would leave litter in /etc.
+#[tokio::test]
+async fn the_second_half_of_a_begun_write_goes_even_if_a_stop_was_asked_during_the_wait() {
+    let run = unheard_a_minute_ago();
+    let sent = AtomicBool::new(false);
+    let r = send_settled(
+        &run,
+        Sending::Finishing,
+        |_| {
+            run.ask_to_stop();
+            async { Ok(Stopped::EndedOnItsOwn) }
+        },
+        || {
+            sent.store(true, Ordering::SeqCst);
+            async { answered() }
+        },
+    )
+    .await;
+    assert!(r.is_ok(), "{r:?}");
+    assert!(sent.load(Ordering::SeqCst));
+    assert_eq!(run.may_run_until(), None);
+}
+
+/// Without a stop, the wait is followed by the command, as before (T619); an answer without an
+/// exit status stays on record as possibly still running.
+#[tokio::test]
+async fn without_a_stop_the_command_goes_once_the_wait_is_over() {
+    let run = unheard_a_minute_ago();
+    let sent = AtomicBool::new(false);
+    let r = send_settled(
+        &run,
+        Sending::New,
+        |_| async { Ok(Stopped::EndedOnItsOwn) },
+        || {
+            sent.store(true, Ordering::SeqCst);
+            async { answered() }
+        },
+    )
+    .await;
+    assert!(r.is_ok(), "{r:?}");
+    assert!(sent.load(Ordering::SeqCst));
+    assert_eq!(run.may_run_until(), None);
+
+    let run = RunMark::fresh();
+    let r = send_settled(
+        &run,
+        Sending::New,
+        |_| async { Ok(Stopped::AlreadyGone) },
+        || async {
+            Ok(CommandOutput {
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        },
+    )
+    .await;
+    assert!(r.is_ok(), "{r:?}");
+    assert!(run.may_run_until().is_some());
 }
