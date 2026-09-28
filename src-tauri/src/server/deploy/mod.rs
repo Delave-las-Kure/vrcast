@@ -238,7 +238,26 @@ pub struct RunMark {
     /// What keeps the key this run made, before password logins are turned off (T616). See
     /// [`RunMark::keeping_key`].
     keep_key: Option<KeepKey>,
+    /// Who is told when the run starts and stops waiting for a command whose end was not
+    /// heard (T624). See [`RunMark::tell_unheard_waits`].
+    on_unheard_wait: std::sync::OnceLock<OnUnheardWait>,
 }
+
+/// Where a run is with a command of its own whose end was not heard (T624), as
+/// [`settle_unheard`] tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnheardWait {
+    /// The run has begun waiting for the command to end on the server before it sends
+    /// anything else — up to that command's `EXEC_CEILING`.
+    Waiting,
+    /// Its stop is confirmed, and the run goes on. Not told when the wait ended otherwise:
+    /// a stop asked meanwhile has its own stage (`STAGE_STOPPING_AFTER_STEP`), and an
+    /// unconfirmed stop ends the run.
+    Settled,
+}
+
+/// What is told about [`UnheardWait`] — the task's stage, in a real run.
+pub type OnUnheardWait = Box<dyn Fn(UnheardWait) + Send + Sync>;
 
 impl std::fmt::Debug for RunMark {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -264,6 +283,27 @@ impl RunMark {
             stopping: std::sync::atomic::AtomicBool::new(false),
             in_flight: std::sync::Mutex::new(None),
             keep_key: None,
+            on_unheard_wait: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Tell `tell` when this run starts and stops waiting for a command whose end was not
+    /// heard (T624). Once per run: a second call is ignored and answers `false`.
+    ///
+    /// The wait lasts up to one command's `EXEC_CEILING` — ten minutes — and a person
+    /// watching a bar stand still under "deploying" for that long is owed the reason.
+    pub fn tell_unheard_waits(&self, tell: OnUnheardWait) -> bool {
+        self.on_unheard_wait.set(tell).is_ok()
+    }
+
+    /// Told only while the run has not been asked to stop: once it has, the stage is
+    /// `STAGE_STOPPING_AFTER_STEP`, and neither the wait nor its end may say otherwise.
+    fn told(&self, what: UnheardWait) {
+        if self.is_stopping() {
+            return;
+        }
+        if let Some(tell) = self.on_unheard_wait.get() {
+            tell(what);
         }
     }
 
@@ -536,10 +576,17 @@ impl Context<'_> {
 /// asked, patient with the command for what is left of its `EXEC_CEILING` (no signal until
 /// then — T609), and asked again for as long as it answers "still running" within that time.
 /// Confirmed — `in_flight` is cleared and the run may go on. Not confirmed (the server could
-/// not be asked, or something survived KILL, or the answer was unreadable) — `Err`, and
-/// `in_flight` stays: nothing further is sent, the run ends at the next check, and the task's
+/// not be asked, or something survived KILL, or the answer was unreadable) —
+/// `Err(DeployError::Unsettled)`, and `in_flight` stays: nothing further is sent, the run ends
+/// at the step it happened at (named in the error and settled `Failed` by [`run`] — T625, a
+/// non-blocking step included), and the task's
 /// own stop (`tasks::deploy::settle`, through fresh connections, for as long as it takes)
 /// takes over with the same record. A stop asked meanwhile — `Cancelled`, the same hand-over.
+///
+/// T624: the run is told ([`RunMark::tell_unheard_waits`]) [`UnheardWait::Waiting`] once, when
+/// the waiting begins, and [`UnheardWait::Settled`] when the stop is confirmed — the task shows
+/// `STAGE_WAITING_UNHEARD_COMMAND` in between and `STAGE_DEPLOYING` again after. Neither is
+/// told once the run has been asked to stop.
 ///
 /// Public, with the stop passed in, so it is checked without a server
 /// (`tests/unit/deploy_unheard.rs`).
@@ -554,12 +601,18 @@ where
     >,
 {
     use crate::server::marked::{Patience, StopProblem};
+    // Said once, when the waiting begins — not at each ask of the loop below (T624).
+    let mut waiting = false;
     loop {
         let Some(until) = run.may_run_until() else {
             return Ok(());
         };
         if run.is_stopping() {
             return Err(DeployError::Cancelled);
+        }
+        if !waiting {
+            waiting = true;
+            run.told(UnheardWait::Waiting);
         }
         let left = until.saturating_duration_since(std::time::Instant::now());
         let patience = if left.is_zero() {
@@ -571,16 +624,21 @@ where
             Ok(how) => {
                 tracing::info!(mark = %run.mark, ?how, "a command whose end was not heard is gone");
                 *run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                run.told(UnheardWait::Settled);
                 return Ok(());
             }
             // Still within its time and waited for, not signalled: ask again.
             Err(StopProblem::StillRunning(_)) => continue,
-            Err(StopProblem::Ssh(e)) => return Err(DeployError::Ssh(e)),
+            // T625: its own variant, not `Ssh` — the run names the step it happened at.
+            Err(StopProblem::Ssh(error)) => return Err(DeployError::Unsettled { id: None, error }),
             Err(problem) => {
-                return Err(DeployError::Ssh(SshError::Exec(format!(
-                    "a command of this run whose end was not heard may still be running, and \
-                     its stop could not be confirmed: {problem}"
-                ))))
+                return Err(DeployError::Unsettled {
+                    id: None,
+                    error: SshError::Exec(format!(
+                        "a command of this run whose end was not heard may still be running, \
+                         and its stop could not be confirmed: {problem}"
+                    )),
+                })
             }
         }
     }
@@ -685,6 +743,18 @@ pub enum DeployError {
         id: StepId,
     },
     Ssh(SshError),
+    /// A command of this run whose end was not heard may still be running on the server, and
+    /// its stop could not be confirmed ([`settle_unheard`], T619) — so nothing further of the
+    /// run may be sent, and the run ends here.
+    ///
+    /// `id` is the step at which that happened (T625, FR-123): [`run`] sets it — at the step's
+    /// check, its apply (blocking or not) or its second check — and settles that step `Failed`.
+    /// `None` only before any step (the mark of ours, the tidy-up, an upgrade's copy). `error`
+    /// is what the stop answered; its text is the failure's `cause`, as it was before T625.
+    Unsettled {
+        id: Option<StepId>,
+        error: SshError,
+    },
     Cancelled,
 }
 
@@ -703,6 +773,7 @@ impl std::fmt::Display for DeployError {
                 "step {id:?} reported success and its check still says it was not applied"
             ),
             Self::Ssh(e) => write!(f, "{e}"),
+            Self::Unsettled { error, .. } => write!(f, "{error}"),
             Self::Cancelled => f.write_str("cancelled"),
         }
     }
@@ -762,7 +833,10 @@ pub async fn run<C: BeforeStep>(
             continue;
         }
 
-        let found = (step.check)(ctx).await?;
+        let found = match (step.check)(ctx).await {
+            Ok(found) => found,
+            Err(e) => return Err(unsettled_at(steps, step.id, ctx, watch, e)),
+        };
         let status = match found {
             // Already so. **This is the whole of safety on a repeat**: a run after a failure
             // does not undo the half that succeeded, and nothing had to be remembered between
@@ -780,7 +854,11 @@ pub async fn run<C: BeforeStep>(
                     // not when our own code returned. The one time this rule was missing, the
                     // hardening step ran without complaint and password logins stayed on for
                     // half a year.
-                    match (step.check)(ctx).await? {
+                    let again = match (step.check)(ctx).await {
+                        Ok(again) => again,
+                        Err(e) => return Err(unsettled_at(steps, step.id, ctx, watch, e)),
+                    };
+                    match again {
                         Checked::Applied => Status::Applied,
                         Checked::NotNeeded => Status::Skipped {
                             why: deploy_steps::SkipReason::NotNeeded,
@@ -809,6 +887,11 @@ pub async fn run<C: BeforeStep>(
                     // step — nothing about the server said no — so it is not reported as one,
                     // and a repeat asks its check afresh.
                     return Err(DeployError::Cancelled);
+                }
+                // T625: an unheard command whose stop could not be confirmed ends the run
+                // whatever the step — a non-blocking one included: nothing more may be sent.
+                Err(e @ DeployError::Unsettled { .. }) => {
+                    return Err(unsettled_at(steps, step.id, ctx, watch, e));
                 }
                 Err(e) => {
                     let detail = e.to_string();
@@ -843,6 +926,37 @@ pub async fn run<C: BeforeStep>(
     }
 
     Ok(done)
+}
+
+/// A step's check or apply came back with an error that ends the run where it is (T625).
+///
+/// Only [`DeployError::Unsettled`] is settled here: the step it happened at is marked `Failed`
+/// with the stop's words, reported, and named in the error — FR-123, the step is named in
+/// every case. Anything else is handed back untouched, as `?` did before T625: a lost
+/// connection or a cancellation at a check is not the step's failure.
+fn unsettled_at<C>(
+    steps: &[Step<C>],
+    id: StepId,
+    ctx: &C,
+    watch: &mut (dyn FnMut(&PlannedStep) + Send),
+    e: DeployError,
+) -> DeployError {
+    let DeployError::Unsettled { id: None, error } = e else {
+        return e;
+    };
+    let planned = settled(
+        steps,
+        id,
+        ctx,
+        &Status::Failed {
+            detail: error.to_string(),
+        },
+    );
+    watch(&planned);
+    DeployError::Unsettled {
+        id: Some(id),
+        error,
+    }
 }
 
 /// The steps in the deployment's own order, whatever order they were handed in.

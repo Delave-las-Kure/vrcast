@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 
 import { StepList } from "../deploy/StepList";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { useServers } from "./store";
 import { useT } from "../../shared/i18n";
 import { ipc, onTaskDone } from "../../shared/ipc";
 import type { AppError, UpgradePlan } from "../../shared/contract";
@@ -31,6 +32,7 @@ export function UpgradeDialog({
 }) {
   const t = useT();
   const words = t.ui.upgrade;
+  const reloadServers = useServers((s) => s.reload);
 
   const [plan, setPlan] = useState<UpgradePlan | null>(null);
   const [running, setRunning] = useState<string | null>(null);
@@ -76,6 +78,9 @@ export function UpgradeDialog({
     const finish = onTaskDone((event) => {
       if (!alive || event.id !== running) return;
       setRunning(null);
+      // T626 — an upgrade over a password profile switches it to the key the run made (T616)
+      // just as a deployment does; the profiles in the store are read again, whatever the end.
+      void reloadServers();
       if (event.error) setError(event.error);
       else onDone?.();
     });
@@ -83,7 +88,7 @@ export function UpgradeDialog({
       alive = false;
       void finish.then((off) => off());
     };
-  }, [running, onDone]);
+  }, [running, onDone, reloadServers]);
 
   const toDo = plan?.steps.filter((s) => s.status === "NotApplied") ?? [];
 

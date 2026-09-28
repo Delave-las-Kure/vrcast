@@ -107,6 +107,7 @@ export type DetailCode =
   | "PROFILE_SECRET_REF_EMPTY"
   | "PROFILE_KEY_PATH_REQUIRED"
   | "PROFILE_KEY_PATH_UNUSED"
+  | "PROFILE_AUTH_NEEDS_SECRET"
   | "PROFILE_NOT_FOUND"
   | "FINGERPRINT_EMPTY"
 
@@ -194,6 +195,7 @@ export type DetailCode =
   | "STAGE_STOP_UNCONFIRMED"
   | "STAGE_STOPPING_AFTER_STEP"
   | "STAGE_DEPLOYING"
+  | "STAGE_WAITING_UNHEARD_COMMAND"
   | "STAGE_DONE"
 
   // what closing the application would do to a task (FR-086)

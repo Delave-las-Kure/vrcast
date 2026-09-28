@@ -355,3 +355,125 @@ fn moving_a_profile_to_another_address_stops_it_claiming_to_have_seen_the_machin
         );
     }
 }
+
+// ---------- T626 (QA-20 №1): a stale form does not undo the key a deployment made ----------
+
+/// A profile as a deployment leaves it after `SshKey` (T616): `managed_key`, the private key
+/// in the store under the profile's own reference.
+fn managed(s: &vrcast_studio_lib::commands::AppState) -> (String, SecretRef) {
+    let mut input = valid_input("Server");
+    input.auth_kind = AuthKind::ManagedKey;
+    let id = api::server_add(s, input, MADE_KEY).expect("the profile was not added");
+    let reference = SecretRef::from_stored(&api::servers_list(s).unwrap()[0].secret_ref);
+    (id, reference)
+}
+
+const MADE_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nmade-by-the-deployment\n";
+
+#[test]
+fn a_stale_password_form_does_not_put_a_managed_key_profile_back_on_password() {
+    // The deploy screen (and an edit form opened before the run) held the profile as it was:
+    // `auth_kind = password`. Written back without a secret, it left "password" over a store
+    // holding the private key, and every later sign-in sent the key as a password.
+    for secret in [None, Some("")] {
+        let s = state();
+        let (id, reference) = managed(&s);
+
+        let err = api::server_update(&s, &id, valid_input("Server"), secret)
+            .expect_err("a stale form moved the profile off the made key");
+        assert_eq!(err.code, ErrorCode::InvalidInput);
+        assert!(
+            err.says(DetailCode::ProfileAuthNeedsSecret),
+            "the refusal does not say why: {err}"
+        );
+
+        let after = &api::servers_list(&s).unwrap()[0];
+        assert_eq!(
+            after.auth_kind,
+            AuthKind::ManagedKey,
+            "the profile was changed anyway"
+        );
+        assert_eq!(
+            s.secrets.get(&reference).unwrap(),
+            MADE_KEY,
+            "the key was touched"
+        );
+    }
+}
+
+#[test]
+fn moving_off_the_made_key_with_a_new_secret_is_allowed() {
+    // A deliberate change — the person types the password (or the passphrase of their own
+    // key): store and profile agree again, so there is nothing to refuse.
+    let s = state();
+    let (id, reference) = managed(&s);
+
+    api::server_update(&s, &id, valid_input("Server"), Some("a-new-root-password"))
+        .expect("a deliberate change of the way of signing in was refused");
+
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0].auth_kind,
+        AuthKind::Password
+    );
+    assert_eq!(s.secrets.get(&reference).unwrap(), "a-new-root-password");
+}
+
+#[test]
+fn editing_other_fields_of_a_managed_key_profile_keeps_its_key() {
+    // The ordinary edit of such a profile: its own `auth_kind` sent back, no secret.
+    let s = state();
+    let (id, reference) = managed(&s);
+
+    let mut input = valid_input("Renamed");
+    input.auth_kind = AuthKind::ManagedKey;
+    api::server_update(&s, &id, input, None).expect("an ordinary edit was refused");
+
+    let after = &api::servers_list(&s).unwrap()[0];
+    assert_eq!(after.name, "Renamed");
+    assert_eq!(after.auth_kind, AuthKind::ManagedKey);
+    assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
+}
+
+#[test]
+fn a_profile_is_not_declared_managed_key_over_a_password() {
+    // The other way round: a store holding a password, a profile saying "managed key" — the
+    // password would be sent as a key.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+
+    let mut input = valid_input("Server");
+    input.auth_kind = AuthKind::ManagedKey;
+    let err = api::server_update(&s, &id, input, None)
+        .expect_err("a password profile was declared managed_key without its key");
+    assert!(err.says(DetailCode::ProfileAuthNeedsSecret), "{err}");
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0].auth_kind,
+        AuthKind::Password
+    );
+}
+
+#[test]
+fn the_ipv6_choice_is_saved_alone_and_leaves_the_way_of_signing_in_alone() {
+    // What the deploy screen calls now instead of `server_update` with the whole profile.
+    use vrcast_studio_lib::domain::server_profile::Ipv6Mode;
+    let s = state();
+    let (id, reference) = managed(&s);
+
+    api::server_set_ipv6_mode(&s, &id, Ipv6Mode::Disable).expect("the choice was not saved");
+
+    let after = &api::servers_list(&s).unwrap()[0];
+    assert_eq!(after.ipv6_mode, Some(Ipv6Mode::Disable));
+    assert_eq!(after.auth_kind, AuthKind::ManagedKey);
+    assert_eq!(after.key_path, None);
+    assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
+
+    api::server_set_ipv6_mode(&s, &id, Ipv6Mode::Keep).unwrap();
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0].ipv6_mode,
+        Some(Ipv6Mode::Keep)
+    );
+
+    let err = api::server_set_ipv6_mode(&s, "srv_nobody", Ipv6Mode::Keep)
+        .expect_err("a choice was saved for a profile that does not exist");
+    assert!(err.says(DetailCode::ProfileNotFound), "{err}");
+}

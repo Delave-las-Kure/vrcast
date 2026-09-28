@@ -32,6 +32,9 @@ export interface ServerFormProps {
   busyLabel: string;
   onSubmit: () => void;
   onCancel: () => void;
+  /** T626 — the profile being edited signs in with the key a deployment made for it. Only
+   *  then is that way of signing in in the list: nobody picks it by hand. */
+  offerManagedKey?: boolean;
 }
 
 export function ServerForm({
@@ -45,6 +48,7 @@ export function ServerForm({
   busyLabel,
   onSubmit,
   onCancel,
+  offerManagedKey = false,
 }: ServerFormProps) {
   const t = useT();
   const w = t.ui.wizard;
@@ -148,9 +152,16 @@ export function ServerForm({
           >
             <option value="key">{w.authKey}</option>
             <option value="password">{w.authPassword}</option>
+            {/* T626 — a profile a deployment switched to its own key. In the list only when
+                the profile being edited already is one: nobody picks it by hand (there is no
+                file, and nothing a person could type), but without it the list showed "By
+                key" for a profile that is not, and saving the form wrote that back. */}
+            {offerManagedKey && <option value="managed_key">{w.authManagedKey}</option>}
           </select>
         </label>
       </div>
+
+      {input.auth_kind === "managed_key" && <small className="muted">{w.authManagedKeyNote}</small>}
 
       {input.auth_kind === "key" && (
         <div className="form__inline">
@@ -176,18 +187,22 @@ export function ServerForm({
         </div>
       )}
 
-      <div className="field">
-        <label>
-          <span>{input.auth_kind === "key" ? w.fieldPassphrase : w.fieldPassword}</span>
-          <input
-            type="password"
-            value={secret}
-            onChange={(e) => onSecretChange(e.target.value)}
-            autoComplete="off"
-          />
-        </label>
-        <small className="muted">{secretHint}</small>
-      </div>
+      {/* No secret field for the made key: the key is not something a person types, and
+          whatever was typed here would replace it in the store (T626). */}
+      {input.auth_kind !== "managed_key" && (
+        <div className="field">
+          <label>
+            <span>{input.auth_kind === "key" ? w.fieldPassphrase : w.fieldPassword}</span>
+            <input
+              type="password"
+              value={secret}
+              onChange={(e) => onSecretChange(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <small className="muted">{secretHint}</small>
+        </div>
+      )}
 
       <details className="form__extra">
         <summary>{w.optional}</summary>

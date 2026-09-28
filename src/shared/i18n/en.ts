@@ -290,6 +290,8 @@ export const en: Catalogue = {
     PROFILE_SECRET_REF_EMPTY: "No reference to a secret in the system store was set.",
     PROFILE_KEY_PATH_REQUIRED: "Signing in by key needs the path to the private key file.",
     PROFILE_KEY_PATH_UNUSED: "Signing in by password does not use a key path — remove it.",
+    PROFILE_AUTH_NEEDS_SECRET:
+      "The way of signing in is changing, but no new password or key was entered — the store would keep the old way’s secret and the next sign-in would fail. If the form was opened before a deployment, it may already have moved the server to its own key: close the form and open it again. To change the way of signing in, enter the password or the key’s passphrase.",
     PROFILE_NOT_FOUND: "There is no such server — its profile may have been deleted.",
     FINGERPRINT_EMPTY: "The fingerprint is empty — there is nothing to confirm.",
 
@@ -407,6 +409,7 @@ export const en: Catalogue = {
     STAGE_STOPPING_AFTER_STEP:
       "stopping — waiting for the current command on the server to finish",
     STAGE_DEPLOYING: "Setting the server up",
+    STAGE_WAITING_UNHEARD_COMMAND: "Waiting for an interrupted command on the server to finish",
     STAGE_DONE: "done",
 
     // --- what closing the application would do ---
@@ -846,7 +849,7 @@ export const en: Catalogue = {
         "This server already has somebody else’s serving configuration — /etc/caddy/Caddyfile. This application did not write it: either it was edited by hand, or somebody’s serving lived here. Without your agreement the deployment will stop at the configuration step and leave the file alone.",
       replaceCaddyfile: "Replace it (a copy is kept)",
       replaceCaddyfileMeans:
-        "Before the first change the file is copied to /etc/vrcast/backup; “Put it back as it was”, used right after this deployment, restores it.",
+        "Before the first change the file is copied to /etc/vrcast/backup/<time>/Caddyfile. “Put it back as it was” restores it only if this deployment runs to the end. If it breaks off, the application will not bring this file back — not even after deploying again: it has to be put back by hand from the copy of the run that broke off, /etc/vrcast/backup/<its start time>/Caddyfile.",
     },
 
     deploySteps: {
@@ -1173,6 +1176,9 @@ export const en: Catalogue = {
       fieldAuth: "Sign-in",
       authKey: "By key",
       authPassword: "By password",
+      authManagedKey: "With the key made while deploying",
+      authManagedKeyNote:
+        "Deploying made this server its own key and turned password sign-in off; the key is kept in the system’s password store. To sign in another way, choose it and enter the password or the key’s passphrase.",
       pickKey: "Browse\u2026",
       fieldKeyPath: "Path to the private key",
       fieldPassphrase: "Key passphrase",

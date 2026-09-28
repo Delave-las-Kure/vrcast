@@ -18,6 +18,7 @@ import {
   type DeployPreview,
   type DomainAnswer,
   type Ipv6Choice,
+  type Ipv6Mode,
   type PlannedStep,
   type ServerState,
   type UpgradePlan,
@@ -211,6 +212,13 @@ export const ipc = {
   serverTest: (id: string) => call<TestStep[]>("server_test", { id }),
   serverFingerprintConfirm: (id: string, fingerprint: string) =>
     call<void>("server_fingerprint_confirm", { id, fingerprint }),
+  /**
+   * Remember the IPv6 choice made on the deploy screen — that field alone (T626). Not
+   * `serverUpdate` with the whole profile: the screen's copy goes out of date during a
+   * deployment, which switches a password profile to its own key.
+   */
+  serverSetIpv6Mode: (id: string, mode: Ipv6Mode) =>
+    call<void>("server_set_ipv6_mode", { id, mode }),
   serverImportSuggestion: () => call<ImportSuggestion | null>("server_import_suggestion"),
 
   // --- library ---
