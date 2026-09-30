@@ -29,6 +29,10 @@ mod moov;
 #[path = "unit/engine.rs"]
 mod engine;
 
+/// T650: carrying on goes through the lane.
+#[path = "unit/resume_lane.rs"]
+mod resume_lane;
+
 #[path = "unit/geo.rs"]
 mod geo;
 

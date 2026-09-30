@@ -133,9 +133,13 @@ struct LiveTask {
     kind: TaskKind,
     state: TaskState,
     cancel: CancellationToken,
-    /// Raised while the task is paused.
+    /// Raised while the task may not do its work: paused by a person, or waiting for its
+    /// place in the lane (T650). Lowered only by [`TaskEngine::try_claim_lane`], under the
+    /// same lock that makes it running.
     paused: Arc<Mutex<bool>>,
     resume: Arc<Notify>,
+    /// Wakes the task's placer: the task has become `Queued` and wants a place (T650).
+    place: Arc<Notify>,
     throttle: Arc<ProgressThrottle>,
     /// What the running task has said so far.
     ///
@@ -398,11 +402,14 @@ impl TaskContext {
 
 /// How an attempt to take a place in a lane ended.
 enum ClaimOutcome {
-    /// The place was taken; the task is now running.
+    /// The place was taken; the task is now running and its work may move.
     Started,
-    /// The lane is full — wait and try again.
+    /// The lane is full, or somebody stands ahead — wait and try again.
     Busy,
-    /// The task is no longer among the living (cancelled or finished) — do not start it.
+    /// The task is not waiting for a place: it is running, or paused and waiting for a
+    /// person. Nothing to do until it becomes `Queued` again.
+    NotWaiting,
+    /// The task is no longer among the living (cancelled or finished).
     Gone,
 }
 
@@ -730,14 +737,26 @@ impl TaskEngine {
     }
 
     /// The part both ways of submitting share: create the live task and start its work.
+    ///
+    /// **One way into the lane, for every task and every time** (T650). A new task, a task
+    /// raised after a restart and carried on, and a task paused mid-work and carried on all
+    /// go the same road: they become `Queued`, and the task's *placer* — a loop living as long
+    /// as the task — takes a place for them through [`TaskEngine::try_claim_lane`], which is
+    /// the only thing that makes a task `Running` and lowers the flag its work waits on.
+    /// Carrying on used to set `Running` directly, so a carried-on task either took no place
+    /// at all (two transfers at once under a limit of one) or counted as running while it
+    /// waited for one — and two such tasks each saw the other and waited for ever (QA-24A №1).
     fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, position: i64, work: F)
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
         let cancel = CancellationToken::new();
-        let paused = Arc::new(Mutex::new(initial == TaskState::Paused));
+        // Raised for everyone at the start: a queued task has no place yet, a raised one is
+        // waiting for a person. Only a place in the lane lowers it.
+        let paused = Arc::new(Mutex::new(true));
         let resume = Arc::new(Notify::new());
+        let place = Arc::new(Notify::new());
         let throttle = Arc::new(ProgressThrottle::default());
         let notices: Arc<Mutex<Vec<Detail>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -751,6 +770,7 @@ impl TaskEngine {
                     cancel: cancel.clone(),
                     paused: paused.clone(),
                     resume: resume.clone(),
+                    place: place.clone(),
                     throttle: throttle.clone(),
                     notices: notices.clone(),
                     position,
@@ -775,12 +795,12 @@ impl TaskEngine {
         let task_id = id.clone();
         let paused_flag = ctx.paused.clone();
         let resume_signal = ctx.resume.clone();
-        tokio::spawn(async move {
-            // A task raised after a restart waits for a person and **takes up no lane**:
-            // otherwise it would hold a place while doing nothing, and a second one like it
-            // could not start. Carrying on a transfer that runs for hours unbidden at
-            // start-up will not do either — the application may have been closed precisely
-            // to stop it.
+        let placer = self.clone().placer(id, place);
+        let run = async move {
+            // Waiting for the first place — or, for a task raised after a restart, for a
+            // person and then a place. Such a task **takes up no lane** while it waits:
+            // otherwise it would hold a place while doing nothing. Cancelling works here too:
+            // a task standing in the queue can be dropped without waiting for it to start.
             loop {
                 let resumed = resume_signal.notified();
                 if cancel.is_cancelled() {
@@ -799,22 +819,6 @@ impl TaskEngine {
                 }
             }
 
-            // Waiting for room in the lane. Cancelling works here too: a task standing in
-            // the queue can be dropped without waiting for it to start.
-            loop {
-                if cancel.is_cancelled() {
-                    engine.finish(&task_id, TaskState::Cancelled, None);
-                    return;
-                }
-                match engine.try_claim_lane(&task_id) {
-                    ClaimOutcome::Started => break,
-                    ClaimOutcome::Busy => {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    }
-                    ClaimOutcome::Gone => return,
-                }
-            }
-
             let outcome = work(ctx).await;
 
             // A cancellation outweighs the work's outcome: a task a person dropped did
@@ -828,7 +832,33 @@ impl TaskEngine {
                 Ok(()) => engine.finish(&task_id, TaskState::Completed, None),
                 Err(e) => engine.finish(&task_id, TaskState::Failed, Some(e)),
             }
+        };
+        tokio::spawn(async move {
+            // The placer never ends by itself; it goes when the task does.
+            tokio::select! {
+                _ = run => {}
+                _ = placer => {}
+            }
         });
+    }
+
+    /// The loop that takes a place in the lane whenever the task stands `Queued` (T650).
+    ///
+    /// It lives beside the task's work for the task's whole life, so a task paused and
+    /// carried on in the middle of its work finds its place exactly as a new one does. Asleep
+    /// while the task is running or paused; woken by [`TaskEngine::resume`] through `place`
+    /// (a permit is kept, so a wake that comes before the sleep is not lost).
+    async fn placer(self, id: String, place: Arc<Notify>) {
+        loop {
+            match self.try_claim_lane(&id) {
+                ClaimOutcome::Busy => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                ClaimOutcome::Started | ClaimOutcome::NotWaiting => place.notified().await,
+                // The task's own work is what ends the task; the placer only stops trying.
+                ClaimOutcome::Gone => std::future::pending::<()>().await,
+            }
+        }
     }
 
     /// Reorder the tasks in the queue (FR-083).
@@ -967,32 +997,48 @@ impl TaskEngine {
 
         *t.paused.lock().unwrap_or_else(|e| e.into_inner()) = true;
         t.state = TaskState::Paused;
-        drop(live);
+        // Under the lock, for the same reason as in `resume`: the order the states reach the
+        // database is the order they happened in.
         self.persist_state(id, TaskState::Paused, None);
+        drop(live);
         Ok(())
     }
 
     /// Carry on a paused task.
+    ///
+    /// **Carrying on asks for a place; it does not take one** (T650). The task becomes
+    /// `Queued` and its placer is woken; it becomes `Running`, and its work moves, only when
+    /// [`TaskEngine::try_claim_lane`] finds room in its lane and nobody standing ahead of it.
+    /// A task already waiting or already running is left as it is — pressing twice is not an
+    /// error (constitution, principle V).
     pub fn resume(&self, id: &str) -> Result<()> {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let t = live
             .get_mut(id)
             .ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
 
-        if !t.state.can_transition_to(TaskState::Running) {
-            return Err(TaskError::BadTransition {
-                id: id.to_owned(),
-                from: t.state.as_str(),
-                to: TaskState::Running.as_str(),
-            });
+        match t.state {
+            TaskState::Queued | TaskState::Running => return Ok(()),
+            TaskState::Paused => {}
+            other => {
+                return Err(TaskError::BadTransition {
+                    id: id.to_owned(),
+                    from: other.as_str(),
+                    to: TaskState::Queued.as_str(),
+                })
+            }
         }
 
-        *t.paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        t.state = TaskState::Running;
-        t.throttle.reset();
-        t.resume.notify_waiters();
+        t.state = TaskState::Queued;
+        // One permit, kept if the placer is not asleep yet.
+        t.place.notify_one();
+        // Written before the lock is let go: the placer may take the place the moment it is,
+        // and its `Running` must not be overwritten by this `Queued` arriving late.
+        self.persist_state(id, TaskState::Queued, None);
         drop(live);
-        self.persist_state(id, TaskState::Running, None);
+        // With room in the lane the answer to "carry on" is already `Running` — the same
+        // atomic claim the placer makes, only sooner; without room the placer keeps trying.
+        let _ = self.try_claim_lane(id);
         Ok(())
     }
 
@@ -1037,20 +1083,24 @@ impl TaskEngine {
     /// Checking for room and changing the state are inseparable on purpose: two tasks that
     /// wake at the same moment would otherwise both see one free place — and both would
     /// start, two preparations in a lane meant for one.
+    ///
+    /// **The only way into `Running`** (T650): only a task standing `Queued` is placed —
+    /// whether it was just submitted or carried on after a pause or a restart — and only
+    /// here is the flag its work waits on lowered. So a task never counts as running while it
+    /// waits, and never works without a place.
     fn try_claim_lane(&self, id: &str) -> ClaimOutcome {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let Some(t) = live.get(id) else {
             return ClaimOutcome::Gone;
         };
+        if t.state != TaskState::Queued {
+            return ClaimOutcome::NotWaiting;
+        }
         let lane = t.kind.lane();
-        // We do not count ourselves. A task raised after a restart and carried on by a
-        // person already counts as running — and, counting itself, would never see a free
-        // place in its own lane.
+        let position = t.position;
         let used = live
-            .iter()
-            .filter(|(other_id, x)| {
-                other_id.as_str() != id && x.state.occupies_lane() && x.kind.lane() == lane
-            })
+            .values()
+            .filter(|x| x.state.occupies_lane() && x.kind.lane() == lane)
             .count();
         if used >= self.limits().for_lane(lane) {
             return ClaimOutcome::Busy;
@@ -1058,35 +1108,27 @@ impl TaskEngine {
 
         // The queue is honoured: the place goes to the task standing first in the lane.
         // Without this check the order would be "whoever grabbed the lock first", and
-        // reordering (FR-083) would give nothing — there would be nothing to reorder.
-        //
-        // Only those standing in the queue are compared. A paused task is not waiting for
-        // the lane, it is waiting for a person, and has no claim to hold the queue; one
-        // carried on by a person goes at once — they have just said it is the one they want.
-        if t.state == TaskState::Queued {
-            let position = t.position;
-            let someone_is_ahead = live.values().any(|x| {
-                x.state == TaskState::Queued && x.kind.lane() == lane && x.position < position
-            });
-            if someone_is_ahead {
-                return ClaimOutcome::Busy;
-            }
+        // reordering (FR-083) would give nothing — there would be nothing to reorder. A task
+        // carried on keeps the place it was given when it was first submitted.
+        let someone_is_ahead = live.iter().any(|(other, x)| {
+            other.as_str() != id
+                && x.state == TaskState::Queued
+                && x.kind.lane() == lane
+                && x.position < position
+        });
+        if someone_is_ahead {
+            return ClaimOutcome::Busy;
         }
 
         let Some(t) = live.get_mut(id) else {
             return ClaimOutcome::Gone;
         };
-        if !t.state.can_transition_to(TaskState::Running) {
-            tracing::warn!(
-                id,
-                from = t.state.as_str(),
-                "the task cannot become running"
-            );
-            return ClaimOutcome::Gone;
-        }
         t.state = TaskState::Running;
-        drop(live);
+        t.throttle.reset();
+        *t.paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        t.resume.notify_waiters();
         self.persist_state(id, TaskState::Running, None);
+        drop(live);
         ClaimOutcome::Started
     }
 
