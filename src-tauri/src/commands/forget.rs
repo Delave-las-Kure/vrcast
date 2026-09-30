@@ -75,6 +75,67 @@ pub struct WhatWent {
     pub secrets_left: Vec<String>,
 }
 
+/// ⚠ T648 (QA-23 №2) — **what the person was shown when they agreed**, handed back with the
+/// removal: the profiles and the servers that would be lost for good, from the
+/// [`WhatWouldGo`] on their screen.
+///
+/// The finding: the screen read the list once, when it opened. A deployment still going then
+/// had not made its key yet, so nothing was named as lost; it finished, the profile turned to
+/// `managed_key`, the button came back on the old agreement — and the only key to that server
+/// went without a word of warning. The screen now reads the list again, but a screen is not
+/// what protects: the removal compares this with what would go *now*, under the same locks it
+/// removes under, and refuses as `FORGET_PREVIEW_STALE` when they differ. Order does not
+/// matter, the names do: an agreement to lose server A is not one to lose server B.
+///
+/// The size of the directory and the number of secrets are deliberately not part of it: the
+/// directory grows while the application is open (the library cache, the logs), and a refusal
+/// over a few kilobytes would teach a person to click through refusals. The number of secrets
+/// is the number of profiles, which is compared by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgetSeen {
+    /// `WhatWouldGo::servers` as shown.
+    pub servers: Vec<String>,
+    /// `WhatWouldGo::locked_out` as shown — the warning the person read, or did not get.
+    pub locked_out: Vec<String>,
+}
+
+impl ForgetSeen {
+    /// The same list, whatever the order it was shown in.
+    fn normalised(&self) -> (Vec<String>, Vec<String>) {
+        let mut servers = self.servers.clone();
+        let mut locked_out = self.locked_out.clone();
+        servers.sort();
+        locked_out.sort();
+        (servers, locked_out)
+    }
+}
+
+impl From<&WhatWouldGo> for ForgetSeen {
+    fn from(would: &WhatWouldGo) -> Self {
+        Self {
+            servers: would.servers.clone(),
+            locked_out: would.locked_out.clone(),
+        }
+    }
+}
+
+/// What the profiles say would go: the names, and those whose only key is in here.
+///
+/// One function for the preview and for the removal's own check (T648), so the two cannot
+/// come to disagree about who counts as locked out.
+fn seen_in(profiles: &[crate::domain::server_profile::ServerProfile]) -> ForgetSeen {
+    ForgetSeen {
+        servers: profiles.iter().map(|p| p.name.clone()).collect(),
+        // A server is a lock-out risk when the application made the key itself: then the
+        // private half exists only in the OS store, and the server refuses passwords.
+        locked_out: profiles
+            .iter()
+            .filter(|p| p.auth_kind == AuthKind::ManagedKey)
+            .map(|p| p.name.clone())
+            .collect(),
+    }
+}
+
 /// Where this run keeps its things — **from the state, never from the environment**.
 ///
 /// The difference is not academic. The first version of this worked the path out from
@@ -110,22 +171,15 @@ pub mod api {
     pub fn forget_preview(state: &AppState) -> Result<WhatWouldGo> {
         let profiles = crate::store::profiles::list(&state.db)
             .map_err(|e| AppError::new(ErrorCode::StorageFailed).with_cause(e))?;
-
-        // A server is a lock-out risk when the application made the key itself: then the
-        // private half exists only in the OS store, and the server refuses passwords.
-        let locked_out = profiles
-            .iter()
-            .filter(|p| p.auth_kind == AuthKind::ManagedKey)
-            .map(|p| p.name.clone())
-            .collect();
+        let seen = seen_in(&profiles);
 
         let dir = data_dir(state);
         Ok(WhatWouldGo {
             bytes: dir.as_deref().map(weigh).unwrap_or(0),
             data_dir: dir.map(|d| d.display().to_string()),
-            servers: profiles.iter().map(|p| p.name.clone()).collect(),
+            servers: seen.servers,
             secrets: profiles.len(),
-            locked_out,
+            locked_out: seen.locked_out,
         })
     }
 
@@ -155,7 +209,18 @@ pub mod api {
     ///
     /// [`TaskEngine::close_for_forgetting`]: crate::tasks::engine::TaskEngine::close_for_forgetting
     /// [`Db::sign_in_lock`]: crate::store::db::Db::sign_in_lock
-    pub fn forget_everything(state: &AppState, confirmed: bool) -> Result<WhatWent> {
+    ///
+    /// ⚠ **T648 (QA-23 №2) — only what the person agreed to.** `seen` is the list on their
+    /// screen ([`ForgetSeen`]). It is compared with the profiles read *here*, after the engine
+    /// is closed and under the sign-in lock — so nothing can change them between the check and
+    /// the removal — and a difference in the names or in who would be locked out is refused as
+    /// `FORGET_PREVIEW_STALE`, nothing touched. The order of the refusals: no `confirmed`
+    /// first, then a task alive (its end may change the list anyway), then a stale list.
+    pub fn forget_everything(
+        state: &AppState,
+        confirmed: bool,
+        seen: &ForgetSeen,
+    ) -> Result<WhatWent> {
         if !confirmed {
             return Err(AppError::new(ErrorCode::ConfirmationRequired));
         }
@@ -172,6 +237,15 @@ pub mod api {
         let profiles = crate::store::profiles::list(&state.db)
             .map_err(|e| AppError::new(ErrorCode::StorageFailed).with_cause(e))?;
 
+        let now = seen_in(&profiles);
+        if now.normalised() != seen.normalised() {
+            return Err(
+                AppError::new(ErrorCode::ForgetPreviewStale).with_cause(format!(
+                    "agreed to servers {:?}, locked out {:?}; now servers {:?}, locked out {:?}",
+                    seen.servers, seen.locked_out, now.servers, now.locked_out
+                )),
+            );
+        }
         let mut removed = 0usize;
         let mut left = Vec::new();
         for profile in &profiles {
@@ -212,7 +286,8 @@ pub mod ipc {
     pub async fn forget_everything(
         state: State<'_, AppState>,
         confirmed: bool,
+        seen: ForgetSeen,
     ) -> Result<WhatWent> {
-        api::forget_everything(&state, confirmed)
+        api::forget_everything(&state, confirmed, &seen)
     }
 }

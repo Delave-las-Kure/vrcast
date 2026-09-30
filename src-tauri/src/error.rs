@@ -170,6 +170,12 @@ error_codes! {
     /// (T643): a task was not created, or a second removal was not started. Nothing was
     /// changed by the refused call.
     ForgetInProgress => "FORGET_IN_PROGRESS",
+    /// Refused because what the person agreed to is no longer what would go (T648): the
+    /// server profiles or the servers that would be lost for good (`locked_out`) differ from
+    /// the list the removal was confirmed against — a deployment finished meanwhile and made
+    /// a key that exists only here, a profile was added or renamed. Nothing was removed; the
+    /// way on is to look at the new list and confirm again.
+    ForgetPreviewStale => "FORGET_PREVIEW_STALE",
 
     // --- input and confirmation ---
     InvalidInput => "INVALID_INPUT",
