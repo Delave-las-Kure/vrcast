@@ -297,6 +297,8 @@ export const en: Catalogue = {
     PROFILE_AUTH_NEEDS_SECRET:
       "The way of signing in is changing, but no new password or key was entered — the store would keep the old way’s secret and the next sign-in would fail. If the form was opened before a deployment, it may already have moved the server to its own key: close the form and open it again. To change the way of signing in, enter the password or the key’s passphrase.",
     PROFILE_NOT_FOUND: "There is no such server — its profile may have been deleted.",
+    PROFILE_MAY_BE_CHANGED:
+      "Putting the profile back as it was failed too — it may have been left changed, though the new password or passphrase was not saved. Open the profile, check its way of signing in and save it again.",
     FINGERPRINT_EMPTY: "The fingerprint is empty — there is nothing to confirm.",
 
     // --- what the single door says when it stays shut (T519(1)) ---

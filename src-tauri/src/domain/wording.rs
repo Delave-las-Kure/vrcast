@@ -70,6 +70,9 @@ detail_codes! {
     /// T626 — the way of signing in moves to or from `managed_key` and no new secret came
     /// with it. `from`, `to` — the two `auth_kind` values.
     ProfileAuthNeedsSecret => "PROFILE_AUTH_NEEDS_SECRET",
+    /// T644 — `server_update`: the system's secret store refused the new secret, and putting
+    /// the profile back as it was failed too; the profile may have been left changed.
+    ProfileMayBeChanged => "PROFILE_MAY_BE_CHANGED",
     ProfileNotFound => "PROFILE_NOT_FOUND",
     FingerprintEmpty => "FINGERPRINT_EMPTY",
 

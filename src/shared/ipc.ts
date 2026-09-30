@@ -206,6 +206,9 @@ export const ipc = {
    * empty string differs from `null` in exactly one move, `managed_key` → `key`, where it
    * means "the key file has no passphrase" and deletes the made key from the store; elsewhere
    * a move to or from `managed_key` needs a non-empty secret (`PROFILE_AUTH_NEEDS_SECRET`).
+   * T644: should the system's store refuse the secret, the profile is put back as it was and
+   * the store's error comes back; if putting back failed too, the error also carries
+   * `PROFILE_MAY_BE_CHANGED` — the profile may have been left changed.
    */
   serverUpdate: (id: string, input: ServerInput, secret: string | null) =>
     call<void>("server_update", { id, input, secret }),

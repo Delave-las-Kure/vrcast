@@ -811,3 +811,179 @@ fn an_empty_secret_is_no_password_the_stale_form_is_still_refused() {
 
     assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
 }
+
+// ---------- T644 (QA-22 №4): the store refuses the secret — the profile goes back ----------
+
+/// Something to run just before the store refuses: where another copy of the application could
+/// change the row.
+type OnRefuse = Box<dyn FnMut() + Send>;
+
+/// A store that can be told to refuse `set`.
+#[derive(Default)]
+struct RefusingStore {
+    inner: vrcast_studio_lib::store::secrets::InMemorySecretStore,
+    refuse: std::sync::atomic::AtomicBool,
+    on_refuse: std::sync::Mutex<Option<OnRefuse>>,
+}
+
+impl vrcast_studio_lib::store::secrets::SecretStore for RefusingStore {
+    fn set(
+        &self,
+        reference: &SecretRef,
+        value: &str,
+    ) -> vrcast_studio_lib::store::secrets::Result<()> {
+        if self.refuse.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some(f) = self.on_refuse.lock().unwrap().as_mut() {
+                f();
+            }
+            return Err(vrcast_studio_lib::store::secrets::SecretError::Backend(
+                String::from("the store is locked"),
+            ));
+        }
+        self.inner.set(reference, value)
+    }
+    fn get(&self, reference: &SecretRef) -> vrcast_studio_lib::store::secrets::Result<String> {
+        self.inner.get(reference)
+    }
+    fn delete(&self, reference: &SecretRef) -> vrcast_studio_lib::store::secrets::Result<()> {
+        self.inner.delete(reference)
+    }
+}
+
+fn refusing_state() -> (
+    vrcast_studio_lib::commands::AppState,
+    std::sync::Arc<RefusingStore>,
+) {
+    let store = std::sync::Arc::new(RefusingStore::default());
+    let s = vrcast_studio_lib::commands::AppState::with_db(
+        std::sync::Arc::new(vrcast_studio_lib::store::db::Db::open_in_memory().unwrap()),
+        store.clone(),
+    )
+    .unwrap();
+    (s, store)
+}
+
+fn signing_in(auth_kind: AuthKind, name: &str) -> ServerInput {
+    let mut input = valid_input(name);
+    input.auth_kind = auth_kind;
+    if auth_kind == AuthKind::Key {
+        input.key_path = Some(String::from(OWN_KEY));
+    }
+    input
+}
+
+/// Every change of the way of signing in a form can make, and each way kept with a new secret:
+/// (from, what the store holds, to, the new secret).
+const MOVES: [(AuthKind, &str, AuthKind, &str); 7] = [
+    (AuthKind::ManagedKey, MADE_KEY, AuthKind::Key, ""),
+    (
+        AuthKind::ManagedKey,
+        MADE_KEY,
+        AuthKind::Key,
+        "a-passphrase",
+    ),
+    (
+        AuthKind::ManagedKey,
+        MADE_KEY,
+        AuthKind::Password,
+        "a-password",
+    ),
+    (AuthKind::Password, SECRET, AuthKind::Key, "a-passphrase"),
+    (
+        AuthKind::Password,
+        SECRET,
+        AuthKind::Password,
+        "a-new-password",
+    ),
+    (
+        AuthKind::Key,
+        "old-passphrase",
+        AuthKind::Password,
+        "a-password",
+    ),
+    (
+        AuthKind::Key,
+        "old-passphrase",
+        AuthKind::Key,
+        "a-new-passphrase",
+    ),
+];
+
+#[test]
+fn a_refused_secret_puts_the_profile_back_as_it_was_on_every_move() {
+    // QA-22 №4: `managed_key` -> `key` with "", the store refused — the profile stayed `key`
+    // with the made private key in the store as its "passphrase". Now it is put back, the store
+    // keeps what it had, and the store's error comes back.
+    for (from, held, to, new_secret) in MOVES {
+        let (s, store) = refusing_state();
+        let id = api::server_add(&s, signing_in(from, "Server"), held).unwrap();
+        let before = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+            .unwrap()
+            .unwrap();
+        let reference = SecretRef::from_stored(&before.secret_ref);
+
+        store
+            .refuse
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut edit = signing_in(to, "Renamed");
+        edit.host = String::from("198.51.100.20");
+        let err = api::server_update(&s, &id, edit, Some(new_secret))
+            .expect_err("the store refused, and the update said it went through");
+        let case = format!("{from:?} -> {to:?}");
+        assert_eq!(err.code, ErrorCode::StorageFailed, "{case}: {err}");
+        assert!(!err.says(DetailCode::ProfileMayBeChanged), "{case}: {err}");
+
+        let after = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, before, "{case}: the profile was not put back");
+        assert_eq!(s.secrets.get(&reference).unwrap(), held, "{case}");
+    }
+}
+
+#[test]
+fn a_profile_changed_before_it_could_be_put_back_is_not_written_over_and_the_error_says_so() {
+    // The putting back is conditional, like the edit: should the row have changed in between
+    // (another copy of the application), nothing is written over it — and the error is loud
+    // that the profile may have been left changed.
+    let (s, store) = refusing_state();
+    let id = api::server_add(&s, signing_in(AuthKind::ManagedKey, "Server"), MADE_KEY).unwrap();
+    let db = s.db.clone();
+    let id2 = id.clone();
+    *store.on_refuse.lock().unwrap() = Some(Box::new(move || {
+        vrcast_studio_lib::store::profiles::set_fingerprint(&db, &id2, "SHA256:someone-else")
+            .unwrap();
+    }));
+    store
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let err = api::server_update(&s, &id, own_key_file("Server"), Some(""))
+        .expect_err("the store refused, and the update said it went through");
+    assert_eq!(err.code, ErrorCode::StorageFailed, "{err}");
+    assert!(err.says(DetailCode::ProfileMayBeChanged), "{err}");
+    let cause = err.cause.clone().unwrap_or_default();
+    assert!(cause.contains("may have been left changed"), "{cause}");
+    assert!(cause.contains("the store is locked"), "{cause}");
+
+    let after = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.host_fingerprint.as_deref(),
+        Some("SHA256:someone-else"),
+        "the other change was written over"
+    );
+}
+
+#[test]
+fn a_locked_store_does_not_stop_an_edit_that_brings_no_secret() {
+    // `secret: null` does not touch the store at all — a locked store does not stop a rename.
+    let (s, store) = refusing_state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    store
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    api::server_update(&s, &id, valid_input("Renamed"), None).expect("a rename was refused");
+    assert_eq!(api::servers_list(&s).unwrap()[0].name, "Renamed");
+}
