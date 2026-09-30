@@ -820,3 +820,128 @@ fn a_wait_with_a_limit_on_the_rounds_says_it_did_not_confirm() {
     );
     assert_eq!(asked.len(), 2);
 }
+
+// ---------- T635: nothing is put back while a step going forward may still be running ----------
+
+use vrcast_studio_lib::server::limits::{
+    barrier_command, read_settled, settle_then, unheard, Settled, BARRIER_GRACE, BARRIER_ROUNDS,
+};
+use vrcast_studio_lib::ssh::{CommandOutput, SshError};
+
+fn said(exit_code: Option<u32>) -> CommandOutput {
+    CommandOutput {
+        exit_code,
+        stdout: String::from("SWAPPED\n"),
+        stderr: String::new(),
+    }
+}
+
+#[test]
+fn a_step_is_heard_only_when_the_server_said_it_ended() {
+    assert!(!unheard(&Ok(said(Some(0)))));
+    // A step that failed and said so has ended: its failure is heard.
+    assert!(!unheard(&Ok(said(Some(7)))));
+    // The channel closed with no exit status: the step's end was never said.
+    assert!(unheard(&Ok(said(None))));
+    // Given up on at the ceiling (`EXEC_CEILING`), or the channel failed.
+    assert!(unheard(&Err(SshError::Exec(String::from(
+        "the command did not finish within 600s and was given up on: …"
+    )))));
+}
+
+#[tokio::test]
+async fn the_barrier_comes_before_the_putting_back() {
+    let order = std::sync::Mutex::new(Vec::new());
+    let outcome = settle_then(
+        || async {
+            order.lock().unwrap().push("barrier");
+            Ok(())
+        },
+        || async {
+            order.lock().unwrap().push("undo");
+            Ok(())
+        },
+    )
+    .await;
+    assert_eq!(outcome, Ok(()));
+    assert_eq!(*order.lock().unwrap(), ["barrier", "undo"]);
+}
+
+#[tokio::test]
+async fn an_unconfirmed_barrier_means_the_putting_back_never_starts() {
+    let undone = std::sync::atomic::AtomicBool::new(false);
+    let outcome = settle_then(
+        || async {
+            Err(String::from(
+                "a step of this change may still be running: 4242:4242",
+            ))
+        },
+        || async {
+            undone.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .await;
+    let err = outcome.expect_err("the putting back went ahead unconfirmed");
+    assert!(err.contains("putting back was not started"), "{err}");
+    assert!(err.contains("4242:4242"), "{err}");
+    assert!(!undone.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn only_a_confirmed_end_lets_the_putting_back_begin() {
+    for end in [
+        "VRCAST_STOP none\n",
+        "VRCAST_STOP ended 3000ms\n",
+        "VRCAST_STOP term 104ms\n",
+        "VRCAST_STOP kill 5012ms\n",
+    ] {
+        assert_eq!(read_settled(end), Settled::Confirmed, "{end}");
+    }
+    assert_eq!(
+        read_settled("VRCAST_STOP unreadable\n"),
+        Settled::Unreadable
+    );
+    for not_an_end in [
+        "VRCAST_DRAIN unconfirmed after 3 rounds: VRCAST_STOP alive 4242:4242 groups: 4242\n",
+        "VRCAST_STOP alive 4242:4242 groups: 4242\n",
+        "VRCAST_STOP running 4242:4242\n",
+        "",
+        "bash: mapfile: -d: invalid option\n",
+    ] {
+        assert!(
+            matches!(read_settled(not_an_end), Settled::NotConfirmed(_)),
+            "{not_an_end:?} was taken for an end"
+        );
+    }
+}
+
+#[test]
+fn the_barrier_waits_for_the_steps_going_forward_a_little_then_stops_them_a_few_times() {
+    let cmd = barrier_command("abc123.f", BARRIER_GRACE.as_secs());
+    assert!(cmd.starts_with("bash -c "), "{cmd}");
+    assert!(
+        cmd.ends_with(&format!(
+            "'abc123.f' 50 50 {} {BARRIER_ROUNDS}",
+            BARRIER_GRACE.as_secs()
+        )),
+        "{cmd}"
+    );
+    // Not a step of the change: the holder must not wait for its own barrier.
+    assert!(!cmd.starts_with("VRCAST_LIMITS_WRITE="), "{cmd}");
+    // A barrier with no limit on its rounds would never report.
+    assert!(!cmd.ends_with(" 0"), "{cmd}");
+}
+
+#[test]
+fn the_barrier_against_a_step_that_will_not_die_reports_it() {
+    // The real drain, with the barrier's limit on the rounds.
+    let Some((said, asked)) = drain_against(&[ALIVE], BARRIER_ROUNDS) else {
+        return;
+    };
+    assert!(
+        matches!(read_settled(&said), Settled::NotConfirmed(ref s) if s.contains("4242:4242")),
+        "{said}"
+    );
+    assert_eq!(asked.len(), BARRIER_ROUNDS as usize);
+}
