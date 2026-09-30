@@ -984,6 +984,232 @@ describe("what is said before it starts", () => {
   });
 });
 
+describe("T654 — one file into a new medium, confirmed after a warning", () => {
+  const viewers: AppError = { code: "VIEWERS_ACTIVE", details: [] };
+
+  beforeEach(() => {
+    // A queued answer a test expects never to be asked for (the SLUG_TAKEN below) would
+    // otherwise be handed to the next test: `clearAllMocks` keeps the once-queue.
+    mockMediaCreate.mockReset();
+    mockMediaDelete.mockReset();
+    mockUploadStart.mockReset();
+    mockUploadStart.mockResolvedValue("t-1");
+  });
+
+  /** One file, a new medium called `title`, and "Upload" pressed. */
+  async function sendOneIntoANewMedium(title: string) {
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    await chooseAFile();
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.upload.newMediaLabel), {
+      target: { value: title },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+  }
+
+  it("the confirmation repeats the upload, not the creation of the medium", async () => {
+    // QA-24A №5, the probe turned round: the second `mediaCreate` the old code sent was
+    // refused `SLUG_TAKEN` and the confirmed upload never went out.
+    mockMediaCreate
+      .mockResolvedValueOnce("m-new")
+      .mockRejectedValueOnce({ code: "SLUG_TAKEN", details: [] } as AppError);
+    mockUploadStart.mockRejectedValueOnce(viewers).mockResolvedValueOnce("t-2");
+    await sendOneIntoANewMedium("Новый фильм");
+
+    fireEvent.click(await screen.findByText(ru.ui.preflight.uploadAnyway));
+
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
+    expect(mockMediaCreate).toHaveBeenCalledTimes(1);
+    const [first, second] = mockUploadStart.mock.calls.map((c) => c[0]);
+    // The very request that was refused, now confirmed — the medium already resolved.
+    expect(second).toEqual({ ...(first as object), confirmed: true });
+    expect(second).toMatchObject({
+      media_id: "m-new",
+      local_path: "F:\\видео\\фильм 22.mp4",
+      remote_name: "фильм 22.mp4",
+    });
+    expect(await screen.findByText(ru.ui.upload.started)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument();
+  });
+
+  it("the medium made is selected as an existing one from then on", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Новый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+
+    const select = screen.getByLabelText(ru.ui.upload.fieldMedia) as HTMLSelectElement;
+    expect(select.value).toBe("m-new");
+    expect(
+      Array.from(select.options).some((o) => o.value === "m-new" && o.text === "Новый фильм"),
+    ).toBe(true);
+    expect(screen.queryByLabelText(ru.ui.upload.newMediaLabel)).not.toBeInTheDocument();
+  });
+
+  it("declining leaves the empty medium named and offered for deletion", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Отклонённый фильм");
+
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    // Not while the question is still open: the answer may yet put the file into it.
+    expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    expect(
+      await screen.findByText(
+        fill(ru.ui.upload.orphanedMediaWarning, { title: "Отклонённый фильм" }, ru, "ru"),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.upload.orphanedMediaDelete)).toBeInTheDocument();
+    // Nothing was deleted behind the person's back.
+    expect(mockMediaDelete).not.toHaveBeenCalled();
+  });
+
+  it("pressing Upload again after declining puts the file into it, not a second medium", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers).mockResolvedValueOnce("t-3");
+    await sendOneIntoANewMedium("Новый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
+    expect(mockMediaCreate).toHaveBeenCalledTimes(1);
+    expect(mockUploadStart).toHaveBeenLastCalledWith(
+      expect.objectContaining({ media_id: "m-new", confirmed: false }),
+    );
+    await screen.findByText(ru.ui.upload.started);
+    expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument();
+  });
+
+  it("deleting the empty medium takes it out of the list and off the form", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Удаляемый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    mockMediaDelete.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "Удаляемый фильм", files: 0, bytes: 0 } },
+      ],
+    } as AppError);
+    fireEvent.click(await screen.findByText(ru.ui.upload.orphanedMediaDelete));
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledWith("s1", "m-new", false));
+
+    mockMediaDelete.mockResolvedValueOnce("ok");
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteYes));
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledWith("s1", "m-new", true));
+
+    await waitFor(() =>
+      expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument(),
+    );
+    const select = screen.getByLabelText(ru.ui.upload.fieldMedia) as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(Array.from(select.options).some((o) => o.value === "m-new")).toBe(false);
+  });
+
+  it("a changed form drops the warning rather than confirming a request no longer on screen", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Новый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldLimit), {
+      target: { value: "1250000" },
+    });
+
+    expect(screen.queryByText(ru.ui.preflight.uploadAnyway)).not.toBeInTheDocument();
+  });
+});
+
+describe("T656 — the suggested name follows the only file left", () => {
+  /** Add one.mp4, then two.mp4 — two separate picks. */
+  async function pickTwoOneAtATime() {
+    mockOpen
+      .mockResolvedValueOnce(["F:/qa/one.mp4"])
+      .mockResolvedValueOnce(["F:/qa/two.mp4"]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByDisplayValue("one.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("two.mp4");
+  }
+
+  const dropButton = (name: string) =>
+    screen.getByRole("button", {
+      name: fill(ru.ui.upload.dropOneFile, { name }, ru, "ru"),
+    });
+
+  it("removing the first file uploads the one left under its own name", async () => {
+    // QA-24A №7, the probe turned round: two.mp4 used to go up named one.mp4.
+    await pickTwoOneAtATime();
+    fireEvent.click(dropButton("one.mp4"));
+
+    expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("two.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+    expect(mockUploadStart.mock.calls[0][0]).toMatchObject({
+      local_path: "F:/qa/two.mp4",
+      remote_name: "two.mp4",
+    });
+  });
+
+  it("a name the person typed is kept when the files change", async () => {
+    mockOpen
+      .mockResolvedValueOnce(["F:/qa/one.mp4"])
+      .mockResolvedValueOnce(["F:/qa/two.mp4"]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByDisplayValue("one.mp4");
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldName), {
+      target: { value: "premiere.mp4" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("two.mp4");
+    fireEvent.click(dropButton("one.mp4"));
+
+    expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("premiere.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+    expect(mockUploadStart.mock.calls[0][0]).toMatchObject({
+      local_path: "F:/qa/two.mp4",
+      remote_name: "premiere.mp4",
+    });
+  });
+
+  it("a name cleared by hand goes back to following the file", async () => {
+    await pickTwoOneAtATime();
+    // Back to one file first, so the field is on screen, then emptied and a file removed.
+    fireEvent.click(dropButton("two.mp4"));
+    const field = screen.getByLabelText(ru.ui.upload.fieldName);
+    fireEvent.change(field, { target: { value: "" } });
+    mockOpen.mockResolvedValueOnce(["F:/qa/three.mp4"]);
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("three.mp4");
+    fireEvent.click(dropButton("one.mp4"));
+
+    expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("three.mp4");
+  });
+});
+
 describe("the queue", () => {
   function task(id: string, order: number): Task {
     return {
