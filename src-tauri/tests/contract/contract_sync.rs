@@ -343,6 +343,19 @@ fn an_examined_source_s_shape_matches_both_ways() {
 }
 
 #[test]
+fn the_forget_agreement_s_shape_matches_both_ways() {
+    // T648: what the screen hands back with "remove everything". A field lost on the way would
+    // be read as an empty list — the core would then refuse every removal as stale, or, were
+    // it ever made lenient, accept one against a warning nobody saw.
+    use vrcast_studio_lib::commands::forget::ForgetSeen;
+    same_shape(
+        &serialized_fields(&ForgetSeen::default()),
+        &declared_fields(&contract_ts(), "ForgetSeen"),
+        "ForgetSeen",
+    );
+}
+
+#[test]
 fn the_playback_check_s_shape_matches_both_ways() {
     let verdict = vrcast_studio_lib::media::validate::classify("");
     same_shape(

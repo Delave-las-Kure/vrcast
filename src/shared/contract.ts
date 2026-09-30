@@ -80,6 +80,7 @@ export type ErrorCode =
   // removing everything (FR-114, T643)
   | "FORGET_TASKS_RUNNING"
   | "FORGET_IN_PROGRESS"
+  | "FORGET_PREVIEW_STALE"
   // input and confirmation
   | "INVALID_INPUT"
   | "CONFIRMATION_REQUIRED"
@@ -890,6 +891,16 @@ export interface WhatWent {
   secrets_removed: number;
   /** Secrets the store would not hand over. Named, rather than swallowed. */
   secrets_left: string[];
+}
+
+/**
+ * T648 — what the person was shown when they agreed, handed back with the removal: the two
+ * lists out of the `WhatWouldGo` on their screen. The core compares them with what would go at
+ * the moment of removal and refuses as `FORGET_PREVIEW_STALE` when they differ (order aside).
+ */
+export interface ForgetSeen {
+  servers: string[];
+  locked_out: string[];
 }
 
 // --- updating the application itself (FR-113) ---
