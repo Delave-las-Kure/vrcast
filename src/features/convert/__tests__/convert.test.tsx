@@ -375,6 +375,51 @@ describe("preparation screen", () => {
     expect(screen.queryByTestId("what-next")).toBeNull();
   });
 
+  /**
+   * T667 — QA-24B-08. A cancelled task ends with `error: null`, and the screen used to read
+   * "no error" as "done": "the file is ready", with an offer to upload the very file the
+   * cancellation had just deleted. What decides is the task's final state.
+   */
+  it("says a cancelled preparation was cancelled, and offers nothing onward", async () => {
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
+    await pickSource();
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    finish?.({ id: await mockConvertStart.mock.results[0].value, state: "cancelled", error: null });
+
+    expect(await screen.findByTestId("what-next-cancelled")).toHaveTextContent(
+      ru.ui.convert.nextCancelled,
+    );
+    expect(screen.queryByTestId("what-next")).toBeNull();
+    expect(screen.queryByText(ru.ui.convert.nextTitle)).toBeNull();
+    expect(screen.queryByText(ru.ui.convert.nextUpload)).toBeNull();
+    expect(screen.queryByText(ru.ui.convert.nextLadder)).toBeNull();
+    expect(screen.queryByTestId("what-next-failed")).toBeNull();
+  });
+
+  it("a failure with no error attached is still a failure, not a finished file", async () => {
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
+    await pickSource();
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    finish?.({ id: await mockConvertStart.mock.results[0].value, state: "failed", error: null });
+
+    expect(await screen.findByTestId("what-next-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("what-next")).toBeNull();
+  });
+
   it("asks for no target bitrate — this screen makes a master, the ladder picks the rungs", async () => {
     // The field is gone (owner, 2026-08-28): asking for a number before anybody has looked
     // at the material is asking for a guess. What must not happen quietly is the screen

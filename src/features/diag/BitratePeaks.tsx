@@ -14,7 +14,7 @@
  * same before the upload as after. Before is more use.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
@@ -58,10 +58,19 @@ export function BitratePeaks({
   const [peaks, setPeaks] = useState<Peaks | null>(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  // Which choice of file is the current one (T669, QA-24B-10). Every pick takes the next
+  // number, and a measurement's answer — figures, error, `onMeasured` — counts only if its
+  // number is still the current one. Clearing the figures at the moment of choosing is not
+  // enough on its own: the measurement of a long file A goes on after B is chosen, and used
+  // to land afterwards, putting A's figures under B's name and handing A's shape to the
+  // diagnosis of B's stalls.
+  const generation = useRef(0);
 
   async function pick() {
     const picked = await open({ multiple: false, directory: false });
     if (typeof picked !== "string") return;
+    const mine = ++generation.current;
+    const current = () => generation.current === mine;
     setChosen(picked);
     setPeaks(null);
     setError(null);
@@ -70,6 +79,7 @@ export function BitratePeaks({
     setAsking(true);
     try {
       const found = await ipc.diagBitrate(picked);
+      if (!current()) return;
       setPeaks(found);
       // Translated from bits/s to megabits the same way `LadderScreen.tsx`'s `bitrate()`
       // does. Without a ten-second peak there is nothing to compare a viewer's link
@@ -83,10 +93,12 @@ export function BitratePeaks({
         onMeasured?.(null);
       }
     } catch (e) {
+      if (!current()) return;
       setError(e as AppError);
       onMeasured?.(null);
     } finally {
-      setAsking(false);
+      // Only the current measurement says whether anything is being measured.
+      if (current()) setAsking(false);
     }
   }
 

@@ -329,3 +329,33 @@ async fn the_delivered_speed_is_measured_against_a_real_server() {
 
     drop(watch);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_each_rung_needs_is_read_off_the_real_description() {
+    // T666 — QA-24B-07. The figure SlowLink compares a set's viewer against, read the way
+    // the application reads it when the watching starts: the set's own description on the
+    // server, each rung's BANDWIDTH. A set with no description is left out, not guessed at.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let conn = connect(&server).await;
+
+    let needs = viewers::rung_needs(
+        &conn,
+        super::hls_fixture::VIDEO_DIR,
+        &[String::from("demo"), String::from("no-such-set")],
+    )
+    .await;
+
+    let demo = needs
+        .get("demo")
+        .expect("the set's description was not read");
+    for rung in &RUNGS {
+        assert_eq!(
+            demo.get(rung.name),
+            Some(&rung.peak_bps()),
+            "rung {} needs what its BANDWIDTH says: {demo:?}",
+            rung.name
+        );
+    }
+    assert!(!needs.contains_key("no-such-set"), "{needs:?}");
+}

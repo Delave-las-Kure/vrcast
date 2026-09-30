@@ -66,7 +66,7 @@ export function ConvertScreen() {
   // Not read off `outPath` when the task ends: the field stays editable afterwards, and a
   // link that offered the next step on a path nobody made would be worse than no link.
   const [finishedPath, setFinishedPath] = useState<string | null>(null);
-  const [done, setDone] = useState<"ok" | "failed" | null>(null);
+  const [done, setDone] = useState<"ok" | "failed" | "cancelled" | null>(null);
 
   const [preview, setPreview] = useState<ConvertPreview | null>(null);
   const [error, setError] = useState<AppError | null>(null);
@@ -127,7 +127,17 @@ export function ConvertScreen() {
     let live = true;
     const unlisten = onTaskDone((event) => {
       if (!live || event.id !== startedTask) return;
-      setDone(event.error ? "failed" : "ok");
+      // By the task's final state, not by whether an error came with it (T667, QA-24B-08):
+      // a cancelled task ends with no error at all, and was shown as "the file is ready"
+      // with an offer to upload a file the cancellation had just deleted. Only a completed
+      // task has made anything.
+      setDone(
+        event.state === "completed" && !event.error
+          ? "ok"
+          : event.state === "cancelled"
+            ? "cancelled"
+            : "failed",
+      );
     });
     return () => {
       live = false;
@@ -339,6 +349,14 @@ export function ConvertScreen() {
         <div className="notice notice--warning" role="status" data-testid="what-next-failed">
           <div className="notice__body">
             <strong className="notice__message">{c.nextFailed}</strong>
+          </div>
+        </div>
+      )}
+
+      {done === "cancelled" && (
+        <div className="notice" role="status" data-testid="what-next-cancelled">
+          <div className="notice__body">
+            <strong className="notice__message">{c.nextCancelled}</strong>
           </div>
         </div>
       )}
