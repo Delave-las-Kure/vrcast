@@ -395,6 +395,8 @@ export const en: Catalogue = {
       "Another preparation is already writing this file: {out_path}. Wait for it to end, or choose another place.",
     CONVERT_REPLACE_FAILED:
       "The new file is ready and checked, but it could not replace the old one ({out_path}) — perhaps the old one is open in another program. The new one was left here: {kept_at}",
+    VALIDATE_STALLED:
+      "The playback check hung: the decoder did not move a single frame in {seconds} s and was stopped. Whether the file plays is unknown, and it is not offered for upload. File: {out_path}",
     CONVERT_VALIDATE_NO_FFMPEG:
       "There is nothing to check playback with: the bundled FFmpeg does not work.",
     CONVERT_NO_ENCODER:

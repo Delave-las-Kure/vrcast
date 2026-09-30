@@ -226,3 +226,233 @@ async fn a_real_file_passes_and_a_damaged_one_does_not() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------- T663: the check answers cancel and pause, and a mute decoder is stopped ----------
+
+mod watched {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
+    use vrcast_studio_lib::domain::wording::DetailCode;
+    use vrcast_studio_lib::media::{ffmpeg, validate};
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::tasks::engine::{TaskEngine, TaskEvent};
+    use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
+
+    use crate::proc_check::long_running;
+
+    fn engine() -> TaskEngine {
+        TaskEngine::new(Arc::new(Db::open_in_memory().expect("no database")))
+    }
+
+    async fn ended(e: &TaskEngine, id: &str, within: Duration) -> Option<TaskState> {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if let Ok(Some(rec)) = e.get(id) {
+                if rec.state.is_final() {
+                    return Some(rec.state);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        None
+    }
+
+    /// What `watch_decoder` came back with, as a word — so a task can hand it out.
+    type Seen = Arc<Mutex<Option<String>>>;
+
+    fn said(outcome: &validate::Result<validate::Decoded>) -> String {
+        match outcome {
+            Ok(_) => String::from("finished"),
+            Err(validate::ValidateError::Cancelled) => String::from("cancelled"),
+            Err(validate::ValidateError::Stalled(_)) => String::from("stalled"),
+            Err(e) => format!("other: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_mute_decoder_is_stopped_for_saying_nothing() {
+        // QA-24B-04: "if FFmpeg hangs, the task never ends". A program that prints no
+        // position at all is, to the watch, a decoder that has stopped moving.
+        let (prog, args) = long_running();
+        let watch = validate::Watch {
+            ctx: None,
+            duration_s: 0.0,
+            stall: Duration::from_millis(1_200),
+        };
+        let started = Instant::now();
+        let outcome = validate::watch_decoder(prog, &args, &watch).await;
+        let took = started.elapsed();
+
+        assert_eq!(said(&outcome), "stalled");
+        assert!(
+            took < Duration::from_secs(10),
+            "a mute decoder held the check for {took:?} — the limit on silence did not fire"
+        );
+    }
+
+    #[test]
+    fn the_limit_is_on_silence_and_is_long_by_default() {
+        // Not a short limit on the whole decode: a two-hour film takes many minutes to decode,
+        // and any total would be wrong for some film.
+        assert!(validate::STALL_LIMIT >= Duration::from_secs(60));
+        assert_eq!(validate::Watch::unattended().stall, validate::STALL_LIMIT);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_during_the_check_ends_the_task() {
+        // QA-24B-04: a cancel pressed during the decode waited for the whole film.
+        let e = engine();
+        let (prog, args) = long_running();
+        let seen: Seen = Arc::new(Mutex::new(None));
+        let keep = seen.clone();
+
+        let id = e
+            .submit(TaskKind::Convert, None, move |ctx| async move {
+                let watch = validate::Watch {
+                    ctx: Some(&ctx),
+                    duration_s: 0.0,
+                    // Far longer than the test: only the cancel can end this.
+                    stall: Duration::from_secs(600),
+                };
+                let outcome = validate::watch_decoder(prog, &args, &watch).await;
+                *keep.lock().unwrap() = Some(said(&outcome));
+                Err(AppError::new(ErrorCode::TaskCancelled))
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let asked = Instant::now();
+        e.cancel(&id).unwrap();
+
+        let state = ended(&e, &id, Duration::from_secs(10)).await;
+        assert_eq!(
+            state,
+            Some(TaskState::Cancelled),
+            "the task did not end after the cancel"
+        );
+        assert!(asked.elapsed() < Duration::from_secs(5));
+        assert_eq!(seen.lock().unwrap().as_deref(), Some("cancelled"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn time_spent_paused_is_not_taken_for_a_hang() {
+        // Pause freezes the decoder where it is (the decision, T663); a pause longer than the
+        // limit on silence must not come back as "the decoder hung".
+        let e = engine();
+        let (prog, args) = long_running();
+        let seen: Seen = Arc::new(Mutex::new(None));
+        let keep = seen.clone();
+
+        let id = e
+            .submit(TaskKind::Convert, None, move |ctx| async move {
+                let watch = validate::Watch {
+                    ctx: Some(&ctx),
+                    duration_s: 0.0,
+                    stall: Duration::from_millis(1_500),
+                };
+                let outcome = validate::watch_decoder(prog, &args, &watch).await;
+                *keep.lock().unwrap() = Some(said(&outcome));
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        e.pause(&id).unwrap();
+        // Twice the limit, paused.
+        tokio::time::sleep(Duration::from_millis(3_000)).await;
+        assert!(
+            seen.lock().unwrap().is_none(),
+            "the check ended while it was paused: {:?}",
+            seen.lock().unwrap()
+        );
+
+        // Let go: now the silence counts again, and it ends as stalled rather than never.
+        e.resume(&id).unwrap();
+        let state = ended(&e, &id, Duration::from_secs(10)).await;
+        assert!(state.is_some(), "the check never ended after it was let go");
+        assert_eq!(seen.lock().unwrap().as_deref(), Some("stalled"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_real_decode_reports_its_own_progress_and_passes() {
+        let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+            eprintln!(
+                "SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything."
+            );
+            return;
+        };
+        let dir =
+            std::env::temp_dir().join(format!("vrcast-t663-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("clip.mp4");
+        let made = std::process::Command::new(&ff)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x240:rate=24",
+                "-t",
+                "4",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&clip)
+            .output()
+            .expect("could not run the bundled FFmpeg");
+        assert!(made.status.success());
+
+        let e = engine();
+        let mut events = e.subscribe();
+        let path = clip.clone();
+        let verdict: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+        let keep = verdict.clone();
+        let id = e
+            .submit(TaskKind::Convert, None, move |ctx| async move {
+                let v = validate::validate_in_task(&path, &ctx, 4.0)
+                    .await
+                    .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
+                *keep.lock().unwrap() = Some(v.ok);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            ended(&e, &id, Duration::from_secs(60)).await,
+            Some(TaskState::Completed)
+        );
+        assert_eq!(
+            *verdict.lock().unwrap(),
+            Some(true),
+            "a clean clip failed its check"
+        );
+
+        let mut shares: Vec<f64> = Vec::new();
+        while let Ok(ev) = events.try_recv() {
+            if let TaskEvent::Progress {
+                id: which,
+                stage: Some(DetailCode::StageValidating),
+                progress,
+                ..
+            } = ev
+            {
+                if which == id {
+                    shares.push(progress);
+                }
+            }
+        }
+        assert!(
+            shares.iter().any(|p| *p > 0.5),
+            "the check reported no progress of its own: {shares:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

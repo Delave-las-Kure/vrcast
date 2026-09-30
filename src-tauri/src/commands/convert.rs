@@ -179,9 +179,29 @@ pub mod api {
         // Validation is not optional (FR-027). A broken encode opens fine,
         // reports the right duration, and falls apart where someone is
         // watching — the only way to know is to decode the whole thing.
-        ctx.report_important(0.98, DetailCode::StageValidating);
-        let verdict = match validate::validate(&attempt).await {
+        //
+        // A stage of its own, counted from zero by the decode itself (T663): it used to sit
+        // at 98 % for as long as the decode took, which on a long film is minutes of a bar
+        // that does not move and a task that did not answer cancel or pause.
+        ctx.report_important(0.0, DetailCode::StageValidating);
+        let verdict = match validate::validate_in_task(&attempt, ctx, source.duration_s).await {
             Ok(verdict) => verdict,
+            Err(validate::ValidateError::Cancelled) => {
+                let _ = std::fs::remove_file(&attempt);
+                return Err(AppError::new(ErrorCode::TaskCancelled));
+            }
+            Err(validate::ValidateError::Stalled(seconds)) => {
+                // The encode is whole as far as anybody knows; only its check hung. Kept
+                // under its own name, as a file that failed its check is, and never
+                // under `out_path`.
+                return Err(
+                    AppError::new(ErrorCode::DecodeValidationFailed).with_detail(
+                        Detail::new(DetailCode::ValidateStalled)
+                            .with("seconds", seconds)
+                            .with("out_path", attempt_str.clone()),
+                    ),
+                );
+            }
             Err(e) => {
                 let _ = std::fs::remove_file(&attempt);
                 return Err(AppError::new(ErrorCode::FfmpegBroken).with_cause(e));
@@ -270,13 +290,23 @@ pub mod api {
     }
 
     /// Check that an already prepared file plays (FR-027).
+    ///
+    /// Outside any task, so nothing can cancel it — but it is bounded all the same: a decoder
+    /// that stops moving is stopped after `validate::STALL_LIMIT` (T663).
     pub async fn convert_validate(path: &str) -> Result<validate::Validation> {
         validate::validate(std::path::Path::new(path))
             .await
-            .map_err(|e| {
-                AppError::new(ErrorCode::FfmpegBroken)
+            .map_err(|e| match e {
+                validate::ValidateError::Stalled(seconds) => {
+                    AppError::new(ErrorCode::DecodeValidationFailed).with_detail(
+                        Detail::new(DetailCode::ValidateStalled)
+                            .with("seconds", seconds)
+                            .with("out_path", path.to_owned()),
+                    )
+                }
+                other => AppError::new(ErrorCode::FfmpegBroken)
                     .detail(DetailCode::ConvertValidateNoFfmpeg)
-                    .with_cause(e.to_string())
+                    .with_cause(other.to_string()),
             })
     }
 

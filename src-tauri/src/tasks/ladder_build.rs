@@ -564,16 +564,36 @@ async fn prepare_and_send(
     // just happened, and the alternative is a broken rung that nobody meets until a person is
     // watching. It is reported as its own stage so the time is accounted for rather than
     // looking like a stall.
+    //
+    // **And it answers cancel and pause while it runs** (T663): it used to be a plain call
+    // that took neither, so a cancel pressed during a long decode waited for the whole film.
     ctx.report_important(0.0, DetailCode::StageValidating);
-    let verdict = crate::media::validate::validate(&out_path)
-        .await
-        .map_err(|e| BuildError::Prepare(e.to_string()))?;
+    let verdict =
+        match crate::media::validate::validate_in_task(&out_path, ctx, job.source.duration_s).await
+        {
+            Ok(verdict) => verdict,
+            Err(e) => {
+                let _ = std::fs::remove_file(&out_path);
+                return Err(match e {
+                    crate::media::validate::ValidateError::Cancelled => BuildError::Cancelled,
+                    other => BuildError::Prepare(other.to_string()),
+                });
+            }
+        };
     if !verdict.ok {
         let _ = std::fs::remove_file(&out_path);
         return Err(BuildError::VariantBroken {
             variant: variant.file.clone(),
             problems: verdict.problems,
         });
+    }
+
+    // **Asked again before the next heavy phase** (T663). A cancel that landed as the decode
+    // finished would otherwise go on to send gigabytes to the server before anything looked
+    // at it again.
+    if ctx.is_cancelled() {
+        let _ = std::fs::remove_file(&out_path);
+        return Err(BuildError::Cancelled);
     }
 
     let sent = send(job, &out_path, &variant.file).await;

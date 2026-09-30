@@ -163,6 +163,9 @@ detail_codes! {
     /// `out_path`, `kept_at` — the new result is checked and whole, and could not be put in
     /// place of the old one; it is kept where it was made (T662).
     ConvertReplaceFailed => "CONVERT_REPLACE_FAILED",
+    /// `seconds`, `out_path` — the playback check's decoder made no progress for that long
+    /// and was stopped (T663). Nothing is known about the file; it was not put in service.
+    ValidateStalled => "VALIDATE_STALLED",
     ConvertValidateNoFfmpeg => "CONVERT_VALIDATE_NO_FFMPEG",
     ConvertNoEncoder => "CONVERT_NO_ENCODER",
     PlanNoAudioTracks => "PLAN_NO_AUDIO_TRACKS",
