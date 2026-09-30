@@ -339,6 +339,16 @@ detail_codes! {
     /// tells a person what is on the server now.
     NoticeCancelledAfterPublish => "NOTICE_CANCELLED_AFTER_PUBLISH",
 
+    /// `name`. A cancelled upload's part-file could not be removed from the server — it was
+    /// out of reach (T653, FR-038). The duty is kept: it is done at the next start of the
+    /// application or the next time an upload connects to that server, and this notice is
+    /// then replaced by [`Self::NoticeLeftoverRemoved`]. Until then it is also the record
+    /// that the duty exists.
+    NoticeLeftoverPending => "NOTICE_LEFTOVER_PENDING",
+    /// `name`. The part-file a cancellation could not remove at the time has since been
+    /// removed (T653).
+    NoticeLeftoverRemoved => "NOTICE_LEFTOVER_REMOVED",
+
     // --- deployment: what a step will change (T507, FR-122) ---
     //
     // ⚠ **The values were worked out and shown to nobody.** `domain::deploy_steps` fills a

@@ -157,6 +157,22 @@ struct LiveTask {
 /// The living map, shared by the engine and every task's context.
 type LiveMap = Arc<Mutex<HashMap<String, LiveTask>>>;
 
+/// What to do when a task raised after a restart is dropped before its work ran (T653).
+type Undo =
+    Box<dyn FnOnce(TaskContext) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
+/// What [`TaskEngine::start`] needs to put a task among the living, besides its work.
+struct Starting {
+    id: String,
+    kind: TaskKind,
+    /// `Queued` for a new task, `Paused` for one raised after a restart.
+    initial: TaskState,
+    position: i64,
+    /// Where the bar stands — what a change of state is announced with (T652).
+    progress: f64,
+    undo: Option<Undo>,
+}
+
 /// What a running task sees.
 ///
 /// Through it the task reports its progress and learns whether it is time to stop. Nothing
@@ -706,11 +722,14 @@ impl TaskEngine {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         store::upsert(&self.db, &record)?;
         self.start(
-            id.clone(),
-            kind,
-            TaskState::Queued,
-            record.queue_order,
-            0.0,
+            Starting {
+                id: id.clone(),
+                kind,
+                initial: TaskState::Queued,
+                position: record.queue_order,
+                progress: 0.0,
+                undo: None,
+            },
             work,
         );
         drop(closed);
@@ -729,6 +748,42 @@ impl TaskEngine {
     /// transfer that runs for hours unbidden at start-up will not do — a person may have
     /// closed the application precisely to stop it.
     pub fn resubmit_paused<F, Fut>(&self, id: &str, work: F) -> Result<()>
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
+    {
+        self.raise(id, work, None)
+    }
+
+    /// The same, with what to do if the task is dropped before its work ever ran (T653).
+    ///
+    /// **Tidying up after a task from the previous run is an action of its own, not a side
+    /// effect of its work.** A raised upload may have left a part-file on the server, and the
+    /// only thing that ever removed one was the transfer itself, on its way out after a
+    /// cancellation. A task cancelled before its work was called — which is exactly a person
+    /// deciding, after a restart, not to carry on — never went that way, and the part-file
+    /// stayed on the server for good (QA-24A №4, FR-038).
+    ///
+    /// `undo` runs in place of the work, when a cancellation arrives while the task is still
+    /// waiting for a person or for its place; the task is written down as cancelled once it
+    /// has returned, as with the work (principle III). Once the work has begun, undoing is
+    /// the work's own business, and `undo` is not called.
+    pub fn resubmit_paused_with_undo<F, Fut, U, UFut>(
+        &self,
+        id: &str,
+        work: F,
+        undo: U,
+    ) -> Result<()>
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
+        U: FnOnce(TaskContext) -> UFut + Send + 'static,
+        UFut: Future<Output = ()> + Send + 'static,
+    {
+        self.raise(id, work, Some(Box::new(move |ctx| Box::pin(undo(ctx)))))
+    }
+
+    fn raise<F, Fut>(&self, id: &str, work: F, undo: Option<Undo>) -> Result<()>
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
@@ -759,11 +814,14 @@ impl TaskEngine {
 
         store::save_state(&self.db, id, TaskState::Paused, None)?;
         self.start(
-            id.to_owned(),
-            record.kind,
-            TaskState::Paused,
-            record.queue_order,
-            record.progress,
+            Starting {
+                id: id.to_owned(),
+                kind: record.kind,
+                initial: TaskState::Paused,
+                position: record.queue_order,
+                progress: record.progress,
+                undo,
+            },
             work,
         );
         Ok(())
@@ -779,18 +837,19 @@ impl TaskEngine {
     /// Carrying on used to set `Running` directly, so a carried-on task either took no place
     /// at all (two transfers at once under a limit of one) or counted as running while it
     /// waited for one — and two such tasks each saw the other and waited for ever (QA-24A №1).
-    fn start<F, Fut>(
-        &self,
-        id: String,
-        kind: TaskKind,
-        initial: TaskState,
-        position: i64,
-        progress: f64,
-        work: F,
-    ) where
+    fn start<F, Fut>(&self, starting: Starting, work: F)
+    where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
+        let Starting {
+            id,
+            kind,
+            initial,
+            position,
+            progress,
+            undo,
+        } = starting;
         let cancel = CancellationToken::new();
         // Raised for everyone at the start: a queued task has no place yet, a raised one is
         // waiting for a person. Only a place in the lane lowers it.
@@ -844,10 +903,17 @@ impl TaskEngine {
             // Waiting for the first place — or, for a task raised after a restart, for a
             // person and then a place. Such a task **takes up no lane** while it waits:
             // otherwise it would hold a place while doing nothing. Cancelling works here too:
-            // a task standing in the queue can be dropped without waiting for it to start.
+            // a task standing in the queue can be dropped without waiting for it to start —
+            // and one raised after a restart is tidied up after (`undo`, T653).
+            let dropped = |ctx: TaskContext| async move {
+                if let Some(undo) = undo {
+                    undo(ctx).await;
+                }
+            };
             loop {
                 let resumed = resume_signal.notified();
                 if cancel.is_cancelled() {
+                    dropped(ctx).await;
                     engine.finish(&task_id, TaskState::Cancelled, None);
                     return;
                 }
@@ -857,6 +923,7 @@ impl TaskEngine {
                 tokio::select! {
                     _ = resumed => {}
                     _ = cancel.cancelled() => {
+                        dropped(ctx).await;
                         engine.finish(&task_id, TaskState::Cancelled, None);
                         return;
                     }
@@ -1055,12 +1122,16 @@ impl TaskEngine {
     /// `Queued` and its placer is woken; it becomes `Running`, and its work moves, only when
     /// [`TaskEngine::try_claim_lane`] finds room in its lane and nobody standing ahead of it.
     /// A task already waiting or already running is left as it is — pressing twice is not an
-    /// error (constitution, principle V).
+    /// error (constitution, principle V). So is one already being stopped: it is on its way
+    /// out, tidying up after itself (T653), and must not be given a place for that.
     pub fn resume(&self, id: &str) -> Result<()> {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let t = live
             .get_mut(id)
             .ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
+        if t.cancel.is_cancelled() {
+            return Ok(());
+        }
 
         match t.state {
             TaskState::Queued | TaskState::Running => return Ok(()),

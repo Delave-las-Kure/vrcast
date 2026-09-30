@@ -547,6 +547,10 @@ export const en: Catalogue = {
       "The stop arrived while \u201c{name}\u201d was already entering serving. It is on the server and being served \u2014 if it does not belong there, delete it in the library.",
     NOTICE_NOT_FILED_UNDER_MEDIUM:
       "“{name}” is uploaded and being served, but it could not be filed under the medium chosen for it — it is in the “not recognised” group, where it can be assigned by hand.",
+    NOTICE_LEFTOVER_PENDING:
+      "The partly uploaded “{name}” is still on the server: the server could not be reached. The application will remove it by itself — at the next start or the next upload to this server.",
+    NOTICE_LEFTOVER_REMOVED:
+      "The partly uploaded “{name}” left by the cancellation has been removed from the server.",
     LADDER_NOT_ENOUGH_SPACE:
       "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
     OBJECTION_RUNG_ABOVE_SOURCE:

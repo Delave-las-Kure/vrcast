@@ -55,6 +55,10 @@ mod servers;
 #[path = "contract/upload.rs"]
 mod upload;
 
+/// T653: dropping a raised upload tidies up after it.
+#[path = "contract/upload_leftover.rs"]
+mod upload_leftover;
+
 #[path = "contract/convert.rs"]
 mod convert;
 

@@ -291,3 +291,69 @@ async fn with_room_in_the_lane_carrying_on_is_running_at_once() {
     finish.send(()).unwrap();
     until(&e, "alone", TaskState::Completed).await;
 }
+
+/// T653: a task raised after a restart and dropped before its work ran has its `undo`
+/// called — the QA probe saw a cancellation with no call at all — and is written down as
+/// cancelled only after `undo` returned; a task whose work had begun is not undone twice.
+#[tokio::test]
+async fn a_raised_task_dropped_before_its_work_is_undone_once_and_then_cancelled() {
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let e = TaskEngine::new(db.clone());
+    store::upsert(&db, &TaskRecord::new("old", TaskKind::Upload, None)).unwrap();
+
+    let worked = Arc::new(AtomicUsize::new(0));
+    let undone = Arc::new(AtomicUsize::new(0));
+    let (w, u) = (worked.clone(), undone.clone());
+    let (in_undo_tx, in_undo) = tokio::sync::oneshot::channel::<()>();
+    let (let_go, undo_gate) = tokio::sync::oneshot::channel::<()>();
+    e.resubmit_paused_with_undo(
+        "old",
+        move |_| async move {
+            w.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+        move |_| async move {
+            u.fetch_add(1, Ordering::SeqCst);
+            let _ = in_undo_tx.send(());
+            let _ = undo_gate.await;
+        },
+    )
+    .unwrap();
+
+    e.cancel("old").unwrap();
+    in_undo.await.unwrap();
+    assert_ne!(
+        state(&e, "old"),
+        TaskState::Cancelled,
+        "written down as cancelled before tidying up had finished"
+    );
+    // Carrying on while it is being tidied up gives it no place.
+    e.resume("old").unwrap();
+    let_go.send(()).unwrap();
+    until(&e, "old", TaskState::Cancelled).await;
+    assert_eq!(undone.load(Ordering::SeqCst), 1);
+    assert_eq!(worked.load(Ordering::SeqCst), 0);
+
+    // Once the work has begun, undoing is the work's business.
+    store::upsert(&db, &TaskRecord::new("begun", TaskKind::Upload, None)).unwrap();
+    let undone2 = Arc::new(AtomicUsize::new(0));
+    let u2 = undone2.clone();
+    let (started_tx, started) = tokio::sync::oneshot::channel::<()>();
+    e.resubmit_paused_with_undo(
+        "begun",
+        move |ctx| async move {
+            let _ = started_tx.send(());
+            ctx.cancel_token().cancelled().await;
+            Ok(())
+        },
+        move |_| async move {
+            u2.fetch_add(1, Ordering::SeqCst);
+        },
+    )
+    .unwrap();
+    e.resume("begun").unwrap();
+    started.await.unwrap();
+    e.cancel("begun").unwrap();
+    until(&e, "begun", TaskState::Cancelled).await;
+    assert_eq!(undone2.load(Ordering::SeqCst), 0);
+}

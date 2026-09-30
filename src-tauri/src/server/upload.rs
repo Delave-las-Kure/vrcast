@@ -395,19 +395,30 @@ pub async fn publish(conn: &Connection, plan: &UploadPlan) -> Result<()> {
 ///
 /// A failure to clean up is not returned: the cancellation has already happened, and there
 /// is no point turning it into a failure because a staged file would not delete. But
-/// keeping quiet will not do either — litter piles up unnoticed.
+/// keeping quiet will not do either — litter piles up unnoticed. Callers that can keep the
+/// duty to remove it for later use [`remove_staged`] instead (T653).
 pub async fn cleanup(conn: &Connection, remote_temp: &str) {
-    let result = conn
+    if let Err(e) = remove_staged(conn, remote_temp).await {
+        tracing::warn!(file = remote_temp, error = %e, "the staged file would not delete");
+    }
+}
+
+/// Remove a staged file, saying whether it is gone (T653).
+///
+/// `rm -f`: a file that is not there any more is gone, which is what was asked — so
+/// repeating this is safe (principle V), and a later attempt after an earlier one quietly
+/// succeeded is not a failure.
+pub async fn remove_staged(conn: &Connection, remote_temp: &str) -> Result<()> {
+    let out = conn
         .exec(&format!("rm -f -- {}", shell_quote(remote_temp)))
-        .await;
-    match result {
-        Ok(out) if out.ok() => {}
-        Ok(out) => {
-            tracing::warn!(file = remote_temp, stderr = %out.stderr.trim(), "the staged file would not delete")
-        }
-        Err(e) => {
-            tracing::warn!(file = remote_temp, error = %e, "the staged file would not delete")
-        }
+        .await?;
+    if out.ok() {
+        Ok(())
+    } else {
+        Err(UploadError::Failed(format!(
+            "the staged file would not delete: {}",
+            out.stderr.trim()
+        )))
     }
 }
 
