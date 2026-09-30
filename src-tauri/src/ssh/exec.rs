@@ -99,6 +99,41 @@ impl Connection {
         command: &str,
         ceiling: Duration,
     ) -> Result<CommandOutput> {
+        // A gate that always answers yes never holds a command back; the error is only
+        // there so that no `expect` stands in a path every command of the application takes.
+        self.exec_gated(command, ceiling, || true)
+            .await?
+            .ok_or_else(|| SshError::Exec(format!("the command was not sent: {command}")))
+    }
+
+    /// Run a command **only if `still_wanted` says yes at the moment it would be sent** —
+    /// `Ok(None)` when it said no, and then nothing was sent (T637).
+    ///
+    /// ⚠ **Getting ready to send is not sending.** Before the command goes, `exec` waits for
+    /// a place for a channel (behind other work on the same connection) and for the channel
+    /// to open — refusals retried with pauses ([`Connection::open_session`]:
+    /// `ResourceShortage`, `ConnectFailed`). A deployment's commands are asked "has the
+    /// run been stopped?" before `exec` is called, and a cancel that came in during that
+    /// preparation used to be let through: the channel opened and a command the run had not
+    /// yet started went to the server (QA-21 №4). `still_wanted` is asked once the channel
+    /// is open, immediately before `channel.exec`; a no closes the channel unused.
+    ///
+    /// Only a deployment's run uses it (`server::deploy::send_settled`); every other caller
+    /// goes through [`Connection::exec`], which sends whatever happens, as before.
+    pub async fn exec_if(
+        &self,
+        command: &str,
+        still_wanted: impl FnOnce() -> bool,
+    ) -> Result<Option<CommandOutput>> {
+        self.exec_gated(command, EXEC_CEILING, still_wanted).await
+    }
+
+    async fn exec_gated(
+        &self,
+        command: &str,
+        ceiling: Duration,
+        still_wanted: impl FnOnce() -> bool,
+    ) -> Result<Option<CommandOutput>> {
         // The channel slot is held for the whole run: a server limits how many
         // channels a connection may have at once, and that must not be exceeded
         // (see connection.rs).
@@ -106,13 +141,22 @@ impl Connection {
 
         let mut channel = self.open_session().await?;
 
+        // Nothing is awaited between this answer and `channel.exec`: a stop asked after it
+        // is a stop asked after the command went.
+        if !still_wanted() {
+            // A channel is not closed by being dropped (russh 0.63), and one left open would
+            // hold one of the server's `MaxSessions` for as long as the connection lives.
+            let _ = channel.close().await;
+            return Ok(None);
+        }
+
         channel
             .exec(true, command)
             .await
             .map_err(SshError::protocol)?;
 
         match tokio::time::timeout(ceiling, read_to_end(&mut channel)).await {
-            Ok(outcome) => outcome,
+            Ok(outcome) => outcome.map(Some),
             // The connection is alive — nothing here says otherwise — but the command
             // behind it has not exited within any reasonable time. Said plainly rather than
             // as a silent hang: a deployment stuck here used to sit at `running` forever,
