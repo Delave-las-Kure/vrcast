@@ -71,6 +71,7 @@ export type ErrorCode =
   | "CADDY_VALIDATE_FAILED"
   | "CADDY_RELOAD_FAILED"
   | "LIMITS_CONFLICT"
+  | "LIMITS_ROLLBACK_FAILED"
   // tasks
   | "TASK_CANCELLED"
   | "TASK_NOT_FOUND"
@@ -246,6 +247,9 @@ export type DetailCode =
   | "WARN_LIMIT_FOLLOWS_THE_ADDRESS"
   | "WARN_ADDRESS_SHARED"
   | "WARN_CAP_BELOW_LIGHTEST"
+  // a change of the limits whose previous rules did not come back (T640)
+  | "LIMITS_ROLLBACK_UNSUCCESSFUL"
+  | "LIMITS_ROLLBACK_NOT_STARTED"
   | "NOTICE_NO_HARDWARE_FOUND"
   | "NOTICE_SOFTWARE_AS_ASKED"
   | "NOTICE_HARDWARE_FAILED"

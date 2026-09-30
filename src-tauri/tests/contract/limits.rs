@@ -75,6 +75,7 @@ async fn the_codes_the_contract_promises_all_exist() {
         ErrorCode::NoLadderForMedia,
         ErrorCode::CaddyValidateFailed,
         ErrorCode::CaddyReloadFailed,
+        ErrorCode::LimitsRollbackFailed,
     ] {
         assert!(
             ErrorCode::parse(code.as_str()).is_some(),
@@ -82,4 +83,46 @@ async fn the_codes_the_contract_promises_all_exist() {
             code.as_str()
         );
     }
+}
+
+// ---------- T640: the previous rules did not come back — two cases under one code ----------
+
+use vrcast_studio_lib::commands::error::DetailCode;
+use vrcast_studio_lib::commands::limits::to_error;
+use vrcast_studio_lib::server::limits::LimitError;
+
+#[test]
+fn an_undo_that_failed_has_its_own_code_and_says_so() {
+    // It used to be `INTERNAL` — "report a bug" — about a server that may really be broken.
+    let err = to_error(LimitError::RollbackFailed(String::from(
+        "the previous configuration went back and the serving still does not answer",
+    )));
+    assert_eq!(err.code, ErrorCode::LimitsRollbackFailed);
+    assert_eq!(err.code.as_str(), "LIMITS_ROLLBACK_FAILED");
+    assert!(err.says(DetailCode::LimitsRollbackUnsuccessful), "{err:?}");
+    assert!(!err.says(DetailCode::LimitsRollbackNotStarted), "{err:?}");
+    assert!(
+        err.cause
+            .as_deref()
+            .unwrap_or("")
+            .contains("still does not answer"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn an_undo_never_started_is_told_apart_from_one_that_failed() {
+    // T635's barrier: nothing was put back because a step of the change may still be
+    // running. The serving may be working; "the serving is broken" would be untrue.
+    let err = to_error(LimitError::RollbackNotStarted(String::from(
+        "the serving would not take the new configuration: timed out; then: putting back \
+         was not started: a step of this change may still be running on the server: \
+         VRCAST_STOP alive 4242:4242",
+    )));
+    assert_eq!(err.code, ErrorCode::LimitsRollbackFailed);
+    assert!(err.says(DetailCode::LimitsRollbackNotStarted), "{err:?}");
+    assert!(!err.says(DetailCode::LimitsRollbackUnsuccessful), "{err:?}");
+    let cause = err.cause.as_deref().unwrap_or("");
+    assert!(cause.contains("may still be running"), "{cause}");
+    assert!(!cause.contains("broken"), "{cause}");
 }

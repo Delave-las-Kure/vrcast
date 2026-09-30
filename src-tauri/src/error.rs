@@ -148,6 +148,12 @@ error_codes! {
     /// (T600) — the same standing `ManifestConflict` has for the JSON catalogue, adapted to
     /// the text rules file: re-read and retry, nothing was silently lost.
     LimitsConflict => "LIMITS_CONFLICT",
+    /// A change of the limits failed and the previous rules did not come back (T640): the
+    /// putting back failed, or it was not started because a step of the change may still be
+    /// running on the server (T635). Which of the two is the detail —
+    /// `LIMITS_ROLLBACK_UNSUCCESSFUL` or `LIMITS_ROLLBACK_NOT_STARTED`. Not `Internal`: it
+    /// is an answer about the server, and each of the two tells a person what to do.
+    LimitsRollbackFailed => "LIMITS_ROLLBACK_FAILED",
 
     // --- tasks ---
     TaskCancelled => "TASK_CANCELLED",

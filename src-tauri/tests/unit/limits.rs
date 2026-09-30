@@ -824,7 +824,8 @@ fn a_wait_with_a_limit_on_the_rounds_says_it_did_not_confirm() {
 // ---------- T635: nothing is put back while a step going forward may still be running ----------
 
 use vrcast_studio_lib::server::limits::{
-    barrier_command, read_settled, settle_then, unheard, Settled, BARRIER_GRACE, BARRIER_ROUNDS,
+    barrier_command, read_settled, settle_then, unheard, PutBackError, Settled, BARRIER_GRACE,
+    BARRIER_ROUNDS,
 };
 use vrcast_studio_lib::ssh::{CommandOutput, SshError};
 
@@ -883,9 +884,27 @@ async fn an_unconfirmed_barrier_means_the_putting_back_never_starts() {
     )
     .await;
     let err = outcome.expect_err("the putting back went ahead unconfirmed");
+    // Told apart from an undo that failed (T640): a different case for the person.
+    assert!(matches!(err, PutBackError::NotStarted(_)), "{err:?}");
+    let err = err.to_string();
     assert!(err.contains("putting back was not started"), "{err}");
     assert!(err.contains("4242:4242"), "{err}");
     assert!(!undone.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn an_undo_that_started_and_failed_is_not_taken_for_one_never_started() {
+    // T640: the barrier confirmed, the undo ran and failed — `Failed`, with the undo's own
+    // words and nothing about a step still running.
+    let outcome = settle_then(
+        || async { Ok(()) },
+        || async { Err(String::from("LOST_LOCK")) },
+    )
+    .await;
+    assert_eq!(
+        outcome,
+        Err(PutBackError::Failed(String::from("LOST_LOCK")))
+    );
 }
 
 #[test]

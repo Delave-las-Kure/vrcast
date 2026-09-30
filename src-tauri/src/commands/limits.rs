@@ -266,7 +266,8 @@ async fn ladder_of(
     Ok(variants)
 }
 
-fn to_error(e: LimitError) -> AppError {
+/// A change's failure, as the interface is told it. `pub` for the contract test (T640).
+pub fn to_error(e: LimitError) -> AppError {
     match e {
         LimitError::ValidateFailed(said) => {
             AppError::new(ErrorCode::CaddyValidateFailed).with_cause(said)
@@ -285,6 +286,15 @@ fn to_error(e: LimitError) -> AppError {
         // The same refusal `ladder_of` gives before the change starts (T215); reached only
         // if the set went away between that read and the one under the lock.
         LimitError::NoLadder(slug) => AppError::new(ErrorCode::NoLadderForMedia).with_cause(slug),
+        // The previous rules did not come back (T640). One code, because for the screen it
+        // is one situation — the change is not finished and what is in force is not what
+        // was — and two details, because the two cases send a person to different places.
+        LimitError::RollbackFailed(_) => AppError::new(ErrorCode::LimitsRollbackFailed)
+            .detail(DetailCode::LimitsRollbackUnsuccessful)
+            .with_cause(e),
+        LimitError::RollbackNotStarted(_) => AppError::new(ErrorCode::LimitsRollbackFailed)
+            .detail(DetailCode::LimitsRollbackNotStarted)
+            .with_cause(e),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }

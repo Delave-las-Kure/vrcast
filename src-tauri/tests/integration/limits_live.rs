@@ -2254,7 +2254,7 @@ async fn an_undo_after_a_reload_given_up_on_waits_for_that_reload_to_end() {
 async fn an_undo_is_not_started_while_a_step_of_the_change_will_not_end() {
     // The forward reload leaves behind a process carrying its mark that comes back after
     // every KILL. The barrier cannot confirm the end: nothing is put back, the change ends
-    // `RollbackFailed` (`LIMITS_ROLLBACK_FAILED`), and the holder keeps the lock until the
+    // `RollbackNotStarted` (`LIMITS_ROLLBACK_FAILED`, T640), and the holder keeps the lock until the
     // step really is gone (T634).
     use vrcast_studio_lib::server::limits::with_step_ceiling;
 
@@ -2293,7 +2293,7 @@ async fn an_undo_is_not_started_while_a_step_of_the_change_will_not_end() {
     );
 
     match &outcome {
-        Err(LimitError::RollbackFailed(said)) => {
+        Err(LimitError::RollbackNotStarted(said)) => {
             assert!(said.contains("putting back was not started"), "{said}");
             assert!(said.contains("may still be running"), "{said}");
             assert!(said.contains("VRCAST_STOP alive"), "{said}");
