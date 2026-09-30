@@ -15,6 +15,7 @@ pub mod media;
 pub mod net;
 pub mod server;
 pub mod ssh;
+pub mod startup_failure;
 pub mod store;
 pub mod tasks;
 pub mod tray;
@@ -63,20 +64,28 @@ fn say_where_the_window_went<R: tauri::Runtime>(
 pub fn run() {
     // First of all, the log with secret redaction. Nothing may be logged before this
     // line: anything written earlier goes past the guard (constitution, principle IV).
-    logging::init();
+    // To stderr as before and, since T655, to a file in the data directory: a Windows
+    // release has no console, and a log nobody can open is no log.
+    let journal = logging::init_for_app(logging::default_dir());
+    if let logging::Journal::NotWritten(why) = &journal {
+        tracing::warn!(reason = %why, "the log is not being written to a file");
+    }
 
     let state = match commands::AppState::bootstrap() {
         Ok(s) => s,
-        Err(e) => {
+        Err(failure) => {
             // Without local storage there is no working: tasks would not survive a
             // restart and there would be nowhere to keep profiles. Refusing to start
             // is more honest than pretending to work.
-            tracing::error!(error = %e, "could not prepare the stores");
-            // No catalogue and no window exist yet, so there is no language to
-            // choose between. What goes out is the code and the particulars: they can
-            // be searched for, which a translated sentence in the wrong language
-            // could not be.
-            eprintln!("{e}");
+            //
+            // ⚠ T655 (QA-24A №6): but not silently. Before, this was a line in stderr and
+            // an exit — and a Windows release has no console, so a person clicking the
+            // icon saw nothing happen at all. Now a native message box (no window, no
+            // interface, no database needed) says what happened, where the database and
+            // the log are, and what to do; the database itself is left exactly as it was.
+            tracing::error!(error = %failure, "could not prepare the stores");
+            eprintln!("{failure}");
+            startup_failure::show(&failure, &journal);
             std::process::exit(1);
         }
     };

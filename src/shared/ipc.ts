@@ -235,6 +235,14 @@ export const ipc = {
   // --- library ---
   libraryList: (serverId: string, refresh = false) =>
     call<LibraryView>("library_list", { serverId, refresh }),
+  /**
+   * The library as already known, **without** asking the server for a refresh (T651) — what
+   * a screen reads on `library:changed`. That event is the end of a refresh; answering it
+   * with `libraryList(id, false)` started another, whose end sent another event, for as
+   * long as the library stayed open. Reads the server only when there is no cache at all.
+   */
+  libraryKnown: (serverId: string) =>
+    call<LibraryView>("library_list", { serverId, refresh: false, cachedOnly: true }),
   mediaCreate: (serverId: string, title: string, slug: string | null) =>
     call<string>("media_create", { serverId, title, slug }),
   mediaRename: (

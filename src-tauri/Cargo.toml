@@ -99,6 +99,10 @@ directories = "6.0.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tauri-plugin-dialog = "2"
+# Окно «приложение не может запуститься» (T655): нативное, без окна Tauri, без интерфейса и без
+# базы — тем же rfd, которым пользуется tauri-plugin-dialog, так что новых крейтов в дереве нет.
+# Версия и возможность — те же, что у плагина: common-controls-v6 даёт кнопки со своими надписями.
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2.10.1"
 
@@ -109,7 +113,7 @@ tauri-plugin-updater = "2.10.1"
 keyring = { version = "4.1.6", features = ["windows-native-keyring-store"] }
 # Сколько места на локальном диске (T452). Своей функции в std нет, а собранная зависимость
 # ради одного вызова — плохой обмен: обе уже стоят в дереве, объявляются лишь напрямую.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Globalization"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # zbus, а не dbus: чистый Rust, не требует libdbus-1-dev на машине сборки и в CI.

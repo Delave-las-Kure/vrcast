@@ -15,7 +15,7 @@
  * getting a yes while telling someone nothing.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { AppError, LadderSetView, LibraryView, MediaView } from "../../shared/contract";
 import { ipc, onLibraryChanged, onViewersUpdate, toAppError } from "../../shared/ipc";
@@ -40,6 +40,12 @@ type Dialog =
 
 export function LibraryScreen() {
   const active = useActiveServer();
+  /**
+   * What the reads depend on — the server, not the profile object. `reloadServers` on
+   * mount hands back fresh objects for the same profiles, and keying on the object read
+   * the library a second time (and asked for a second refresh) for nothing.
+   */
+  const activeId = active?.id ?? null;
   const reloadServers = useServers((s) => s.reload);
   const serversLoading = useServers((s) => s.loading);
 
@@ -99,23 +105,47 @@ export function LibraryScreen() {
     void reloadServers();
   }, [reloadServers]);
 
+  /**
+   * T657 — which request's answer the screen is waiting for. Every `load` takes the next
+   * number and only the answer of the latest one is shown — its data, its error and the end
+   * of its loading alike. Requests come from several places at once (the first showing, the
+   * refresh button, `library:changed`, after every change) and over a slow link they do not
+   * come back in the order they went: an older answer arriving last put the old title back
+   * over the renamed one. A ref rather than state: bumping it must not re-render, and the
+   * answer compares against the value as it is when it arrives, not as it was rendered.
+   */
+  const generation = useRef(0);
+
+  /**
+   * Read the library. `refresh` asks the server outright; `"known"` takes what is already
+   * known without asking for a refresh (T651); `false` shows the cache and lets a refresh
+   * follow.
+   */
   const load = useCallback(
-    async (refresh: boolean) => {
-      if (!active) {
+    async (refresh: boolean | "known") => {
+      const mine = ++generation.current;
+      const latest = () => mine === generation.current;
+      if (!activeId) {
         setView(null);
         setLoading(false);
         return;
       }
       try {
-        setView(await ipc.libraryList(active.id, refresh));
+        const next =
+          refresh === "known"
+            ? await ipc.libraryKnown(activeId)
+            : await ipc.libraryList(activeId, refresh);
+        if (!latest()) return;
+        setView(next);
         setError(null);
       } catch (e) {
+        if (!latest()) return;
         setError(toAppError(e));
       } finally {
-        setLoading(false);
+        if (latest()) setLoading(false);
       }
     },
-    [active],
+    [activeId],
   );
 
   // The first showing comes from the cache, immediately.
@@ -124,7 +154,9 @@ export function LibraryScreen() {
     void load(false);
   }, [load]);
 
-  // Refreshes from the core: both what arrives in the background and what we asked for.
+  // What the core says changed. The event is the end of a refresh (or of a change), so the
+  // answer is read without asking for another refresh — asking for one here closed the loop
+  // refresh → event → refresh the audit found (T651). Another server's change is not ours.
   useEffect(() => {
     let cancelled = false;
     const unlisten: Array<() => void> = [];
@@ -133,13 +165,15 @@ export function LibraryScreen() {
       else unlisten.push(fn);
     };
 
-    void onLibraryChanged(() => void load(false)).then(keep);
+    void onLibraryChanged((serverId) => {
+      if (!activeId || serverId === activeId) void load("known");
+    }).then(keep);
 
     return () => {
       cancelled = true;
       unlisten.forEach((fn) => fn());
     };
-  }, [load]);
+  }, [load, activeId]);
 
   /** Carry out a change and read the library again. */
   const act = async (fn: () => Promise<unknown>) => {
