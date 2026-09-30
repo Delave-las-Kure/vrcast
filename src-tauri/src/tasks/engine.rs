@@ -45,6 +45,58 @@ pub enum TaskError {
 
     #[error(transparent)]
     Db(#[from] DbError),
+
+    /// "Forget everything" is removing this application's data right now (T643): no task is
+    /// admitted until it is over.
+    #[error("the application's data is being removed — no task can start now")]
+    Forgetting,
+}
+
+/// Why [`TaskEngine::try_claim`] did not give the key (T643).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimRefused {
+    /// Somebody holds it already (T621).
+    Taken,
+    /// "Forget everything" is running (T643).
+    Forgetting,
+}
+
+/// What stood in the way of "forget everything" (T643): the work still alive in the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StillWorking {
+    /// Tasks in the living map — queued, running, or paused with their work still held —
+    /// by kind.
+    pub tasks: Vec<TaskKind>,
+    /// Claims held by commands whose task does not exist yet (a deployment still connecting,
+    /// T621). Such a command is about to become a task, and counts as one.
+    pub claims: usize,
+}
+
+impl std::fmt::Display for StillWorking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kinds: Vec<&str> = self.tasks.iter().map(|k| k.as_str()).collect();
+        write!(
+            f,
+            "{} task(s) alive [{}], {} starting",
+            self.tasks.len(),
+            kinds.join(", "),
+            self.claims
+        )
+    }
+}
+
+/// The engine closed to new work while "forget everything" runs (T643).
+///
+/// Given by [`TaskEngine::close_for_forgetting`]; the engine opens again when this is dropped —
+/// on every way out of the removal, a failed one included.
+pub struct Closed {
+    gate: Arc<Mutex<bool>>,
+}
+
+impl Drop for Closed {
+    fn drop(&mut self) {
+        *self.gate.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    }
 }
 
 pub type Result<T> = std::result::Result<T, TaskError>;
@@ -370,6 +422,15 @@ pub struct TaskEngine {
     next_position: Arc<std::sync::atomic::AtomicI64>,
     /// Keys taken by [`TaskEngine::claim`] (T621). Shared by every clone, like `live`.
     claims: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Raised while "forget everything" runs (T643) — see [`TaskEngine::close_for_forgetting`].
+    ///
+    /// **One lock that every way in takes first.** Claiming a key and creating a task (and
+    /// raising one after a restart) check it and do their work while holding it; closing takes
+    /// it, then looks at the claims and the living, and raises it — all under it. So "nothing
+    /// is running" and "nothing may start" are one step: there is no moment between the look
+    /// and the closing in which a task could slip in. Order: this one, then `claims`, then
+    /// `live` — never the other way round.
+    closed: Arc<Mutex<bool>>,
 }
 
 /// The right to do one thing, held by one caller at a time (T621).
@@ -406,20 +467,79 @@ impl TaskEngine {
             events,
             next_position: Arc::new(std::sync::atomic::AtomicI64::new(next)),
             claims: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            closed: Arc::new(Mutex::new(false)),
         }
     }
 
-    /// Take `key` for this caller, or `None` when somebody holds it already (T621).
+    /// Take `key` for this caller, or `None` when somebody holds it already (T621) — or when
+    /// "forget everything" is running (T643); [`TaskEngine::try_claim`] says which.
     ///
     /// Check-and-take under one lock: of two callers at the same instant exactly one gets it.
     /// This is what a scan of the task list cannot give a command that does slow work (a
     /// connection, a DNS wait) between its check and its `submit`.
     pub fn claim(&self, key: &str) -> Option<Claim> {
+        self.try_claim(key).ok()
+    }
+
+    /// The same as [`TaskEngine::claim`], saying why it was refused (T643).
+    pub fn try_claim(&self, key: &str) -> std::result::Result<Claim, ClaimRefused> {
+        let closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return Err(ClaimRefused::Forgetting);
+        }
         let mut claims = self.claims.lock().unwrap_or_else(|e| e.into_inner());
-        claims.insert(key.to_owned()).then(|| Claim {
+        if !claims.insert(key.to_owned()) {
+            return Err(ClaimRefused::Taken);
+        }
+        drop(claims);
+        drop(closed);
+        Ok(Claim {
             claims: self.claims.clone(),
             key: key.to_owned(),
         })
+    }
+
+    /// Close the engine to new work for the length of "forget everything" (T643, the owner's
+    /// decision of 2026-09-30).
+    ///
+    /// **Refused while any work is alive**: a task in the living map — queued, running, or
+    /// paused with its work held in memory (a paused one can be carried on at any moment, and
+    /// a carried-on one needs no permission from here) — or a claim held by a command whose
+    /// task does not exist yet. The removal must not race a task that writes a secret back
+    /// (QA-22 №3: a deployment's `key_keeper` re-created the key after the report said it was
+    /// gone), and a lock around the removal alone would not stop that: the task would write
+    /// once the lock was let go.
+    ///
+    /// **When it is given, nothing starts until it is dropped**: [`TaskEngine::try_claim`]
+    /// answers `Forgetting`, and creating or raising a task answers [`TaskError::Forgetting`].
+    /// The look and the closing are one step under [`TaskEngine::closed`]'s lock.
+    ///
+    /// Two removals at once: the second is refused as `Err(None)`.
+    pub fn close_for_forgetting(&self) -> std::result::Result<Closed, Option<StillWorking>> {
+        let mut closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return Err(None);
+        }
+        let claims = self.claims.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let tasks: Vec<TaskKind> = self
+            .live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|t| t.kind)
+            .collect();
+        if claims > 0 || !tasks.is_empty() {
+            return Err(Some(StillWorking { tasks, claims }));
+        }
+        *closed = true;
+        Ok(Closed {
+            gate: self.closed.clone(),
+        })
+    }
+
+    /// Whether "forget everything" is running right now (T643).
+    pub fn is_closed_for_forgetting(&self) -> bool {
+        *self.closed.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Set the per-lane limits at construction — used by `AppState::with_db` (T546) to
@@ -537,6 +657,12 @@ impl TaskEngine {
         let id = uuid::Uuid::new_v4().to_string();
         let mut record = TaskRecord::new(id.clone(), kind, server_id);
         record.batch = batch;
+        // T643: checked and held until the task is among the living, so "forget everything"
+        // either sees it or it sees the engine closed — never neither.
+        let closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return Err(TaskError::Forgetting);
+        }
         record.queue_order = self
             .next_position
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -548,6 +674,7 @@ impl TaskEngine {
             record.queue_order,
             work,
         );
+        drop(closed);
         Ok(id)
     }
 
@@ -574,6 +701,11 @@ impl TaskEngine {
                 from: record.state.as_str(),
                 to: TaskState::Paused.as_str(),
             });
+        }
+        // T643: the same gate as `submit_in_batch`, held until the task is among the living.
+        let closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+        if *closed {
+            return Err(TaskError::Forgetting);
         }
         if self
             .live
@@ -1011,6 +1143,7 @@ impl From<TaskError> for crate::error::AppError {
             T::Cancelled => ErrorCode::TaskCancelled,
             T::Db(_) => ErrorCode::StorageFailed,
             T::Failed(_) => ErrorCode::Internal,
+            T::Forgetting => ErrorCode::ForgetInProgress,
         };
         AppError::new(code).with_cause(e)
     }

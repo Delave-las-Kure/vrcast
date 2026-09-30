@@ -20,8 +20,24 @@ import { useCallback, useEffect, useState } from "react";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT } from "../../shared/i18n";
 import { formatBytes } from "../../shared/i18n/format";
-import { ipc } from "../../shared/ipc";
-import type { AppError, WhatWent, WhatWouldGo } from "../../shared/contract";
+import { ipc, onTaskDone, onTaskProgress } from "../../shared/ipc";
+import type { AppError, Task, WhatWent, WhatWouldGo } from "../../shared/contract";
+
+/**
+ * T643 — whether a task counts as going for "remove everything".
+ *
+ * The core refuses while a task is alive in its engine: queued, running, or paused with its work
+ * still held — which is what `can_resume` says of a paused one (T515). A paused row left over from
+ * an earlier run is only a row: nothing of it can write anything, and the core lets the removal
+ * through over it, so the button does too.
+ */
+function isGoing(task: Task): boolean {
+  return (
+    task.state === "queued" ||
+    task.state === "running" ||
+    (task.state === "paused" && task.can_resume)
+  );
+}
 
 export function Forget() {
   const t = useT();
@@ -33,6 +49,10 @@ export function Forget() {
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  // T643: the ids of the tasks going right now. The core is what refuses (and says so with
+  // `FORGET_TASKS_RUNNING`, a command still connecting included); this only keeps the button
+  // from offering what would be refused.
+  const [going, setGoing] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
@@ -46,6 +66,35 @@ export function Forget() {
       });
     return () => {
       alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const unlisten: Array<() => void> = [];
+    const keep = (fn: () => void) => {
+      if (cancelled) fn();
+      else unlisten.push(fn);
+    };
+    const reload = () => {
+      ipc
+        .tasksList()
+        .then((tasks) => {
+          if (cancelled || !Array.isArray(tasks)) return;
+          setGoing(new Set(tasks.filter(isGoing).map((task) => task.id)));
+        })
+        // A list that would not load leaves the button as it was: the core still refuses.
+        .catch(() => undefined);
+    };
+    reload();
+    // Progress comes only from a task alive in the engine; a new one is seen at its first report.
+    void onTaskProgress((e) => {
+      setGoing((prev) => (prev.has(e.id) ? prev : new Set(prev).add(e.id)));
+    }).then(keep);
+    void onTaskDone(() => reload()).then(keep);
+    return () => {
+      cancelled = true;
+      unlisten.forEach((fn) => fn());
     };
   }, []);
 
@@ -123,10 +172,16 @@ export function Forget() {
             {words.agree}
           </label>
 
+          {going.size > 0 && (
+            <p className="forget-warning" data-testid="forget-tasks-running">
+              {words.tasksRunning}
+            </p>
+          )}
+
           <button
             type="button"
             className="danger"
-            disabled={!agreed || busy}
+            disabled={!agreed || busy || going.size > 0}
             onClick={() => void remove()}
             data-testid="forget-do"
           >

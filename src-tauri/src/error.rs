@@ -161,6 +161,16 @@ error_codes! {
     TaskBadTransition => "TASK_BAD_TRANSITION",
     TaskNotPausable => "TASK_NOT_PAUSABLE",
 
+    // --- removing everything (FR-114) ---
+    /// `forget_everything` refused: a task is alive (queued, running, or paused with its work
+    /// held) or a command is about to create one (T643). Nothing was removed. The way on is to
+    /// stop or cancel the tasks and try again.
+    ForgetTasksRunning => "FORGET_TASKS_RUNNING",
+    /// Refused because "forget everything" is removing the application's data right now
+    /// (T643): a task was not created, or a second removal was not started. Nothing was
+    /// changed by the refused call.
+    ForgetInProgress => "FORGET_IN_PROGRESS",
+
     // --- input and confirmation ---
     InvalidInput => "INVALID_INPUT",
     ConfirmationRequired => "CONFIRMATION_REQUIRED",
