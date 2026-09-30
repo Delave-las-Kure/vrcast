@@ -112,6 +112,9 @@ struct LibraryContext {
     by_file: HashMap<String, VariantFacts>,
     /// A quality set's short name to the medium it belongs to.
     by_slug: HashMap<String, String>,
+    /// A quality set's short name to what each of its rungs needs (T666) — read off the
+    /// set's description on the server when the watching starts.
+    needs: HashMap<String, HashMap<String, u64>>,
     places: Arc<std::sync::RwLock<crate::store::geo::Places>>,
 }
 
@@ -122,16 +125,15 @@ impl ViewerContext for LibraryContext {
             Asked::SetDescription { slug, .. }
             | Asked::RungPlaylist { slug, .. }
             | Asked::Segment { slug, .. }
-            | Asked::SetInit { slug, .. } => VariantFacts {
-                media_id: self.by_slug.get(slug).cloned(),
-                variant: asked.rung().map(str::to_owned),
-                // What a rung needs is written in the description of the quality set, and
-                // reading that is Phase 5's work (T186). Until then a viewer of a set is
-                // shown with everything except the speed they ought to be getting, and
-                // SlowLink cannot fire for them. Left honestly empty rather than filled
-                // with the medium's average, which is not what any one rung needs.
-                required_bps: None,
-            },
+            | Asked::SetInit { slug, .. } => crate::domain::viewers::set_facts(
+                asked,
+                self.by_slug.get(slug).cloned(),
+                // What a rung needs is its BANDWIDTH in the set's description (QA-24B-07:
+                // this used to be left empty, and SlowLink could never fire for a viewer of
+                // a set). A set whose description could not be read still has none — the
+                // medium's average is not what any one rung needs.
+                self.needs.get(slug),
+            ),
             Asked::Other => VariantFacts::default(),
         }
     }
@@ -194,8 +196,23 @@ impl LibraryContext {
         Self {
             by_file,
             by_slug,
+            needs: HashMap::new(),
             places,
         }
+    }
+
+    /// The quality sets on the server, by short name — the ones whose rungs' needs are read.
+    fn set_slugs(view: &super::library::LibraryView) -> Vec<String> {
+        let mut slugs: Vec<String> = view
+            .media
+            .iter()
+            .flat_map(|m| m.ladders.iter())
+            .filter(|l| l.exists_on_server)
+            .filter_map(|l| l.path.split('/').next().map(str::to_owned))
+            .collect();
+        slugs.sort();
+        slugs.dedup();
+        slugs
     }
 }
 
@@ -294,7 +311,7 @@ pub mod api {
             .ok_or_else(|| super::super::servers::no_such_server(server_id))?;
         let view = super::super::library::api::library_list(state, server_id, false).await?;
         let settings = crate::store::settings::load(&state.db)?;
-        let context = Arc::new(LibraryContext::build(&view, state.places.clone()));
+        let mut context = LibraryContext::build(&view, state.places.clone());
 
         // Watching only. A server that is somebody else's still shows who is pulling
         // from it — and that is exactly the sort of thing its owner would want to see.
@@ -305,6 +322,13 @@ pub mod api {
         )
         .await?
         .conn;
+
+        // What each rung of each set needs (T666), read once here, as the library itself is.
+        // A set rebuilt while the watching runs (which is asked about when anybody is
+        // watching — T571) keeps its old figures until the screen is opened again.
+        context.needs =
+            viewers::rung_needs(&conn, &profile.video_dir, &LibraryContext::set_slugs(&view)).await;
+        let context = Arc::new(context);
 
         let (tx, mut updates) = tokio::sync::mpsc::channel(64);
         let watch = viewers::start_reconnecting(

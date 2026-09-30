@@ -585,3 +585,119 @@ fn only_the_network_is_worth_trying_again_for() {
         );
     }
 }
+
+// ---------- T666: what a rung of a quality set needs ----------
+
+/// A description the way our own builder writes it (`hls_master::build`): the rungs'
+/// playlists one directory deep, BANDWIDTH the peak and AVERAGE-BANDWIDTH the average.
+const MASTER: &str = "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n\
+#EXT-X-STREAM-INF:BANDWIDTH=12000000,AVERAGE-BANDWIDTH=8000000,RESOLUTION=3840x2160,FRAME-RATE=30.000,CODECS=\"avc1.640033,mp4a.40.2\"\n\
+v1/stream.m3u8\n\
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,AVERAGE-BANDWIDTH=4000000,RESOLUTION=2560x1440,FRAME-RATE=30.000,CODECS=\"avc1.640032,mp4a.40.2\"\n\
+v2/stream.m3u8\n";
+
+#[test]
+fn each_rung_needs_its_own_bandwidth_from_the_description() {
+    use vrcast_studio_lib::domain::viewers::rung_needs;
+    let needs = rung_needs(MASTER);
+    assert_eq!(
+        needs.get("v1"),
+        Some(&12_000_000),
+        "the peak, not the average: {needs:?}"
+    );
+    assert_eq!(needs.get("v2"), Some(&6_000_000));
+    assert_eq!(needs.len(), 2);
+
+    // Nothing is guessed: a description that is not one gives nothing at all.
+    assert!(rung_needs("not a playlist").is_empty());
+    assert!(rung_needs("").is_empty());
+}
+
+/// The facts a request into the set gets, the way the application's own library hands them.
+fn set_library(asked: &Asked) -> VariantFacts {
+    use vrcast_studio_lib::domain::viewers::{rung_needs, set_facts};
+    let needs = rung_needs(MASTER);
+    set_facts(asked, Some(String::from("media-demo")), Some(&needs))
+}
+
+#[test]
+fn a_segment_of_a_rung_carries_that_rungs_need_and_the_description_carries_none() {
+    let segment = set_library(&access_log::what_was_asked_for(
+        "/videos/demo/v2/seg_00003.m4s",
+    ));
+    assert_eq!(segment.required_bps, Some(6_000_000));
+    assert_eq!(segment.variant.as_deref(), Some("v2"));
+    assert_eq!(segment.media_id.as_deref(), Some("media-demo"));
+
+    let init = set_library(&access_log::what_was_asked_for("/videos/demo/v1/init.mp4"));
+    assert_eq!(init.required_bps, Some(12_000_000));
+
+    // Only asked what there is: no rung chosen, no need.
+    let description = set_library(&access_log::what_was_asked_for("/videos/demo/master.m3u8"));
+    assert_eq!(description.required_bps, None);
+
+    // A rung the description does not name is not given somebody else's figure.
+    let unknown = set_library(&access_log::what_was_asked_for(
+        "/videos/demo/v9/seg_00001.m4s",
+    ));
+    assert_eq!(unknown.required_bps, None);
+}
+
+#[test]
+fn a_viewer_of_a_set_getting_less_than_their_rung_needs_is_marked_slow() {
+    // QA-24B-07: this could not happen before — `required_bps` was empty for every request
+    // into a set, and SlowLink never fired for its viewers.
+    let mut session = Session::default();
+    session.note_request(
+        &request("10.0.0.9", "/videos/demo/v1/seg_00001.m4s", 0),
+        &set_library,
+    );
+    session.note_connections(&[row("10.0.0.9", 0, 0, 0, Some(0.01))], at(0));
+    // Five megabytes over ten seconds: 4 Mbit/s against the 12 Mbit/s the rung needs.
+    session.note_connections(&[row("10.0.0.9", 5_000_000, 500, 0, Some(0.01))], at(10));
+    let viewer = session.active(at(11)).remove(0);
+
+    assert_eq!(viewer.required_bps, Some(12_000_000));
+    assert!(
+        viewer.problems.contains(&Problem::SlowLink),
+        "a viewer of a set getting a third of what the rung needs was not marked: {viewer:?}"
+    );
+}
+
+#[test]
+fn a_viewer_of_a_set_whose_player_is_holding_back_is_not_marked_slow() {
+    // The exemption stays: a player with a full buffer stops reading, and its speed drops
+    // right off with nothing wrong at all.
+    let mut session = Session::default();
+    session.note_request(
+        &request("10.0.0.8", "/videos/demo/v1/seg_00001.m4s", 0),
+        &set_library,
+    );
+    session.note_connections(&[row("10.0.0.8", 0, 0, 0, Some(0.97))], at(0));
+    session.note_connections(&[row("10.0.0.8", 5_000_000, 500, 0, Some(0.97))], at(10));
+    let viewer = session.active(at(11)).remove(0);
+
+    assert_eq!(
+        viewer.required_bps,
+        Some(12_000_000),
+        "the need is known either way"
+    );
+    assert!(
+        !viewer.problems.contains(&Problem::SlowLink),
+        "a player holding back its own flow was accused of a bad link: {viewer:?}"
+    );
+}
+
+#[test]
+fn a_viewer_of_a_set_getting_enough_is_not_marked() {
+    let mut session = Session::default();
+    session.note_request(
+        &request("10.0.0.7", "/videos/demo/v2/seg_00001.m4s", 0),
+        &set_library,
+    );
+    session.note_connections(&[row("10.0.0.7", 0, 0, 0, None)], at(0));
+    // Ten megabytes over ten seconds: 8 Mbit/s against the 6 the rung needs.
+    session.note_connections(&[row("10.0.0.7", 10_000_000, 1000, 0, None)], at(10));
+    let viewer = session.active(at(11)).remove(0);
+    assert!(viewer.problems.is_empty(), "{viewer:?}");
+}

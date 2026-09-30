@@ -261,6 +261,44 @@ impl Watch {
     }
 }
 
+/// What each rung of each of these quality sets needs, read off their descriptions (T666).
+///
+/// Best effort, the way the library's own reading of a set is (`ladder_probe`): a set whose
+/// description cannot be read or parsed is left out, and its viewers are shown without a
+/// need — never with a guessed one. Read a few at a time, through the ordinary places for
+/// short work, so that a library of many sets neither queues behind itself nor crowds out
+/// other work.
+pub async fn rung_needs(
+    conn: &Connection,
+    video_dir: &str,
+    slugs: &[String],
+) -> HashMap<String, HashMap<String, u64>> {
+    use futures::stream::{self, StreamExt};
+
+    let dir = video_dir.trim_end_matches('/');
+    stream::iter(slugs.iter().cloned())
+        .map(|slug| async move {
+            let path = format!("{dir}/{slug}/{}", access_log::SET_DESCRIPTION);
+            let text = tokio::time::timeout(
+                POLL_ANSWER_WITHIN,
+                conn.exec(&format!(
+                    "cat {} 2>/dev/null || true",
+                    super::shell_quote(&path)
+                )),
+            )
+            .await
+            .ok()?
+            .ok()?
+            .stdout;
+            let needs = crate::domain::viewers::rung_needs(&text);
+            (!needs.is_empty()).then_some((slug, needs))
+        })
+        .buffer_unordered(4)
+        .filter_map(|found| async move { found })
+        .collect()
+        .await
+}
+
 /// Start following the log on `conn`, and wait until it has really started.
 async fn follow(
     conn: &Connection,

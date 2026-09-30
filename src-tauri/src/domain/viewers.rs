@@ -322,6 +322,53 @@ impl Session {
     }
 }
 
+// ---------- what each rung of a quality set needs (T666) ----------
+
+/// What each rung of a quality set needs to arrive in time, read off the set's description.
+///
+/// ⚠ **QA-24B-07.** A viewer of a quality set used to be shown with everything except the
+/// speed they ought to be getting: `required_bps` was left empty for every request into a
+/// set, and `SlowLink` (FR-053) could not fire for any of them — only for directly served
+/// files. The description already says it: every `#EXT-X-STREAM-INF` carries the rung's
+/// `BANDWIDTH`, which is the figure a player sizes its connection by (the peak, not the
+/// average — `domain::hls_master::Variant`). That is what a rung needs.
+///
+/// Keyed by the rung's name as a request names it: the directory its playlist sits in
+/// (`v2/stream.m3u8` → `v2`), which is what `access_log::Asked::rung` hands back. A variant
+/// whose path is not one directory deep is left out rather than guessed at. A description
+/// that does not parse gives nothing — the viewer is then shown without a need, as before.
+pub fn rung_needs(master: &str) -> HashMap<String, u64> {
+    let Ok(variants) = super::hls_master::parse(master) else {
+        return HashMap::new();
+    };
+    variants
+        .into_iter()
+        .filter_map(|v| {
+            let (dir, _playlist) = v.path.trim_start_matches("./").rsplit_once('/')?;
+            (!dir.is_empty() && !dir.contains('/') && v.bandwidth > 0)
+                .then(|| (dir.to_owned(), v.bandwidth))
+        })
+        .collect()
+}
+
+/// The facts for a request into a quality set: which medium, which rung, and what that
+/// rung needs (T666).
+///
+/// The description itself (`master.m3u8`) names no rung, so it carries no need: a person
+/// who has only asked what there is has not chosen anything yet.
+pub fn set_facts(
+    asked: &Asked,
+    media_id: Option<String>,
+    needs: Option<&HashMap<String, u64>>,
+) -> VariantFacts {
+    let rung = asked.rung();
+    VariantFacts {
+        media_id,
+        variant: rung.map(str::to_owned),
+        required_bps: rung.and_then(|r| needs?.get(r).copied()),
+    }
+}
+
 // ---------- the watching itself: going, lost, stopped (T664) ----------
 
 /// Where the watching stands, as the screen is told it.
