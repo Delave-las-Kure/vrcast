@@ -164,7 +164,9 @@ export const ipc = {
   // --- removal (FR-114) ---
   /** What would go if everything were removed. Changes nothing. */
   forgetPreview: () => call<WhatWouldGo>("forget_preview"),
-  /** Remove. Refused without `confirmed`, before anything is touched. */
+  /** Remove. Refused without `confirmed`, before anything is touched. Refused as
+   *  `FORGET_TASKS_RUNNING` while any task is alive (T643), nothing removed; while it runs, a new
+   *  task is refused as `FORGET_IN_PROGRESS`. */
   forgetEverything: (confirmed: boolean) => call<WhatWent>("forget_everything", { confirmed }),
 
   // --- updating the application (FR-113) ---

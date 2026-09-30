@@ -77,6 +77,9 @@ export type ErrorCode =
   | "TASK_NOT_FOUND"
   | "TASK_BAD_TRANSITION"
   | "TASK_NOT_PAUSABLE"
+  // removing everything (FR-114, T643)
+  | "FORGET_TASKS_RUNNING"
+  | "FORGET_IN_PROGRESS"
   // input and confirmation
   | "INVALID_INPUT"
   | "CONFIRMATION_REQUIRED"

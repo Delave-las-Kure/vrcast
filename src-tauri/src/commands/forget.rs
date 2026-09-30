@@ -135,10 +135,39 @@ pub mod api {
     /// profiles, and the profiles live in the database that is about to be deleted. Delete the
     /// directory first and the entries in the operating system's store become unreachable
     /// orphans — nothing left knows their names.
+    ///
+    /// ⚠ **T643 (QA-22 №3) — not while anything is at work, and nothing starts meanwhile.** A
+    /// deployment's `key_keeper` writes the key it made into the store; one already past its
+    /// look re-created the secret after this reported it gone. A lock around the removal
+    /// alone would not do — the task would write once it was let go — so, by the owner's
+    /// decision of 2026-09-30:
+    ///
+    /// - refused as `FORGET_TASKS_RUNNING` while any task is alive in the engine (queued,
+    ///   running, or paused with its work held) or a command holds a claim for one it is about
+    ///   to create; nothing is touched. [`TaskEngine::close_for_forgetting`] makes the look and
+    ///   the closing one step;
+    /// - while this runs, the engine is closed: a new task, a raised one or a claim is refused
+    ///   as `FORGET_IN_PROGRESS`, and so is a second removal. It opens again when this returns,
+    ///   whichever way;
+    /// - the secrets go under [`Db::sign_in_lock`], the lock the other writers of a secret
+    ///   (`server_update`, the deployment's key keeping) hold around their whole change — so
+    ///   one of them already inside it is waited for rather than overtaken.
+    ///
+    /// [`TaskEngine::close_for_forgetting`]: crate::tasks::engine::TaskEngine::close_for_forgetting
+    /// [`Db::sign_in_lock`]: crate::store::db::Db::sign_in_lock
     pub fn forget_everything(state: &AppState, confirmed: bool) -> Result<WhatWent> {
         if !confirmed {
             return Err(AppError::new(ErrorCode::ConfirmationRequired));
         }
+
+        let _closed = state
+            .tasks
+            .close_for_forgetting()
+            .map_err(|busy| match busy {
+                Some(working) => AppError::new(ErrorCode::ForgetTasksRunning).with_cause(working),
+                None => AppError::new(ErrorCode::ForgetInProgress),
+            })?;
+        let _sign_in = state.db.sign_in_lock();
 
         let profiles = crate::store::profiles::list(&state.db)
             .map_err(|e| AppError::new(ErrorCode::StorageFailed).with_cause(e))?;

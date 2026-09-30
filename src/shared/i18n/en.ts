@@ -249,6 +249,16 @@ export const en: Catalogue = {
       hint: "Short tasks are not paused — it is simpler to cancel one and run it again.",
     },
 
+    // --- "Remove everything" (FR-114, T643) ---
+    FORGET_TASKS_RUNNING: {
+      message: "Stop the tasks first",
+      hint: "While any task is going — a deployment, an upgrade, an upload, a preparation, a measurement — the data is not removed: the task could write back what was removed. Wait for the tasks to finish or cancel them on the tasks screen, then try again. Nothing was removed.",
+    },
+    FORGET_IN_PROGRESS: {
+      message: "The application's data is being removed right now",
+      hint: "While the removal runs, no new task starts. Wait for it to finish and try again. Nothing was changed.",
+    },
+
     // --- input and confirmation ---
     INVALID_INPUT: {
       message: "The details entered will not do",
@@ -897,6 +907,8 @@ export const en: Catalogue = {
       secretsLeft: (names: string) =>
         `The system store would not give up these secrets: ${names}. They will have to be cleared by hand.`,
       dirLeft: "The data directory could not be removed — something may be holding a file in it.",
+      tasksRunning:
+        "Stop the tasks first: while any is going — a deployment, an upgrade, an upload, a preparation, a measurement — the data cannot be removed. Wait for them to finish or cancel them on the tasks screen.",
     },
     update: {
       title: "Updates",

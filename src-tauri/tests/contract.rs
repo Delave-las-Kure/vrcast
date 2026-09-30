@@ -17,6 +17,10 @@ mod contract_sync;
 #[path = "contract/forget.rs"]
 mod forget;
 
+/// T643 — «Забыть всё» не идёт при живых задачах, и задачи не стартуют, пока оно идёт.
+#[path = "contract/forget_tasks.rs"]
+mod forget_tasks;
+
 #[path = "contract/server_inventory.rs"]
 mod server_inventory;
 
