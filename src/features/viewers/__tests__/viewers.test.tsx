@@ -36,7 +36,7 @@ const mockLimitPreview = vi.fn(async (_request: { slug: string }) => ({
   warnings: [],
   below_lightest: false,
 }));
-const mockLimitSet = vi.fn(async () => undefined);
+const mockLimitSet = vi.fn(async (..._a: unknown[]) => undefined);
 
 /** What the core would send. Held so a test can push an update whenever it likes. */
 let send: ((update: ViewersUpdateEvent) => void) | null = null;
@@ -68,7 +68,7 @@ vi.mock("../../../shared/ipc", async () => {
       geoStatus: () => mockGeoStatus(),
       geoUpdate: () => mockGeoUpdate(),
       limitPreview: (...a: unknown[]) => mockLimitPreview(...(a as [{ slug: string }])),
-      limitSet: (...a: unknown[]) => mockLimitSet(...(a as [])),
+      limitSet: (...a: unknown[]) => mockLimitSet(...a),
       limitsList: () => Promise.resolve([]),
     }),
     onLibraryChanged: vi.fn(async () => () => {}),
@@ -361,5 +361,56 @@ describe("the tables of places", () => {
       "the dialog asked the core about the medium by something that is not its slug, so the " +
         "core looks for a quality set at a path that does not exist",
     ).toBe("backrooms");
+  });
+
+  it("opens the cap on the film the viewer is watching, not the first in the catalogue (T668)", async () => {
+    // QA-24B-09: a viewer of film B got a dialog set to film A, and putting it right was a
+    // fourth action where SC-006 allows three.
+    mockLibraryList.mockResolvedValue({
+      server_id: "s1",
+      media: [
+        {
+          id: "m-a",
+          title: "Film A",
+          slug: "film-a",
+          files: [],
+          ladders: [],
+          total_bytes: 0,
+          created_at: "",
+        },
+        {
+          id: "m-b",
+          title: "Film B",
+          slug: "film-b",
+          files: [],
+          ladders: [],
+          total_bytes: 0,
+          created_at: "",
+        },
+      ],
+      unrecognized: [],
+      disk: null,
+      stale: false,
+    });
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalledWith("s1"));
+    send?.(update([viewer({ media_id: "m-b" })]));
+    expect(await screen.findByText("Film B")).toBeInTheDocument();
+
+    // 1. open it on the viewer; 2. set the cap; 3. agree.
+    fireEvent.click(await screen.findByRole("button", { name: ru.ui.limits.title }));
+    await waitFor(() => expect(mockLimitPreview).toHaveBeenCalled());
+    expect(mockLimitPreview.mock.calls[0][0].slug).toBe("film-b");
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "3" } });
+    await waitFor(() => expect(mockLimitPreview).toHaveBeenCalledTimes(2));
+    expect(mockLimitPreview.mock.calls[1][0]).toMatchObject({ slug: "film-b" });
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("confirm"));
+    await waitFor(() => expect(mockLimitSet).toHaveBeenCalledTimes(1));
+    expect((mockLimitSet.mock.calls[0] as unknown[])[0]).toMatchObject({
+      ip: "203.0.113.9",
+      slug: "film-b",
+      cap_bps: 3_000_000,
+    });
   });
 });

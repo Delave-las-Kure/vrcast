@@ -10,12 +10,15 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { en, renderIn, ru } from "../../../test-utils";
-import type { LimitPreview, QualityLimit } from "../../../shared/contract";
+import type { LimitPreview, LimitRequest, QualityLimit } from "../../../shared/contract";
 
-const mockPreview = vi.fn<() => Promise<LimitPreview>>();
+const mockPreview = vi.fn<(request: LimitRequest) => Promise<LimitPreview>>();
 const mockSet = vi.fn<(...a: unknown[]) => Promise<void>>();
 const mockClear = vi.fn<(...a: unknown[]) => Promise<void>>();
 const mockList = vi.fn<() => Promise<QualityLimit[]>>();
+
+/** Every question the dialog asked, in order. */
+const mockPreviewArgs = () => mockPreview.mock.calls.map(([request]) => request);
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -25,7 +28,7 @@ vi.mock("../../../shared/ipc", async () => {
   return {
     ...actual,
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
-      limitPreview: () => mockPreview(),
+      limitPreview: (request: LimitRequest) => mockPreview(request),
       limitSet: (...a: unknown[]) => mockSet(...a),
       limitClear: (...a: unknown[]) => mockClear(...a),
       limitsList: () => mockList(),
@@ -143,6 +146,89 @@ describe("putting the cap on", () => {
     // Until the preview arrives there is nothing on screen to have understood.
     mockPreview.mockImplementation(() => new Promise(() => undefined));
     renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "en");
+    expect(screen.getByTestId("confirm")).toBeDisabled();
+    expect(screen.getByTestId("limit-previewing")).toHaveTextContent(en.ui.limits.previewing);
+  });
+});
+
+/**
+ * T668 — QA-24B-09. The preview used to outlive what it was asked for: change the cap and
+ * press at once, and the change went through with `confirmed: true` against the previous
+ * cap's rungs and warnings.
+ */
+describe("agreeing to exactly what is on screen (T668)", () => {
+  const TWO = [
+    { slug: "film-a", title: "Film A" },
+    { slug: "film-b", title: "Film B" },
+  ];
+
+  it("opens on the viewer's own medium, not the first in the catalogue", async () => {
+    renderIn(
+      <LimitDialog serverId="s1" ip="203.0.113.10" media={TWO} initialSlug="film-b" />,
+      "en",
+    );
+    await waitFor(() => expect(mockPreview).toHaveBeenCalled());
+    expect(mockPreviewArgs()[0].slug).toBe("film-b");
+    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("film-b");
+  });
+
+  it("a changed cap waits for its own preview: the old one is not shown and cannot be agreed to", async () => {
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "en");
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+
+    // The next answer is held back.
+    let answer: (p: LimitPreview) => void = () => undefined;
+    mockPreview.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "1" } });
+
+    expect(screen.getByTestId("confirm")).toBeDisabled();
+    expect(screen.queryByTestId("kept")).toBeNull();
+    expect(screen.queryByTestId("warnings")).toBeNull();
+    expect(screen.getByTestId("limit-previewing")).toBeInTheDocument();
+
+    // Its own answer arrives: now it may be agreed to, and what goes is what was shown.
+    answer({
+      kept: [variant(3_000_000, 720)],
+      warnings: [{ key: "WARN_CAP_BELOW_LIGHTEST", params: { lightest_bps: 3_000_000 } }],
+      below_lightest: true,
+    });
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+    expect(screen.getByTestId("warnings")).toHaveTextContent(
+      en.details.WARN_CAP_BELOW_LIGHTEST.split("(")[0].trim(),
+    );
+    fireEvent.click(screen.getByTestId("confirm"));
+    await waitFor(() => expect(mockSet).toHaveBeenCalledTimes(1));
+    expect(mockSet.mock.calls[0][0]).toMatchObject({ slug: "demo", cap_bps: 1_000_000 });
+  });
+
+  it("an answer to an earlier question arriving late is not taken for the current one", async () => {
+    const answers: ((p: LimitPreview) => void)[] = [];
+    mockPreview.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "en");
+    await waitFor(() => expect(answers.length).toBe(1));
+
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "2" } });
+    await waitFor(() => expect(answers.length).toBe(2));
+
+    // The first (6 Mbit/s) question answers after the second was asked.
+    answers[0]({ kept: [variant(6_000_000, 1080)], warnings: [], below_lightest: false });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByTestId("confirm")).toBeDisabled();
+    expect(screen.queryByTestId("kept")).toBeNull();
+
+    answers[1]({ kept: [variant(2_000_000, 540)], warnings: [], below_lightest: false });
+    await waitFor(() => expect(screen.getByTestId("kept")).toHaveTextContent("2.0 Mbit/s"));
+    expect(screen.getByTestId("confirm")).toBeEnabled();
+  });
+
+  it("says it is applying while the cap goes on", async () => {
+    mockSet.mockImplementation(() => new Promise(() => undefined));
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "en");
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("confirm"));
+    await waitFor(() =>
+      expect(screen.getByTestId("confirm")).toHaveTextContent(en.ui.limits.applying),
+    );
     expect(screen.getByTestId("confirm")).toBeDisabled();
   });
 });

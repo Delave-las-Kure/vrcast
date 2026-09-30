@@ -118,6 +118,8 @@ export function ViewersScreen() {
   const media = useMedia(serverId);
   // By identifier, which is how a viewer record names what it is watching.
   const titleById = useMemo(() => Object.fromEntries(media.map((m) => [m.id, m.title])), [media]);
+  // And the set a viewer is watching, by the same identifier — for the cap dialog (T668).
+  const slugById = useMemo(() => Object.fromEntries(media.map((m) => [m.id, m.slug])), [media]);
 
   const [viewers, setViewers] = useState<Viewer[] | null>(null);
   // Where the watching stands (T664). Kept beside the list rather than folded into it: the
@@ -130,11 +132,13 @@ export function ViewersScreen() {
   });
   // Bumped by "start again" after the watching has given up: the effect below runs afresh.
   const [restarts, setRestarts] = useState(0);
-  // Whom the person is about to cap, if anybody. The dialogue is opened from the row
-  // rather than from a screen of its own: capping is something done **to a viewer you
-  // are looking at**, and making somebody go elsewhere and retype an address would be
-  // three actions where SC-006 allows three altogether.
-  const [capping, setCapping] = useState<string | null>(null);
+  // Whom the person is about to cap, if anybody, and what they are watching. The dialogue is
+  // opened from the row rather than from a screen of its own: capping is something done
+  // **to a viewer you are looking at**, and making somebody go elsewhere and retype an
+  // address would be three actions where SC-006 allows three altogether. The medium goes
+  // with the address (T668, QA-24B-09): the dialog used to open on the first film of the
+  // catalogue, whatever the viewer was watching.
+  const [capping, setCapping] = useState<{ ip: string; slug: string | null } | null>(null);
   const [error, setError] = useState<AppError | null>(null);
 
   useEffect(() => {
@@ -261,7 +265,12 @@ export function ViewersScreen() {
                 key={viewer.ip}
                 viewer={viewer}
                 mediaTitle={viewer.media_id ? titleById[viewer.media_id] : undefined}
-                onLimit={() => setCapping(viewer.ip)}
+                onLimit={() =>
+                  setCapping({
+                    ip: viewer.ip,
+                    slug: viewer.media_id ? (slugById[viewer.media_id] ?? null) : null,
+                  })
+                }
                 limitLabel={t.ui.limits.title}
               />
             ))}
@@ -271,8 +280,10 @@ export function ViewersScreen() {
 
       {capping && serverId && (
         <LimitDialog
+          key={`${capping.ip}/${capping.slug ?? ""}`}
           serverId={serverId}
-          ip={capping}
+          ip={capping.ip}
+          initialSlug={capping.slug}
           media={media}
           onDone={() => setCapping(null)}
           onCancel={() => setCapping(null)}

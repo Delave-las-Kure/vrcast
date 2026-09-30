@@ -7,7 +7,17 @@
  * the address may belong to more than one person, that it may stop belonging to this one,
  * and that the cap is below anything that exists.
  *
- * Three actions and no more, as SC-006 asks: choose the medium, set the cap, agree.
+ * Three actions and no more, as SC-006 asks: open it on the viewer, set the cap, agree. The
+ * medium is the one the viewer is watching (T668) — choosing it again is a fourth action,
+ * and choosing wrongly is a cap on a film nobody at that address is watching.
+ *
+ * ⚠ **T668 (QA-24B-09) — agreeing to exactly what is on screen.** The preview used to stay
+ * on screen, and the button stayed live, while a new one was being asked for: change the
+ * cap and press at once, and the change went through with `confirmed: true` against the
+ * previous cap's rungs and warnings — the "below anything that exists" warning, which
+ * depends on the cap, possibly never seen. A preview now belongs to the exact server,
+ * address, set and cap it was asked for; anything else on screen is not it, and the button
+ * waits for the answer that is.
  */
 
 import { useEffect, useState } from "react";
@@ -16,16 +26,22 @@ import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
 import { ipc } from "../../shared/ipc";
-import type { AppError, LimitPreview } from "../../shared/contract";
+import type { AppError, LimitPreview, LimitRequest } from "../../shared/contract";
 
 function mbps(bps: number): string {
   return `${(bps / 1_000_000).toFixed(1)}`;
+}
+
+/** What a preview was asked for. Two previews answer the same question only if these match. */
+function keyOf(request: LimitRequest): string {
+  return JSON.stringify([request.server_id, request.ip, request.slug, request.cap_bps]);
 }
 
 export function LimitDialog({
   serverId,
   ip,
   media,
+  initialSlug,
   onDone,
   onCancel,
 }: {
@@ -33,6 +49,11 @@ export function LimitDialog({
   ip: string;
   /** What the library holds, so the person picks rather than types. */
   media: { slug: string; title: string }[];
+  /**
+   * The set the viewer is watching, when that is known (T668). The dialog opens on it; the
+   * first medium of the catalogue is only the fallback for a viewer whose film is unknown.
+   */
+  initialSlug?: string | null;
   onDone?: () => void;
   onCancel?: () => void;
 }) {
@@ -40,28 +61,49 @@ export function LimitDialog({
   const { lang } = useLang();
   const words = t.ui.limits;
 
-  const [slug, setSlug] = useState(media[0]?.slug ?? "");
+  const fallback = (): string =>
+    (initialSlug && media.some((m) => m.slug === initialSlug) ? initialSlug : media[0]?.slug) ?? "";
+  const [slug, setSlug] = useState(fallback);
   const [capMbps, setCapMbps] = useState(6);
-  const [preview, setPreview] = useState<LimitPreview | null>(null);
+  // The preview together with what it was asked for — see the note at the top.
+  const [answered, setAnswered] = useState<{ key: string; preview: LimitPreview } | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [applying, setApplying] = useState(false);
+
+  // The library may still be arriving when the dialog opens. Once it has, the viewer's own
+  // medium is chosen — not whichever came first.
+  useEffect(() => {
+    if (!slug && media.length > 0) setSlug(fallback());
+    // `fallback` reads only `media` and `initialSlug`, both listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [media, initialSlug, slug]);
+
+  const request: LimitRequest = { server_id: serverId, ip, slug, cap_bps: capMbps * 1_000_000 };
+  const key = keyOf(request);
+  // Only the preview for exactly what is on screen now counts. An older one is not shown as
+  // if it were this one, and cannot be agreed to.
+  const preview = answered?.key === key ? answered.preview : null;
+  const previewing = Boolean(slug) && preview === null && error === null;
 
   // What this would do, asked again on every change. Nothing is altered by asking, and a
   // person choosing a cap is choosing from what they can see it will leave.
   useEffect(() => {
     if (!slug) return;
     let alive = true;
+    const asked: LimitRequest = {
+      server_id: serverId,
+      ip,
+      slug,
+      cap_bps: capMbps * 1_000_000,
+    };
     setError(null);
     ipc
-      .limitPreview({ server_id: serverId, ip, slug, cap_bps: capMbps * 1_000_000 })
+      .limitPreview(asked)
       .then((answer) => {
-        if (alive) setPreview(answer);
+        if (alive) setAnswered({ key: keyOf(asked), preview: answer });
       })
       .catch((e: AppError) => {
-        if (alive) {
-          setPreview(null);
-          setError(e);
-        }
+        if (alive) setError(e);
       });
     return () => {
       alive = false;
@@ -75,7 +117,7 @@ export function LimitDialog({
 
       <label>
         {words.pickMedia}
-        <select value={slug} onChange={(e) => setSlug(e.target.value)}>
+        <select value={slug} onChange={(e) => setSlug(e.target.value)} disabled={applying}>
           {media.map((m) => (
             <option key={m.slug} value={m.slug}>
               {m.title}
@@ -90,11 +132,18 @@ export function LimitDialog({
           type="number"
           min={1}
           value={capMbps}
+          disabled={applying}
           onChange={(e) => setCapMbps(Math.max(1, Number(e.target.value)))}
         />
       </label>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+
+      {previewing && (
+        <p className="hint" role="status" data-testid="limit-previewing">
+          {words.previewing}
+        </p>
+      )}
 
       {preview && (
         <>
@@ -137,15 +186,17 @@ export function LimitDialog({
         data-testid="confirm"
         disabled={!preview || applying}
         onClick={() => {
+          // What goes is what the preview on screen was asked for — the same thing, since
+          // a preview for anything else would not be on screen.
           setApplying(true);
           ipc
-            .limitSet({ server_id: serverId, ip, slug, cap_bps: capMbps * 1_000_000 }, true)
+            .limitSet(request, true)
             .then(() => onDone?.())
             .catch((e: AppError) => setError(e))
             .finally(() => setApplying(false));
         }}
       >
-        {words.confirm}
+        {applying ? words.applying : words.confirm}
       </button>
       <button type="button" onClick={() => onCancel?.()}>
         {words.cancel}

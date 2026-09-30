@@ -1101,6 +1101,8 @@ export const en: Catalogue = {
       confirm: "Understood — cap it",
       cancel: "Cancel",
       noLadder: "This medium has no quality set — there is nothing to shorten",
+      previewing: "Working out what the viewer would be left with…",
+      applying: "Capping…",
 
       listTitle: "Limits in force",
       listEmpty: "Nothing is capped.",
