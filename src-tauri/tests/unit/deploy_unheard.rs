@@ -713,3 +713,165 @@ async fn only_a_command_let_through_is_counted_as_possibly_running() {
         "a command let through and then lost is not on record as possibly running"
     );
 }
+
+// ---------- T641: the last check reads the task's token itself, not a mark the select! sets ----------
+
+/// One deployment command raced against its task's cancellation exactly as
+/// `tasks::deploy::run` races the run: the same `tokio::select!` — the run's arm, and the
+/// token's arm that calls `ask_to_stop` and then awaits the run to its end.
+///
+/// The command waits for its channel (a `oneshot`, the stand-in for a place and an open); the
+/// token is cancelled **before** the channel is ready, and then the channel is let go — so at
+/// the next poll both arms are ready and `select!` picks either (QA-22 №1). `linked` says
+/// whether the run reads the token itself ([`RunMark::stop_on`], what `tasks::deploy::run`
+/// does). Answers whether the command reached the server, and what `send_settled` said.
+async fn one_command_cancelled_before_its_channel_opens(
+    sending: Sending,
+    linked: bool,
+) -> (bool, Result<CommandOutput, DeployError>) {
+    let run = RunMark::fresh();
+    let token = tokio_util::sync::CancellationToken::new();
+    if linked {
+        assert!(run.stop_on(token.clone()));
+    }
+    let sent = AtomicBool::new(false);
+    let waiting = tokio::sync::Notify::new();
+    let (open, opened) = tokio::sync::oneshot::channel::<()>();
+
+    let run_fut = send_settled(
+        &run,
+        sending,
+        |_| async { Ok(Stopped::AlreadyGone) },
+        |gate| async {
+            waiting.notify_one();
+            let _ = opened.await;
+            if !gate.open() {
+                return Ok(None);
+            }
+            sent.store(true, Ordering::SeqCst);
+            answered()
+        },
+    );
+    tokio::pin!(run_fut);
+    let cancel_token = token.clone();
+    // As in `tasks::deploy::run`.
+    let deploy = async {
+        tokio::select! {
+            result = &mut run_fut => (result, false),
+            _ = cancel_token.cancelled() => {
+                run.ask_to_stop();
+                (run_fut.await, true)
+            }
+        }
+    };
+    let cancel = async {
+        waiting.notified().await;
+        // `task_cancel`: the token, and nothing else.
+        token.cancel();
+        let _ = open.send(());
+    };
+    let ((result, _), ()) = tokio::join!(deploy, cancel);
+    (sent.load(Ordering::SeqCst), result)
+}
+
+const RACES: usize = 200;
+
+/// QA-22 №1: with the token cancelled before the channel opened, `select!` polled the run's
+/// arm first about half the time, and the gate — asking only the mark the other arm sets —
+/// let the command go (102 of 200). The run now reads the token: none of `RACES` goes, and
+/// every one ends `Cancelled`.
+#[tokio::test]
+async fn a_cancelled_task_sends_no_new_command_whichever_arm_the_select_polls_first() {
+    let mut went = 0;
+    for _ in 0..RACES {
+        let (sent, result) =
+            one_command_cancelled_before_its_channel_opens(Sending::New, true).await;
+        if sent {
+            went += 1;
+        }
+        assert!(matches!(result, Err(DeployError::Cancelled)), "{result:?}");
+    }
+    assert_eq!(
+        went, 0,
+        "{went} of {RACES} commands went to the server after their task was cancelled"
+    );
+}
+
+/// The harness above does catch the race: with the run not reading the token (only the
+/// `select!`'s `ask_to_stop`, as before T641) some of `RACES` commands go — the mark alone
+/// comes too late. Keeps the test above from passing for want of a race.
+#[tokio::test]
+async fn the_mark_the_select_sets_alone_comes_too_late() {
+    let mut went = 0;
+    for _ in 0..RACES {
+        let (sent, _) = one_command_cancelled_before_its_channel_opens(Sending::New, false).await;
+        if sent {
+            went += 1;
+        }
+    }
+    eprintln!("without the token read: {went} of {RACES} commands went after the cancel");
+    assert!(
+        went > 0,
+        "no command went without the token read — the race was not reproduced"
+    );
+}
+
+/// The second half of a begun `put_file` (the move, the tidying) still goes, all of `RACES`,
+/// with the task's token cancelled — the exception T630 and T637 kept.
+#[tokio::test]
+async fn the_second_half_of_a_begun_write_goes_with_the_task_cancelled() {
+    for _ in 0..RACES {
+        let (sent, result) =
+            one_command_cancelled_before_its_channel_opens(Sending::Finishing, true).await;
+        assert!(sent, "the move of a begun write was held back");
+        assert!(result.is_ok(), "{result:?}");
+    }
+}
+
+/// Every other "send / do not send" reads the same source: a run whose token is cancelled is
+/// stopping at once, without `ask_to_stop`; the wait for an unheard command is not begun
+/// (its stop not asked, nothing told), and `send_settled` sends nothing new.
+#[tokio::test]
+async fn every_check_of_a_run_sees_its_cancelled_token() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let run = unheard_a_minute_ago();
+    assert!(run.stop_on(token.clone()));
+    assert!(
+        !run.stop_on(tokio_util::sync::CancellationToken::new()),
+        "a second token replaced the first"
+    );
+    assert!(!run.is_stopping());
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let sink = told.clone();
+    assert!(run.tell_unheard_waits(Box::new(move |w| sink.lock().unwrap().push(w))));
+
+    token.cancel();
+    assert!(run.is_stopping(), "a cancelled token did not stop the run");
+
+    let asked = AtomicUsize::new(0);
+    let r = settle_unheard(&run, |_| {
+        asked.fetch_add(1, Ordering::SeqCst);
+        async { Ok(Stopped::AlreadyGone) }
+    })
+    .await;
+    assert!(matches!(r, Err(DeployError::Cancelled)), "{r:?}");
+    assert_eq!(asked.load(Ordering::SeqCst), 0);
+    {
+        let told = told.lock().unwrap();
+        assert!(told.is_empty(), "{told:?}");
+    }
+
+    let run = RunMark::fresh();
+    run.stop_on(token.clone());
+    let sent = AtomicBool::new(false);
+    let r = send_settled(
+        &run,
+        Sending::New,
+        |_| async { Ok(Stopped::AlreadyGone) },
+        sends_if_let_through(&sent),
+    )
+    .await;
+    assert!(matches!(r, Err(DeployError::Cancelled)), "{r:?}");
+    assert!(!sent.load(Ordering::SeqCst));
+    assert_eq!(run.may_run_until(), None);
+}

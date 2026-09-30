@@ -98,6 +98,10 @@ pub async fn run<'a>(
     // does not move; once its stop is confirmed, back to "deploying".
     ctx.run
         .tell_unheard_waits(stage_on_unheard_wait(task.clone(), done.clone(), total));
+    // T641: the run reads the task's cancellation at its source — the token `task_cancel`
+    // cancels — and not only through `ask_to_stop` in the `select!` below, which is reached
+    // only when that arm happens to be polled first (QA-22 №1). See `RunMark::stop_on`.
+    ctx.run.stop_on(task.cancel_token());
 
     let cancelled = || task.is_cancelled();
     let (outcome, stop_asked) = {
