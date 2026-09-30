@@ -244,6 +244,9 @@ pub(crate) fn invalidate_library_parts(
     events: &tokio::sync::broadcast::Sender<AppEvent>,
     server_id: &str,
 ) {
+    // Before the cache is forgotten: a library refresh begun before this change must neither
+    // be joined nor written back over it (T651).
+    crate::commands::library::refreshes::invalidated(db, server_id);
     if let Err(e) = crate::store::library_cache::forget(db, server_id) {
         tracing::warn!(server = server_id, error = %e, "the library cache was not cleared");
     }

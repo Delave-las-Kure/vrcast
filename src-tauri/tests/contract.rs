@@ -27,6 +27,10 @@ mod server_inventory;
 #[path = "contract/library.rs"]
 mod library;
 
+/// T651 — a library refresh is joined, kept and said only when it changed something.
+#[path = "contract/library_refresh.rs"]
+mod library_refresh;
+
 #[path = "contract/deploy.rs"]
 mod deploy;
 
