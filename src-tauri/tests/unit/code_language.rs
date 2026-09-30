@@ -73,16 +73,20 @@ fn has_cyrillic(line: &str) -> bool {
 
 /// Files where Cyrillic is the subject rather than the language, each with the reason.
 ///
-/// **Three of them, and each one is data or a quotation** — not prose:
+/// **Four of them, and each one is data, a quotation or a catalogue** — not the code speaking:
 ///
 /// - `domain/media.rs` transliterates: `'а' => "a"`. The letters *are* the table. Writing it
 ///   any other way would mean the table no longer says what it does.
 /// - `domain/ladder.rs` quotes a line of the shell script this project was ported from,
 ///   which says what it says (constitution VI).
 /// - `commands/limits.rs` names a section of `contracts/ipc-commands.md` by its own title.
+/// - `startup_failure/startup_words.rs` (T655) is a catalogue — the Russian and English words
+///   of the one message shown when the database will not open, which is exactly when there is
+///   no window and no interface to read `src/shared/i18n` with. Sentences only, apart from the
+///   code, as the catalogues are.
 ///
 /// A quotation is not the core speaking. Everything else is, and is English.
-const CYRILLIC_IS_THE_SUBJECT: [(&str, &str); 3] = [
+const CYRILLIC_IS_THE_SUBJECT: [(&str, &str); 4] = [
     (
         "media.rs",
         "the transliteration table: the letters are the data",
@@ -94,6 +98,10 @@ const CYRILLIC_IS_THE_SUBJECT: [(&str, &str); 3] = [
     (
         "limits.rs",
         "names a section of the contract by its own title",
+    ),
+    (
+        "startup_words.rs",
+        "the catalogue of the start-up failure message, shown before any interface exists",
     ),
 ];
 

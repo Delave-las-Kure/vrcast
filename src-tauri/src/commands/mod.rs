@@ -109,10 +109,29 @@ pub struct AppState {
 
 impl AppState {
     /// Build the state with the real stores and sort out what the previous run left.
-    pub fn bootstrap() -> Result<Self> {
-        let path = Db::default_path()?;
-        let db = Arc::new(Db::open(path.clone())?);
-        let mut state = Self::with_db(db, Arc::new(OsSecretStore::new()))?;
+    ///
+    /// ⚠ **T655 — a failure says what failed and on which file.** The error is a
+    /// [`StartupFailure`](crate::startup_failure::StartupFailure) rather than an `AppError`:
+    /// the start-up failure window needs to tell "not a database" from "newer schema" from "no
+    /// access" and to name the file, and an `AppError` of `STORAGE_FAILED` keeps neither.
+    pub fn bootstrap() -> std::result::Result<Self, crate::startup_failure::StartupFailure> {
+        let path = Db::default_path()
+            .map_err(|e| crate::startup_failure::StartupFailure::from_db(None, &e))?;
+        Self::bootstrap_at(path)
+    }
+
+    /// The same, with the database at `path`; its folder becomes the data directory.
+    ///
+    /// Public so that the failure path can be checked on a file in a temporary folder. The
+    /// database is only opened, never moved, renamed or removed, whatever is wrong with it.
+    pub fn bootstrap_at(
+        path: std::path::PathBuf,
+    ) -> std::result::Result<Self, crate::startup_failure::StartupFailure> {
+        use crate::startup_failure::StartupFailure;
+        let db =
+            Arc::new(Db::open(&path).map_err(|e| StartupFailure::from_db(Some(path.clone()), &e))?);
+        let mut state = Self::with_db(db, Arc::new(OsSecretStore::new()))
+            .map_err(|e| StartupFailure::other(Some(path.clone()), &e))?;
         // The one place a real directory is handed over. Everything else — tests included —
         // gets `None` and can therefore delete nothing.
         state.data_dir = path.parent().map(|p| p.to_path_buf());

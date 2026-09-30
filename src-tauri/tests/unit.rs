@@ -237,3 +237,8 @@ mod geo_fetch_lock;
 /// T606 — the destinations of a short-name change are known before any `mv` runs.
 #[path = "unit/rename_plan.rs"]
 mod rename_plan;
+
+/// T655 — a local database that will not open leads to a message with the paths, and the
+/// log is written to a file.
+#[path = "unit/startup_failure.rs"]
+mod startup_failure;
