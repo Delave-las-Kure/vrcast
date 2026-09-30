@@ -149,7 +149,13 @@ struct LiveTask {
     notices: Arc<Mutex<Vec<Detail>>>,
     /// The place in the queue: lower runs sooner (FR-083).
     position: i64,
+    /// The progress last reported, for the event a change of state sends (T652): a pause
+    /// or a carry-on is announced with the bar where it stands, not at zero.
+    progress: Arc<Mutex<f64>>,
 }
+
+/// The living map, shared by the engine and every task's context.
+type LiveMap = Arc<Mutex<HashMap<String, LiveTask>>>;
 
 /// What a running task sees.
 ///
@@ -178,6 +184,12 @@ pub struct TaskContext {
     last_stage: Arc<Mutex<Option<DetailCode>>>,
     /// What the task has to say that is not a failure — see `add_notice`.
     notices: Arc<Mutex<Vec<Detail>>>,
+    /// The last progress reported — see [`LiveTask::progress`].
+    progress: Arc<Mutex<f64>>,
+    /// The engine's living map, where the task's state is kept (T652). A progress report
+    /// takes the state from here, under the lock every change of state is made under, so an
+    /// event never says `Running` about a task already paused. `None` for a detached context.
+    live: Option<LiveMap>,
     events: broadcast::Sender<TaskEvent>,
     db: Arc<Db>,
 }
@@ -209,6 +221,8 @@ impl TaskContext {
             persist_throttle: Arc::new(ProgressThrottle::new(PROGRESS_PERSIST_INTERVAL)),
             last_stage: Arc::new(Mutex::new(None)),
             notices: Arc::new(Mutex::new(Vec::new())),
+            progress: Arc::new(Mutex::new(0.0)),
+            live: None,
             events,
             db,
         }
@@ -356,14 +370,31 @@ impl TaskContext {
         if !self.throttle.allow(important || changed) {
             return;
         }
-        let _ = self.events.send(TaskEvent::Progress {
+        let progress = progress.clamp(0.0, 1.0);
+        *self.progress.lock().unwrap_or_else(|e| e.into_inner()) = progress;
+        let event = |state| TaskEvent::Progress {
             id: self.id.clone(),
-            state: TaskState::Running,
-            progress: progress.clamp(0.0, 1.0),
+            state,
+            progress,
             stage,
             speed_bps,
             eta_s,
-        });
+        };
+        // **A report of bytes is not a change of state** (T652, QA-24A №3). The state the
+        // event carries is the one the engine holds right now, read and sent under the lock
+        // every change of state is made under — so the events go out in the order the
+        // changes happened. A window that was already being written when "pause" was pressed
+        // finishes and reports its bytes as `Paused`, not `Running`.
+        let Some(live) = &self.live else {
+            let _ = self.events.send(event(TaskState::Running));
+            return;
+        };
+        let live = live.lock().unwrap_or_else(|e| e.into_inner());
+        // A task no longer among the living has ended, and its `Done` has gone out: a late
+        // report must not come after it.
+        if let Some(t) = live.get(&self.id) {
+            let _ = self.events.send(event(t.state));
+        }
     }
 
     /// Remember the progress so that it survives the application closing.
@@ -679,6 +710,7 @@ impl TaskEngine {
             kind,
             TaskState::Queued,
             record.queue_order,
+            0.0,
             work,
         );
         drop(closed);
@@ -731,6 +763,7 @@ impl TaskEngine {
             record.kind,
             TaskState::Paused,
             record.queue_order,
+            record.progress,
             work,
         );
         Ok(())
@@ -746,8 +779,15 @@ impl TaskEngine {
     /// Carrying on used to set `Running` directly, so a carried-on task either took no place
     /// at all (two transfers at once under a limit of one) or counted as running while it
     /// waited for one — and two such tasks each saw the other and waited for ever (QA-24A №1).
-    fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, position: i64, work: F)
-    where
+    fn start<F, Fut>(
+        &self,
+        id: String,
+        kind: TaskKind,
+        initial: TaskState,
+        position: i64,
+        progress: f64,
+        work: F,
+    ) where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
@@ -759,6 +799,7 @@ impl TaskEngine {
         let place = Arc::new(Notify::new());
         let throttle = Arc::new(ProgressThrottle::default());
         let notices: Arc<Mutex<Vec<Detail>>> = Arc::new(Mutex::new(Vec::new()));
+        let progress = Arc::new(Mutex::new(progress));
 
         {
             let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
@@ -774,6 +815,7 @@ impl TaskEngine {
                     throttle: throttle.clone(),
                     notices: notices.clone(),
                     position,
+                    progress: progress.clone(),
                 },
             );
         }
@@ -787,6 +829,8 @@ impl TaskEngine {
             persist_throttle: Arc::new(ProgressThrottle::new(PROGRESS_PERSIST_INTERVAL)),
             last_stage: Arc::new(Mutex::new(None)),
             notices,
+            progress,
+            live: Some(self.live.clone()),
             events: self.events.clone(),
             db: self.db.clone(),
         };
@@ -1000,6 +1044,7 @@ impl TaskEngine {
         // Under the lock, for the same reason as in `resume`: the order the states reach the
         // database is the order they happened in.
         self.persist_state(id, TaskState::Paused, None);
+        self.announce(id, t);
         drop(live);
         Ok(())
     }
@@ -1035,6 +1080,7 @@ impl TaskEngine {
         // Written before the lock is let go: the placer may take the place the moment it is,
         // and its `Running` must not be overwritten by this `Queued` arriving late.
         self.persist_state(id, TaskState::Queued, None);
+        self.announce(id, t);
         drop(live);
         // With room in the lane the answer to "carry on" is already `Running` — the same
         // atomic claim the placer makes, only sooner; without room the placer keeps trying.
@@ -1128,6 +1174,7 @@ impl TaskEngine {
         *t.paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
         t.resume.notify_waiters();
         self.persist_state(id, TaskState::Running, None);
+        self.announce(id, t);
         drop(live);
         ClaimOutcome::Started
     }
@@ -1159,6 +1206,25 @@ impl TaskEngine {
             state,
             error,
             notices,
+        });
+    }
+
+    /// Tell the interface a task changed state (T652).
+    ///
+    /// Called by every change of state the engine makes short of the end — paused, waiting
+    /// for its turn, running — with the living map's lock held (the borrowed `LiveTask` is the
+    /// proof), the same lock a progress report sends under. So the interface learns the state
+    /// from the engine's own transition, in the order the transitions happened, and a report
+    /// of bytes that was already on its way can no longer overtake a pause.
+    fn announce(&self, id: &str, t: &LiveTask) {
+        let _ = self.events.send(TaskEvent::Progress {
+            id: id.to_owned(),
+            state: t.state,
+            progress: *t.progress.lock().unwrap_or_else(|e| e.into_inner()),
+            // Nothing is said about the stage; the speed and time left are unknown from here.
+            stage: None,
+            speed_bps: None,
+            eta_s: None,
         });
     }
 

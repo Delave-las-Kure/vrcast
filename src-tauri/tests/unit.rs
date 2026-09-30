@@ -33,6 +33,10 @@ mod engine;
 #[path = "unit/resume_lane.rs"]
 mod resume_lane;
 
+/// T652: progress does not change a task's state.
+#[path = "unit/progress_state.rs"]
+mod progress_state;
+
 #[path = "unit/geo.rs"]
 mod geo;
 

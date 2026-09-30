@@ -196,6 +196,46 @@ it("offers a carry-on to one the core is holding", async () => {
   expect(await screen.findByRole("button", { name: ru.ui.tasks.resume })).toBeTruthy();
 });
 
+it("keeps Carry on on a paused row when a late progress report says running", async () => {
+  // T652, QA-24A №3. The window already being written when "pause" was pressed finishes and
+  // reports its bytes afterwards. Taking the `running` in that report hid "Carry on" from a
+  // task that was really standing still.
+  list = [task({ kind: "upload", state: "paused", can_resume: true, progress: 0.4 })];
+  renderIn(<TasksPanel />);
+  await screen.findByRole("button", { name: ru.ui.tasks.resume });
+
+  progress?.({
+    id: "t-1",
+    state: "running",
+    progress: 0.5,
+    stage: null,
+    speed_bps: 1000,
+    eta_s: 60,
+  });
+
+  // The bytes are taken — the bar moves — but not the state.
+  await waitFor(() =>
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50"),
+  );
+  expect(screen.getByRole("button", { name: ru.ui.tasks.resume })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: ru.ui.tasks.pause })).toBeNull();
+  expect(screen.getByText(ru.ui.tasks.states.paused)).toBeTruthy();
+});
+
+it("follows the core's own changes of state: queued after carry on, then running", async () => {
+  // The guard above must not freeze a row: carrying on is announced as `queued` and then
+  // `running`, and the row follows both.
+  list = [task({ kind: "upload", state: "paused", can_resume: true })];
+  renderIn(<TasksPanel />);
+  await screen.findByRole("button", { name: ru.ui.tasks.resume });
+
+  const base = { id: "t-1", progress: 0.4, stage: null, speed_bps: null, eta_s: null };
+  progress?.({ ...base, state: "queued" });
+  await screen.findByText(ru.ui.tasks.states.queued);
+  progress?.({ ...base, state: "running" });
+  expect(await screen.findByRole("button", { name: ru.ui.tasks.pause })).toBeTruthy();
+});
+
 it("says nothing where a task had nothing to say", async () => {
   // A row that always appears is a row nobody reads.
   list = [task({ state: "completed", progress: 1 })];

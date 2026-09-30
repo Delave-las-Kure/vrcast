@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { AppError, Task, TaskKind } from "../../shared/contract";
+import type { AppError, Task, TaskKind, TaskState } from "../../shared/contract";
 import type { TaskOnClose } from "../../shared/contract";
 import { ipc, onTaskDone, onTaskProgress, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
@@ -68,6 +68,22 @@ function formatEta(seconds: number | null, t: Catalogue, lang: Lang): string | n
 /** The states a task does not come back from. */
 const FINISHED = new Set(["completed", "failed", "cancelled"]);
 
+/**
+ * The state a row takes from a progress event (T652, QA-24A №3).
+ *
+ * **A paused row is not made running by a progress event.** The core leaves a pause only by
+ * "carry on", and carrying on first makes the task `queued` — announced as an event of its
+ * own, and read back by the list the button reloads — and only then `running`, once it has a
+ * place in its lane. So `running` straight over `paused` can only be a report that set out
+ * before the pause and arrived after it: taking it would hide "Carry on" from a task that is
+ * really standing still. A finished row is not brought back by any event either.
+ */
+function nextState(shown: TaskState, reported: TaskState): TaskState {
+  if (FINISHED.has(shown)) return shown;
+  if (shown === "paused" && reported === "running") return shown;
+  return reported;
+}
+
 export function TasksPanel() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [onClose, setOnClose] = useState<TaskOnClose[]>([]);
@@ -121,7 +137,7 @@ export function TasksPanel() {
           task.id === e.id
             ? {
                 ...task,
-                state: e.state,
+                state: nextState(task.state, e.state),
                 progress: e.progress,
                 // An event that says nothing about the stage says nothing about it. Most
                 // do not: `report_transfer` sends how fast and how long left, four times a
