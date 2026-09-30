@@ -100,6 +100,7 @@ fn request(path: &str, out_path: &str) -> ConvertStart {
         height: None,
         out_path: out_path.to_owned(),
         prefer_hardware: true,
+        confirmed: false,
     }
 }
 
@@ -331,4 +332,245 @@ async fn validating_a_damaged_file_refuses_it() {
         !verdict.problems.is_empty(),
         "it was refused without saying why"
     );
+}
+
+// ---------- a finished result, and one output path per preparation (T662) ----------
+
+/// A clip long and heavy enough that re-encoding it is still running a second or two in.
+fn long_clip(work: &Workspace, name: &str) -> String {
+    let out = work.path(name);
+    let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg");
+    let made = std::process::Command::new(ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=30",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            "60",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+        ])
+        .arg(&out)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(made.status.success(), "could not prepare a long clip");
+    out
+}
+
+/// A request that re-encodes the picture on the processor: slow enough to be caught mid-way.
+fn slow_request(src: &str, out: &str) -> ConvertStart {
+    let mut ask = request(src, out);
+    ask.height = Some(360);
+    ask.target_kbps = Some(1_500);
+    ask.prefer_hardware = false;
+    ask
+}
+
+/// Attempt files a preparation left beside `out`.
+fn attempts_beside(out: &str) -> Vec<String> {
+    let out = std::path::Path::new(out);
+    let prefix = format!("{}.", out.file_name().unwrap().to_string_lossy());
+    std::fs::read_dir(out.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(&prefix) && n.ends_with(".vrcast-part"))
+        .collect()
+}
+
+async fn wait_final(
+    state: &AppState,
+    task: &str,
+    within: std::time::Duration,
+) -> vrcast_studio_lib::tasks::state::TaskState {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        if let Some(record) = state.tasks.get(task).ok().flatten() {
+            if record.state.is_final() {
+                return record.state;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the task did not end in time"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_finished_result_is_not_replaced_without_a_yes() {
+    if !has_ffmpeg() {
+        return;
+    }
+    // QA-24B-03: a second "prepare" into the same place used to overwrite a finished
+    // result from its first second, with no word said.
+    let work = Workspace::new();
+    let src = work.clip("source.mp4");
+    let out = work.path("ready.mp4");
+    std::fs::write(&out, b"hours of work").unwrap();
+    let state = state();
+
+    let err = convert::convert_start(&state, request(&src, &out))
+        .await
+        .expect_err("a finished result was about to be replaced without asking");
+
+    assert_eq!(err.code, ErrorCode::ConfirmationRequired);
+    assert!(
+        err.says(DetailCode::ConvertOutExists),
+        "it does not say what is at stake: {err}"
+    );
+    assert_eq!(
+        std::fs::read(&out).unwrap(),
+        b"hours of work",
+        "the refusal touched the file it refused to replace"
+    );
+    assert!(
+        state.tasks.list().unwrap().is_empty(),
+        "a task was created for a start that was refused"
+    );
+}
+
+#[tokio::test]
+async fn a_confirmed_replacement_puts_the_new_result_in_place_once_it_is_checked() {
+    if !has_ffmpeg() {
+        return;
+    }
+    let work = Workspace::new();
+    let src = work.clip("source.mp4");
+    let out = work.path("ready.mp4");
+    std::fs::write(&out, b"the old result").unwrap();
+    let state = state();
+
+    let mut ask = request(&src, &out);
+    ask.confirmed = true;
+    let task = convert::convert_start(&state, ask)
+        .await
+        .expect("a confirmed replacement did not start");
+    let ended = wait_final(&state, &task, std::time::Duration::from_secs(120)).await;
+    assert_eq!(
+        ended,
+        vrcast_studio_lib::tasks::state::TaskState::Completed,
+        "{:?}",
+        state.tasks.get(&task).unwrap().and_then(|t| t.error)
+    );
+
+    assert_ne!(
+        std::fs::read(&out).unwrap(),
+        b"the old result",
+        "the task succeeded and the old result is still in place"
+    );
+    let verdict = convert::convert_validate(&out).await.unwrap();
+    assert!(
+        verdict.ok,
+        "what was put in place does not play: {verdict:?}"
+    );
+    assert!(
+        attempts_beside(&out).is_empty(),
+        "the attempt's own file was left behind: {:?}",
+        attempts_beside(&out)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_a_new_attempt_leaves_the_old_result_alone() {
+    if !has_ffmpeg() {
+        return;
+    }
+    // QA-24B-03, the half that destroyed work: cancelling the new attempt removed
+    // `out_path` — which was the old, finished result.
+    let work = Workspace::new();
+    let src = long_clip(&work, "long.mp4");
+    let out = work.path("ready.mp4");
+    std::fs::write(&out, b"the old result, hours of it").unwrap();
+    let state = state();
+
+    let mut ask = slow_request(&src, &out);
+    ask.confirmed = true;
+    let task = convert::convert_start(&state, ask)
+        .await
+        .expect("the new attempt did not start");
+
+    // Wait until the attempt is really writing, so the cancel lands mid-encode.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while attempts_beside(&out).is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the new attempt never started writing"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    state.tasks.cancel(&task).expect("the cancel was refused");
+    let ended = wait_final(&state, &task, std::time::Duration::from_secs(60)).await;
+    assert_eq!(ended, vrcast_studio_lib::tasks::state::TaskState::Cancelled);
+
+    assert_eq!(
+        std::fs::read(&out).expect("the old result is gone"),
+        b"the old result, hours of it",
+        "cancelling the new attempt touched the old result"
+    );
+    assert!(
+        attempts_beside(&out).is_empty(),
+        "the cancelled attempt left its own file behind: {:?}",
+        attempts_beside(&out)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_preparation_into_the_same_file_is_refused_while_the_first_is_running() {
+    if !has_ffmpeg() {
+        return;
+    }
+    let work = Workspace::new();
+    let src = long_clip(&work, "long.mp4");
+    let out = work.path("ready.mp4");
+    let state = state();
+
+    let first = convert::convert_start(&state, slow_request(&src, &out))
+        .await
+        .expect("the first preparation did not start");
+
+    // The same file, spelled differently where the platform allows it — and confirmed,
+    // so that nothing but the busy path can be what refuses it.
+    let same = if cfg!(windows) {
+        out.replace('\\', "/").to_uppercase()
+    } else {
+        out.clone()
+    };
+    let mut second = slow_request(&src, &same);
+    second.confirmed = true;
+    let err = convert::convert_start(&state, second)
+        .await
+        .expect_err("two preparations were let write one result");
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert!(
+        err.says(DetailCode::ConvertOutBusy),
+        "it does not say the path is taken: {err}"
+    );
+
+    // And once the first has ended, the path is free again — the hold is not a leak.
+    state.tasks.cancel(&first).unwrap();
+    wait_final(&state, &first, std::time::Duration::from_secs(60)).await;
+    let mut again = slow_request(&src, &out);
+    again.confirmed = true;
+    let third = convert::convert_start(&state, again)
+        .await
+        .expect("the path stayed held after the preparation that held it ended");
+    state.tasks.cancel(&third).unwrap();
+    wait_final(&state, &third, std::time::Duration::from_secs(60)).await;
 }

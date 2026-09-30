@@ -89,6 +89,7 @@ async fn scenario_3_a_file_is_prepared_checked_and_offered() {
         height: None,
         out_path: out.to_string_lossy().into_owned(),
         prefer_hardware: true,
+        confirmed: false,
     })
     .await
     .expect("the preparation would not be looked at");
@@ -181,6 +182,7 @@ async fn run_convert(
         height: None,
         out_path: out.to_string_lossy().into_owned(),
         prefer_hardware: true,
+        confirmed: false,
     };
     let task = match convert::convert_start(state, request).await {
         Ok(id) => id,

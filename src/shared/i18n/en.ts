@@ -389,6 +389,12 @@ export const en: Catalogue = {
     CONVERT_NO_OUT_PATH: "Where to put the prepared file was not specified.",
     CONVERT_OUT_OVERWRITES_SOURCE:
       "The prepared file cannot be written over the source — the source would be lost for good.",
+    CONVERT_OUT_EXISTS:
+      "A finished file is already there: {out_path}. Replace it? The old one stays in place until the new one is ready and checked.",
+    CONVERT_OUT_BUSY:
+      "Another preparation is already writing this file: {out_path}. Wait for it to end, or choose another place.",
+    CONVERT_REPLACE_FAILED:
+      "The new file is ready and checked, but it could not replace the old one ({out_path}) — perhaps the old one is open in another program. The new one was left here: {kept_at}",
     CONVERT_VALIDATE_NO_FFMPEG:
       "There is nothing to check playback with: the bundled FFmpeg does not work.",
     CONVERT_NO_ENCODER:
@@ -1324,6 +1330,9 @@ export const en: Catalogue = {
       nextUpload: "Send as one file",
       nextFailed:
         "The preparation failed, so there is nothing to go on with. The task says what happened.",
+      replaceTitle: "Replace the finished file?",
+      replaceYes: "Replace",
+      replaceNo: "Keep it as it is",
     },
 
     library: {

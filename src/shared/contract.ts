@@ -173,6 +173,9 @@ export type DetailCode =
   | "PROBE_UNREADABLE"
   | "CONVERT_NO_OUT_PATH"
   | "CONVERT_OUT_OVERWRITES_SOURCE"
+  | "CONVERT_OUT_EXISTS"
+  | "CONVERT_OUT_BUSY"
+  | "CONVERT_REPLACE_FAILED"
   | "CONVERT_VALIDATE_NO_FFMPEG"
   | "CONVERT_NO_ENCODER"
   | "PLAN_NO_AUDIO_TRACKS"
@@ -1604,6 +1607,8 @@ export interface ConvertStart {
   out_path: string;
   /** False = the person asked for the processor themselves. */
   prefer_hardware: boolean;
+  /** Agreed to replace a finished result already at `out_path` (T662). */
+  confirmed?: boolean;
 }
 
 /** The verdict of the playback check (FR-027). */

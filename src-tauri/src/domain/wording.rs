@@ -156,6 +156,13 @@ detail_codes! {
     ProbeUnreadable => "PROBE_UNREADABLE",
     ConvertNoOutPath => "CONVERT_NO_OUT_PATH",
     ConvertOutOverwritesSource => "CONVERT_OUT_OVERWRITES_SOURCE",
+    /// `out_path` — a finished result is already there; replacing it needs a yes (T662).
+    ConvertOutExists => "CONVERT_OUT_EXISTS",
+    /// `out_path` — another preparation that has not ended writes this same result (T662).
+    ConvertOutBusy => "CONVERT_OUT_BUSY",
+    /// `out_path`, `kept_at` — the new result is checked and whole, and could not be put in
+    /// place of the old one; it is kept where it was made (T662).
+    ConvertReplaceFailed => "CONVERT_REPLACE_FAILED",
     ConvertValidateNoFfmpeg => "CONVERT_VALIDATE_NO_FFMPEG",
     ConvertNoEncoder => "CONVERT_NO_ENCODER",
     PlanNoAudioTracks => "PLAN_NO_AUDIO_TRACKS",

@@ -54,6 +54,7 @@ fn the_run_that_gets_killed() {
             // The processor on purpose: hardware encoders are not present on every
             // machine, and this check is about killing, not about speed.
             prefer_hardware: false,
+            confirmed: false,
         };
 
         vrcast_studio_lib::commands::convert::api::convert_start(&state, request)
@@ -71,10 +72,9 @@ fn the_run_that_gets_killed() {
 fn wait_for_output(out: &std::path::Path, child: &mut std::process::Child) -> u64 {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        if let Ok(meta) = std::fs::metadata(out) {
-            if meta.len() > 0 {
-                return meta.len();
-            }
+        let written = size_of(out);
+        if written > 0 {
+            return written;
         }
         if let Ok(Some(status)) = child.try_wait() {
             panic!("the run ended by itself ({status}) before writing anything");
@@ -174,9 +174,9 @@ fn killing_the_application_leaves_no_encoder_behind() {
 
     // The size check is the one that matters to a person: an orphaned encoder
     // would keep growing the file, and a file with a plausible size looks finished.
-    let after_kill = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+    let after_kill = size_of(&out);
     std::thread::sleep(Duration::from_secs(3));
-    let later = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+    let later = size_of(&out);
 
     assert_eq!(
         after_kill, later,
@@ -192,8 +192,28 @@ fn killing_the_application_leaves_no_encoder_behind() {
 }
 
 /// Size of the output file, or zero while it does not exist yet.
+///
+/// T662: the encoder writes into a file of its own beside the result
+/// (`ready.mp4.<id>.vrcast-part`) and the result appears only after the check, so what
+/// grows while encoding is that attempt. Either counts: whichever is being written.
 fn size_of(path: &std::path::Path) -> u64 {
-    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    let direct = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return direct;
+    };
+    let prefix = format!("{}.", name.to_string_lossy());
+    let attempt = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with(&prefix) && n.ends_with(".vrcast-part")
+        })
+        .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+        .max()
+        .unwrap_or(0);
+    direct.max(attempt)
 }
 
 /// Wait until the file has grown past `from`, or give up.
@@ -288,6 +308,7 @@ async fn pausing_a_conversion_actually_stops_the_encoder() {
             height: None,
             out_path: out.to_string_lossy().into_owned(),
             prefer_hardware: false,
+            confirmed: false,
         },
     )
     .await
