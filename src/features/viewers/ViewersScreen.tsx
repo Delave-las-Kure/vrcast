@@ -16,11 +16,46 @@ import { useEffect, useMemo, useState } from "react";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { PlacesTables } from "./PlacesTables";
 import { useActiveServer, useServers } from "../servers/store";
-import { useT } from "../../shared/i18n";
+import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
+import { fill } from "../../shared/i18n/render";
 import { ipc, onViewersUpdate } from "../../shared/ipc";
-import type { AppError, LibraryView, Viewer } from "../../shared/contract";
+import type { AppError, LibraryView, Viewer, ViewersUpdateEvent } from "../../shared/contract";
 import { LimitDialog } from "./LimitDialog";
 import { ViewerRow } from "./ViewerRow";
+
+/**
+ * This machine's clock, ticking once a second while `running` — so the age of a list that is
+ * no longer being kept up to date goes on growing on screen (T664). Still otherwise: a
+ * current list needs no clock, and a timer nobody reads is a timer for nothing.
+ */
+function useNow(running: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  return now;
+}
+
+/** "The list below is the last one received, 42 s ago." — or that there was none. */
+function ageLine(
+  asOf: string | null,
+  now: number,
+  words: Catalogue["ui"]["viewers"],
+  t: Catalogue,
+  lang: Lang,
+): string {
+  const at = asOf ? Date.parse(asOf) : NaN;
+  if (Number.isNaN(at)) return words.staleNever;
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  const age =
+    seconds < 120
+      ? fill(words.ageSeconds, { n: seconds }, t, lang)
+      : fill(words.ageMinutes, { n: Math.floor(seconds / 60) }, t, lang);
+  return fill(words.staleAge, { age }, t, lang);
+}
 
 /** A medium, in the two forms this screen needs it in. */
 type Named = { id: string; slug: string; title: string };
@@ -67,6 +102,7 @@ function useMedia(serverId: string | null): Named[] {
 
 export function ViewersScreen() {
   const t = useT();
+  const { lang } = useLang();
   const words = t.ui.viewers;
   const server = useActiveServer();
   const serverId = server?.id ?? null;
@@ -84,6 +120,16 @@ export function ViewersScreen() {
   const titleById = useMemo(() => Object.fromEntries(media.map((m) => [m.id, m.title])), [media]);
 
   const [viewers, setViewers] = useState<Viewer[] | null>(null);
+  // Where the watching stands (T664). Kept beside the list rather than folded into it: the
+  // list stays on screen while the connection is being got back, and what changes is
+  // whether it may be read as "now".
+  const [watch, setWatch] = useState<Pick<ViewersUpdateEvent, "watch" | "as_of" | "attempt">>({
+    watch: "watching",
+    as_of: null,
+    attempt: 0,
+  });
+  // Bumped by "start again" after the watching has given up: the effect below runs afresh.
+  const [restarts, setRestarts] = useState(0);
   // Whom the person is about to cap, if anybody. The dialogue is opened from the row
   // rather than from a screen of its own: capping is something done **to a viewer you
   // are looking at**, and making somebody go elsewhere and retype an address would be
@@ -96,9 +142,16 @@ export function ViewersScreen() {
     let alive = true;
     setError(null);
     setViewers(null);
+    setWatch({ watch: "watching", as_of: null, attempt: 0 });
 
     const unlisten = onViewersUpdate((update) => {
-      if (alive && update.server_id === serverId) setViewers(update.active);
+      if (!alive || update.server_id !== serverId) return;
+      setViewers(update.active);
+      setWatch({
+        watch: update.watch ?? "watching",
+        as_of: update.as_of ?? null,
+        attempt: update.attempt ?? 0,
+      });
     });
 
     ipc.viewersWatchStart(serverId).catch((e: AppError) => {
@@ -113,7 +166,11 @@ export function ViewersScreen() {
       void unlisten.then((off) => off());
       void ipc.viewersWatchStop().catch(() => undefined);
     };
-  }, [serverId]);
+  }, [serverId, restarts]);
+
+  const stale = watch.watch !== "watching";
+  // The age of a list nobody is keeping up to date grows by itself, with no event to say so.
+  const now = useNow(stale);
 
   if (!server) {
     return (
@@ -137,9 +194,40 @@ export function ViewersScreen() {
       */}
       <PlacesTables />
 
+      {watch.watch === "reconnecting" && (
+        <div className="notice notice--warning" role="status" data-testid="viewers-reconnecting">
+          <div className="notice__body">
+            <strong className="notice__message">{words.reconnecting}</strong>
+            {watch.attempt > 0 && (
+              <span className="notice__hint">
+                {" "}
+                {fill(words.reconnectingTry, { n: watch.attempt }, t, lang)}
+              </span>
+            )}
+            <p className="notice__hint" id="viewers-age" data-testid="viewers-age">
+              {ageLine(watch.as_of, now, words, t, lang)}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {watch.watch === "stopped" && (
+        <div className="notice notice--error" role="alert" data-testid="viewers-stopped">
+          <div className="notice__body">
+            <strong className="notice__message">{words.stopped}</strong>
+            <p className="notice__hint" id="viewers-age" data-testid="viewers-age">
+              {ageLine(watch.as_of, now, words, t, lang)}
+            </p>
+            <button type="button" onClick={() => setRestarts((n) => n + 1)}>
+              {words.restart}
+            </button>
+          </div>
+        </div>
+      )}
+
       {viewers === null && !error && <p className="hint">{words.starting}</p>}
 
-      {viewers !== null && viewers.length === 0 && (
+      {viewers !== null && viewers.length === 0 && !stale && (
         // Not an error and not a blank screen: nobody watching is the ordinary state most
         // of the time, and it must not look like something failed to load.
         <p className="hint" role="status">
@@ -148,7 +236,14 @@ export function ViewersScreen() {
       )}
 
       {viewers !== null && viewers.length > 0 && (
-        <table className="viewers">
+        <table
+          className={stale ? "viewers viewers--stale" : "viewers"}
+          data-testid="viewers-table"
+          data-stale={stale ? "true" : "false"}
+          aria-describedby={stale ? "viewers-age" : undefined}
+          // Faded while it is not current: the same rows, readable, and plainly not "now".
+          style={stale ? { opacity: 0.55 } : undefined}
+        >
           <thead>
             <tr>
               <th>{words.columnAddress}</th>

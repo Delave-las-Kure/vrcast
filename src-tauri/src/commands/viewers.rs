@@ -41,6 +41,24 @@ impl ViewersWatch {
             .and_then(|g| g.as_ref().map(|r| r.server_id.clone()))
     }
 
+    /// The watching of this server as it stands — `None` when it is not being watched, or
+    /// when the watch there has given up and has to be started afresh (T664).
+    pub fn alive_for(&self, server_id: &str) -> Option<ViewersUpdate> {
+        self.inner.lock().ok().and_then(|g| {
+            g.as_ref()
+                .filter(|r| r.server_id == server_id && r.watch.is_alive())
+                .map(|r| r.watch.current())
+        })
+    }
+
+    /// Where the watching stands, when there is one.
+    pub fn status(&self) -> Option<crate::domain::viewers::WatchStatus> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|r| r.watch.status()))
+    }
+
     /// Who is watching right now, by the server's clock as last read.
     ///
     /// Empty when nothing is being watched, which is a true answer rather than a
@@ -181,6 +199,66 @@ impl LibraryContext {
     }
 }
 
+/// How a lost watching gets a new connection (T664).
+///
+/// **To the machine the watching began on, as it was confirmed then** — the profile as it
+/// was read at the start. Read afresh at every try it would follow an edit of the profile to
+/// another machine, and the list of that one's viewers would arrive under this one's name
+/// (the lesson of T647). What is read afresh is only whether the profile still exists: a
+/// server that was removed is not watched on.
+///
+/// Refusals are sorted into those that pass and those that do not: an address that does not
+/// answer is the network, and it comes back; a changed key, a refused login or a key that
+/// cannot be read wait for a person, and asking again every thirty seconds would only fill
+/// the server's log with failed logins.
+fn reconnect_to(
+    state: &AppState,
+    profile: crate::domain::server_profile::ServerProfile,
+) -> viewers::Reconnect {
+    let secrets = state.secrets.clone();
+    let db = state.db.clone();
+    Arc::new(move || {
+        let secrets = secrets.clone();
+        let db = db.clone();
+        let profile = profile.clone();
+        Box::pin(async move {
+            match crate::store::profiles::get(&db, &profile.id) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err(viewers::Retry::Permanent(String::from(
+                        "the server's profile was removed",
+                    )))
+                }
+                Err(e) => return Err(viewers::Retry::Transient(e.to_string())),
+            }
+            crate::server::gate::open(
+                secrets.as_ref(),
+                &profile,
+                crate::server::gate::Intent::Read,
+            )
+            .await
+            .map(|opened| opened.conn)
+            .map_err(sort_refusal)
+        })
+    })
+}
+
+/// Whether a refusal to connect passes by itself — see [`reconnect_to`].
+pub fn sort_refusal(refusal: crate::server::gate::Refusal) -> viewers::Retry {
+    use crate::server::gate::Refusal;
+    use crate::ssh::SshError;
+    let why = refusal.to_string();
+    match refusal {
+        Refusal::Ssh(
+            SshError::Unreachable { .. }
+            | SshError::Exec(_)
+            | SshError::Protocol(_)
+            | SshError::Sftp { .. },
+        ) => viewers::Retry::Transient(why),
+        _ => viewers::Retry::Permanent(why),
+    }
+}
+
 pub mod api {
     use super::*;
 
@@ -189,8 +267,23 @@ pub mod api {
     /// Repeating it for the same server is not an error and not a second watch: it is the
     /// ordinary thing to do when a screen is opened again, and starting a second would take
     /// standing channels that do not exist.
+    ///
+    /// ⚠ **But only over a watch that is alive** (T664, QA-24B-05). The name of the server
+    /// used to be enough, and a watch whose connection had died long ago answered "already
+    /// watching" for ever — reopening the screen could not bring it back. A watch that has
+    /// given up is replaced; one that is running, or getting its connection back, is kept,
+    /// and what it has is sent at once so the screen does not wait for the next poll.
     pub async fn viewers_watch_start(state: &AppState, server_id: &str) -> Result<()> {
-        if state.viewers.watching().as_deref() == Some(server_id) {
+        if let Some(current) = state.viewers.alive_for(server_id) {
+            // Only when there is something to say: before the first list, an empty one would
+            // read as "nobody is watching" when nobody has looked yet.
+            if current.as_of.is_some()
+                || current.watch != crate::domain::viewers::WatchState::Watching
+            {
+                let _ = state
+                    .events
+                    .send(super::super::AppEvent::ViewersUpdate(current));
+            }
             return Ok(());
         }
         // Whatever was being watched stops first, so that its two channels come back before
@@ -214,8 +307,9 @@ pub mod api {
         .conn;
 
         let (tx, mut updates) = tokio::sync::mpsc::channel(64);
-        let watch = viewers::start(
+        let watch = viewers::start_reconnecting(
             conn,
+            Some(reconnect_to(state, profile.clone())),
             server_id.to_owned(),
             context,
             settings.activity_threshold(),

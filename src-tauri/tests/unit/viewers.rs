@@ -431,3 +431,157 @@ fn the_threshold_can_be_changed_without_losing_who_is_watching() {
         "changing the setting threw away the session"
     );
 }
+
+// ---------- T664: the watching itself — going, lost, getting back, stopped ----------
+
+use vrcast_studio_lib::domain::viewers::{backoff, WatchState, WatchStatus, BACKOFF_CEILING};
+
+#[test]
+fn the_pause_before_each_try_grows_and_stops_growing_at_the_ceiling() {
+    // QA-24B-05. A try is a new SSH login; a wall of them every second against a server that
+    // is rebooting is how an address ends up banned by the server's own protection. So the
+    // pause doubles — and stops at a ceiling, because the tries themselves never stop.
+    let waits: Vec<u64> = (1..=8).map(|n| backoff(n).as_secs()).collect();
+    assert_eq!(waits, vec![1, 2, 4, 8, 16, 30, 30, 30]);
+    assert_eq!(
+        backoff(u32::MAX),
+        BACKOFF_CEILING,
+        "a long outage overflowed the pause"
+    );
+    assert!(
+        (1..=1000).all(|n| backoff(n) <= BACKOFF_CEILING && backoff(n) >= backoff(1)),
+        "a pause fell outside its bounds"
+    );
+}
+
+#[test]
+fn a_lost_connection_is_said_out_loud_and_the_list_is_marked_as_old() {
+    let mut status = WatchStatus::started();
+    assert_eq!(status.state, WatchState::Watching);
+    assert!(
+        status.last_snapshot_at.is_none(),
+        "a list was claimed before there was one"
+    );
+
+    let first = OffsetDateTime::UNIX_EPOCH + Duration::seconds(1_000);
+    status.snapshot(first);
+    assert!(status.is_current());
+
+    // The connection goes. The list is no longer current, and it says when it last was.
+    status.lost();
+    assert_eq!(status.state, WatchState::Reconnecting);
+    assert!(
+        !status.is_current(),
+        "a list nobody is keeping up to date was called current"
+    );
+    assert_eq!(
+        status.last_snapshot_at,
+        Some(first),
+        "losing the connection lost the age of the list"
+    );
+    assert_eq!(status.attempt, 0);
+}
+
+#[test]
+fn every_try_waits_longer_than_the_one_before_and_a_fresh_list_starts_the_count_over() {
+    let mut status = WatchStatus::started();
+    status.lost();
+
+    let first = status.next_try();
+    status.try_failed(false);
+    let second = status.next_try();
+    status.try_failed(false);
+    let third = status.next_try();
+    assert!(
+        first < second && second < third,
+        "the pause did not grow: {first:?} {second:?} {third:?}"
+    );
+    assert_eq!(status.attempt, 3);
+    assert_eq!(
+        status.state,
+        WatchState::Reconnecting,
+        "a passing failure gave the watching up"
+    );
+
+    // Back: the next list is current, and the next loss starts from the shortest pause.
+    let back = OffsetDateTime::UNIX_EPOCH + Duration::seconds(2_000);
+    status.snapshot(back);
+    assert_eq!(status.state, WatchState::Watching);
+    assert_eq!(status.attempt, 0);
+    assert_eq!(status.last_snapshot_at, Some(back));
+
+    status.lost();
+    assert_eq!(
+        status.next_try(),
+        backoff(1),
+        "the count of tries survived a recovery"
+    );
+}
+
+#[test]
+fn a_failure_that_trying_again_cannot_cure_stops_the_watching_and_nothing_restarts_it_by_itself() {
+    // A changed key or a refused login waits for a person. Saying "reconnecting" over it
+    // would promise something that is not going on.
+    let mut status = WatchStatus::started();
+    status.lost();
+    status.next_try();
+    status.try_failed(true);
+    assert_eq!(status.state, WatchState::Stopped);
+
+    status.lost();
+    assert_eq!(
+        status.state,
+        WatchState::Stopped,
+        "a stopped watching claimed to be reconnecting"
+    );
+    status.try_failed(false);
+    assert_eq!(status.state, WatchState::Stopped);
+    assert!(!status.is_current());
+}
+
+#[test]
+fn the_screen_is_told_the_state_in_the_words_the_contract_uses() {
+    // `src/shared/contract.ts`: WatchState = "watching" | "reconnecting" | "stopped".
+    for (state, word) in [
+        (WatchState::Watching, "\"watching\""),
+        (WatchState::Reconnecting, "\"reconnecting\""),
+        (WatchState::Stopped, "\"stopped\""),
+    ] {
+        assert_eq!(serde_json::to_string(&state).unwrap(), word);
+    }
+}
+
+#[test]
+fn only_the_network_is_worth_trying_again_for() {
+    use vrcast_studio_lib::commands::viewers::sort_refusal;
+    use vrcast_studio_lib::server::gate::Refusal;
+    use vrcast_studio_lib::server::viewers::Retry;
+    use vrcast_studio_lib::ssh::{ServerAddress, SshError};
+
+    let addr = ServerAddress::new("198.51.100.7", 22);
+    let passes = sort_refusal(Refusal::Ssh(SshError::Unreachable {
+        addr: addr.clone(),
+        reason: String::from("timed out"),
+    }));
+    assert!(
+        matches!(passes, Retry::Transient(_)),
+        "a server that did not answer was given up on"
+    );
+
+    for refusal in [
+        Refusal::Ssh(SshError::AuthFailed {
+            methods: String::from("publickey"),
+        }),
+        Refusal::Ssh(SshError::HostKeyChanged {
+            addr: addr.clone(),
+            expected: String::from("SHA256:a"),
+            actual: String::from("SHA256:b"),
+        }),
+        Refusal::Ssh(SshError::HostKeyUnconfirmed { addr }),
+    ] {
+        assert!(
+            matches!(sort_refusal(refusal), Retry::Permanent(_)),
+            "a refusal that waits for a person was retried every thirty seconds"
+        );
+    }
+}

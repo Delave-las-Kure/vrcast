@@ -1150,6 +1150,15 @@ export const en: Catalogue = {
           "The connection is open but nothing is moving. If it lasts, the viewer's film has cut out.",
       },
       watchingNow: "watching now",
+      reconnecting: "The connection to the server was lost — reconnecting…",
+      reconnectingTry: "Attempt {n}.",
+      staleAge: "The list below is the last one received, {age} ago. It may be different by now.",
+      staleNever: "No list has come from the server yet.",
+      stopped:
+        "Watching has stopped: the server will not let us in, and trying again will not help — its key has changed or the login is refused. Check the server in the Servers section.",
+      restart: "Start again",
+      ageSeconds: "{n} s",
+      ageMinutes: "{n} min",
     },
 
     sections: {

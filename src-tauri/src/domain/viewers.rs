@@ -322,6 +322,119 @@ impl Session {
     }
 }
 
+// ---------- the watching itself: going, lost, stopped (T664) ----------
+
+/// Where the watching stands, as the screen is told it.
+///
+/// ⚠ **QA-24B-05.** There used to be no such thing: the watching was either running or not,
+/// and a connection that died in between left it "running" for good — the log's reader
+/// ended, the poll failed quietly every three seconds, and the screen went on showing the
+/// last list as if it were now. Said out loud instead, so that a list that is no longer
+/// being kept up to date is never mistaken for one that is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchState {
+    /// Both sources are being read, and the list is current.
+    Watching,
+    /// The connection or one of the sources was lost; getting them back. The list is the
+    /// last one there was, and is marked as such.
+    Reconnecting,
+    /// Given up, for a reason that trying again will not cure (the server's key changed,
+    /// the login is refused, the profile is gone). A person has to act; opening the screen
+    /// again starts over.
+    Stopped,
+}
+
+/// The shortest wait before trying to get the watching back.
+const BACKOFF_FIRST: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The longest wait between two tries.
+///
+/// **Thirty seconds, and the attempts themselves are not limited.** A server that is down
+/// for an hour comes back, and the watching must come back with it without a person
+/// noticing it had gone (FR-054). What is bounded is the pace: every try is a new SSH
+/// login, and a wall of them every second against a server that is rebooting is how an
+/// address ends up banned by the server's own protection. Twice as long each time, to at
+/// most this — a little over the thirty seconds the list's own activity threshold is, so a
+/// viewer who is still there when it returns is still in the list.
+pub const BACKOFF_CEILING: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long to wait before try number `attempt` (counted from one).
+pub fn backoff(attempt: u32) -> std::time::Duration {
+    let doublings = attempt.saturating_sub(1).min(16);
+    BACKOFF_FIRST
+        .saturating_mul(1u32 << doublings)
+        .min(BACKOFF_CEILING)
+}
+
+/// The state of one watching, and the rules it moves by.
+///
+/// Kept apart from the fetching so that the rules can be checked without a server: when a
+/// list is current, when it has gone stale, how long to wait, when to give up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchStatus {
+    pub state: WatchState,
+    /// How many tries at getting it back have been made since it was lost. Zero while
+    /// watching.
+    pub attempt: u32,
+    /// When the list was last current, by **this machine's** clock — the screen works out
+    /// the age from it, and the screen has only this machine's clock to compare with.
+    pub last_snapshot_at: Option<OffsetDateTime>,
+}
+
+impl WatchStatus {
+    /// A watching that has just started and has not yet had a list.
+    pub fn started() -> Self {
+        Self {
+            state: WatchState::Watching,
+            attempt: 0,
+            last_snapshot_at: None,
+        }
+    }
+
+    /// A fresh list came in: the watching is going, whatever it was doing before.
+    pub fn snapshot(&mut self, now: OffsetDateTime) {
+        self.state = WatchState::Watching;
+        self.attempt = 0;
+        self.last_snapshot_at = Some(now);
+    }
+
+    /// The connection or a source was lost. The first try comes after [`backoff`]`(1)`.
+    ///
+    /// Nothing happens to a watching that has already stopped: it is not coming back by
+    /// itself, and saying "reconnecting" over it would promise something that is not
+    /// going on.
+    pub fn lost(&mut self) {
+        if self.state == WatchState::Stopped {
+            return;
+        }
+        if self.state == WatchState::Watching {
+            self.attempt = 0;
+        }
+        self.state = WatchState::Reconnecting;
+    }
+
+    /// A try at getting it back begins. Comes back with how long to wait first.
+    pub fn next_try(&mut self) -> std::time::Duration {
+        self.attempt = self.attempt.saturating_add(1);
+        backoff(self.attempt)
+    }
+
+    /// A try failed. `permanent` means trying again cannot help — see [`WatchState::Stopped`].
+    pub fn try_failed(&mut self, permanent: bool) {
+        if permanent {
+            self.state = WatchState::Stopped;
+        } else if self.state != WatchState::Stopped {
+            self.state = WatchState::Reconnecting;
+        }
+    }
+
+    /// Whether the list being shown is the current one.
+    pub fn is_current(&self) -> bool {
+        self.state == WatchState::Watching
+    }
+}
+
 impl Tracked {
     fn as_viewer(&self, ip: &str, now: OffsetDateTime) -> Viewer {
         let delivery_bps = self.delivery_bps();
