@@ -529,33 +529,67 @@ fn public_key_to_deploy_with(
 /// the profile then refuse to be switched, the password is put back, so the store and the
 /// profile never disagree — a profile saying "password" over a store holding a key would send
 /// the key as a password, and every later connection would fail.
+///
+/// ⚠ **T636 (QA-21 №3) — only a profile that still signs in with a password, and nothing
+/// between the look and the write.** The whole of it runs under [`Db::sign_in_lock`], the lock
+/// `server_update` takes too, so a person's form cannot slip its own change in between; and
+/// the profile is read afresh under that lock rather than trusted from the run's copy. A profile
+/// that no longer signs in with a password (a person pointed it at a key file of their own
+/// while the run went on) is not taken back: nothing is written, the store is not touched, and
+/// the error stops the run before password logins are turned off. The profile itself is
+/// switched by [`profiles::switch_to_managed_key`] — two columns, conditional on `password` in
+/// the `UPDATE` itself — rather than by writing the run's whole, older copy back over whatever
+/// was renamed since.
+///
+/// [`Db::sign_in_lock`]: crate::store::db::Db::sign_in_lock
+/// [`profiles::switch_to_managed_key`]: crate::store::profiles::switch_to_managed_key
 fn switch_to_managed_key(
     secrets: &dyn SecretStore,
     db: &crate::store::db::Db,
     profile: &ServerProfile,
     private_openssh: &str,
 ) -> Result<()> {
-    let reference = SecretRef::from_stored(&profile.secret_ref);
+    let _sign_in = db.sign_in_lock();
+    let now = crate::store::profiles::get(db, &profile.id)?
+        .ok_or_else(|| super::servers::no_such_server(&profile.id))?;
+    if now.auth_kind != AuthKind::Password {
+        return Err(no_longer_a_password(now.auth_kind));
+    }
+
+    let reference = SecretRef::from_stored(&now.secret_ref);
     let before = secrets.get(&reference).ok();
     secrets.set(&reference, private_openssh).map_err(|e| {
         AppError::new(ErrorCode::KeyUnreadable).with_cause(crate::store::redact::safe_display(&e))
     })?;
 
-    let switched = ServerProfile {
-        auth_kind: AuthKind::ManagedKey,
-        // No file was made, so no path may be left behind: a leftover path is the sort of
-        // thing that quietly gets used one day.
-        key_path: None,
-        ..profile.clone()
-    };
-    if let Err(e) = crate::store::profiles::update(db, &switched) {
+    // No file was made, so no path may be left behind: a leftover path is the sort of thing
+    // that quietly gets used one day — the `UPDATE` clears it.
+    let switched = crate::store::profiles::switch_to_managed_key(db, &now.id);
+    if !matches!(switched, Ok(true)) {
         let _ = match &before {
             Some(old) => secrets.set(&reference, old),
             None => secrets.delete(&reference),
         };
-        return Err(e.into());
+        return Err(match switched {
+            Err(e) => e.into(),
+            // Only something outside this application's lock — another copy of it on the same
+            // database — could get here: the profile was read as `password` a moment ago.
+            Ok(_) => match crate::store::profiles::get(db, &now.id)? {
+                Some(p) => no_longer_a_password(p.auth_kind),
+                None => super::servers::no_such_server(&now.id),
+            },
+        });
     }
     Ok(())
+}
+
+/// The run's made key is not kept over a profile that signs in some other way now (T636).
+fn no_longer_a_password(now: AuthKind) -> AppError {
+    AppError::new(ErrorCode::InvalidInput).with_cause(format!(
+        "the profile no longer signs in with a password (now: {}), so the key made for it \
+         was not kept",
+        now.as_str()
+    ))
 }
 
 /// What a run of a password profile keeps its made key with (T616): the store and the profile,

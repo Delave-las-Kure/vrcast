@@ -477,3 +477,145 @@ fn the_ipv6_choice_is_saved_alone_and_leaves_the_way_of_signing_in_alone() {
         .expect_err("a choice was saved for a profile that does not exist");
     assert!(err.says(DetailCode::ProfileNotFound), "{err}");
 }
+
+// ---------- T636 (QA-21 №3): the check and the write are one step ----------
+
+/// What a deployment does to a password profile after `SshKey` (T616), through the very
+/// function the run uses: the made key into the store, the profile onto `managed_key`.
+fn keep_made_key(s: &vrcast_studio_lib::commands::AppState, id: &str) -> Result<(), String> {
+    let profile = vrcast_studio_lib::store::profiles::get(&s.db, id)
+        .unwrap()
+        .expect("the profile vanished");
+    vrcast_studio_lib::commands::deploy::key_keeper(s, &profile, MADE_KEY.to_owned())()
+}
+
+#[test]
+fn a_switch_to_the_made_key_between_the_check_and_the_write_is_not_written_over() {
+    // QA-21 №3, the interleaving: the form reads `password`, the check "password → password,
+    // no secret" passes, the deployment keeps its key, and the form's old `password` used to
+    // be written over it — every step succeeding. `between` stands where the switch landed;
+    // it goes around the application's own lock the way only another process could, which is
+    // exactly what the conditional write is there for.
+    for secret in [None, Some("")] {
+        let s = state();
+        let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+        let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+
+        let mut renamed = valid_input("Renamed");
+        renamed.auth_kind = AuthKind::Password;
+        let err = api::server_update_between(&s, &id, renamed, secret, &mut || {
+            s.secrets.set(&reference, MADE_KEY).unwrap();
+            assert!(
+                vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &id).unwrap(),
+                "the switch in between did not happen"
+            );
+        })
+        .expect_err("a check made against `password` wrote over a profile now on managed_key");
+        assert_eq!(err.code, ErrorCode::InvalidInput);
+        assert!(err.says(DetailCode::ProfileAuthNeedsSecret), "{err}");
+
+        let after = &api::servers_list(&s).unwrap()[0];
+        assert_eq!(
+            after.auth_kind,
+            AuthKind::ManagedKey,
+            "the switch was undone"
+        );
+        assert_eq!(after.name, "Server", "the stale form was written anyway");
+        assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
+    }
+}
+
+#[test]
+fn a_new_password_typed_while_the_key_was_kept_is_checked_again_and_then_agrees() {
+    // The other outcome of the same interleaving: the person typed a new password. Re-checked
+    // against `managed_key`, that is a deliberate move off the made key with a secret — allowed,
+    // and the profile and the store agree on the password.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+
+    api::server_update_between(
+        &s,
+        &id,
+        valid_input("Server"),
+        Some("a-new-root-password"),
+        &mut || {
+            s.secrets.set(&reference, MADE_KEY).unwrap();
+            vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &id).unwrap();
+        },
+    )
+    .expect("a deliberate password was refused");
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0].auth_kind,
+        AuthKind::Password
+    );
+    assert_eq!(s.secrets.get(&reference).unwrap(), "a-new-root-password");
+}
+
+#[test]
+fn the_deployment_keeps_its_key_only_over_a_password_profile() {
+    // `switch_to_managed_key` is conditional too: a profile the person has since pointed at a
+    // key file of their own is not taken back by a run that started on its password.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+    let profile_at_start = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+        .unwrap()
+        .unwrap();
+
+    let mut own_key = valid_input("Server");
+    own_key.auth_kind = AuthKind::Key;
+    own_key.key_path = Some(String::from("C:/keys/id_ed25519"));
+    api::server_update(&s, &id, own_key, Some("my-passphrase")).unwrap();
+
+    let keep =
+        vrcast_studio_lib::commands::deploy::key_keeper(&s, &profile_at_start, MADE_KEY.into());
+    keep().expect_err("the run took back a profile that is no longer on a password");
+
+    let after = &api::servers_list(&s).unwrap()[0];
+    assert_eq!(after.auth_kind, AuthKind::Key);
+    assert_eq!(after.key_path.as_deref(), Some("C:/keys/id_ed25519"));
+    assert_eq!(s.secrets.get(&reference).unwrap(), "my-passphrase");
+}
+
+#[test]
+fn the_deployment_switches_only_the_way_of_signing_in_not_the_rest_of_its_old_copy() {
+    // The run's copy of the profile is from its start; a rename since then stays.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    let profile_at_start = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+        .unwrap()
+        .unwrap();
+    api::server_update(&s, &id, valid_input("Renamed during the run"), None).unwrap();
+
+    vrcast_studio_lib::commands::deploy::key_keeper(&s, &profile_at_start, MADE_KEY.into())()
+        .expect("the key was not kept");
+
+    let after = &api::servers_list(&s).unwrap()[0];
+    assert_eq!(after.auth_kind, AuthKind::ManagedKey);
+    assert_eq!(after.key_path, None);
+    assert_eq!(after.name, "Renamed during the run");
+}
+
+#[test]
+fn a_form_and_a_deployment_on_two_threads_never_leave_password_over_the_key() {
+    // The real race, many times over: whichever lands first, the profile and the store agree.
+    for _ in 0..50 {
+        let s = std::sync::Arc::new(state());
+        let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+        let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+
+        let (s1, id1) = (s.clone(), id.clone());
+        let form = std::thread::spawn(move || {
+            api::server_update(&s1, &id1, valid_input("Renamed"), None).is_ok()
+        });
+        let (s2, id2) = (s.clone(), id.clone());
+        let run = std::thread::spawn(move || keep_made_key(&s2, &id2).is_ok());
+        let _ = form.join().unwrap();
+        assert!(run.join().unwrap(), "the deployment could not keep its key");
+
+        let after = &api::servers_list(&s).unwrap()[0];
+        assert_eq!(after.auth_kind, AuthKind::ManagedKey);
+        assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
+    }
+}
