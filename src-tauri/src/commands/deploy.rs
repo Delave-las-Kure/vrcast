@@ -829,14 +829,22 @@ async fn start(
     // same instant cannot both get past here. Held until the task exists and then by its work
     // (moved in below); dropped on every early return in between (refused door, DNS, key), so
     // a failed attempt does not block the next one.
-    let Some(claim) = state.tasks.claim(&format!("deploy:{server_id}")) else {
-        // The other call may not have its task yet (still connecting, still asking DNS): then
-        // there is no identifier to name.
-        let mut refused = AppError::new(ErrorCode::DeployAlreadyRunning);
-        if let Some(busy) = running_deploy_for(state, server_id)? {
-            refused = refused.with_cause(busy);
+    // T649 (QA-23 №3): `try_claim`, not `claim` — a refusal because "forget everything" is
+    // running is not a deployment already running, and is said as what it is.
+    let claim = match state.tasks.try_claim(&format!("deploy:{server_id}")) {
+        Ok(claim) => claim,
+        Err(crate::tasks::engine::ClaimRefused::Forgetting) => {
+            return Err(AppError::new(ErrorCode::ForgetInProgress));
         }
-        return Err(refused);
+        Err(crate::tasks::engine::ClaimRefused::Taken) => {
+            // The other call may not have its task yet (still connecting, still asking DNS):
+            // then there is no identifier to name.
+            let mut refused = AppError::new(ErrorCode::DeployAlreadyRunning);
+            if let Some(busy) = running_deploy_for(state, server_id)? {
+                refused = refused.with_cause(busy);
+            }
+            return Err(refused);
+        }
     };
     if let Some(busy) = running_deploy_for(state, server_id)? {
         return Err(AppError::new(ErrorCode::DeployAlreadyRunning).with_cause(busy));
