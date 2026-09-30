@@ -182,18 +182,18 @@ async fn the_transfer_carries_on_from_where_it_got_to_rather_than_starting_over(
         .expect("the upload would not submit");
 
     // The progress messages are gathered until the task ends. Only the transfer's own
-    // reports count — the ones that carry a speed: since T652 the engine announces the task
-    // becoming `Running` itself, with the bar where it stood when the task was queued (zero),
-    // before the transfer has looked at what is on the server.
+    // reports count: since T652 the engine announces the task becoming `Running` itself,
+    // with the bar where it stood when the task was queued — zero — before the transfer has
+    // looked at what is on the server. A transfer reports only after a window has gone, so
+    // its reports are never zero; and the speed cannot tell them apart, since T659 sends an
+    // unknown speed as unknown.
     let collector = tokio::spawn(async move {
         let mut first_progress: Option<f64> = None;
         while let Ok(event) = events.recv().await {
             match event {
-                TaskEvent::Progress {
-                    progress,
-                    speed_bps: Some(_),
-                    ..
-                } if first_progress.is_none() => {
+                TaskEvent::Progress { progress, .. }
+                    if first_progress.is_none() && progress > 0.0 =>
+                {
                     first_progress = Some(progress);
                 }
                 TaskEvent::Done { .. } => break,

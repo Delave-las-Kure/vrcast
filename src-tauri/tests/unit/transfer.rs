@@ -249,6 +249,69 @@ fn the_time_left_is_not_invented_when_the_speed_is_unknown() {
     assert_eq!(e.eta(1_000_000), None);
 }
 
+/// T659, QA-24A №10: a capped link, one four-megabyte window every twelve seconds. Every
+/// sample used to be taken for the first after a pause and thrown away, and the speed and
+/// time left never appeared.
+#[test]
+fn a_slow_link_one_window_every_twelve_seconds_gets_a_speed_and_a_time_left() {
+    let mut e = ProgressEstimate::default();
+    let start = Instant::now();
+    const MIB4: u64 = 4 * 1024 * 1024;
+    // The transfer's own starting point, as `transfer_once` records it.
+    e.record(start, 0);
+    for i in 1..=5u64 {
+        e.record(start + Duration::from_secs(i * 12), i * MIB4);
+        let speed = e
+            .speed_bps()
+            .unwrap_or_else(|| panic!("no speed after window {i} on a slow link"));
+        let expected = MIB4 / 12;
+        assert!(
+            speed.abs_diff(expected) <= expected / 100,
+            "window {i}: speed {speed}, expected about {expected}"
+        );
+        let left = e
+            .eta(30_000_000_000)
+            .unwrap_or_else(|| panic!("no time left after window {i}"));
+        assert!(left > Duration::from_secs(80_000) && left < Duration::from_secs(90_000));
+    }
+}
+
+/// The QA probe's own shape: no starting point, samples only after each window. The first
+/// window cannot say anything (there is nothing to measure against); from the second on,
+/// the speed is known.
+#[test]
+fn slow_samples_without_a_starting_point_give_a_speed_from_the_second_on() {
+    let mut e = ProgressEstimate::default();
+    let now = Instant::now();
+    for i in 1..=5u64 {
+        e.record(now + Duration::from_secs(i * 12), i * 4 * 1024 * 1024);
+        if i == 1 {
+            assert_eq!(e.speed_bps(), None);
+        } else {
+            assert!(e.speed_bps().is_some(), "no speed after sample {i}");
+            assert!(
+                e.eta(30_000_000_000).is_some(),
+                "no time left after sample {i}"
+            );
+        }
+    }
+}
+
+/// A stall longer than any window can take is still not measured across — the transfer
+/// has given the connection up by then, and the gap is not transfer time.
+#[test]
+fn a_gap_longer_than_any_window_is_not_measured_across() {
+    let mut e = ProgressEstimate::default();
+    let start = Instant::now();
+    e.record(start, 0);
+    e.record(start + Duration::from_secs(12), 4_000_000);
+    e.record(
+        start + Duration::from_secs(12) + Duration::from_secs(601),
+        4_100_000,
+    );
+    assert_eq!(e.speed_bps(), None);
+}
+
 #[test]
 fn too_short_a_stretch_does_not_make_gigabits_believable() {
     // Dividing by thousandths of a second turns any jitter into an unbelievable number.

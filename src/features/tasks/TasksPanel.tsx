@@ -57,7 +57,9 @@ function formatSpeed(bps: number | null, t: Catalogue, lang: Lang): string | nul
 }
 
 function formatEta(seconds: number | null, t: Catalogue, lang: Lang): string | null {
-  if (seconds === null || seconds <= 0) return null;
+  // `null` is "not known yet" and shows nothing (T659). A known zero is less than a second
+  // left — the core no longer sends zero for "unknown", so it is not hidden with it.
+  if (seconds === null || seconds < 0) return null;
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   if (h > 0) return fill(t.ui.tasks.etaHours, { h, m }, t, lang);

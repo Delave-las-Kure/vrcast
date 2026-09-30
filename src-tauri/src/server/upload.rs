@@ -300,13 +300,27 @@ pub async fn transfer_once(
     let mut sent = offset;
     let mut buf = vec![0u8; WINDOW_BYTES as usize];
 
+    // Where this attempt starts from, as the estimate's first sample (T659): the first
+    // window then already gives a speed, however long it takes. The time spent reconnecting
+    // before it is not counted — the caller resets the estimate after a break.
+    estimate.reset();
+    estimate.record(Instant::now(), offset);
+
     loop {
         // Cancelling and pausing are checked between windows: tearing off a write in the
         // middle would leave a broken tail in the file that has to be written over
         // afterwards.
+        //
+        // A pause is said to the estimate here, where it is known (T659): the time spent
+        // paused is not transfer time, and what was gathered before it is thrown away.
+        let was_paused = ctx.is_paused();
         ctx.wait_while_paused().await;
         if ctx.is_cancelled() {
             return Err(UploadError::Cancelled);
+        }
+        if was_paused {
+            estimate.reset();
+            estimate.record(Instant::now(), sent);
         }
 
         let read = local
@@ -358,10 +372,12 @@ fn report(ctx: &TaskContext, plan: &UploadPlan, estimate: &ProgressEstimate, sen
         sent as f64 / plan.total_bytes as f64
     };
     let remaining = plan.total_bytes.saturating_sub(sent);
+    // Unknown is sent as unknown (T659): a zero here used to stand for "not yet known", and
+    // a zero speed is a claim of its own — that nothing is moving.
     ctx.report_transfer(
         progress,
-        estimate.speed_bps().unwrap_or(0) as i64,
-        estimate.eta(remaining).map_or(0, |d| d.as_secs() as i64),
+        estimate.speed_bps().map(|b| b as i64),
+        estimate.eta(remaining).map(|d| d.as_secs() as i64),
     );
     // And separately — to disk, far less often. An upload runs for hours, and after the
     // application restarts a person must see how much has already been sent, not zero.

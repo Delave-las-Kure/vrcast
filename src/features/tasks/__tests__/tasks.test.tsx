@@ -236,6 +236,23 @@ it("follows the core's own changes of state: queued after carry on, then running
   expect(await screen.findByRole("button", { name: ru.ui.tasks.pause })).toBeTruthy();
 });
 
+it("shows nothing for an unknown time left, and 'soon' for a known zero", async () => {
+  // T659: the core sends `null` for "not known yet" instead of a zero, so a zero that does
+  // arrive is real — under a second left — and is not hidden with the unknown.
+  list = [task()];
+  renderIn(<TasksPanel />);
+  await screen.findByRole("progressbar");
+  const base = { id: "t-1", state: "running", progress: 0.5, stage: null, speed_bps: null };
+  progress?.({ ...base, eta_s: null });
+  await waitFor(() =>
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50"),
+  );
+  expect(screen.queryByText(ru.ui.tasks.etaSoon)).toBeNull();
+
+  progress?.({ ...base, progress: 0.99, eta_s: 0 });
+  expect(await screen.findByText(ru.ui.tasks.etaSoon)).toBeTruthy();
+});
+
 it("says nothing where a task had nothing to say", async () => {
   // A row that always appears is a row nobody reads.
   list = [task({ state: "completed", progress: 1 })];

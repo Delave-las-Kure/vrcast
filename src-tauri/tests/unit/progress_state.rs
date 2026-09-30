@@ -51,7 +51,7 @@ async fn a_report_after_the_pause_says_paused() {
         .submit(TaskKind::Upload, None, move |ctx| async move {
             // The window that was in flight when the pause was pressed.
             let _ = window.await;
-            ctx.report_transfer(0.5, 1000, 60);
+            ctx.report_transfer(0.5, Some(1000), Some(60));
             let _ = reported_tx.send(());
             ctx.wait_while_paused().await;
             Ok(())

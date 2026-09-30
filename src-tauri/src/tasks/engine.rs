@@ -304,9 +304,10 @@ impl TaskContext {
         self.report_full(progress, Some(stage), None, None, false);
     }
 
-    /// Report progress along with the transfer's figures.
-    pub fn report_transfer(&self, progress: f64, speed_bps: i64, eta_s: i64) {
-        self.report_full(progress, None, Some(speed_bps), Some(eta_s), false);
+    /// Report progress along with the transfer's figures. `None` is "not known yet" and goes
+    /// out as `null` — never as a zero, which would say nothing is moving (T659).
+    pub fn report_transfer(&self, progress: f64, speed_bps: Option<i64>, eta_s: Option<i64>) {
+        self.report_full(progress, None, speed_bps, eta_s, false);
     }
 
     /// Say something that is not progress and is not a failure.
