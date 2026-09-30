@@ -118,7 +118,9 @@ pub const WRITE_ENV: &str = "VRCAST_LIMITS_WRITE";
 ///
 /// A step is one command, and the client itself gives one up after `EXEC_CEILING`; a step
 /// still running that long after the door closed is taken for hung and stopped — TERM,
-/// then KILL (`domain::marked::stop_script`, as T609 stops a deployment's command).
+/// then KILL (`domain::marked::stop_script`, as T609 stops a deployment's command) — and,
+/// for as long as the stop says it is still alive, TERM and KILL again (T634): the lock is
+/// never let go under a step of its change that has not been seen to end.
 pub const DRAIN_CEILING: Duration = crate::ssh::exec::EXEC_CEILING;
 
 #[derive(Debug, thiserror::Error)]
@@ -216,6 +218,11 @@ struct Txn<'a> {
     /// children (`_slow/<slug>` before `_slow/<slug>/<cap>`). Those this change had to make
     /// are removed again if it is undone.
     dirs: &'a [String],
+    /// Whether a step of this change going forward was sent and its end was never heard —
+    /// given up on at its ceiling, its channel failed, or it closed with no exit status
+    /// (T635). Such a step may still be running on the server; nothing is put back before
+    /// the barrier has seen it end (`Serving::settle`).
+    unheard: std::sync::atomic::AtomicBool,
 }
 
 impl Txn<'_> {
@@ -417,11 +424,14 @@ where
 ///  3. **waits for every live step of this change going forward** — processes carrying
 ///     `WRITE_ENV=<id>.f`, still running on the server — for up to `DRAIN_CEILING`, then
 ///     stops whatever is left, TERM and then KILL: `domain::marked::stop_script`, the stop
-///     of T609 (T628);
+///     of T609 (T628) — and **reads its answer** (`DRAIN`, T634): as long as it says a step
+///     is still alive, TERM and KILL again, with no limit on how many times; only a
+///     confirmed end, or `/proc` that cannot be read at all, lets it go on;
 ///  4. replaces itself (`exec`, the same PID — `flock` is still waiting on it) by the same
 ///     wait **without** `HELD_ENV`, for every step of the change (`WRITE_ENV=<id>…`): a
 ///     putting back that got in before the mark went is waited for — with a `DRAIN_CEILING`
-///     of its own, counted from here — and none can get in after;
+///     of its own, counted from here, and the same reading of the answer — and none can get
+///     in after;
 ///  5. ends — and with it `flock`, and the lock.
 ///
 /// **Why nothing slips past.** Every step carries its mark from its first instruction, and
@@ -438,27 +448,36 @@ where
 /// `pub` so the Docker test can run the very same holder with an input that stays open and
 /// says nothing — a client that went silent without its channel closing.
 pub fn holder_command(id: &str, lock_path: &str) -> String {
+    holder_command_draining(id, lock_path, DRAIN_CEILING)
+}
+
+/// The same holder, with the wait for the change's steps before the first TERM given rather
+/// than `DRAIN_CEILING` — so the Docker test of a step that will not die (T634) need not
+/// sit through ten minutes of a step that is merely slow first. Nothing in the application
+/// passes anything but `DRAIN_CEILING`.
+pub fn holder_command_draining(id: &str, lock_path: &str, drain: Duration) -> String {
     let door = format!(
         "echo \"LOCKED $$ $1\"; while IFS= read -r -t {silence} _; do :; done",
         silence = LOCK_SILENCE.as_secs(),
     );
     let wait_args = format!(
-        "{term} {kill} {grace} signal",
+        "{term} {kill} {grace}",
         term = super::marked::TERM_TICKS,
         kill = super::marked::KILL_TICKS,
-        grace = DRAIN_CEILING.as_secs(),
+        grace = drain.as_secs(),
     );
     let holder = format!(
         "trap '' HUP PIPE\n\
          id=$1\n\
          stop={stop}\n\
+         drain={drain}\n\
          {TXN_ENV}=\"$id\" bash -c {door} vrcast-limits-door \"$$\"\n\
          exec </dev/null >/dev/null 2>&1\n\
-         {selfcheck} bash -c \"$stop\" vrcast-limits-wait \"$id.f\" {wait_args}\n\
-         exec env -u {HELD_ENV} {selfcheck} bash -c \"$stop\" vrcast-limits-last \"$id\" {wait_args}\n",
+         bash -c \"$drain\" vrcast-limits-wait \"$stop\" \"$id.f\" {wait_args}\n\
+         exec env -u {HELD_ENV} bash -c \"$drain\" vrcast-limits-last \"$stop\" \"$id\" {wait_args}\n",
         stop = super::shell_quote(&crate::domain::marked::stop_script(WRITE_ENV)),
+        drain = super::shell_quote(&drain_script()),
         door = super::shell_quote(&door),
-        selfcheck = crate::domain::marked::SELFCHECK,
     );
     let id = super::shell_quote(id);
     format!(
@@ -468,6 +487,164 @@ pub fn holder_command(id: &str, lock_path: &str) -> String {
         lock = super::shell_quote(lock_path),
         holder = super::shell_quote(&holder),
     )
+}
+
+/// The holder's wait for the steps of its change, and the barrier before a putting back
+/// (T634, T635): the stop of T609 (`domain::marked::stop_script`, passed as `$1`) run **again
+/// and again** until its answer is one that lets go.
+///
+/// Arguments: the stop script, the mark (a prefix), the TERM and KILL waits in 100 ms
+/// ticks, how many seconds the first round waits for the steps to end on their own, and —
+/// optional — how many rounds at most (none, or 0: no limit).
+///
+/// **Reading the answer is the point** (QA-21 №1). Before T634 the answer went to
+/// `/dev/null`, and `VRCAST_STOP alive …` — TERM and KILL both sent, and a step of the
+/// change still there — let the lock go exactly like a confirmed end: the limit on the wait
+/// was a limit on the lock. Now only these let go:
+///
+///  * `none`, `ended`, `term`, `kill` — nothing of the change is alive: confirmed;
+///  * `unreadable` — `/proc` cannot be read here (bash < 4.4, a `/proc` hidden from us):
+///    nothing can ever be confirmed on this server, and holding the lock for good would
+///    only make every change of the rules on it fail. The owner's decision (2026-09-30):
+///    let go, as before T628.
+///
+/// Anything else — `alive`, and an answer that is not one at all — is "not confirmed": the
+/// next round sends TERM, then KILL again (no waiting first this time), a second after the
+/// last. With no limit on the rounds (the holder) this goes on for as long as a step of the
+/// change is alive, and the lock with it; every other change meanwhile waits `LOCK_WAIT`
+/// and is turned away (`LIMITS_CONFLICT`). With a limit (the barrier) the last answer is
+/// said as `VRCAST_DRAIN unconfirmed …`.
+///
+/// Prints the answer that ended it — nobody reads it in the holder, whose output goes
+/// nowhere; the barrier reads it (`read_settled`).
+const DRAIN: &str = r#"set -u
+STOP="$1"; WANT="$2"; TERM_TICKS="$3"; KILL_TICKS="$4"; GRACE_S="$5"; ROUNDS="${6:-0}"
+round=0
+while :; do
+  said=$(VRCAST_HLS_SELFCHECK=1 bash -c "$STOP" vrcast-limits-stop "$WANT" "$TERM_TICKS" "$KILL_TICKS" "$GRACE_S" signal)
+  round=$((round + 1))
+  case "$said" in
+    "VRCAST_STOP none"|"VRCAST_STOP ended "*|"VRCAST_STOP term "*|"VRCAST_STOP kill "*|"VRCAST_STOP unreadable")
+      echo "$said"; exit 0 ;;
+    "VRCAST_STOP "*) ;;
+    # No answer at all: the stop could not even start its scan. Where that is because
+    # `/proc` is not there, it never will — the same as `unreadable`.
+    *) [ -r "/proc/$$/stat" ] || { echo "VRCAST_STOP unreadable"; exit 0; } ;;
+  esac
+  if [ "$ROUNDS" -gt 0 ] && [ "$round" -ge "$ROUNDS" ]; then
+    echo "VRCAST_DRAIN unconfirmed after $round rounds: ${said//$'\n'/ }"; exit 0
+  fi
+  GRACE_S=0
+  sleep 1
+done
+"#;
+
+/// The drain script (`DRAIN`), `pub` so the unit test can run it against a stop that
+/// answers what the test tells it to.
+pub fn drain_script() -> String {
+    DRAIN.to_owned()
+}
+
+/// How many rounds of TERM and KILL the barrier before a putting back tries (T635) before
+/// it gives up and the putting back is refused. Each round is at most 5 s + 5 s + a second,
+/// so three are about half a minute past whatever the step still had of its own time.
+pub const BARRIER_ROUNDS: u32 = 3;
+
+/// The barrier's command (T635): wait for every live step of this change going forward
+/// (`<id>.f`) — `grace_s` for it to end on its own, then TERM and KILL for up to
+/// `BARRIER_ROUNDS` rounds — and say how it went (`read_settled`).
+///
+/// Not marked itself: it is not a step of the change, and the holder must not wait for it.
+pub fn barrier_command(forward_mark: &str, grace_s: u64) -> String {
+    format!(
+        "bash -c {drain} vrcast-limits-barrier {stop} {mark} {term} {kill} {grace_s} {BARRIER_ROUNDS}",
+        drain = super::shell_quote(DRAIN),
+        stop = super::shell_quote(&crate::domain::marked::stop_script(WRITE_ENV)),
+        mark = super::shell_quote(forward_mark),
+        term = super::marked::TERM_TICKS,
+        kill = super::marked::KILL_TICKS,
+    )
+}
+
+/// How long the barrier gives an unheard step to end on its own before TERM (T635).
+///
+/// Every step of a change is a few file operations or one `caddy validate`/`reload` — 17–18
+/// ms each on the test server (2026-09-23). A step whose answer was lost on a channel that
+/// broke is, as a rule, long over; ten seconds is room for a slow disk. One given up on at
+/// its ceiling has had ten minutes already and is taken for hung.
+pub const BARRIER_GRACE: Duration = Duration::from_secs(10);
+
+/// What the barrier found (T635).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Settled {
+    /// No step of the change going forward is alive: putting back may begin.
+    Confirmed,
+    /// `/proc` cannot be read on this server, so nothing can be confirmed there — and the
+    /// holder lets the lock go on the same answer (T634). Putting back goes ahead as it did
+    /// before T635; logged.
+    Unreadable,
+    /// A step may still be running, or the answer was no answer: putting back must not
+    /// begin.
+    NotConfirmed(String),
+}
+
+/// Read the barrier's answer. Only the stop's own words for "gone" confirm, and only its
+/// exact `unreadable` counts as that; anything else is not a confirmation.
+pub fn read_settled(text: &str) -> Settled {
+    use crate::domain::marked::StopReport;
+    if text.lines().any(|l| l.trim() == "VRCAST_STOP unreadable") {
+        return Settled::Unreadable;
+    }
+    match crate::domain::marked::read_stop(text) {
+        StopReport::Confirmed { .. } => Settled::Confirmed,
+        StopReport::StillAlive(who) => Settled::NotConfirmed(format!("still alive: {who}")),
+        StopReport::StillRunning(who) => Settled::NotConfirmed(format!("still running: {who}")),
+        StopReport::Unreadable(said) => Settled::NotConfirmed(said),
+    }
+}
+
+/// Whether a step's outcome was **heard** (T635): the server said the step's shell ended,
+/// with a status. A step given up on at its ceiling, one whose channel failed, and one
+/// whose channel closed with no exit status were not — the step may still be running on the
+/// server, and a putting back must wait for it (`settle_then`).
+pub fn unheard(outcome: &Result<crate::ssh::CommandOutput, SshError>) -> bool {
+    !matches!(outcome, Ok(out) if out.exit_code.is_some())
+}
+
+/// Put back only once the barrier has confirmed nothing of the change is still going
+/// forward (T635): `settle` first, and `undo` only if it succeeded. Its error is the
+/// putting back's, and the putting back never started.
+///
+/// `pub` so the unit test can check the order with steps that only record themselves.
+pub async fn settle_then<S, SF, U, UF>(settle: S, undo: U) -> Result<(), String>
+where
+    S: FnOnce() -> SF,
+    SF: std::future::Future<Output = Result<(), String>>,
+    U: FnOnce() -> UF,
+    UF: std::future::Future<Output = Result<(), String>>,
+{
+    settle()
+        .await
+        .map_err(|e| format!("putting back was not started: {e}"))?;
+    undo().await
+}
+
+tokio::task_local! {
+    /// The ceiling on one step of a change, where a test sets one (`with_step_ceiling`).
+    static STEP_CEILING: Duration;
+}
+
+/// Run `f` — a change of the rules — with its steps given up on after `ceiling` rather than
+/// `EXEC_CEILING` (T635), so the Docker test of a step that outlives its client's wait need
+/// not wait ten minutes. Only for the task `f` runs in; nothing in the application calls it.
+pub async fn with_step_ceiling<F: std::future::Future>(ceiling: Duration, f: F) -> F::Output {
+    STEP_CEILING.scope(ceiling, f).await
+}
+
+fn step_ceiling() -> Duration {
+    STEP_CEILING
+        .try_with(|c| *c)
+        .unwrap_or(crate::ssh::exec::EXEC_CEILING)
 }
 
 /// A step of change `id`, as it is sent (T628): carrying `WRITE_ENV=<id>` from its first
@@ -550,6 +727,12 @@ impl Serving<'_> {
     /// for them — if they were absent. Nothing has been removed by then, so there is
     /// nothing removed to bring back. After any outcome the lock is free again.
     ///
+    /// **Nothing is put back while a step going forward may still be running** (T635). A
+    /// step whose end was not heard — given up on at its ceiling, its channel failed — may go
+    /// on on the server; the putting back waits for it first (`Serving::settle`), and if its
+    /// end cannot be confirmed it is not started at all: `RollbackFailed`, and the lock stays
+    /// with the holder until the step is gone (T634).
+    ///
     /// **Why removing comes last (T602).** Until the reload the rules the web server holds
     /// are the old ones, and they point at the old files; removing one of those before the
     /// new rules are in force and proven would give a limited viewer nothing for as long as
@@ -624,6 +807,7 @@ impl Serving<'_> {
             base: base_generation,
             changes: &changes,
             dirs: &dirs,
+            unheard: std::sync::atomic::AtomicBool::new(false),
         };
         self.under_lock(&txn, limits).await?;
         self.sweep(&txn, &plan).await;
@@ -790,7 +974,7 @@ impl Serving<'_> {
             return Err(LimitError::Conflict { base, current });
         }
         if let Err(e) = swapped {
-            return Err(match self.undo(txn, &prepared).await {
+            return Err(match self.put_back(txn, &prepared).await {
                 Ok(()) => e,
                 Err(undo) => LimitError::RollbackFailed(format!("{e}; then: {undo}")),
             });
@@ -865,7 +1049,7 @@ impl Serving<'_> {
             conf = super::shell_quote(self.conf_path),
         ));
 
-        let out = self.step(&txn.forward(), &script).await?;
+        let out = self.forward(txn, &script).await?;
         let verdict = verdict(&out.stdout);
         if let Some(current) = conflict_in(verdict) {
             return Err(LimitError::Conflict {
@@ -943,7 +1127,7 @@ impl Serving<'_> {
             staged = super::shell_quote(&self.staged_conf(txn)),
         ));
 
-        let out = self.step(&txn.forward(), &script).await?;
+        let out = self.forward(txn, &script).await?;
         let verdict = verdict(&out.stdout);
         if verdict == "SWAPPED" && out.ok() {
             return Ok(());
@@ -963,7 +1147,7 @@ impl Serving<'_> {
     /// After the rules went in and a check failed: put everything back, and make sure the
     /// serving answers again.
     async fn roll_back(&self, txn: &Txn<'_>, prepared: &Prepared) -> Result<(), LimitError> {
-        self.undo(txn, prepared)
+        self.put_back(txn, prepared)
             .await
             .map_err(LimitError::RollbackFailed)?;
         if !self.serving_answers().await {
@@ -1069,7 +1253,7 @@ impl Serving<'_> {
         ));
 
         let out = self
-            .step(&txn.back(), &script)
+            .back(txn, &script)
             .await
             .map_err(|e| format!("putting back could not be run: {e}"))?;
         if verdict(&out.stdout) == "UNDONE" && out.ok() {
@@ -1107,7 +1291,7 @@ impl Serving<'_> {
             ));
         }
         script.push_str("[ $fail = 0 ] && echo SWEPT || echo SWEEP_INCOMPLETE\n");
-        match self.step(&txn.forward(), &script).await {
+        match self.forward(txn, &script).await {
             Ok(out) if verdict(&out.stdout) == "SWEPT" => {}
             outcome => tracing::warn!(
                 ?outcome,
@@ -1143,8 +1327,13 @@ impl Serving<'_> {
         if dirs.is_empty() {
             return;
         }
+        // A putting back like `undo`, and behind the same barrier (T635).
+        if let Err(e) = self.settle(txn).await {
+            tracing::warn!(error = %e, "the directories this change made were left in place");
+            return;
+        }
         let script = format!("{}\n{}; true", guard_held(txn), dirs.join("; "));
-        let _ = self.step(&txn.back(), &script).await;
+        let _ = self.back(txn, &script).await;
     }
 
     /// Remove this change's own staged files, by the same reasoning.
@@ -1163,7 +1352,7 @@ impl Serving<'_> {
             return;
         }
         let outcome = self
-            .step(&txn.forward(), &format!("rm -f {}", quoted.join(" ")))
+            .forward(txn, &format!("rm -f {}", quoted.join(" ")))
             .await;
         if !matches!(&outcome, Ok(out) if out.ok()) {
             tracing::warn!(?outcome, "files of a change of the rules were not removed");
@@ -1195,8 +1384,8 @@ impl Serving<'_> {
     /// must not do that — it fails (`LOST_LOCK`) and the change is put back instead.
     async fn check_and_reload(&self, txn: &Txn<'_>) -> Result<(), LimitError> {
         let validate = self
-            .step(
-                &txn.forward(),
+            .forward(
+                txn,
                 &format!(
                     "caddy validate --config {} --adapter caddyfile 2>&1",
                     super::shell_quote(self.main_conf)
@@ -1208,8 +1397,8 @@ impl Serving<'_> {
         }
 
         let reload = self
-            .step(
-                &txn.forward(),
+            .forward(
+                txn,
                 &format!(
                     "{}\ncaddy reload --config {} --adapter caddyfile 2>&1",
                     guard(txn),
@@ -1259,7 +1448,98 @@ impl Serving<'_> {
     /// reads — the rules and the quality sets read in step 0 — need not: nothing it does
     /// outlives it, and nothing it does can be mixed into another change.
     async fn step(&self, mark: &str, script: &str) -> Result<crate::ssh::CommandOutput, SshError> {
-        self.conn.exec(&write_step(mark, script)).await
+        self.conn
+            .exec_with_timeout(&write_step(mark, script), step_ceiling())
+            .await
+    }
+
+    /// A step going forward (`<id>.f`). One whose end was not heard (`unheard`) is noted on
+    /// the change, so nothing is put back before the barrier has seen it end (T635).
+    async fn forward(
+        &self,
+        txn: &Txn<'_>,
+        script: &str,
+    ) -> Result<crate::ssh::CommandOutput, SshError> {
+        let outcome = self.step(&txn.forward(), script).await;
+        if unheard(&outcome) {
+            txn.unheard.store(true, std::sync::atomic::Ordering::SeqCst);
+            tracing::warn!(
+                ?outcome,
+                "the end of a step of a change of the rules was not heard; it may still be \
+                 running, and nothing is put back before it is seen to end"
+            );
+        }
+        outcome
+    }
+
+    /// A step putting back (`<id>.u`).
+    async fn back(
+        &self,
+        txn: &Txn<'_>,
+        script: &str,
+    ) -> Result<crate::ssh::CommandOutput, SshError> {
+        self.step(&txn.back(), script).await
+    }
+
+    /// Put back everything this change touched — but only once no step of it going forward
+    /// can still be running on the server (T635): `settle`, then `undo`.
+    ///
+    /// Before T635 the undo went in at once: a `caddy reload` of this change whose answer
+    /// was lost (or that was given up on at `EXEC_CEILING`) could still be running, and take
+    /// effect after the undo had put the old files back and reloaded them — Caddy's memory
+    /// and the files on disk no longer the same (QA-21 №2).
+    async fn put_back(&self, txn: &Txn<'_>, prepared: &Prepared) -> Result<(), String> {
+        settle_then(|| self.settle(txn), || self.undo(txn, prepared)).await
+    }
+
+    /// The barrier before putting back (T635): nothing to do if every step going forward
+    /// was heard to end; otherwise wait for every live `<id>.f` — `BARRIER_GRACE` for it to
+    /// end on its own, then TERM and KILL, `BARRIER_ROUNDS` times at most — and go on only
+    /// if the stop confirms nothing is left.
+    ///
+    /// Not confirmed — a step still alive after every round, an answer that is no answer,
+    /// or the barrier itself not run — is an error, and nothing is put back: the caller
+    /// reports `RollbackFailed` (`LIMITS_ROLLBACK_FAILED`). The lock stays with the holder,
+    /// which goes on sending TERM and KILL for as long as the step is alive (T634).
+    ///
+    /// `/proc` that cannot be read is the one answer that lets the undo go ahead unconfirmed,
+    /// as it did before T635 — the same rule the holder follows (owner's decision,
+    /// 2026-09-30): on such a server nothing can ever be confirmed, and refusing every undo
+    /// there would leave every failed change's rules in force.
+    async fn settle(&self, txn: &Txn<'_>) -> Result<(), String> {
+        if !txn.unheard.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        // The waits of the stop itself (5 s + 5 s a round, and a second between rounds) and
+        // a minute for the scans and the link, on top of the grace.
+        let ceiling =
+            BARRIER_GRACE + Duration::from_secs(11) * BARRIER_ROUNDS + Duration::from_secs(60);
+        let out = self
+            .conn
+            .exec_with_timeout(
+                &barrier_command(&txn.forward(), BARRIER_GRACE.as_secs()),
+                ceiling,
+            )
+            .await
+            .map_err(|e| {
+                format!("whether a step of this change is still running could not be asked: {e}")
+            })?;
+        match read_settled(&out.stdout) {
+            Settled::Confirmed => {
+                tracing::info!(said = %out.stdout.trim(), "no step of the change is running any more; putting back");
+                Ok(())
+            }
+            Settled::Unreadable => {
+                tracing::warn!(
+                    "whether a step of the change is still running cannot be seen on this server \
+                     (/proc unreadable); putting back unconfirmed, as before T635"
+                );
+                Ok(())
+            }
+            Settled::NotConfirmed(said) => Err(format!(
+                "a step of this change may still be running on the server: {said}"
+            )),
+        }
     }
 }
 

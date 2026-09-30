@@ -517,11 +517,16 @@ fn the_holder_waits_for_the_changes_steps_before_it_lets_go() {
     // then — the holder's mark dropped, the same PID — every step of the change.
     assert!(cmd.contains(WRITE_ENV), "{cmd}");
     assert!(
-        cmd.contains("vrcast-limits-wait \"$id.f\" 50 50 600 signal"),
+        cmd.contains("vrcast-limits-wait \"$stop\" \"$id.f\" 50 50 600"),
         "{cmd}"
     );
     assert!(
-        cmd.contains("exec env -u VRCAST_LIMITS_HELD VRCAST_HLS_SELFCHECK=1 bash -c \"$stop\" vrcast-limits-last \"$id\" 50 50 600 signal"),
+        cmd.contains("exec env -u VRCAST_LIMITS_HELD bash -c \"$drain\" vrcast-limits-last \"$stop\" \"$id\" 50 50 600"),
+        "{cmd}"
+    );
+    // Both waits read the stop's answer (T634), with no limit on the rounds.
+    assert!(
+        !cmd.contains("600 signal") && !cmd.contains("50 50 600 0") && !cmd.contains("600 3"),
         "{cmd}"
     );
     // The wait comes after the door, never before it.
@@ -661,4 +666,282 @@ async fn an_abandoned_change_lets_the_lock_go_at_once() {
         .await
         .expect("the holder's input never ended")
         .expect("the holder's input failed");
+}
+
+// ---------- T634: the holder reads what the stop said, and lets go only on an end ----------
+//
+// The very drain script the holder runs, run here by bash against a stand-in for the stop
+// of T609 that answers, round by round, what the test tells it to.
+
+use vrcast_studio_lib::server::limits::drain_script;
+
+/// A bash to run the script with — never Windows' own `System32\bash.exe`, which is WSL's
+/// and which `Command::new("bash")` would find first there.
+fn a_bash() -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .filter(|dir| {
+            !dir.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("system32")
+        })
+        .flat_map(|dir| [dir.join("bash"), dir.join("bash.exe")])
+        .find(|p| p.is_file())
+}
+
+/// Run the drain against a stop that answers `answers[i]` in round `i` (the last one from
+/// then on), and give back what the drain printed and the grace each round was asked for.
+fn drain_against(answers: &[&str], rounds: u32) -> Option<(String, Vec<String>)> {
+    let Some(bash) = a_bash() else {
+        eprintln!("no bash on this machine: the drain script was not run");
+        return None;
+    };
+    let dir = std::env::temp_dir().join(format!("vrcast-drain-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).expect("no scratch directory");
+    let dir_s = dir.to_string_lossy().replace('\\', "/");
+    let mut cases = String::new();
+    for (i, a) in answers.iter().enumerate() {
+        if i + 1 == answers.len() {
+            cases.push_str(&format!("  *) printf '%s\n' '{a}' ;;\n"));
+        } else {
+            cases.push_str(&format!("  {i}) printf '%s\n' '{a}' ;;\n"));
+        }
+    }
+    // The stand-in keeps its own count, and notes the grace (`$4`) it was asked for.
+    let stop = format!(
+        "n=$(cat '{dir_s}/n' 2>/dev/null || echo 0)\n\
+         echo $((n + 1)) > '{dir_s}/n'\n\
+         echo \"$4 $5\" >> '{dir_s}/asked'\n\
+         case $n in\n{cases}esac\n"
+    );
+    let out = std::process::Command::new(bash)
+        .arg("-c")
+        .arg(drain_script())
+        .arg("vrcast-limits-wait")
+        .arg(stop)
+        .arg("abc123.f")
+        .args(["50", "50", "600", &rounds.to_string()])
+        .output()
+        .expect("bash would not run");
+    let asked = std::fs::read_to_string(dir.join("asked"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    Some((
+        String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+        asked,
+    ))
+}
+
+const ALIVE: &str = "VRCAST_STOP alive 4242:4242 groups: 4242 ";
+
+#[test]
+fn still_alive_after_kill_is_not_an_end_and_the_stop_is_sent_again() {
+    // QA-21 №1: `alive` used to let the lock go like a confirmed end.
+    let Some((said, asked)) = drain_against(&[ALIVE, ALIVE, "VRCAST_STOP kill 5012ms"], 0) else {
+        return;
+    };
+    assert_eq!(said, "VRCAST_STOP kill 5012ms");
+    // Three rounds: the first waits the step's own time, the rest signal at once.
+    assert_eq!(asked, ["600 signal", "0 signal", "0 signal"]);
+}
+
+#[test]
+fn with_no_limit_on_the_rounds_the_wait_does_not_give_up_while_a_step_is_alive() {
+    let answers = [ALIVE, ALIVE, ALIVE, ALIVE, ALIVE, "VRCAST_STOP term 104ms"];
+    let Some((said, asked)) = drain_against(&answers, 0) else {
+        return;
+    };
+    assert_eq!(said, "VRCAST_STOP term 104ms");
+    assert_eq!(asked.len(), 6, "{asked:?}");
+}
+
+#[test]
+fn every_confirmed_end_lets_go_at_once() {
+    for end in [
+        "VRCAST_STOP none",
+        "VRCAST_STOP ended 3000ms",
+        "VRCAST_STOP term 104ms",
+        "VRCAST_STOP kill 5012ms",
+    ] {
+        let Some((said, asked)) = drain_against(&[end], 0) else {
+            return;
+        };
+        assert_eq!(said, end);
+        assert_eq!(asked.len(), 1, "{end}: {asked:?}");
+    }
+}
+
+#[test]
+fn a_proc_that_cannot_be_read_lets_go_as_before() {
+    // The owner's decision (2026-09-30): bash < 4.4, or `/proc` hidden — nothing can ever be
+    // confirmed there, and the lock is let go as it was before T628.
+    let Some((said, asked)) = drain_against(&["VRCAST_STOP unreadable"], 0) else {
+        return;
+    };
+    assert_eq!(said, "VRCAST_STOP unreadable");
+    assert_eq!(asked.len(), 1);
+}
+
+#[test]
+fn an_answer_that_is_no_answer_is_not_an_end() {
+    // Where `/proc` is there (it is wherever this test runs), silence or nonsense from the
+    // stop is "not confirmed", never "gone".
+    let Some((said, asked)) = drain_against(&["", "bash: something broke", "VRCAST_STOP none"], 0)
+    else {
+        return;
+    };
+    assert_eq!(said, "VRCAST_STOP none");
+    assert_eq!(asked.len(), 3, "{asked:?}");
+}
+
+#[test]
+fn still_running_is_not_an_end_either() {
+    let Some((said, asked)) = drain_against(
+        &["VRCAST_STOP running 4242:4242", "VRCAST_STOP kill 10ms"],
+        0,
+    ) else {
+        return;
+    };
+    assert_eq!(said, "VRCAST_STOP kill 10ms");
+    assert_eq!(asked.len(), 2);
+}
+
+#[test]
+fn a_wait_with_a_limit_on_the_rounds_says_it_did_not_confirm() {
+    let Some((said, asked)) = drain_against(&[ALIVE], 2) else {
+        return;
+    };
+    assert!(
+        said.starts_with("VRCAST_DRAIN unconfirmed after 2 rounds: VRCAST_STOP alive 4242:4242"),
+        "{said}"
+    );
+    assert_eq!(asked.len(), 2);
+}
+
+// ---------- T635: nothing is put back while a step going forward may still be running ----------
+
+use vrcast_studio_lib::server::limits::{
+    barrier_command, read_settled, settle_then, unheard, Settled, BARRIER_GRACE, BARRIER_ROUNDS,
+};
+use vrcast_studio_lib::ssh::{CommandOutput, SshError};
+
+fn said(exit_code: Option<u32>) -> CommandOutput {
+    CommandOutput {
+        exit_code,
+        stdout: String::from("SWAPPED\n"),
+        stderr: String::new(),
+    }
+}
+
+#[test]
+fn a_step_is_heard_only_when_the_server_said_it_ended() {
+    assert!(!unheard(&Ok(said(Some(0)))));
+    // A step that failed and said so has ended: its failure is heard.
+    assert!(!unheard(&Ok(said(Some(7)))));
+    // The channel closed with no exit status: the step's end was never said.
+    assert!(unheard(&Ok(said(None))));
+    // Given up on at the ceiling (`EXEC_CEILING`), or the channel failed.
+    assert!(unheard(&Err(SshError::Exec(String::from(
+        "the command did not finish within 600s and was given up on: …"
+    )))));
+}
+
+#[tokio::test]
+async fn the_barrier_comes_before_the_putting_back() {
+    let order = std::sync::Mutex::new(Vec::new());
+    let outcome = settle_then(
+        || async {
+            order.lock().unwrap().push("barrier");
+            Ok(())
+        },
+        || async {
+            order.lock().unwrap().push("undo");
+            Ok(())
+        },
+    )
+    .await;
+    assert_eq!(outcome, Ok(()));
+    assert_eq!(*order.lock().unwrap(), ["barrier", "undo"]);
+}
+
+#[tokio::test]
+async fn an_unconfirmed_barrier_means_the_putting_back_never_starts() {
+    let undone = std::sync::atomic::AtomicBool::new(false);
+    let outcome = settle_then(
+        || async {
+            Err(String::from(
+                "a step of this change may still be running: 4242:4242",
+            ))
+        },
+        || async {
+            undone.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        },
+    )
+    .await;
+    let err = outcome.expect_err("the putting back went ahead unconfirmed");
+    assert!(err.contains("putting back was not started"), "{err}");
+    assert!(err.contains("4242:4242"), "{err}");
+    assert!(!undone.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn only_a_confirmed_end_lets_the_putting_back_begin() {
+    for end in [
+        "VRCAST_STOP none\n",
+        "VRCAST_STOP ended 3000ms\n",
+        "VRCAST_STOP term 104ms\n",
+        "VRCAST_STOP kill 5012ms\n",
+    ] {
+        assert_eq!(read_settled(end), Settled::Confirmed, "{end}");
+    }
+    assert_eq!(
+        read_settled("VRCAST_STOP unreadable\n"),
+        Settled::Unreadable
+    );
+    for not_an_end in [
+        "VRCAST_DRAIN unconfirmed after 3 rounds: VRCAST_STOP alive 4242:4242 groups: 4242\n",
+        "VRCAST_STOP alive 4242:4242 groups: 4242\n",
+        "VRCAST_STOP running 4242:4242\n",
+        "",
+        "bash: mapfile: -d: invalid option\n",
+    ] {
+        assert!(
+            matches!(read_settled(not_an_end), Settled::NotConfirmed(_)),
+            "{not_an_end:?} was taken for an end"
+        );
+    }
+}
+
+#[test]
+fn the_barrier_waits_for_the_steps_going_forward_a_little_then_stops_them_a_few_times() {
+    let cmd = barrier_command("abc123.f", BARRIER_GRACE.as_secs());
+    assert!(cmd.starts_with("bash -c "), "{cmd}");
+    assert!(
+        cmd.ends_with(&format!(
+            "'abc123.f' 50 50 {} {BARRIER_ROUNDS}",
+            BARRIER_GRACE.as_secs()
+        )),
+        "{cmd}"
+    );
+    // Not a step of the change: the holder must not wait for its own barrier.
+    assert!(!cmd.starts_with("VRCAST_LIMITS_WRITE="), "{cmd}");
+    // A barrier with no limit on its rounds would never report.
+    assert!(!cmd.ends_with(" 0"), "{cmd}");
+}
+
+#[test]
+fn the_barrier_against_a_step_that_will_not_die_reports_it() {
+    // The real drain, with the barrier's limit on the rounds.
+    let Some((said, asked)) = drain_against(&[ALIVE], BARRIER_ROUNDS) else {
+        return;
+    };
+    assert!(
+        matches!(read_settled(&said), Settled::NotConfirmed(ref s) if s.contains("4242:4242")),
+        "{said}"
+    );
+    assert_eq!(asked.len(), BARRIER_ROUNDS as usize);
 }

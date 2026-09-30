@@ -1974,3 +1974,342 @@ async fn a_silent_clients_step_keeps_the_lock_until_it_has_ended() {
     assert!(lock_is_free(&server));
     assert_eq!(leftovers(&server), "");
 }
+
+// ---------- T634: a step that will not die keeps the lock ----------
+//
+// T628's holder waited for its change's steps, stopped what was left with TERM and KILL —
+// and let the lock go whatever the stop said, `alive` included (QA-21 №1). Now the holder
+// reads the answer and sends TERM and KILL again for as long as a step of its change is
+// still alive; the lock is not let go before the stop confirms an end.
+
+/// How long the test's holder waits for A's step before the first TERM — instead of the
+/// application's ten minutes, which is the same wait and proves nothing more here.
+const T634_DRAIN_S: u64 = 2;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_step_that_survives_kill_keeps_the_lock_until_it_is_gone() {
+    // A takes the lock with the application's holder (a short first wait) on a channel that
+    // stays open and says nothing. A step of A's change will not stay dead: whatever TERM
+    // and KILL take, a new process with A's mark is there 50 ms later — the nearest a
+    // container comes to a process KILL does not reach (`D` state cannot be made on demand).
+    // After the silence the holder must keep the lock through round after round of TERM and
+    // KILL, B must be turned away (`Busy`, `LIMITS_CONFLICT` to a person), and the lock must
+    // go only once the step really is gone.
+    use vrcast_studio_lib::server::limits::{holder_command_draining, LOCK_SILENCE};
+
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    let id = "undying";
+
+    let conn = connect(&server).await;
+    let started = std::time::Instant::now();
+    let holder = async {
+        let out = conn
+            .exec_with_timeout(
+                &holder_command_draining(id, LOCK, Duration::from_secs(T634_DRAIN_S)),
+                Duration::from_secs(400),
+            )
+            .await;
+        (out, started.elapsed())
+    };
+    let scene = async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Outside A's mark itself (and outside the groups of what it starts), so nothing the
+        // holder signals reaches it; every process it starts carries A's forward mark.
+        server
+            .exec_inside(&format!(
+                "setsid nohup bash -c 'while [ ! -e /tmp/let_it_die ]; do \
+                 VRCAST_LIMITS_WRITE={id}.f setsid sleep 3600 & sleep 0.05; done' \
+                 >/dev/null 2>&1 </dev/null &"
+            ))
+            .expect("the undying step would not start");
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let early = lock_is_free(&server);
+
+        // B asks after the door has closed, and waits its whole `LOCK_WAIT` for nothing.
+        tokio::time::sleep(LOCK_SILENCE + Duration::from_secs(5) - Duration::from_secs(10)).await;
+        let b_from = started.elapsed();
+        let b = put_limit(
+            &server,
+            "203.0.113.62",
+            "demo",
+            all[1].bandwidth,
+            &good_url(&server),
+        )
+        .await;
+        let b_to = started.elapsed();
+        let held_after_b = !lock_is_free(&server);
+        // Each environment entry ends in a NUL, so the entry is matched with that NUL after it.
+        let marked_alive = server
+            .exec_inside(&format!(
+                "grep -laP 'VRCAST_LIMITS_WRITE={id}\\.f\\x00' /proc/[0-9]*/environ 2>/dev/null \
+                 | wc -l"
+            ))
+            .unwrap_or_else(|e| e);
+
+        // Now let it die.
+        server
+            .exec_inside("touch /tmp/let_it_die")
+            .expect("the step would not be let go");
+        let let_go_at = started.elapsed();
+        (
+            early,
+            b_from,
+            b,
+            b_to,
+            held_after_b,
+            marked_alive,
+            let_go_at,
+        )
+    };
+    let ((held, freed_at), (early, b_from, b, b_to, held_after_b, marked_alive, let_go_at)) =
+        tokio::join!(holder, scene);
+    conn.close().await;
+    let _ = server.exec_inside("touch /tmp/let_it_die");
+
+    eprintln!(
+        "B from {:.1}s to {:.1}s: {b:?}; lock held after B: {held_after_b}; marked processes \
+         then: {}; the step let go at {:.1}s; the holder let go at {:.1}s",
+        b_from.as_secs_f64(),
+        b_to.as_secs_f64(),
+        marked_alive.trim(),
+        let_go_at.as_secs_f64(),
+        freed_at.as_secs_f64(),
+    );
+
+    let held = held.expect("the holder's channel failed");
+    assert!(
+        held.stdout.starts_with("LOCKED "),
+        "A never had the lock: {held:?}"
+    );
+    assert!(!early, "the lock was free while A was still heard from");
+    assert!(
+        matches!(b, Err(LimitError::Busy)),
+        "B was not turned away while A's step was alive: {b:?}"
+    );
+    assert!(
+        b_to > LOCK_SILENCE + Duration::from_secs(T634_DRAIN_S + 60),
+        "the check did not reach well past the first round of TERM and KILL: {b_to:?}"
+    );
+    assert!(
+        held_after_b,
+        "the lock went while a step of its change was still alive after KILL"
+    );
+    assert!(
+        marked_alive.trim().parse::<u32>().is_ok_and(|n| n > 0),
+        "the undying step was not alive when the lock was checked: {marked_alive:?}"
+    );
+    assert!(
+        freed_at >= let_go_at,
+        "the holder let go at {freed_at:?}, before the step was let die at {let_go_at:?}"
+    );
+    assert!(
+        freed_at <= let_go_at + Duration::from_secs(20),
+        "the holder kept the lock long after the step had gone: {freed_at:?} vs {let_go_at:?}"
+    );
+    assert!(lock_is_free(&server));
+    assert_eq!(leftovers(&server), "");
+}
+
+// ---------- T635: a putting back waits for the step whose end was not heard ----------
+//
+// A `caddy reload` of the change is given up on by the client (its ceiling, here shortened
+// with `with_step_ceiling`, in the application `EXEC_CEILING`) while it is still running on
+// the server. Before T635 the undo went in at once, and the first reload could land after
+// it — Caddy holding the rolled-back change while the files say otherwise (QA-21 №2).
+
+/// How long the client waits for a step in these tests before giving it up.
+const T635_STEP_CEILING: Duration = Duration::from_secs(15);
+
+/// Put a `caddy` in front of the real one whose `reload` **going forward** (a step marked
+/// `<id>.f`) first runs `slow` — shell, with `$MARK` the step's mark — and notes when it
+/// started and ended; every other call, the undo's reload included, is noted and passed
+/// straight through.
+fn install_slow_forward_reload(server: &TestServer, slow: &str) {
+    let script = format!(
+        "#!/bin/bash\n\
+         now() {{ date +%s%N; }}\n\
+         if [ \"$1\" = reload ]; then\n\
+         \x20 echo \"start $(now) ${{VRCAST_LIMITS_WRITE:-none}}\" >> /tmp/reloads\n\
+         \x20 case \"${{VRCAST_LIMITS_WRITE:-}}\" in *.f)\n\
+         \x20   MARK=$VRCAST_LIMITS_WRITE\n\
+         \x20   {slow}\n\
+         \x20 ;; esac\n\
+         \x20 /usr/local/bin/caddy \"$@\"; rc=$?\n\
+         \x20 echo \"end $(now) ${{VRCAST_LIMITS_WRITE:-none}}\" >> /tmp/reloads\n\
+         \x20 exit $rc\n\
+         fi\n\
+         exec /usr/local/bin/caddy \"$@\"\n"
+    );
+    let path = std::env::temp_dir().join(format!(
+        "vrcast-slow-caddy-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::write(&path, script).expect("the slow caddy would not be written");
+    server
+        .put_file(&path, "/usr/local/sbin/caddy")
+        .expect("the slow caddy would not go in");
+    let _ = std::fs::remove_file(&path);
+    server
+        .exec_inside("chmod 755 /usr/local/sbin/caddy && /usr/bin/rm -f /tmp/reloads")
+        .expect("the slow caddy would not be made runnable");
+}
+
+fn remove_slow_caddy(server: &TestServer) {
+    server
+        .exec_inside("/usr/bin/rm -f /usr/local/sbin/caddy")
+        .expect("the slow caddy would not come out");
+}
+
+/// The reloads the slow caddy saw: (`start`/`end`, nanoseconds, mark).
+fn reloads(server: &TestServer) -> Vec<(String, u128, String)> {
+    server
+        .exec_inside("cat /tmp/reloads 2>/dev/null || true")
+        .expect("the reloads would not be read")
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            Some((
+                w.next()?.to_owned(),
+                w.next()?.parse().ok()?,
+                w.next()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_undo_after_a_reload_given_up_on_waits_for_that_reload_to_end() {
+    use vrcast_studio_lib::server::limits::with_step_ceiling;
+
+    const RELOAD_S: u64 = 20;
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    one_limit_in_force(&server, &all).await;
+    let conf_before = contents(&server, CONF);
+    let slow_before = slow_snapshot(&server);
+    // The forward reload takes 20 s: past the client's 15 s, inside the barrier's own wait.
+    install_slow_forward_reload(&server, &format!("sleep {RELOAD_S}"));
+
+    let started = std::time::Instant::now();
+    let outcome = with_step_ceiling(T635_STEP_CEILING, add_a_second_limit(&server, &all)).await;
+    let took = started.elapsed();
+    remove_slow_caddy(&server);
+    let calls = reloads(&server);
+    let conf_after = contents(&server, CONF);
+    let conf_written: u128 = server
+        .exec_inside(&format!("stat -c %.9Y '{CONF}' | tr -d ."))
+        .expect("the rules would not be looked at")
+        .trim()
+        .parse()
+        .expect("the rules' time is not a number");
+    eprintln!(
+        "took {:.1}s, {outcome:?}; reloads: {calls:?}",
+        took.as_secs_f64()
+    );
+
+    // The change failed on its unheard reload, and was put back.
+    match &outcome {
+        Err(LimitError::Ssh(e)) => assert!(e.to_string().contains("given up on"), "{e}"),
+        other => panic!("the change did not end on its unheard reload: {other:?}"),
+    }
+    let forward_end = calls
+        .iter()
+        .find(|(what, _, mark)| what == "end" && mark.ends_with(".f"))
+        .map(|(_, at, _)| *at)
+        .expect("the forward reload never ended");
+    let undo_start = calls
+        .iter()
+        .find(|(what, _, mark)| what == "start" && mark.ends_with(".u"))
+        .map(|(_, at, _)| *at)
+        .expect("the undo never reloaded");
+    assert!(
+        undo_start > forward_end,
+        "the undo's reload started {:.3}s before the forward reload ended",
+        (forward_end as f64 - undo_start as f64) / 1e9
+    );
+    assert!(
+        conf_written > forward_end,
+        "the rules were put back before the forward reload ended"
+    );
+    eprintln!(
+        "the undo's reload began {:.3}s after the forward reload ended; the rules went back \
+         {:.3}s after it",
+        (undo_start as f64 - forward_end as f64) / 1e9,
+        (conf_written as f64 - forward_end as f64) / 1e9,
+    );
+    assert_eq!(
+        without_generation(&conf_after),
+        without_generation(&conf_before)
+    );
+    assert!(!conf_after.contains("203.0.113.8"));
+    assert_eq!(slow_snapshot(&server), slow_before);
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_frees_within(&server, Duration::from_secs(20)).await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_undo_is_not_started_while_a_step_of_the_change_will_not_end() {
+    // The forward reload leaves behind a process carrying its mark that comes back after
+    // every KILL. The barrier cannot confirm the end: nothing is put back, the change ends
+    // `RollbackFailed` (`LIMITS_ROLLBACK_FAILED`), and the holder keeps the lock until the
+    // step really is gone (T634).
+    use vrcast_studio_lib::server::limits::with_step_ceiling;
+
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    one_limit_in_force(&server, &all).await;
+    // The respawner has no mark and a session of its own, so no stop reaches it; it starts
+    // a process carrying the step's mark every 50 ms — however many are killed, others are
+    // there at the next scan: a step of the change that is never seen to be gone. Each of
+    // them ends by itself once it is let die, as a finished step does.
+    install_slow_forward_reload(
+        &server,
+        "env -u VRCAST_LIMITS_WRITE setsid nohup bash -c 'while [ ! -e /tmp/let_it_die ]; do \
+         VRCAST_LIMITS_WRITE='\"$MARK\"' setsid bash -c \"until [ -e /tmp/let_it_die ]; do \
+         sleep 0.2; done\" & sleep 0.05; done' >/dev/null 2>&1 </dev/null &\n    sleep 3600",
+    );
+
+    let started = std::time::Instant::now();
+    let outcome = with_step_ceiling(T635_STEP_CEILING, add_a_second_limit(&server, &all)).await;
+    let took = started.elapsed();
+    let conf_after = contents(&server, CONF);
+    let held = !lock_is_free(&server);
+    let undo_reloads = reloads(&server)
+        .iter()
+        .filter(|(_, _, mark)| mark.ends_with(".u"))
+        .count();
+    server
+        .exec_inside("touch /tmp/let_it_die")
+        .expect("the step would not be let go");
+    remove_slow_caddy(&server);
+    let let_go_at = started.elapsed();
+    eprintln!(
+        "took {:.1}s, {outcome:?}; lock held after: {held}",
+        took.as_secs_f64()
+    );
+
+    match &outcome {
+        Err(LimitError::RollbackFailed(said)) => {
+            assert!(said.contains("putting back was not started"), "{said}");
+            assert!(said.contains("may still be running"), "{said}");
+            assert!(said.contains("VRCAST_STOP alive"), "{said}");
+        }
+        other => panic!("the change did not refuse to put back: {other:?}"),
+    }
+    assert_eq!(undo_reloads, 0, "the undo ran");
+    // Nothing was put back: A's rules are still in the file (not reloaded by anybody).
+    assert!(conf_after.contains("203.0.113.8"), "{conf_after}");
+    assert!(
+        held,
+        "the lock went while a step of the change was still alive"
+    );
+    assert!(lock_frees_within(&server, Duration::from_secs(30)).await);
+    eprintln!(
+        "the lock went {:.1}s after the step was let die",
+        (started.elapsed() - let_go_at).as_secs_f64()
+    );
+}
