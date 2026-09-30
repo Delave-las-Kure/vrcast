@@ -302,8 +302,7 @@ export const en: Catalogue = {
       "There is a web-server configuration on this server with no state file of ours beside it — it looks set up by hand, or by another tool.",
     SERVER_FOREIGN_STATE_UNREADABLE:
       "Our own state file is on this server but could not be read ({problem}).",
-    SERVER_FOREIGN_UNKNOWN:
-      "The server was judged foreign, but no reason was given.",
+    SERVER_FOREIGN_UNKNOWN: "The server was judged foreign, but no reason was given.",
     SERVER_NOT_DEPLOYED: "Nothing is deployed on this server yet.",
     SERVER_ALREADY_DEPLOYED:
       "The server is already deployed and at a version this application is happy with.",
@@ -404,10 +403,8 @@ export const en: Catalogue = {
     STAGE_BUILDING_LADDER: "preparing the variants",
     STAGE_CUTTING_SEGMENTS: "cutting into segments — on the server",
     STAGE_VERIFYING_LADDER: "checking that every variant is served",
-    STAGE_STOP_UNCONFIRMED:
-      "stopping on the server — not confirmed yet, trying again",
-    STAGE_STOPPING_AFTER_STEP:
-      "stopping — waiting for the current command on the server to finish",
+    STAGE_STOP_UNCONFIRMED: "stopping on the server — not confirmed yet, trying again",
+    STAGE_STOPPING_AFTER_STEP: "stopping — waiting for the current command on the server to finish",
     STAGE_DEPLOYING: "Setting the server up",
     STAGE_WAITING_UNHEARD_COMMAND: "Waiting for an interrupted command on the server to finish",
     STAGE_DONE: "done",
@@ -1222,7 +1219,8 @@ export const en: Catalogue = {
       mediaNew: "New medium…",
       newMediaLabel: "Title of the new medium",
       newMediaPlaceholder: "Title",
-      multipleNamesHint: "Names in service will be taken from the file names — no line-by-line editing.",
+      multipleNamesHint:
+        "Names in service will be taken from the file names — no line-by-line editing.",
       dropFile: "Remove",
       dropOneFile: "Remove {name} from the list",
       fieldLimit: "Cap the speed",
@@ -1353,7 +1351,7 @@ export const en: Catalogue = {
         BITRATE_VARIANTS: "bitrate variants of one file",
       },
       assignTo: "Assign to a medium",
-  moveTo: "Move to",
+      moveTo: "Move to",
       assignChoose: "— choose —",
       createHeading: "New medium",
       fieldTitle: "Title",
@@ -1408,6 +1406,10 @@ export const en: Catalogue = {
       editHeading: "Edit the server “{name}”",
       editSecretHint:
         "Leave this empty to keep the stored password or key as it is — it is never handed back from the store.",
+      leaveMadeKeyForFileHint:
+        "The key made while deploying will be deleted from the system store. Enter the passphrase of your key file — or leave the field empty if the file has none.",
+      leaveMadeKeyForPasswordHint:
+        "The key made while deploying will be deleted from the system store — enter the server’s password. Without it the change is not saved.",
       editAddressChanged:
         "The address or port changed — the server has to be recognised again before connecting to it.",
       save: "Save",

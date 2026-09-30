@@ -82,6 +82,16 @@ export function EditServerDialog({
   const s = t.ui.servers;
   const w = t.ui.wizard;
 
+  /** T638 — the profile signs in with the made key and the form moves it off it: the field
+   *  under it no longer "keeps" anything, since the made key cannot stay. */
+  const leavingMadeKey = profile.auth_kind === "managed_key" && input.auth_kind !== "managed_key";
+  const leavingMadeKeyForFile = leavingMadeKey && input.auth_kind === "key";
+  const secretHint = leavingMadeKeyForFile
+    ? s.leaveMadeKeyForFileHint
+    : leavingMadeKey
+      ? s.leaveMadeKeyForPasswordHint
+      : s.editSecretHint;
+
   /** Step 1: save the changes. Re-checks the connection only if `host`/`port` moved. */
   const save = async () => {
     setBusy(true);
@@ -89,7 +99,15 @@ export function EditServerDialog({
     try {
       // T626 — the made key is not typed by anybody: whatever is left in the (hidden) secret
       // field from a moment on another way of signing in must not replace it in the store.
-      const newSecret = input.auth_kind === "managed_key" || secret === "" ? null : secret;
+      //
+      // T638 — leaving the made key for a key file of one's own is the one move where an empty
+      // field is a value rather than "keep": the file's passphrase is empty, the made key is
+      // deleted from the store (`""` — "no passphrase" — against `null` — "leave the store
+      // alone", which the core refuses here). Every other empty field still means "keep".
+      let newSecret: string | null;
+      if (input.auth_kind === "managed_key") newSecret = null;
+      else if (leavingMadeKeyForFile) newSecret = secret;
+      else newSecret = secret === "" ? null : secret;
       await ipc.serverUpdate(profile.id, input, newSecret);
       setSecret("");
       const addressChanged = input.host !== profile.host || input.port !== profile.port;
@@ -145,7 +163,7 @@ export function EditServerDialog({
           onFieldChange={(key, value) => setInput((prev) => ({ ...prev, [key]: value }))}
           secret={secret}
           onSecretChange={setSecret}
-          secretHint={s.editSecretHint}
+          secretHint={secretHint}
           busy={busy}
           submitLabel={s.save}
           busyLabel={s.saving}

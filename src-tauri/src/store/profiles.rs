@@ -114,19 +114,27 @@ pub fn insert(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
     })
 }
 
-/// Change a profile.
+/// Change a profile — **only while it still signs in the way it did when it was read** (T636).
 ///
 /// `is_active` and `secret_ref` are deliberately left alone: being active is switched
 /// by its own command, and the reference to the secret belongs to the core and must
 /// not move when ordinary fields are edited.
-pub fn update(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
+///
+/// `read_as` is the `auth_kind` the caller read and checked its change against. The check and
+/// the write used to be two separate trips to the database, with nothing holding the profile
+/// between them: a deployment moving it to `managed_key` in between (T616) had its switch
+/// written over by a form that had checked "password → password, nothing to refuse". The
+/// condition sits in the `UPDATE` itself, so no order of events lets a check against one way of
+/// signing in write over another. `false` — nothing was written: the profile is gone or signs
+/// in differently now; read it again and check again.
+pub fn update_if_signs_in(db: &Db, p: &ServerProfile, read_as: AuthKind) -> Result<bool, DbError> {
     db.with_conn(|c| {
-        c.execute(
+        let changed = c.execute(
             "UPDATE server_profiles SET
                 name = ?2, host = ?3, port = ?4, username = ?5, auth_kind = ?6,
                 key_path = ?7, domain = ?8, video_dir = ?9, cdn_base = ?10,
                 host_fingerprint = ?11, ipv6_mode = ?12
-             WHERE id = ?1",
+             WHERE id = ?1 AND auth_kind = ?13",
             rusqlite::params![
                 p.id,
                 p.name,
@@ -140,9 +148,33 @@ pub fn update(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
                 p.cdn_base,
                 p.host_fingerprint,
                 p.ipv6_mode.map(|m| m.as_str()),
+                read_as.as_str(),
             ],
         )?;
-        Ok(())
+        Ok(changed > 0)
+    })
+}
+
+/// Point a password profile at the key a deployment made for it (T616, T636): `auth_kind =
+/// managed_key`, no key path — **these two columns, and only from `password`**.
+///
+/// Not [`update_if_signs_in`] with the run's copy of the profile: that copy was taken when the
+/// run started, and writing all of it back would undo whatever the person renamed or moved in
+/// the meantime. And only from `password`, because that is the one way of signing in the made
+/// key replaces: a profile a person has since pointed at a key file of their own is theirs, and
+/// the run does not take it back. `false` — nothing was written.
+pub fn switch_to_managed_key(db: &Db, id: &str) -> Result<bool, DbError> {
+    db.with_conn(|c| {
+        let changed = c.execute(
+            "UPDATE server_profiles SET auth_kind = ?2, key_path = NULL
+             WHERE id = ?1 AND auth_kind = ?3",
+            rusqlite::params![
+                id,
+                AuthKind::ManagedKey.as_str(),
+                AuthKind::Password.as_str()
+            ],
+        )?;
+        Ok(changed > 0)
     })
 }
 

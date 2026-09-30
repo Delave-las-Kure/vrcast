@@ -139,6 +139,20 @@ pub(crate) fn no_such_server(id: &str) -> AppError {
 /// signing in and what the store holds agree again. The same the other way round: a profile
 /// declared `managed_key` over a store still holding a password would send the password as a
 /// key. An empty secret counts as none — the interface sends one only when a field was filled.
+///
+/// **T638 (QA-21 №5, the owner's decision 2026-09-30) — the one exception: from `managed_key`
+/// to a key file of the person's own, `secret = ""` is the passphrase, and it is "none".** For
+/// `key` the store holds the file's passphrase rather than a key, and a key without a
+/// passphrase is ordinary. So the two absences are told apart here, and only here:
+///
+/// - `secret: null` — "leave the store as it is". Refused as before: the store holds the made
+///   private key, and a `key` profile would hand it to the file as its passphrase;
+/// - `secret: ""` — "the file has no passphrase". Allowed: the empty passphrase is written over
+///   the entry, **which deletes the made key from the store** — the profile and the store agree
+///   again, on a key file with no passphrase.
+///
+/// Every other move to or from `managed_key` still needs a non-empty secret: an empty password
+/// is not a password, and a move *to* `managed_key` is made by a deployment, never by a form.
 fn refuse_stale_sign_in(
     existing: &ServerProfile,
     input: &ServerInput,
@@ -147,16 +161,25 @@ fn refuse_stale_sign_in(
     let moves = existing.auth_kind != input.auth_kind
         && (existing.auth_kind == AuthKind::ManagedKey || input.auth_kind == AuthKind::ManagedKey);
     let has_secret = secret.is_some_and(|s| !s.is_empty());
-    if moves && !has_secret {
-        return Err(AppError::new(ErrorCode::InvalidInput)
-            .with_detail(
-                Detail::new(DetailCode::ProfileAuthNeedsSecret)
-                    .with("from", existing.auth_kind.as_str())
-                    .with("to", input.auth_kind.as_str()),
-            )
-            .with_cause("auth_kind"));
+    let to_own_key_without_passphrase = existing.auth_kind == AuthKind::ManagedKey
+        && input.auth_kind == AuthKind::Key
+        && secret == Some("");
+    if moves && !has_secret && !to_own_key_without_passphrase {
+        return Err(needs_secret(existing.auth_kind, input.auth_kind));
     }
     Ok(())
+}
+
+/// `INVALID_INPUT` + `PROFILE_AUTH_NEEDS_SECRET {from, to}` — one wording for both places that
+/// refuse a way of signing in the store would not match (T626, T636).
+fn needs_secret(from: AuthKind, to: AuthKind) -> AppError {
+    AppError::new(ErrorCode::InvalidInput)
+        .with_detail(
+            Detail::new(DetailCode::ProfileAuthNeedsSecret)
+                .with("from", from.as_str())
+                .with("to", to.as_str()),
+        )
+        .with_cause("auth_kind")
 }
 
 pub mod api {
@@ -204,15 +227,71 @@ pub mod api {
     /// Change a profile. The secret is replaced **only when one is passed**: otherwise
     /// changing a profile's name would wipe out the password, and a person would learn of it
     /// only at the next connection.
+    ///
+    /// ⚠ **T636 (QA-21 №3) — the check of the way of signing in and the write are one step.**
+    /// The profile used to be read, checked ([`refuse_stale_sign_in`]) and written in three
+    /// separate trips to the database, with nothing holding it between them: a deployment
+    /// switching it to `managed_key` in between (T616) was undone by a form that had checked
+    /// "password → password" a moment before — every step succeeding. Now:
+    ///
+    /// - the whole change, the store's secret included, runs under [`Db::sign_in_lock`], which
+    ///   the deployment's switch takes too, so neither can land in the middle of the other;
+    /// - and the write itself is conditional on the `auth_kind` that was checked
+    ///   ([`profiles::update_if_signs_in`]): should the profile sign in differently by then
+    ///   anyway (another copy of the application on the same database), nothing is written,
+    ///   the profile is read again and the check runs again against what it is now.
+    ///
+    /// [`Db::sign_in_lock`]: crate::store::db::Db::sign_in_lock
     pub fn server_update(
         state: &AppState,
         id: &str,
         input: ServerInput,
         secret: Option<&str>,
     ) -> Result<()> {
-        let existing = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
-        refuse_stale_sign_in(&existing, &input, secret)?;
+        server_update_between(state, id, input, secret, &mut || {})
+    }
 
+    /// [`server_update`], with `between` run after the check and before the write — the window
+    /// T636 is about. **For the tests only**: they put a change of the way of signing in there,
+    /// the way another process could, and see that it is not written over. Nothing in the
+    /// application calls this with anything but an empty `between`.
+    #[doc(hidden)]
+    pub fn server_update_between(
+        state: &AppState,
+        id: &str,
+        input: ServerInput,
+        secret: Option<&str>,
+        between: &mut dyn FnMut(),
+    ) -> Result<()> {
+        let _sign_in = state.db.sign_in_lock();
+        // Two looks are enough: under the lock the second is for another process's change
+        // only, and a profile changing its way of signing in twice in that instant is refused
+        // rather than chased.
+        for _ in 0..2 {
+            let existing = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
+            refuse_stale_sign_in(&existing, &input, secret)?;
+            let profile = updated(state, &existing, input.clone())?;
+            between();
+            if profiles::update_if_signs_in(&state.db, &profile, existing.auth_kind)? {
+                if let Some(value) = secret {
+                    state
+                        .secrets
+                        .set(&SecretRef::from_stored(&profile.secret_ref), value)?;
+                }
+                return Ok(());
+            }
+        }
+        let now = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
+        Err(needs_secret(now.auth_kind, input.auth_kind))
+    }
+
+    /// The profile `server_update` would write over `existing`, checked.
+    fn updated(
+        state: &AppState,
+        existing: &ServerProfile,
+        input: ServerInput,
+    ) -> Result<ServerProfile> {
+        let id = existing.id.as_str();
         let mut profile = profile_from(input, existing.id.clone(), existing.secret_ref.clone());
         // The active mark is a deliberate act of a person's own and editing a field is not a
         // reason to undo it.
@@ -251,15 +330,7 @@ pub mod api {
                 )
                 .with_cause(&profile.name));
         }
-
-        profiles::update(&state.db, &profile)?;
-
-        if let Some(value) = secret {
-            state
-                .secrets
-                .set(&SecretRef::from_stored(&profile.secret_ref), value)?;
-        }
-        Ok(())
+        Ok(profile)
     }
 
     /// Delete a profile along with its secret's entry in the operating system store.
@@ -267,6 +338,10 @@ pub mod api {
     /// A secret left behind is access to somebody else's server that a person no longer
     /// remembers (FR-005).
     pub fn server_remove(state: &AppState, id: &str) -> Result<()> {
+        // T636: under the same lock as every change of the way of signing in — a deployment
+        // keeping its key in the middle of this would otherwise write it into the entry of a
+        // profile that is going away, after that entry was deleted.
+        let _sign_in = state.db.sign_in_lock();
         // A missing profile is not an error: repeating must be safe (the contract,
         // rule 5).
         let Some(profile) = profiles::get(&state.db, id)? else {

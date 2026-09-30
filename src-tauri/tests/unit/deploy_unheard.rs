@@ -19,7 +19,7 @@ use vrcast_studio_lib::domain::marked::Stopped;
 use vrcast_studio_lib::domain::server_profile::{AuthKind, ServerProfile};
 use vrcast_studio_lib::domain::wording::DetailCode;
 use vrcast_studio_lib::server::deploy::{
-    send_settled, settle_unheard, DeployError, RunMark, Sending, UnheardWait,
+    send_settled, settle_unheard, DeployError, RunMark, SendGate, Sending, UnheardWait,
 };
 use vrcast_studio_lib::server::marked::{Patience, StopProblem};
 use vrcast_studio_lib::ssh::exec::EXEC_CEILING;
@@ -471,12 +471,27 @@ async fn the_task_shows_the_wait_while_it_lasts_and_deploying_after() {
 
 // ---------- T630: a stop asked during the wait holds back the next command ----------
 
-fn answered() -> Result<CommandOutput, SshError> {
-    Ok(CommandOutput {
+fn answered() -> Result<Option<CommandOutput>, SshError> {
+    Ok(Some(CommandOutput {
         exit_code: Some(0),
         stdout: String::from("done"),
         stderr: String::new(),
-    })
+    }))
+}
+
+/// A stand-in for `Connection::exec_if` whose channel opens at once: the gate is asked, and
+/// the command "goes" (`sent`) only on a yes.
+fn sends_if_let_through(
+    sent: &AtomicBool,
+) -> impl FnOnce(SendGate<'_>) -> futures::future::Ready<Result<Option<CommandOutput>, SshError>> + '_
+{
+    move |gate| {
+        if !gate.open() {
+            return futures::future::ready(Ok(None));
+        }
+        sent.store(true, Ordering::SeqCst);
+        futures::future::ready(answered())
+    }
 }
 
 /// QA-20 №6: `exec_marked` asked "stopping?" before the wait; the person cancelled while the
@@ -494,10 +509,7 @@ async fn a_stop_asked_during_the_wait_keeps_the_next_new_command_from_going() {
             run.ask_to_stop();
             async { Ok(Stopped::EndedOnItsOwn) }
         },
-        || {
-            sent.store(true, Ordering::SeqCst);
-            async { answered() }
-        },
+        sends_if_let_through(&sent),
     )
     .await;
     assert!(matches!(r, Err(DeployError::Cancelled)), "{r:?}");
@@ -525,10 +537,7 @@ async fn the_second_half_of_a_begun_write_goes_even_if_a_stop_was_asked_during_t
             run.ask_to_stop();
             async { Ok(Stopped::EndedOnItsOwn) }
         },
-        || {
-            sent.store(true, Ordering::SeqCst);
-            async { answered() }
-        },
+        sends_if_let_through(&sent),
     )
     .await;
     assert!(r.is_ok(), "{r:?}");
@@ -546,10 +555,7 @@ async fn without_a_stop_the_command_goes_once_the_wait_is_over() {
         &run,
         Sending::New,
         |_| async { Ok(Stopped::EndedOnItsOwn) },
-        || {
-            sent.store(true, Ordering::SeqCst);
-            async { answered() }
-        },
+        sends_if_let_through(&sent),
     )
     .await;
     assert!(r.is_ok(), "{r:?}");
@@ -561,15 +567,149 @@ async fn without_a_stop_the_command_goes_once_the_wait_is_over() {
         &run,
         Sending::New,
         |_| async { Ok(Stopped::AlreadyGone) },
-        || async {
-            Ok(CommandOutput {
+        |gate| async move {
+            assert!(
+                gate.open(),
+                "nothing was asked to stop, and the gate said no"
+            );
+            Ok(Some(CommandOutput {
                 exit_code: None,
                 stdout: String::new(),
                 stderr: String::new(),
-            })
+            }))
         },
     )
     .await;
     assert!(r.is_ok(), "{r:?}");
     assert!(run.may_run_until().is_some());
+}
+
+// ---------- T637: a stop asked while the channel is got ready holds back the command ----------
+
+/// A stand-in for `Connection::exec_if` whose channel takes a while: a place is waited for,
+/// the server refuses the channel (`ResourceShortage`) and the open is retried — and the
+/// person cancels during that. `opening` is let go by the test; the gate is asked only after.
+async fn exec_after_a_slow_open(
+    gate: SendGate<'_>,
+    opening: &tokio::sync::Notify,
+    waiting: &tokio::sync::Notify,
+    sent: &AtomicBool,
+) -> Result<Option<CommandOutput>, SshError> {
+    waiting.notify_one();
+    opening.notified().await;
+    if !gate.open() {
+        return Ok(None);
+    }
+    sent.store(true, Ordering::SeqCst);
+    answered()
+}
+
+/// QA-21 №4: `send_settled` asked "stopping?" and handed over; the channel was still being
+/// waited for when the person cancelled; the channel opened and a command the run had not
+/// started went to the server. Now the last answer is given with the channel open, and a new
+/// command is not sent: the run is `Cancelled`, and nothing is on record as in flight.
+#[tokio::test]
+async fn a_stop_asked_while_the_channel_opens_keeps_a_new_command_from_going() {
+    let run = RunMark::fresh();
+    let sent = AtomicBool::new(false);
+    let opening = tokio::sync::Notify::new();
+    let waiting = tokio::sync::Notify::new();
+
+    let send = send_settled(
+        &run,
+        Sending::New,
+        |_| async { Ok(Stopped::AlreadyGone) },
+        |gate| exec_after_a_slow_open(gate, &opening, &waiting, &sent),
+    );
+    let cancel = async {
+        waiting.notified().await;
+        // `send_settled`'s own check is behind it: the run is getting a channel now.
+        assert_eq!(
+            run.may_run_until(),
+            None,
+            "a command still waiting for its channel was already counted as sent"
+        );
+        run.ask_to_stop();
+        opening.notify_one();
+    };
+    let (r, ()) = tokio::join!(send, cancel);
+
+    assert!(matches!(r, Err(DeployError::Cancelled)), "{r:?}");
+    assert!(
+        !sent.load(Ordering::SeqCst),
+        "a command not yet sent when the run was cancelled went once its channel opened"
+    );
+    assert_eq!(
+        run.may_run_until(),
+        None,
+        "a command held back at its channel is on record as possibly running"
+    );
+}
+
+/// The second half of a begun `put_file` goes even when the stop comes while its channel
+/// opens — the exception T630 kept, kept here too.
+#[tokio::test]
+async fn the_second_half_of_a_begun_write_goes_even_if_a_stop_was_asked_while_the_channel_opens() {
+    let run = RunMark::fresh();
+    let sent = AtomicBool::new(false);
+    let opening = tokio::sync::Notify::new();
+    let waiting = tokio::sync::Notify::new();
+
+    let send = send_settled(
+        &run,
+        Sending::Finishing,
+        |_| async { Ok(Stopped::AlreadyGone) },
+        |gate| exec_after_a_slow_open(gate, &opening, &waiting, &sent),
+    );
+    let cancel = async {
+        waiting.notified().await;
+        run.ask_to_stop();
+        opening.notify_one();
+    };
+    let (r, ()) = tokio::join!(send, cancel);
+
+    assert!(r.is_ok(), "{r:?}");
+    assert!(
+        sent.load(Ordering::SeqCst),
+        "the move of a begun write was held back"
+    );
+    assert_eq!(run.may_run_until(), None);
+}
+
+/// A channel that could not be had at all (the retries used up, the connection gone) sent
+/// nothing, and leaves nothing on record for the stop to wait ten minutes for. Once the gate
+/// has let a command through, an error may hide a started command — then it is on record.
+#[tokio::test]
+async fn only_a_command_let_through_is_counted_as_possibly_running() {
+    let run = RunMark::fresh();
+    let r = send_settled(
+        &run,
+        Sending::New,
+        |_| async { Ok(Stopped::AlreadyGone) },
+        |_gate| async { Err(SshError::Protocol(String::from("ChannelOpenFailure"))) },
+    )
+    .await;
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(
+        run.may_run_until(),
+        None,
+        "a command whose channel never opened is on record as possibly running"
+    );
+
+    let run = RunMark::fresh();
+    let r = send_settled(
+        &run,
+        Sending::New,
+        |_| async { Ok(Stopped::AlreadyGone) },
+        |gate| async move {
+            assert!(gate.open());
+            Err(SshError::Protocol(String::from("the channel broke")))
+        },
+    )
+    .await;
+    assert!(r.is_err(), "{r:?}");
+    assert!(
+        run.may_run_until().is_some(),
+        "a command let through and then lost is not on record as possibly running"
+    );
 }
