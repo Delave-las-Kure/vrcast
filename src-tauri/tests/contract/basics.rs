@@ -36,8 +36,9 @@ fn state() -> AppState {
 /// guard against leaking secrets is worse than none.
 static REGISTRY: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Take the registry for the length of a test and clear it.
-fn alone_with_registry() -> std::sync::MutexGuard<'static, ()> {
+/// Take the registry for the length of a test and clear it. Shared with the other contract
+/// files that check redaction (T647): one lock for the one registry.
+pub(crate) fn alone_with_registry() -> std::sync::MutexGuard<'static, ()> {
     let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
     vrcast_studio_lib::store::redact::forget_all();
     guard

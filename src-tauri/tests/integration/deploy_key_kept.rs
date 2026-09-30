@@ -21,19 +21,27 @@
 //! and `DnsCheck` pass for real (needs the network to reach the root servers and sslip.io).
 //!
 //! Needs Docker and the Ubuntu archive (the Packages step installs for real).
+//!
+//! T647 (QA-23 №1): and the run's stop, after `SshHardening`, through the production
+//! `stop_through_gate` on the target `start` takes when the run begins: the password the run
+//! began with is refused by then, and the made key signs in.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use vrcast_studio_lib::commands::deploy::{api as deploy_api, key_keeper};
+use vrcast_studio_lib::commands::deploy::{
+    api as deploy_api, key_keeper, stop_target_of, stop_through_gate,
+};
 use vrcast_studio_lib::commands::servers::{api as servers, ServerInput};
 use vrcast_studio_lib::commands::AppState;
 use vrcast_studio_lib::domain::deploy_steps::{Status, StepId};
 use vrcast_studio_lib::domain::dns_verdict::{Ipv6Choice, ServerAddresses};
+use vrcast_studio_lib::domain::marked::Stopped;
 use vrcast_studio_lib::domain::server_profile::AuthKind;
 use vrcast_studio_lib::domain::server_state::Kind;
 use vrcast_studio_lib::server::deploy::{self, machine, Context, Proofs, RunMark};
+use vrcast_studio_lib::server::marked::Patience;
 use vrcast_studio_lib::ssh::keygen;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretStore};
@@ -81,6 +89,10 @@ async fn a_run_closed_after_the_hardening_step_leaves_a_profile_that_signs_in_wi
         let profile = vrcast_studio_lib::store::profiles::get(&db, &id)
             .unwrap()
             .expect("the profile vanished");
+        // T647: the run's stop target, taken as `start` takes it — before the run, from the
+        // profile as it began (on a password), with the password the store holds now.
+        let stop_target = stop_target_of(state.secrets.as_ref(), &profile)
+            .expect("a confirmed profile has a stop target");
         let made = keygen::make("vrcast-studio: T616").expect("no key");
         let conn = by_password(&target).await;
         let facts = machine::look(&conn).await.expect("no machine facts");
@@ -132,6 +144,28 @@ async fn a_run_closed_after_the_hardening_step_leaves_a_profile_that_signs_in_wi
             "the run was not stopped after the hardening step: {outcome:?}"
         );
         conn.close().await;
+
+        // T647: the run's stop, after `SshHardening`, goes where the run began and signs in
+        // with what the run holds — the password it began with is refused now, so only the
+        // made key gets in.
+        let without_key =
+            stop_through_gate(&stop_target, None, "t647-no-such-mark", Patience::NONE).await;
+        assert!(
+            without_key.is_err(),
+            "the run's password still signed in after the hardening step: {without_key:?}"
+        );
+        let with_key = stop_through_gate(
+            &stop_target,
+            Some(&made.private_openssh),
+            "t647-no-such-mark",
+            Patience::NONE,
+        )
+        .await;
+        assert_eq!(
+            with_key,
+            Ok(Stopped::AlreadyGone),
+            "the run's stop did not sign in with the key it made"
+        );
         // Everything of the run goes here — the made key in memory with it.
         id
     };

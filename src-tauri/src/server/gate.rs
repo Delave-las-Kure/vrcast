@@ -13,7 +13,7 @@
 
 use crate::domain::server_profile::ServerProfile;
 use crate::domain::server_state::{self, Compat, ForeignReason, Kind, ServerState};
-use crate::ssh::{Connection, SshError};
+use crate::ssh::{Connection, Credentials, ServerAddress, SshError};
 use crate::store::secrets::SecretStore;
 
 /// What a session is being opened for.
@@ -127,11 +127,96 @@ pub async fn open(
     profile: &ServerProfile,
     intent: Intent,
 ) -> Result<Opened, Refusal> {
-    let conn = super::connect_raw(secrets, profile, None).await?;
+    let conn = super::connect_raw(secrets, profile).await?;
     admit(conn, &profile.video_dir, intent, None).await
 }
 
-/// Open a session to stop what a deployment or upgrade left running (T609, T615).
+/// Where a deployment or upgrade stops what it left running, and with what it signs in there
+/// — **taken when the run begins, and never read from the profile again** (T647).
+///
+/// ⚠ **QA-23 №1.** The stop used to read the profile afresh at each attempt, for one reason
+/// (T616: a password profile is switched to the made key during the run) — and took with it
+/// everything else the profile says: the address, the port, the user, the confirmed
+/// fingerprint. A profile pointed at server B while a run on A was cut off sent the next
+/// attempt to B; B has no process carrying A's mark, answered `VRCAST_STOP none`, and that was
+/// read as "A's run is gone". Or B would not let us in, and the stop on A was retried for ever
+/// against the wrong machine.
+///
+/// So the run keeps its own: the machine and account it started on, the fingerprint it was
+/// confirmed by, and the credentials it signed in with — the password or key it began with
+/// (and, passed separately at each attempt, the key it made and put on the server). The
+/// profile is not asked. A person editing the profile changes where the *next* run goes, not
+/// where this one's end is confirmed.
+///
+/// The secrets are on the redaction list from the moment this is made
+/// ([`Credentials::register_for_redaction`]), and `Debug` shows none of them — [`Credentials`]
+/// hides its own.
+#[derive(Debug, Clone)]
+pub struct StopTarget {
+    address: ServerAddress,
+    user: String,
+    fingerprint: String,
+    video_dir: String,
+    own: Option<Credentials>,
+}
+
+impl StopTarget {
+    /// The run's target, from the profile **as the run began** and the credentials it signs
+    /// in with. `None` when that profile has no confirmed fingerprint — the run itself could
+    /// not have been let in, and credentials are never sent without one (FR-092).
+    ///
+    /// `own` is `None` when there was nothing to sign in with (the store would not give the
+    /// secret up): the stop then has only the made key, once there is one.
+    pub fn new(profile: &ServerProfile, own: Option<Credentials>) -> Option<Self> {
+        let fingerprint = profile.host_fingerprint.clone()?;
+        if let Some(credentials) = &own {
+            credentials.register_for_redaction();
+        }
+        Some(Self {
+            address: ServerAddress::new(&profile.host, profile.port),
+            user: profile.user.clone(),
+            fingerprint,
+            video_dir: profile.video_dir.clone(),
+            own,
+        })
+    }
+
+    /// The machine the run started on.
+    pub fn address(&self) -> &ServerAddress {
+        &self.address
+    }
+
+    /// The account the run started as.
+    pub fn user(&self) -> &str {
+        &self.user
+    }
+
+    /// The fingerprint the run's server was confirmed by.
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+
+    /// What an attempt signs in with, in order (T615, T647): the key the run made and put on
+    /// the server, when given — after `SshHardening` it is the only way in — and then the
+    /// run's own credentials from its start.
+    pub fn ways_in(&self, made_key: Option<&str>) -> Vec<Credentials> {
+        let mut ways = Vec::with_capacity(2);
+        if let Some(openssh) = made_key {
+            let made = Credentials::KeyText {
+                openssh: openssh.to_owned(),
+                passphrase: None,
+            };
+            made.register_for_redaction();
+            ways.push(made);
+        }
+        if let Some(own) = &self.own {
+            ways.push(own.clone());
+        }
+        ways
+    }
+}
+
+/// Open a session to stop what a deployment or upgrade left running (T609, T615, T647).
 ///
 /// Through the gate like everything else — stopping a process on the server is an action on
 /// it, not a read (the lesson of T601) — with the intent the run itself used, `Setup`, and
@@ -140,33 +225,40 @@ pub async fn open(
 /// without the second door the stop would be retried for ever against a server that will
 /// never say yes. Nothing else is let through.
 ///
-/// `made_key` (T615): the private key the run made and put on the server. Since T616 the
-/// profile is switched to it (store and profile) before `SshHardening` turns password logins
-/// off, and the caller reads the profile afresh at each attempt — so this is a second way in,
-/// for the moment between the key being put on the server and it being kept. When given, the
-/// made key is tried first and the profile's own credentials only if it will not sign in.
-pub async fn open_to_stop(
-    secrets: &dyn SecretStore,
-    profile: &ServerProfile,
-    made_key: Option<&str>,
-) -> Result<Opened, Refusal> {
-    let conn = match made_key {
-        Some(key) => match super::connect_raw(secrets, profile, Some(key)).await {
-            Ok(conn) => conn,
-            Err(by_key) => {
-                tracing::warn!(error = %by_key, "the made key would not sign in; trying the profile's own way in");
-                super::connect_raw(secrets, profile, None).await?
+/// **To the run's own server, as the run's own account, checked against the run's own
+/// fingerprint** — `target`, taken when the run began (T647). The profile is not read: it may
+/// point somewhere else by now.
+///
+/// `made_key` (T615): the private key the run made and put on the server. Tried first when
+/// given; the run's own credentials from its start only if it will not sign in.
+pub async fn open_to_stop(target: &StopTarget, made_key: Option<&str>) -> Result<Opened, Refusal> {
+    let mut last: Option<SshError> = None;
+    for credentials in target.ways_in(made_key) {
+        match Connection::connect(
+            target.address.clone(),
+            &target.user,
+            credentials,
+            &target.fingerprint,
+        )
+        .await
+        {
+            Ok(conn) => {
+                return admit(conn, &target.video_dir, Intent::Setup, Some(Intent::Change)).await
             }
-        },
-        None => super::connect_raw(secrets, profile, None).await?,
-    };
-    admit(
-        conn,
-        &profile.video_dir,
-        Intent::Setup,
-        Some(Intent::Change),
-    )
-    .await
+            Err(e) => {
+                tracing::warn!(error = %e, "one way in to the run's server would not sign in");
+                last = Some(e);
+            }
+        }
+    }
+    Err(Refusal::Ssh(last.unwrap_or_else(|| {
+        SshError::KeyUnreadable {
+            path: String::from("the run's own way in"),
+            reason: String::from(
+                "the run began with nothing it could sign in with, and has made no key yet",
+            ),
+        }
+    })))
 }
 
 /// Let an open connection through for `intent`, or refuse — closing it.
