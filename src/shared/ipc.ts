@@ -70,6 +70,7 @@ import {
   type Stalls,
   type Peaks,
   type WhatWouldGo,
+  type ForgetSeen,
   type UpdateStanding,
   type Found,
   type WhatWent,
@@ -166,8 +167,11 @@ export const ipc = {
   forgetPreview: () => call<WhatWouldGo>("forget_preview"),
   /** Remove. Refused without `confirmed`, before anything is touched. Refused as
    *  `FORGET_TASKS_RUNNING` while any task is alive (T643), nothing removed; while it runs, a new
-   *  task is refused as `FORGET_IN_PROGRESS`. */
-  forgetEverything: (confirmed: boolean) => call<WhatWent>("forget_everything", { confirmed }),
+   *  task is refused as `FORGET_IN_PROGRESS`. `seen` is the list the person agreed to (T648):
+   *  if the profiles or the servers that would be lost for good differ now, it is refused as
+   *  `FORGET_PREVIEW_STALE`, nothing removed. */
+  forgetEverything: (confirmed: boolean, seen: ForgetSeen) =>
+    call<WhatWent>("forget_everything", { confirmed, seen }),
 
   // --- updating the application (FR-113) ---
   /** Version and packaging. Answers from this machine alone — nothing leaves it. */

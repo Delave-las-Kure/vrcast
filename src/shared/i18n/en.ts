@@ -258,6 +258,10 @@ export const en: Catalogue = {
       message: "The application's data is being removed right now",
       hint: "While the removal runs, no new task starts. Wait for it to finish and try again. Nothing was changed.",
     },
+    FORGET_PREVIEW_STALE: {
+      message: "The list of what would go has changed",
+      hint: "Since you looked at it, the server profiles or the servers that would become unreachable for good have changed — a deployment may have finished and left its key only here. Nothing was removed. Look at the new list and confirm again.",
+    },
 
     // --- input and confirmation ---
     INVALID_INPUT: {
@@ -909,6 +913,9 @@ export const en: Catalogue = {
       dirLeft: "The data directory could not be removed — something may be holding a file in it.",
       tasksRunning:
         "Stop the tasks first: while any is going — a deployment, an upgrade, an upload, a preparation, a measurement — the data cannot be removed. Wait for them to finish or cancel them on the tasks screen.",
+      changed:
+        "The list changed while you were looking at it: check it again and confirm again. The earlier agreement has been withdrawn.",
+      reading: "Reading the list again…",
     },
     update: {
       title: "Updates",

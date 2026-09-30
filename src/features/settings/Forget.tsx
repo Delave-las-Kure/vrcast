@@ -15,13 +15,13 @@
  * reads it, and the person deciding is the one who cannot check afterwards.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT } from "../../shared/i18n";
 import { formatBytes } from "../../shared/i18n/format";
 import { ipc, onTaskDone, onTaskProgress } from "../../shared/ipc";
-import type { AppError, Task, WhatWent, WhatWouldGo } from "../../shared/contract";
+import type { AppError, ForgetSeen, Task, WhatWent, WhatWouldGo } from "../../shared/contract";
 
 /**
  * T643 — whether a task counts as going for "remove everything".
@@ -39,6 +39,23 @@ function isGoing(task: Task): boolean {
   );
 }
 
+/** T648 — the part of the list a person agrees to: whose profiles go, and who is lost for good. */
+function seenOf(would: WhatWouldGo): ForgetSeen {
+  return { servers: would.servers, locked_out: would.locked_out };
+}
+
+/** The same names, whatever the order. The core compares the same way. */
+function sameNames(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const x = [...a].sort();
+  const y = [...b].sort();
+  return x.every((name, i) => name === y[i]);
+}
+
+function sameSeen(a: WhatWouldGo, b: WhatWouldGo): boolean {
+  return sameNames(a.servers, b.servers) && sameNames(a.locked_out, b.locked_out);
+}
+
 export function Forget() {
   const t = useT();
   const { lang } = useLang();
@@ -53,21 +70,54 @@ export function Forget() {
   // `FORGET_TASKS_RUNNING`, a command still connecting included); this only keeps the button
   // from offering what would be refused.
   const [going, setGoing] = useState<ReadonlySet<string>>(new Set());
+  // ⚠ T648 (QA-23 №2): whether the list on screen was read after the last task ended. A task
+  // that ends may have changed it — a deployment turns its profile to the key it made, and that
+  // server is then lost for good — so the button stays off until the list is read again, never
+  // on the strength of a fresh task list and an old list of consequences.
+  const [fresh, setFresh] = useState(false);
+  // The list changed under an agreement: the agreement is withdrawn and this says why.
+  const [changed, setChanged] = useState(false);
+
+  const shown = useRef<WhatWouldGo | null>(null);
+  const alive = useRef(true);
+  // Only the latest read counts: an earlier one answering late must not overwrite it.
+  const reads = useRef(0);
+
+  /**
+   * Read the list (again). When it differs from the one on screen in whose profiles go or who
+   * is lost for good, the agreement given to the old one is withdrawn and the change is said.
+   * Resolves to the list now on screen, or `null` when it could not be read or a later read
+   * overtook this one.
+   */
+  const readList = useCallback(async (): Promise<WhatWouldGo | null> => {
+    const mine = ++reads.current;
+    setFresh(false);
+    try {
+      const got = await ipc.forgetPreview();
+      if (!alive.current || mine !== reads.current) return null;
+      const before = shown.current;
+      if (before && !sameSeen(before, got)) {
+        setAgreed(false);
+        setChanged(true);
+      }
+      shown.current = got;
+      setWould(got);
+      setFresh(true);
+      return got;
+    } catch (e) {
+      // Left not fresh: without a list the button stays off, and the core would refuse anyway.
+      if (alive.current && mine === reads.current) setError(e as AppError);
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-    ipc
-      .forgetPreview()
-      .then((got) => {
-        if (alive) setWould(got);
-      })
-      .catch((e: AppError) => {
-        if (alive) setError(e);
-      });
+    alive.current = true;
+    void readList();
     return () => {
-      alive = false;
+      alive.current = false;
     };
-  }, []);
+  }, [readList]);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,24 +141,38 @@ export function Forget() {
     void onTaskProgress((e) => {
       setGoing((prev) => (prev.has(e.id) ? prev : new Set(prev).add(e.id)));
     }).then(keep);
-    void onTaskDone(() => reload()).then(keep);
+    // T648: a task that ended may have changed what would go — the list is read again with it.
+    void onTaskDone(() => {
+      if (cancelled) return;
+      reload();
+      void readList();
+    }).then(keep);
     return () => {
       cancelled = true;
       unlisten.forEach((fn) => fn());
     };
-  }, []);
+  }, [readList]);
 
   const remove = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      setWent(await ipc.forgetEverything(true));
+      // T648: read once more right before removing. A change since the look withdraws the
+      // agreement (in `readList`) and nothing is removed; what the person saw is what is sent,
+      // and the core refuses it too if it has gone stale in between.
+      const before = shown.current;
+      const now = await readList();
+      if (!now || !before || !sameSeen(before, now)) return;
+      setWent(await ipc.forgetEverything(true, seenOf(now)));
     } catch (e) {
-      setError(e as AppError);
+      const err = e as AppError;
+      setError(err);
+      // The core saw a different list: read it, which withdraws the agreement and says why.
+      if (err?.code === "FORGET_PREVIEW_STALE") void readList();
     } finally {
-      setBusy(false);
+      if (alive.current) setBusy(false);
     }
-  }, []);
+  }, [readList]);
 
   if (went) {
     return (
@@ -162,11 +226,21 @@ export function Forget() {
             </div>
           )}
 
+          {changed && (
+            // T648: the list is not the one agreed to any more — the tick is off, and why.
+            <p className="forget-warning" data-testid="forget-changed" role="status">
+              {words.changed}
+            </p>
+          )}
+
           <label className="forget-agree">
             <input
               type="checkbox"
               checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
+              onChange={(e) => {
+                setAgreed(e.target.checked);
+                if (e.target.checked) setChanged(false);
+              }}
               data-testid="forget-agree"
             />
             {words.agree}
@@ -181,11 +255,13 @@ export function Forget() {
           <button
             type="button"
             className="danger"
-            disabled={!agreed || busy || going.size > 0}
+            // T648: `fresh` too — the list has to have been read since the last task ended, not
+            // only the task list.
+            disabled={!agreed || busy || !fresh || going.size > 0}
             onClick={() => void remove()}
             data-testid="forget-do"
           >
-            {busy ? words.removing : words.remove}
+            {busy ? words.removing : fresh ? words.remove : words.reading}
           </button>
         </>
       )}

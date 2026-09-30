@@ -19,6 +19,7 @@ use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretRef, SecretSt
 use vrcast_studio_lib::tasks::engine::ClaimRefused;
 use vrcast_studio_lib::tasks::state::{LaneLimits, TaskKind, TaskState};
 
+use super::forget::seen;
 use super::support::{state, valid_input};
 
 const MADE_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nmade-by-the-run\n";
@@ -75,7 +76,8 @@ async fn a_running_task_refuses_and_nothing_is_removed() {
         let (task, go) = hold(&s, kind).await;
         wait_for(&s, &task, TaskState::Running).await;
 
-        let err = api::forget_everything(&s, true).expect_err("removed under a running task");
+        let err =
+            api::forget_everything(&s, true, &seen(&s)).expect_err("removed under a running task");
         assert_eq!(err.code, ErrorCode::ForgetTasksRunning, "{kind:?}: {err:?}");
         assert!(
             err.cause
@@ -105,7 +107,7 @@ async fn a_running_task_refuses_and_nothing_is_removed() {
     }
 
     // Everything over: the removal goes through.
-    let went = api::forget_everything(&s, true).expect("removal after the tasks ended");
+    let went = api::forget_everything(&s, true, &seen(&s)).expect("removal after the tasks ended");
     assert_eq!(went.secrets_removed, 1);
 }
 
@@ -116,7 +118,8 @@ async fn a_queued_task_and_a_pending_claim_refuse_too() {
 
     // A deployment still connecting holds its claim and has no task yet (T621).
     let claim = s.tasks.claim("deploy:x").expect("the claim was not given");
-    let err = api::forget_everything(&s, true).expect_err("removed under a pending claim");
+    let err =
+        api::forget_everything(&s, true, &seen(&s)).expect_err("removed under a pending claim");
     assert_eq!(err.code, ErrorCode::ForgetTasksRunning);
     drop(claim);
 
@@ -133,7 +136,7 @@ async fn a_queued_task_and_a_pending_claim_refuse_too() {
         s.tasks.get(&second).unwrap().map(|t| t.state),
         Some(TaskState::Queued)
     );
-    let err = api::forget_everything(&s, true).expect_err("removed under a queued task");
+    let err = api::forget_everything(&s, true, &seen(&s)).expect_err("removed under a queued task");
     assert_eq!(err.code, ErrorCode::ForgetTasksRunning);
 
     go_first.notify_one();
@@ -142,7 +145,7 @@ async fn a_queued_task_and_a_pending_claim_refuse_too() {
     go_second.notify_one();
     wait_for(&s, &second, TaskState::Completed).await;
 
-    let went = api::forget_everything(&s, true).expect("removal after the tasks ended");
+    let went = api::forget_everything(&s, true, &seen(&s)).expect("removal after the tasks ended");
     assert_eq!(went.secrets_removed, 1);
 }
 
@@ -170,7 +173,7 @@ async fn the_qa_path_a_deployment_keeping_its_key_cannot_write_it_back() {
         .unwrap();
     wait_for(&s, &task, TaskState::Running).await;
 
-    let err = api::forget_everything(&s, true).expect_err("removed under a deployment");
+    let err = api::forget_everything(&s, true, &seen(&s)).expect_err("removed under a deployment");
     assert_eq!(err.code, ErrorCode::ForgetTasksRunning);
     assert_eq!(secret_of(&s, &id).as_deref(), Some("пароль"));
 
@@ -178,7 +181,7 @@ async fn the_qa_path_a_deployment_keeping_its_key_cannot_write_it_back() {
     wait_for(&s, &task, TaskState::Completed).await;
     assert_eq!(secret_of(&s, &id).as_deref(), Some(MADE_KEY));
 
-    let went = api::forget_everything(&s, true).expect("removal after the run");
+    let went = api::forget_everything(&s, true, &seen(&s)).expect("removal after the run");
     assert_eq!(went.secrets_removed, 1);
     assert!(went.secrets_left.is_empty());
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -232,7 +235,7 @@ async fn while_the_removal_runs_nothing_starts_and_afterwards_it_does() {
 
     let removing = {
         let s = s.clone();
-        std::thread::spawn(move || api::forget_everything(&s, true))
+        std::thread::spawn(move || api::forget_everything(&s, true, &seen(&s)))
     };
     entered_rx
         .recv_timeout(Duration::from_secs(10))
@@ -252,7 +255,7 @@ async fn while_the_removal_runs_nothing_starts_and_afterwards_it_does() {
         .map_err(AppError::from)
         .expect_err("a task started during the removal");
     assert_eq!(err.code, ErrorCode::ForgetInProgress);
-    let err = api::forget_everything(&s, true).expect_err("a second removal started");
+    let err = api::forget_everything(&s, true, &seen(&s)).expect_err("a second removal started");
     assert_eq!(err.code, ErrorCode::ForgetInProgress);
     assert!(
         s.tasks.list().unwrap().is_empty(),
@@ -279,13 +282,15 @@ fn a_refused_removal_and_a_finished_one_both_leave_the_engine_open() {
     let s = state();
     let claim = s.tasks.claim("deploy:y").unwrap();
     assert_eq!(
-        api::forget_everything(&s, true).unwrap_err().code,
+        api::forget_everything(&s, true, &seen(&s))
+            .unwrap_err()
+            .code,
         ErrorCode::ForgetTasksRunning
     );
     assert!(!s.tasks.is_closed_for_forgetting());
     drop(claim);
 
-    api::forget_everything(&s, true).expect("removal failed");
+    api::forget_everything(&s, true, &seen(&s)).expect("removal failed");
     assert!(!s.tasks.is_closed_for_forgetting());
     assert!(s.tasks.claim("deploy:y").is_some());
 }
