@@ -564,10 +564,22 @@ async fn prepare_and_send(
     // just happened, and the alternative is a broken rung that nobody meets until a person is
     // watching. It is reported as its own stage so the time is accounted for rather than
     // looking like a stall.
+    //
+    // **And it answers cancel and pause while it runs** (T663): it used to be a plain call
+    // that took neither, so a cancel pressed during a long decode waited for the whole film.
     ctx.report_important(0.0, DetailCode::StageValidating);
-    let verdict = crate::media::validate::validate(&out_path)
-        .await
-        .map_err(|e| BuildError::Prepare(e.to_string()))?;
+    let verdict =
+        match crate::media::validate::validate_in_task(&out_path, ctx, job.source.duration_s).await
+        {
+            Ok(verdict) => verdict,
+            Err(e) => {
+                let _ = std::fs::remove_file(&out_path);
+                return Err(match e {
+                    crate::media::validate::ValidateError::Cancelled => BuildError::Cancelled,
+                    other => BuildError::Prepare(other.to_string()),
+                });
+            }
+        };
     if !verdict.ok {
         let _ = std::fs::remove_file(&out_path);
         return Err(BuildError::VariantBroken {
@@ -576,7 +588,15 @@ async fn prepare_and_send(
         });
     }
 
-    let sent = send(job, &out_path, &variant.file).await;
+    // **Asked again before the next heavy phase** (T663). A cancel that landed as the decode
+    // finished would otherwise go on to send gigabytes to the server before anything looked
+    // at it again.
+    if ctx.is_cancelled() {
+        let _ = std::fs::remove_file(&out_path);
+        return Err(BuildError::Cancelled);
+    }
+
+    let sent = send(job, &out_path, &variant.file, ctx).await;
     // The local copy goes whether the sending worked or not: it is gigabytes, and a failed
     // build that quietly fills somebody's disk is a second failure on top of the first.
     let _ = std::fs::remove_file(&out_path);
@@ -584,26 +604,48 @@ async fn prepare_and_send(
 }
 
 /// Send a prepared variant to the serving directory.
-async fn send(job: &BuildJob<'_>, local: &Path, name: &str) -> Result<(), BuildError> {
-    use tokio::io::AsyncWriteExt;
-
+///
+/// **In blocks, not whole** (T660, QA-24B-01). It used to read the entire variant into memory
+/// — gigabytes, after hours of encoding — and write it in one call with no way to stop and no
+/// word of how far it had got. Now it goes through [`stream_blocks`]: one [`SEND_BLOCK`] in
+/// memory at a time, `STAGE_SENDING_VARIANT` with the share sent, and a cancel looked at
+/// between blocks, after which the staged `.part` on the server is removed.
+async fn send(
+    job: &BuildJob<'_>,
+    local: &Path,
+    name: &str,
+    ctx: &TaskContext,
+) -> Result<(), BuildError> {
     let target = format!("{}/{}", job.video_dir.trim_end_matches('/'), name);
     let staged = format!("{target}.part");
 
-    let body = tokio::fs::read(local)
+    let mut source = tokio::fs::File::open(local)
         .await
         .map_err(|e| BuildError::Prepare(e.to_string()))?;
+    let total = source
+        .metadata()
+        .await
+        .map_err(|e| BuildError::Prepare(e.to_string()))?
+        .len();
+
+    ctx.report_important(0.0, DetailCode::StageSendingVariant);
     let sftp = job.conn.sftp().await?;
     let written = async {
+        use tokio::io::AsyncWriteExt;
         let mut file = sftp.create(staged.clone()).await?;
-        file.write_all(&body).await?;
-        file.flush().await?;
-        file.shutdown().await?;
-        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        let sent = stream_blocks(&mut source, &mut file, total, ctx).await;
+        if sent.is_ok() {
+            file.flush().await?;
+            file.shutdown().await?;
+        }
+        sent.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
     .await;
     if let Err(e) = written {
         let _ = sftp.remove_file(staged.clone()).await;
+        if ctx.is_cancelled() {
+            return Err(BuildError::Cancelled);
+        }
         return Err(BuildError::Ssh(crate::ssh::SshError::sftp(
             crate::store::redact::safe_display(&*e),
         )));
@@ -621,6 +663,72 @@ async fn send(job: &BuildJob<'_>, local: &Path, name: &str) -> Result<(), BuildE
         .await?
         .require_ok("could not put the variant in place")?;
     Ok(())
+}
+
+/// How much of a variant is held in memory at once while it is sent (T660).
+///
+/// A megabyte: large enough that SFTP's per-write round trips do not dominate, small enough
+/// that a 20 GB rung costs the machine what a small image does.
+pub const SEND_BLOCK: usize = 1024 * 1024;
+
+/// Why a variant's sending stopped (T660).
+#[derive(Debug, thiserror::Error)]
+pub enum StreamError {
+    #[error("the variant could not be read: {0}")]
+    Read(std::io::Error),
+    #[error("the variant could not be written: {0}")]
+    Write(std::io::Error),
+    #[error("the sending was cancelled")]
+    Cancelled,
+}
+
+/// Copy `from` into `into` one [`SEND_BLOCK`] at a time (T660).
+///
+/// The whole of what makes the sending bounded, stoppable and visible, apart from the SFTP
+/// session it is used with — so that it can be checked against a reader of any size and a
+/// writer that records what it was handed, without a server. One buffer, reused: memory does
+/// not grow with the file. Between blocks it asks whether the task was cancelled and waits
+/// out a pause; after each block it reports the share sent under `STAGE_SENDING_VARIANT`.
+///
+/// Returns how many bytes went across.
+pub async fn stream_blocks<R, W>(
+    from: &mut R,
+    into: &mut W,
+    total: u64,
+    ctx: &TaskContext,
+) -> Result<u64, StreamError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut block = vec![0u8; SEND_BLOCK];
+    let mut sent: u64 = 0;
+    loop {
+        if ctx.is_cancelled() {
+            return Err(StreamError::Cancelled);
+        }
+        ctx.wait_while_paused().await;
+        if ctx.is_cancelled() {
+            return Err(StreamError::Cancelled);
+        }
+
+        let n = from.read(&mut block).await.map_err(StreamError::Read)?;
+        if n == 0 {
+            return Ok(sent);
+        }
+        into.write_all(&block[..n])
+            .await
+            .map_err(StreamError::Write)?;
+        sent += n as u64;
+        if total > 0 {
+            ctx.report(
+                (sent as f64 / total as f64).clamp(0.0, 1.0),
+                DetailCode::StageSendingVariant,
+            );
+        }
+    }
 }
 
 /// Write `master.m3u8` staged-and-renamed, the way [`send`] already writes a variant (T572).

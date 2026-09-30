@@ -173,6 +173,10 @@ export type DetailCode =
   | "PROBE_UNREADABLE"
   | "CONVERT_NO_OUT_PATH"
   | "CONVERT_OUT_OVERWRITES_SOURCE"
+  | "CONVERT_OUT_EXISTS"
+  | "CONVERT_OUT_BUSY"
+  | "CONVERT_REPLACE_FAILED"
+  | "VALIDATE_STALLED"
   | "CONVERT_VALIDATE_NO_FFMPEG"
   | "CONVERT_NO_ENCODER"
   | "PLAN_NO_AUDIO_TRACKS"
@@ -195,7 +199,9 @@ export type DetailCode =
   | "STAGE_VALIDATING"
   | "STAGE_CHECKSUM"
   | "STAGE_MEASURING_QUALITY"
+  | "STAGE_PREPARING_MEASUREMENT"
   | "STAGE_BUILDING_LADDER"
+  | "STAGE_SENDING_VARIANT"
   | "STAGE_CUTTING_SEGMENTS"
   | "STAGE_VERIFYING_LADDER"
   | "STAGE_STOP_UNCONFIRMED"
@@ -1619,6 +1625,8 @@ export interface ConvertStart {
   out_path: string;
   /** False = the person asked for the processor themselves. */
   prefer_hardware: boolean;
+  /** Agreed to replace a finished result already at `out_path` (T662). */
+  confirmed?: boolean;
 }
 
 /** The verdict of the playback check (FR-027). */

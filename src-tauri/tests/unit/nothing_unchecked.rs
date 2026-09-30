@@ -35,13 +35,14 @@ use std::path::{Path, PathBuf};
 const SENDS_A_PREPARED_FILE: &[(&str, &str, &str)] = &[
     (
         "src/commands/convert.rs",
-        "validate::validate(",
+        "validate::validate_in_task(",
         "Preparing one file. The verdict is what decides whether it may be offered for upload \
-         at all, and it has been here since FR-027 was written.",
+         at all, and it has been here since FR-027 was written. Inside the task, so the decode \
+         answers cancel and pause (T663).",
     ),
     (
         "src/tasks/ladder_build.rs",
-        "validate::validate(",
+        "validate::validate_in_task(",
         "Building a quality set. Every rung is a file a viewer is served, and until 2026-09-07 \
          none of them was decoded — the set went to the server because the encoder had exited \
          zero (T499).",
@@ -82,10 +83,10 @@ fn the_ladder_decodes_a_variant_before_it_sends_it() {
         .find("convert::run(&convert, ctx)")
         .expect("the ladder build no longer encodes a variant — if it moved, move this too");
     let decoded = text
-        .find("validate::validate(&out_path)")
+        .find("validate::validate_in_task(&out_path")
         .expect("the ladder build no longer decodes a variant (T499)");
     let sent = text
-        .find("send(job, &out_path, &variant.file)")
+        .find("send(job, &out_path, &variant.file, ctx)")
         .expect("the ladder build no longer sends a variant");
 
     assert!(
@@ -101,6 +102,12 @@ fn the_ladder_decodes_a_variant_before_it_sends_it() {
         between.contains("if !verdict.ok"),
         "the variant is decoded and the answer is not looked at, which is a decode nobody \
          asked for and a rung nobody checked"
+    );
+    // T663: and a cancel that landed during the decode is looked at before gigabytes go out.
+    assert!(
+        between.contains("ctx.is_cancelled()"),
+        "nothing asks whether the build was cancelled between the decode and the send, so a \
+         cancel pressed during the check sends the whole rung before it is noticed"
     );
 }
 

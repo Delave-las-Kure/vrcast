@@ -66,15 +66,56 @@ pub struct Probed {
 ///
 /// `duration_s` is the film's length; the pieces are placed inside it.
 pub async fn probe(path: &Path, duration_s: f64, encoder: &Encoder) -> Probed {
+    match probe_until(path, duration_s, encoder, None).await {
+        Ok(probed) => probed,
+        // Nothing can cancel a probe that was given nothing to cancel it with.
+        Err(Cancelled) => nothing_probed(encoder),
+    }
+}
+
+/// The probe was stopped from outside (T661).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the complexity probe was cancelled")]
+pub struct Cancelled;
+
+fn nothing_probed(encoder: &Encoder) -> Probed {
+    Probed {
+        measured_bps: None,
+        pieces: 0,
+        encoder: encoder.clone(),
+        notice: Some(crate::domain::wording::Detail::new(
+            crate::domain::wording::DetailCode::NoticeProbeFailed,
+        )),
+    }
+}
+
+/// The same, stopping when `cancel` says so (T661).
+///
+/// Every piece is a real encode, and they used to run as plain children that outlived the
+/// application (QA-24B-02). Now each goes through [`crate::tasks::process::run_to_end`]: a
+/// managed process that dies with the application, stops on `cancel` (its whole tree killed
+/// and waited for), and is stopped if it reports no progress for
+/// [`crate::tasks::process::SILENCE_LIMIT`]. A piece's temporary file is removed on every
+/// way out, including a cancel and a dropped future.
+pub async fn probe_until(
+    path: &Path,
+    duration_s: f64,
+    encoder: &Encoder,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<Probed, Cancelled> {
     let total = duration_s.max(0.0) as u64;
     let mut taken: Vec<u64> = Vec::new();
 
     for percent in AT_PERCENT {
+        if cancel.is_some_and(|c| c.is_cancelled()) {
+            return Err(Cancelled);
+        }
         let at = piece_start(total, percent);
-        match encode_piece(path, at, encoder).await {
+        match encode_piece(path, at, encoder, cancel).await {
             Ok(bps) if bps > 0 => taken.push(bps),
             Ok(_) => {}
-            Err(e) => {
+            Err(PieceError::Cancelled) => return Err(Cancelled),
+            Err(PieceError::Ffmpeg(e)) => {
                 // One piece failing is not a failure: the other two still answer. Only all
                 // three failing falls back.
                 tracing::debug!(at, error = %e, "a piece of the probe would not encode");
@@ -84,17 +125,10 @@ pub async fn probe(path: &Path, duration_s: f64, encoder: &Encoder) -> Probed {
 
     let calibrated = super::encoder_args::family_of(encoder).is_calibrated();
     if taken.is_empty() {
-        return Probed {
-            measured_bps: None,
-            pieces: 0,
-            encoder: encoder.clone(),
-            notice: Some(crate::domain::wording::Detail::new(
-                crate::domain::wording::DetailCode::NoticeProbeFailed,
-            )),
-        };
+        return Ok(nothing_probed(encoder));
     }
 
-    Probed {
+    Ok(Probed {
         measured_bps: Some(taken.iter().sum::<u64>() / taken.len() as u64),
         pieces: taken.len(),
         encoder: encoder.clone(),
@@ -108,7 +142,7 @@ pub async fn probe(path: &Path, duration_s: f64, encoder: &Encoder) -> Probed {
                 crate::domain::wording::DetailCode::NoticeProbeUncalibrated,
             )
         }),
-    }
+    })
 }
 
 /// Where a piece starts, keeping clear of titles and credits.
@@ -124,12 +158,39 @@ pub fn piece_start(total_s: u64, percent: u64) -> u64 {
     at
 }
 
+/// How one piece did not give an answer.
+#[derive(Debug)]
+enum PieceError {
+    Ffmpeg(ffmpeg::FfmpegError),
+    Cancelled,
+}
+
+impl From<ffmpeg::FfmpegError> for PieceError {
+    fn from(e: ffmpeg::FfmpegError) -> Self {
+        Self::Ffmpeg(e)
+    }
+}
+
+/// A piece's temporary file, removed however the piece ends (T661).
+///
+/// In `Drop` because not every way out goes through the end of `encode_piece`: a cancelled
+/// measurement drops the future mid-encode, and a file left behind in the temporary
+/// directory for every piece of every probe is litter nobody cleans.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Encode one piece and see what it weighed.
 async fn encode_piece(
     path: &Path,
     at_s: u64,
     encoder: &Encoder,
-) -> Result<u64, ffmpeg::FfmpegError> {
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<u64, PieceError> {
     let ffmpeg_bin = ffmpeg::locate("ffmpeg")?;
     // The staged file's name belongs to this one call rather than being shared: two calls
     // that land on the same `at_s` (deterministic for a fixed clip length) at the same
@@ -138,16 +199,20 @@ async fn encode_piece(
     // same file. `std::process::id()` used to stand in for uniqueness here, but a process id
     // is shared by every thread in that one process, so it bought none; a UUID does (T567,
     // same fix as `server::manifest_io`'s staged manifest file).
-    let out = std::env::temp_dir().join(format!(
+    let out = Scratch(std::env::temp_dir().join(format!(
         "vrcast-probe-{at_s}-{}.mp4",
         uuid::Uuid::new_v4().simple()
-    ));
+    )));
 
     let mut args: Vec<String> = vec![
         "-nostdin".into(),
         "-y".into(),
         "-v".into(),
         "error".into(),
+        // Progress on stdout (T661): what tells a slow encode from a hung one.
+        "-progress".into(),
+        "pipe:1".into(),
+        "-nostats".into(),
         // Seeking before the input is what makes this quick: ffmpeg jumps rather than
         // decoding its way there. On a two-hour film the difference is minutes.
         "-ss".into(),
@@ -192,28 +257,25 @@ async fn encode_piece(
     ] {
         args.push(a.to_owned());
     }
-    args.push(out.to_string_lossy().into_owned());
+    args.push(out.0.to_string_lossy().into_owned());
 
-    let status = crate::tasks::process::quiet(&ffmpeg_bin)
-        .args(&args)
-        .output()
-        .await
-        .map_err(|e| ffmpeg::FfmpegError::NotRunnable(e.to_string()));
+    let finished = crate::tasks::process::run_to_end(
+        &ffmpeg_bin.to_string_lossy(),
+        &args,
+        cancel,
+        crate::tasks::process::SILENCE_LIMIT,
+    )
+    .await
+    .map_err(|e| match e {
+        crate::tasks::process::RunError::Cancelled => PieceError::Cancelled,
+        other => PieceError::Ffmpeg(ffmpeg::FfmpegError::NotRunnable(other.to_string())),
+    })?;
 
-    let bitrate = match status {
-        Ok(o) if o.status.success() => ffmpeg::bitrate_of(&out).await.unwrap_or(0),
-        Ok(o) => {
-            let _ = tokio::fs::remove_file(&out).await;
-            return Err(ffmpeg::FfmpegError::Unexpected(
-                String::from_utf8_lossy(&o.stderr).trim().to_owned(),
-            ));
-        }
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&out).await;
-            return Err(e);
-        }
-    };
-
-    let _ = tokio::fs::remove_file(&out).await;
-    Ok(bitrate)
+    if !finished.status.success() {
+        return Err(PieceError::Ffmpeg(ffmpeg::FfmpegError::Unexpected(
+            String::from_utf8_lossy(&finished.stderr).trim().to_owned(),
+        )));
+    }
+    // `out` goes when this returns, whatever it returns.
+    Ok(ffmpeg::bitrate_of(&out.0).await.unwrap_or(0))
 }

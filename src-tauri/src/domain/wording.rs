@@ -156,6 +156,16 @@ detail_codes! {
     ProbeUnreadable => "PROBE_UNREADABLE",
     ConvertNoOutPath => "CONVERT_NO_OUT_PATH",
     ConvertOutOverwritesSource => "CONVERT_OUT_OVERWRITES_SOURCE",
+    /// `out_path` — a finished result is already there; replacing it needs a yes (T662).
+    ConvertOutExists => "CONVERT_OUT_EXISTS",
+    /// `out_path` — another preparation that has not ended writes this same result (T662).
+    ConvertOutBusy => "CONVERT_OUT_BUSY",
+    /// `out_path`, `kept_at` — the new result is checked and whole, and could not be put in
+    /// place of the old one; it is kept where it was made (T662).
+    ConvertReplaceFailed => "CONVERT_REPLACE_FAILED",
+    /// `seconds`, `out_path` — the playback check's decoder made no progress for that long
+    /// and was stopped (T663). Nothing is known about the file; it was not put in service.
+    ValidateStalled => "VALIDATE_STALLED",
     ConvertValidateNoFfmpeg => "CONVERT_VALIDATE_NO_FFMPEG",
     ConvertNoEncoder => "CONVERT_NO_ENCODER",
     PlanNoAudioTracks => "PLAN_NO_AUDIO_TRACKS",
@@ -186,7 +196,13 @@ detail_codes! {
     StageValidating => "STAGE_VALIDATING",
     StageChecksum => "STAGE_CHECKSUM",
     StageMeasuringQuality => "STAGE_MEASURING_QUALITY",
+    /// Before the grid: every packet of the film read and three pieces of it encoded, to
+    /// place the chunks and the anchor (T661). Minutes on a long film.
+    StagePreparingMeasurement => "STAGE_PREPARING_MEASUREMENT",
     StageBuildingLadder => "STAGE_BUILDING_LADDER",
+    /// A prepared variant is on its way to the server, in blocks; the share is how much of
+    /// it has gone (T660).
+    StageSendingVariant => "STAGE_SENDING_VARIANT",
     StageCuttingSegments => "STAGE_CUTTING_SEGMENTS",
     StageVerifyingLadder => "STAGE_VERIFYING_LADDER",
     /// The build was stopped or failed, and the server has not yet confirmed that the

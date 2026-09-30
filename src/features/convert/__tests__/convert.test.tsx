@@ -445,6 +445,78 @@ describe("preparation screen", () => {
     await waitFor(() => expect(mockConvertStart).toHaveBeenCalled());
     expect(mockConvertStart.mock.calls[0][0]).toMatchObject({ target_kbps: null });
   });
+
+  it("asks before replacing a finished file, and only a yes sends the confirmation", async () => {
+    // T662 (QA-24B-03). The core refuses to replace a finished result without a yes; the
+    // screen turns that refusal into the question rather than into a failure notice.
+    const existing = "F:/video/source.ready.mp4";
+    mockConvertStart.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [{ key: "CONVERT_OUT_EXISTS", params: { out_path: existing } }],
+    });
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
+    await pickSource();
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
+
+    const dialog = await screen.findByRole("alertdialog", { name: ru.ui.convert.replaceTitle });
+    expect(dialog.textContent).toContain(existing);
+    expect(mockConvertStart).toHaveBeenCalledTimes(1);
+    expect(mockConvertStart.mock.calls[0][0].confirmed).toBeFalsy();
+
+    fireEvent.click(screen.getByText(ru.ui.convert.replaceYes));
+    await waitFor(() => expect(mockConvertStart).toHaveBeenCalledTimes(2));
+    expect(mockConvertStart.mock.calls[1][0]).toMatchObject({
+      out_path: existing,
+      confirmed: true,
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("keeps the finished file when the person says no", async () => {
+    mockConvertStart.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [{ key: "CONVERT_OUT_EXISTS", params: { out_path: "F:/video/x.mp4" } }],
+    });
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
+    await pickSource();
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
+
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByText(ru.ui.convert.replaceNo));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(mockConvertStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer a second preparation into the same file while the first is running", async () => {
+    // QA-24B-03: the button came back the moment the task number arrived, and a second
+    // press queued a second preparation writing the same result.
+    renderIn(
+      <MemoryRouter>
+        <ConvertScreen />
+      </MemoryRouter>,
+    );
+    await pickSource();
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
+    fireEvent.click(screen.getByText(ru.ui.convert.start));
+    await waitFor(() => expect(mockConvertStart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(finish).not.toBeNull());
+
+    expect(screen.getByText(ru.ui.convert.start)).toBeDisabled();
+
+    // Once it has ended, the same file may be prepared again (and the core will ask).
+    finish?.({ id: "t-1", state: "completed", error: null });
+    await waitFor(() => expect(screen.getByText(ru.ui.convert.start)).toBeEnabled());
+  });
 });
 
 describe("playback check", () => {
