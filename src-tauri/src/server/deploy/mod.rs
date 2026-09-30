@@ -226,11 +226,15 @@ pub fn apt_complaint(said: &crate::ssh::CommandOutput) -> String {
 /// A command already on its way — `dpkg` unpacking, say — is waited for to its natural end:
 /// killed halfway it leaves the package database interrupted (measured, T609 phase A), and a
 /// repeat then fails until somebody runs `dpkg --configure -a` by hand. So once
-/// [`RunMark::ask_to_stop`] is called, every further `ran`/`asks`/`put_file` answers
+/// [`RunMark::ask_to_stop`] is called — or the task's own cancellation token, handed in with
+/// [`RunMark::stop_on`], is cancelled — every further `ran`/`asks`/`put_file` answers
 /// [`DeployError::Cancelled`] without sending anything, and the one in flight is let finish.
 pub struct RunMark {
     mark: String,
     stopping: std::sync::atomic::AtomicBool,
+    /// The task's cancellation token, read directly by [`RunMark::is_stopping`] (T641). See
+    /// [`RunMark::stop_on`].
+    stop_source: std::sync::OnceLock<tokio_util::sync::CancellationToken>,
     /// When the command now running was sent, if one is — cleared only once the server has
     /// said how it ended. A command whose answer was lost with its channel may still be
     /// running, and is given until [`crate::ssh::exec::EXEC_CEILING`] after this moment.
@@ -264,6 +268,10 @@ impl std::fmt::Debug for RunMark {
         f.debug_struct("RunMark")
             .field("mark", &self.mark)
             .field("stopping", &self.stopping)
+            .field(
+                "stop_source_cancelled",
+                &self.stop_source.get().map(|t| t.is_cancelled()),
+            )
             .field("in_flight", &self.in_flight)
             .field("keeps_a_key", &self.keep_key.is_some())
             .finish()
@@ -281,6 +289,7 @@ impl RunMark {
         Self {
             mark: uuid::Uuid::new_v4().simple().to_string(),
             stopping: std::sync::atomic::AtomicBool::new(false),
+            stop_source: std::sync::OnceLock::new(),
             in_flight: std::sync::Mutex::new(None),
             keep_key: None,
             on_unheard_wait: std::sync::OnceLock::new(),
@@ -341,8 +350,32 @@ impl RunMark {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Read the task's cancellation at its source (T641).
+    ///
+    /// ⚠ `task_cancel` cancels the task's token; `stopping` used to be the only thing asked,
+    /// and it was set only by the cancel arm of the `select!` in `tasks::deploy::run`.
+    /// `select!` does not put that arm first: with the token cancelled and a command's
+    /// channel just opened, the run's arm could be polled first, pass [`SendGate::open`]
+    /// while `stopping` was still `false`, and send a command the person had cancelled
+    /// before it went (QA-22 №1: 102 of 200). Now [`RunMark::is_stopping`] asks the token
+    /// itself, so every decision "send / do not send" — [`SendGate`], [`send_settled`],
+    /// [`settle_unheard`], `exec_marked`, the checks of the first half of `put_file` — sees a
+    /// cancel the moment `cancel()` has returned, whatever the `select!` polled first.
+    ///
+    /// Once per run: a second call is ignored and answers `false`. Without it (a run outside
+    /// a task, the checks without a server) only [`RunMark::ask_to_stop`] stops the run.
+    pub fn stop_on(&self, token: tokio_util::sync::CancellationToken) -> bool {
+        self.stop_source.set(token).is_ok()
+    }
+
+    /// Has the run been asked to stop — by [`RunMark::ask_to_stop`], or by its task's
+    /// cancellation token ([`RunMark::stop_on`], T641)?
     pub fn is_stopping(&self) -> bool {
         self.stopping.load(std::sync::atomic::Ordering::SeqCst)
+            || self
+                .stop_source
+                .get()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
     }
 
     /// Until when the command last sent may legitimately still be running on the server —
@@ -623,7 +656,8 @@ pub enum Sending {
 /// sent** — nothing awaited in between ([`crate::ssh::Connection::exec_if`]).
 ///
 /// [`SendGate::open`] answers no for a [`Sending::New`] command once the run has been asked to
-/// stop, and yes for [`Sending::Finishing`] whatever was asked. A yes is also the moment the
+/// stop — `ask_to_stop`, or the task's token itself cancelled ([`RunMark::stop_on`], T641) —
+/// and yes for [`Sending::Finishing`] whatever was asked. A yes is also the moment the
 /// command counts as sent: the time is kept as the run's command in flight (T609, T619) — not
 /// earlier, while a channel was still being waited for and nothing had gone.
 pub struct SendGate<'r> {
