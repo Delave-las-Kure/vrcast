@@ -169,3 +169,49 @@ fn the_interface_sends_the_answer_about_the_caddyfile_under_the_name_the_command
          interface that sends nothing must be read as \"not agreed\", not refused"
     );
 }
+
+/// T649 (QA-23 №3) — while "forget everything" runs, `deploy_run` and `server_upgrade_run` are
+/// refused as `FORGET_IN_PROGRESS`, not as `DEPLOY_ALREADY_RUNNING`: no deployment is running,
+/// and "wait for the other one" would send a person to wait for something that is not there.
+/// Once the removal is over, the same calls are no longer refused for it.
+#[tokio::test]
+async fn while_forgetting_a_deployment_and_an_upgrade_are_refused_as_forgetting() {
+    let state = state();
+    let id = vrcast_studio_lib::commands::servers::api::server_add(
+        &state,
+        super::support::valid_input("T649"),
+        "t649-synthetic-password",
+    )
+    .unwrap();
+
+    let Ok(closed) = state.tasks.close_for_forgetting() else {
+        panic!("the engine would not close");
+    };
+    let deploy = api::deploy_run(&state, &id, Ipv6Choice::Keep, true, false)
+        .await
+        .expect_err("a deployment started during the removal");
+    let upgrade = api::server_upgrade_run(&state, &id, true)
+        .await
+        .expect_err("an upgrade started during the removal");
+    assert_eq!(deploy.code, ErrorCode::ForgetInProgress, "{deploy:?}");
+    assert_eq!(upgrade.code, ErrorCode::ForgetInProgress, "{upgrade:?}");
+    assert!(
+        state.tasks.list().unwrap().is_empty(),
+        "a refused call left a task behind"
+    );
+    drop(closed);
+
+    // Over: refused for some other reason (the profile has no confirmed fingerprint), and not
+    // for either of these two.
+    for err in [
+        api::deploy_run(&state, &id, Ipv6Choice::Keep, true, false)
+            .await
+            .expect_err("an unconfirmed server was deployed to"),
+        api::server_upgrade_run(&state, &id, true)
+            .await
+            .expect_err("an unconfirmed server was upgraded"),
+    ] {
+        assert_ne!(err.code, ErrorCode::ForgetInProgress, "{err:?}");
+        assert_ne!(err.code, ErrorCode::DeployAlreadyRunning, "{err:?}");
+    }
+}

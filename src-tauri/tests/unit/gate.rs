@@ -299,6 +299,14 @@ const REACHES_A_SERVER: &[(&str, usize, &str)] = &[
         "`connect_raw` itself — the one door, which `gate::open` opens after it has decided.",
     ),
     (
+        "server/gate.rs",
+        1,
+        "`gate::open_to_stop` (T647): a deployment's stop goes to the run's own server, as its \
+         own account, against its own confirmed fingerprint and with the credentials it began \
+         with — taken when the run began, not read from a profile that may point elsewhere by \
+         now. It is the gate itself: the connection goes straight to `admit`, which decides.",
+    ),
+    (
         "commands/servers.rs",
         1,
         "The step-by-step connection check (T041). It exists precisely to find out what is at \

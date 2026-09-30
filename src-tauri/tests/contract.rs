@@ -30,6 +30,10 @@ mod library;
 #[path = "contract/deploy.rs"]
 mod deploy;
 
+/// T647 — a deployment's stop goes to the server the run started on, with the run's own way in.
+#[path = "contract/deploy_stop_target.rs"]
+mod deploy_stop_target;
+
 #[path = "contract/ladder.rs"]
 mod ladder;
 

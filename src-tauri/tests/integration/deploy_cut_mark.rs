@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
-use vrcast_studio_lib::commands::deploy::{api as deploy_api, stop_through_gate};
+use vrcast_studio_lib::commands::deploy::{api as deploy_api, stop_target_of, stop_through_gate};
 use vrcast_studio_lib::commands::servers::{api as servers, ServerInput};
 use vrcast_studio_lib::commands::AppState;
 use vrcast_studio_lib::domain::deploy_steps::{PlannedStep, Status, StepId};
@@ -115,17 +115,19 @@ async fn a_run_broken_off_after_packages_on_a_bare_machine_is_stopped_through_th
     let steps = steps_for_a_container();
     let task = TaskContext::detached(Arc::new(Db::open_in_memory().unwrap()));
 
-    // The production stop, gate and all.
+    // The production stop, gate and all — to the run's own server with the run's own way in,
+    // taken now, as `start` takes it when the run begins (T647).
+    let stop_target = stop_target_of(state.secrets.as_ref(), &profile)
+        .expect("a confirmed profile has a stop target");
     let attempts = AtomicUsize::new(0);
     let answers: Mutex<Vec<String>> = Mutex::default();
     let stop_again = |mark: String, patience: Patience| -> BoxFuture<'_, Result<Stopped, String>> {
-        let state = &state;
-        let profile = &profile;
+        let stop_target = &stop_target;
         let attempts = &attempts;
         let answers = &answers;
         Box::pin(async move {
             attempts.fetch_add(1, Ordering::SeqCst);
-            let r = stop_through_gate(state, profile, None, &mark, patience).await;
+            let r = stop_through_gate(stop_target, None, &mark, patience).await;
             answers.lock().unwrap().push(format!("{r:?}"));
             r
         })

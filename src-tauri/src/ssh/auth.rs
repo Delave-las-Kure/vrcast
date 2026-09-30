@@ -50,6 +50,32 @@ impl std::fmt::Debug for Credentials {
     }
 }
 
+impl Credentials {
+    /// Put every secret these carry on the redaction list (T647) — for credentials kept in
+    /// memory beyond one connection, such as a deployment's own way in to its server. The
+    /// same rule as [`load_key_text`]: registered where the secret is taken in, not where it
+    /// might be printed. A path is not a secret and is not registered.
+    pub fn register_for_redaction(&self) {
+        match self {
+            Self::Key { passphrase, .. } => {
+                if let Some(p) = passphrase {
+                    redact::register(p);
+                }
+            }
+            Self::Password(password) => redact::register(password),
+            Self::KeyText {
+                openssh,
+                passphrase,
+            } => {
+                redact::register(openssh);
+                if let Some(p) = passphrase {
+                    redact::register(p);
+                }
+            }
+        }
+    }
+}
+
 /// Read a private key from disk.
 ///
 /// Tells "the key is protected by a passphrase" from "the key will not read" — those

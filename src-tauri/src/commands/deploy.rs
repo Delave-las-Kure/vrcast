@@ -639,25 +639,62 @@ pub fn key_keeper(
     })
 }
 
+/// What a run's stop signs in to its own server with (T647): the credentials the run began
+/// with — the password, the key file with its passphrase, or the key kept in the store — read
+/// **once**, when the run begins, and held by the run from then on. `None` when the store will
+/// not give the secret up (the run itself then cannot sign in either). A key file is named by
+/// its path; the passphrase is what is read here.
+///
+/// Public so the check on a container builds its target the way production does
+/// (`tests/integration/deploy_cut_mark.rs`).
+pub fn own_credentials(secrets: &dyn SecretStore, profile: &ServerProfile) -> Option<Credentials> {
+    let secret = secrets
+        .get(&SecretRef::from_stored(&profile.secret_ref))
+        .ok()?;
+    Some(match profile.auth_kind {
+        AuthKind::Password => Credentials::Password(secret),
+        AuthKind::Key => Credentials::Key {
+            path: profile.key_path.clone().unwrap_or_default().into(),
+            passphrase: Some(secret),
+        },
+        AuthKind::ManagedKey => Credentials::KeyText {
+            openssh: secret,
+            passphrase: None,
+        },
+    })
+}
+
+/// The run's own server and way in, for its stop (T647): see [`gate::StopTarget`]. Taken from
+/// `profile` **as the run began** and never refreshed. `None` without a confirmed fingerprint.
+pub fn stop_target_of(
+    secrets: &dyn SecretStore,
+    profile: &ServerProfile,
+) -> Option<gate::StopTarget> {
+    gate::StopTarget::new(profile, own_credentials(secrets, profile))
+}
+
 /// One attempt at confirming a run's stop through a fresh connection — what production's
 /// `stop_again` does (T609, T615), and public so the check on a container goes through the
 /// same door (`tests/integration/deploy_cut_mark.rs`, T617).
 ///
 /// Through the gate like everything else (`gate::open_to_stop`): stopping a process on the
 /// server is an action on the server, not a read (the lesson of T601). A refusal or a failure
-/// to connect is one more unconfirmed attempt, not an end. The profile is read afresh from the
-/// database each time (T616: a password profile is switched to the made key during the run),
-/// and `made_key`, when given, is tried first.
+/// to connect is one more unconfirmed attempt, not an end.
+///
+/// ⚠ **T647 (QA-23 №1) — to the run's own server, never to where the profile points now.**
+/// `target` is the run's address, port, user, confirmed fingerprint and credentials, taken
+/// when it began ([`stop_target_of`]). The profile used to be read afresh here at each attempt
+/// (for the made key, T616) and brought the rest with it: a profile pointed at another server
+/// sent the attempt there, where nothing carries this run's mark — `VRCAST_STOP none`, read as
+/// the run being gone. `made_key`, when given, is the key the run made and put on the server
+/// (after `SshHardening` its only way in) and is tried first.
 pub async fn stop_through_gate(
-    state: &super::AppState,
-    profile: &ServerProfile,
+    target: &gate::StopTarget,
     made_key: Option<&str>,
     mark: &str,
     patience: crate::server::marked::Patience,
 ) -> std::result::Result<crate::domain::marked::Stopped, String> {
-    let profile =
-        super::library::api::profile_of(state, &profile.id).unwrap_or_else(|_| profile.clone());
-    let opened = gate::open_to_stop(state.secrets.as_ref(), &profile, made_key)
+    let opened = gate::open_to_stop(target, made_key)
         .await
         .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
     let stopped = crate::server::marked::stop_confirmed(
@@ -792,18 +829,33 @@ async fn start(
     // same instant cannot both get past here. Held until the task exists and then by its work
     // (moved in below); dropped on every early return in between (refused door, DNS, key), so
     // a failed attempt does not block the next one.
-    let Some(claim) = state.tasks.claim(&format!("deploy:{server_id}")) else {
-        // The other call may not have its task yet (still connecting, still asking DNS): then
-        // there is no identifier to name.
-        let mut refused = AppError::new(ErrorCode::DeployAlreadyRunning);
-        if let Some(busy) = running_deploy_for(state, server_id)? {
-            refused = refused.with_cause(busy);
+    // T649 (QA-23 №3): `try_claim`, not `claim` — a refusal because "forget everything" is
+    // running is not a deployment already running, and is said as what it is.
+    let claim = match state.tasks.try_claim(&format!("deploy:{server_id}")) {
+        Ok(claim) => claim,
+        Err(crate::tasks::engine::ClaimRefused::Forgetting) => {
+            return Err(AppError::new(ErrorCode::ForgetInProgress));
         }
-        return Err(refused);
+        Err(crate::tasks::engine::ClaimRefused::Taken) => {
+            // The other call may not have its task yet (still connecting, still asking DNS):
+            // then there is no identifier to name.
+            let mut refused = AppError::new(ErrorCode::DeployAlreadyRunning);
+            if let Some(busy) = running_deploy_for(state, server_id)? {
+                refused = refused.with_cause(busy);
+            }
+            return Err(refused);
+        }
     };
     if let Some(busy) = running_deploy_for(state, server_id)? {
         return Err(AppError::new(ErrorCode::DeployAlreadyRunning).with_cause(busy));
     }
+
+    // T647: where this run's stop will go and what it will sign in with — the profile as the
+    // run begins, with the credentials the store holds for it now. Held by the run from here
+    // on; a person editing the profile later changes where the next run goes, not where this
+    // one's end is confirmed. `None` only without a confirmed fingerprint, which the gate
+    // below refuses anyway.
+    let stop_target = stop_target_of(state.secrets.as_ref(), &profile);
 
     let intent = Intent::Setup;
 
@@ -847,6 +899,11 @@ async fn start(
         .tasks
         .submit(task_kind, Some(server_id.clone()), move |task| async move {
             let _claim = claim;
+            // T647: the run's own server and way in, for its stop — taken in `start` from the
+            // profile as the run began, and never read from the profile again.
+            let Some(stop_target) = stop_target else {
+                return Err(AppError::new(ErrorCode::HostKeyUnconfirmed).with_cause(&profile.host));
+            };
             let opened = gate::open(secrets.as_ref(), &profile, intent).await?;
             let facts: Machine = machine::look(&opened.conn).await?;
             let address = ServerAddress::new(&profile.host, profile.port);
@@ -969,18 +1026,18 @@ async fn start(
             // the same gate, with the same intent, as the run itself: stopping a process on
             // the server is an action on the server, not a read (the lesson of T601). A
             // refusal or a failure to connect is one more unconfirmed attempt, not an end.
-            // ⚠ **T615/T616 — which key the next attempt signs in with.** The profile is read
-            // afresh from the database at each attempt: since T616 a password profile is
-            // switched to the made key (store and profile) before `SshHardening` turns
-            // passwords off, so a copy taken when the task began would go on signing in with a
-            // password the server no longer takes — retried for ever, the server held for ever.
-            // Once `SshKey` is seen applied, the made key (from memory) is tried first as well,
-            // and the profile's own credentials only if that fails. A profile that was already
-            // on a key is not affected: no key is made.
+            // ⚠ **T615/T616/T647 — where the next attempt goes, and what it signs in with.**
+            // To the run's own server, account and fingerprint (`stop_target`, taken above
+            // when the run began), never to where the profile points now: a profile pointed
+            // at another server in the meantime would send the attempt there, where nothing
+            // carries this run's mark (QA-23 №1). It signs in with what the run holds itself:
+            // once `SshKey` is seen applied, the made key (from memory) first — after
+            // `SshHardening` the password the run began with is refused — and then the run's
+            // own credentials from its start. A profile that was already on a key is not
+            // affected: no key is made.
             let key_in = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let stop_again = {
-                let inner = inner.clone();
-                let profile = profile.clone();
+                let stop_target = std::sync::Arc::new(stop_target);
                 let made_private = made_private.clone();
                 let key_in = key_in.clone();
                 move |mark: String,
@@ -989,13 +1046,12 @@ async fn start(
                     'static,
                     std::result::Result<crate::domain::marked::Stopped, String>,
                 > {
-                    let inner = inner.clone();
-                    let profile = profile.clone();
+                    let stop_target = stop_target.clone();
                     let made = made_private
                         .clone()
                         .filter(|_| key_in.load(std::sync::atomic::Ordering::SeqCst));
                     Box::pin(async move {
-                        stop_through_gate(&inner, &profile, made.as_deref(), &mark, patience).await
+                        stop_through_gate(&stop_target, made.as_deref(), &mark, patience).await
                     })
                 }
             };
