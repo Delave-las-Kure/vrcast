@@ -224,7 +224,10 @@ describe("T657 — only the latest answer is shown", () => {
     await act(async () => {
       useServers.setState({ profiles: [{ ...profile(), id: "s2", name: "Other server" }] });
     });
-    expect(mocks.list.mock.calls).toEqual([["s1", false], ["s2", false]]);
+    expect(mocks.list.mock.calls).toEqual([
+      ["s1", false],
+      ["s2", false],
+    ]);
 
     await act(async () => first.resolve(view("First server's answer")));
     expect(screen.queryByText("First server's answer")).not.toBeInTheDocument();
