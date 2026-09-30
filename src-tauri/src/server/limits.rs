@@ -118,7 +118,9 @@ pub const WRITE_ENV: &str = "VRCAST_LIMITS_WRITE";
 ///
 /// A step is one command, and the client itself gives one up after `EXEC_CEILING`; a step
 /// still running that long after the door closed is taken for hung and stopped — TERM,
-/// then KILL (`domain::marked::stop_script`, as T609 stops a deployment's command).
+/// then KILL (`domain::marked::stop_script`, as T609 stops a deployment's command) — and,
+/// for as long as the stop says it is still alive, TERM and KILL again (T634): the lock is
+/// never let go under a step of its change that has not been seen to end.
 pub const DRAIN_CEILING: Duration = crate::ssh::exec::EXEC_CEILING;
 
 #[derive(Debug, thiserror::Error)]
@@ -417,11 +419,14 @@ where
 ///  3. **waits for every live step of this change going forward** — processes carrying
 ///     `WRITE_ENV=<id>.f`, still running on the server — for up to `DRAIN_CEILING`, then
 ///     stops whatever is left, TERM and then KILL: `domain::marked::stop_script`, the stop
-///     of T609 (T628);
+///     of T609 (T628) — and **reads its answer** (`DRAIN`, T634): as long as it says a step
+///     is still alive, TERM and KILL again, with no limit on how many times; only a
+///     confirmed end, or `/proc` that cannot be read at all, lets it go on;
 ///  4. replaces itself (`exec`, the same PID — `flock` is still waiting on it) by the same
 ///     wait **without** `HELD_ENV`, for every step of the change (`WRITE_ENV=<id>…`): a
 ///     putting back that got in before the mark went is waited for — with a `DRAIN_CEILING`
-///     of its own, counted from here — and none can get in after;
+///     of its own, counted from here, and the same reading of the answer — and none can get
+///     in after;
 ///  5. ends — and with it `flock`, and the lock.
 ///
 /// **Why nothing slips past.** Every step carries its mark from its first instruction, and
@@ -438,27 +443,36 @@ where
 /// `pub` so the Docker test can run the very same holder with an input that stays open and
 /// says nothing — a client that went silent without its channel closing.
 pub fn holder_command(id: &str, lock_path: &str) -> String {
+    holder_command_draining(id, lock_path, DRAIN_CEILING)
+}
+
+/// The same holder, with the wait for the change's steps before the first TERM given rather
+/// than `DRAIN_CEILING` — so the Docker test of a step that will not die (T634) need not
+/// sit through ten minutes of a step that is merely slow first. Nothing in the application
+/// passes anything but `DRAIN_CEILING`.
+pub fn holder_command_draining(id: &str, lock_path: &str, drain: Duration) -> String {
     let door = format!(
         "echo \"LOCKED $$ $1\"; while IFS= read -r -t {silence} _; do :; done",
         silence = LOCK_SILENCE.as_secs(),
     );
     let wait_args = format!(
-        "{term} {kill} {grace} signal",
+        "{term} {kill} {grace}",
         term = super::marked::TERM_TICKS,
         kill = super::marked::KILL_TICKS,
-        grace = DRAIN_CEILING.as_secs(),
+        grace = drain.as_secs(),
     );
     let holder = format!(
         "trap '' HUP PIPE\n\
          id=$1\n\
          stop={stop}\n\
+         drain={drain}\n\
          {TXN_ENV}=\"$id\" bash -c {door} vrcast-limits-door \"$$\"\n\
          exec </dev/null >/dev/null 2>&1\n\
-         {selfcheck} bash -c \"$stop\" vrcast-limits-wait \"$id.f\" {wait_args}\n\
-         exec env -u {HELD_ENV} {selfcheck} bash -c \"$stop\" vrcast-limits-last \"$id\" {wait_args}\n",
+         bash -c \"$drain\" vrcast-limits-wait \"$stop\" \"$id.f\" {wait_args}\n\
+         exec env -u {HELD_ENV} bash -c \"$drain\" vrcast-limits-last \"$stop\" \"$id\" {wait_args}\n",
         stop = super::shell_quote(&crate::domain::marked::stop_script(WRITE_ENV)),
+        drain = super::shell_quote(&drain_script()),
         door = super::shell_quote(&door),
-        selfcheck = crate::domain::marked::SELFCHECK,
     );
     let id = super::shell_quote(id);
     format!(
@@ -468,6 +482,62 @@ pub fn holder_command(id: &str, lock_path: &str) -> String {
         lock = super::shell_quote(lock_path),
         holder = super::shell_quote(&holder),
     )
+}
+
+/// The holder's wait for the steps of its change, and the barrier before a putting back
+/// (T634, T635): the stop of T609 (`domain::marked::stop_script`, passed as `$1`) run **again
+/// and again** until its answer is one that lets go.
+///
+/// Arguments: the stop script, the mark (a prefix), the TERM and KILL waits in 100 ms
+/// ticks, how many seconds the first round waits for the steps to end on their own, and —
+/// optional — how many rounds at most (none, or 0: no limit).
+///
+/// **Reading the answer is the point** (QA-21 №1). Before T634 the answer went to
+/// `/dev/null`, and `VRCAST_STOP alive …` — TERM and KILL both sent, and a step of the
+/// change still there — let the lock go exactly like a confirmed end: the limit on the wait
+/// was a limit on the lock. Now only these let go:
+///
+///  * `none`, `ended`, `term`, `kill` — nothing of the change is alive: confirmed;
+///  * `unreadable` — `/proc` cannot be read here (bash < 4.4, a `/proc` hidden from us):
+///    nothing can ever be confirmed on this server, and holding the lock for good would
+///    only make every change of the rules on it fail. The owner's decision (2026-09-30):
+///    let go, as before T628.
+///
+/// Anything else — `alive`, and an answer that is not one at all — is "not confirmed": the
+/// next round sends TERM, then KILL again (no waiting first this time), a second after the
+/// last. With no limit on the rounds (the holder) this goes on for as long as a step of the
+/// change is alive, and the lock with it; every other change meanwhile waits `LOCK_WAIT`
+/// and is turned away (`LIMITS_CONFLICT`). With a limit (the barrier) the last answer is
+/// said as `VRCAST_DRAIN unconfirmed …`.
+///
+/// Prints the answer that ended it — nobody reads it in the holder, whose output goes
+/// nowhere; the barrier reads it (`read_settled`).
+const DRAIN: &str = r#"set -u
+STOP="$1"; WANT="$2"; TERM_TICKS="$3"; KILL_TICKS="$4"; GRACE_S="$5"; ROUNDS="${6:-0}"
+round=0
+while :; do
+  said=$(VRCAST_HLS_SELFCHECK=1 bash -c "$STOP" vrcast-limits-stop "$WANT" "$TERM_TICKS" "$KILL_TICKS" "$GRACE_S" signal)
+  round=$((round + 1))
+  case "$said" in
+    "VRCAST_STOP none"|"VRCAST_STOP ended "*|"VRCAST_STOP term "*|"VRCAST_STOP kill "*|"VRCAST_STOP unreadable")
+      echo "$said"; exit 0 ;;
+    "VRCAST_STOP "*) ;;
+    # No answer at all: the stop could not even start its scan. Where that is because
+    # `/proc` is not there, it never will — the same as `unreadable`.
+    *) [ -r "/proc/$$/stat" ] || { echo "VRCAST_STOP unreadable"; exit 0; } ;;
+  esac
+  if [ "$ROUNDS" -gt 0 ] && [ "$round" -ge "$ROUNDS" ]; then
+    echo "VRCAST_DRAIN unconfirmed after $round rounds: ${said//$'\n'/ }"; exit 0
+  fi
+  GRACE_S=0
+  sleep 1
+done
+"#;
+
+/// The drain script (`DRAIN`), `pub` so the unit test can run it against a stop that
+/// answers what the test tells it to.
+pub fn drain_script() -> String {
+    DRAIN.to_owned()
 }
 
 /// A step of change `id`, as it is sent (T628): carrying `WRITE_ENV=<id>` from its first

@@ -1974,3 +1974,140 @@ async fn a_silent_clients_step_keeps_the_lock_until_it_has_ended() {
     assert!(lock_is_free(&server));
     assert_eq!(leftovers(&server), "");
 }
+
+// ---------- T634: a step that will not die keeps the lock ----------
+//
+// T628's holder waited for its change's steps, stopped what was left with TERM and KILL —
+// and let the lock go whatever the stop said, `alive` included (QA-21 №1). Now the holder
+// reads the answer and sends TERM and KILL again for as long as a step of its change is
+// still alive; the lock is not let go before the stop confirms an end.
+
+/// How long the test's holder waits for A's step before the first TERM — instead of the
+/// application's ten minutes, which is the same wait and proves nothing more here.
+const T634_DRAIN_S: u64 = 2;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_step_that_survives_kill_keeps_the_lock_until_it_is_gone() {
+    // A takes the lock with the application's holder (a short first wait) on a channel that
+    // stays open and says nothing. A step of A's change will not stay dead: whatever TERM
+    // and KILL take, a new process with A's mark is there 50 ms later — the nearest a
+    // container comes to a process KILL does not reach (`D` state cannot be made on demand).
+    // After the silence the holder must keep the lock through round after round of TERM and
+    // KILL, B must be turned away (`Busy`, `LIMITS_CONFLICT` to a person), and the lock must
+    // go only once the step really is gone.
+    use vrcast_studio_lib::server::limits::{holder_command_draining, LOCK_SILENCE};
+
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    let id = "undying";
+
+    let conn = connect(&server).await;
+    let started = std::time::Instant::now();
+    let holder = async {
+        let out = conn
+            .exec_with_timeout(
+                &holder_command_draining(id, LOCK, Duration::from_secs(T634_DRAIN_S)),
+                Duration::from_secs(400),
+            )
+            .await;
+        (out, started.elapsed())
+    };
+    let scene = async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Outside A's mark itself (and outside the groups of what it starts), so nothing the
+        // holder signals reaches it; every process it starts carries A's forward mark.
+        server
+            .exec_inside(&format!(
+                "setsid nohup bash -c 'while [ ! -e /tmp/let_it_die ]; do \
+                 VRCAST_LIMITS_WRITE={id}.f setsid sleep 3600 & sleep 0.05; done' \
+                 >/dev/null 2>&1 </dev/null &"
+            ))
+            .expect("the undying step would not start");
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let early = lock_is_free(&server);
+
+        // B asks after the door has closed, and waits its whole `LOCK_WAIT` for nothing.
+        tokio::time::sleep(LOCK_SILENCE + Duration::from_secs(5) - Duration::from_secs(10)).await;
+        let b_from = started.elapsed();
+        let b = put_limit(
+            &server,
+            "203.0.113.62",
+            "demo",
+            all[1].bandwidth,
+            &good_url(&server),
+        )
+        .await;
+        let b_to = started.elapsed();
+        let held_after_b = !lock_is_free(&server);
+        // Each environment entry ends in a NUL, so the entry is matched with that NUL after it.
+        let marked_alive = server
+            .exec_inside(&format!(
+                "grep -laP 'VRCAST_LIMITS_WRITE={id}\\.f\\x00' /proc/[0-9]*/environ 2>/dev/null \
+                 | wc -l"
+            ))
+            .unwrap_or_else(|e| e);
+
+        // Now let it die.
+        server
+            .exec_inside("touch /tmp/let_it_die")
+            .expect("the step would not be let go");
+        let let_go_at = started.elapsed();
+        (
+            early,
+            b_from,
+            b,
+            b_to,
+            held_after_b,
+            marked_alive,
+            let_go_at,
+        )
+    };
+    let ((held, freed_at), (early, b_from, b, b_to, held_after_b, marked_alive, let_go_at)) =
+        tokio::join!(holder, scene);
+    conn.close().await;
+    let _ = server.exec_inside("touch /tmp/let_it_die");
+
+    eprintln!(
+        "B from {:.1}s to {:.1}s: {b:?}; lock held after B: {held_after_b}; marked processes \
+         then: {}; the step let go at {:.1}s; the holder let go at {:.1}s",
+        b_from.as_secs_f64(),
+        b_to.as_secs_f64(),
+        marked_alive.trim(),
+        let_go_at.as_secs_f64(),
+        freed_at.as_secs_f64(),
+    );
+
+    let held = held.expect("the holder's channel failed");
+    assert!(
+        held.stdout.starts_with("LOCKED "),
+        "A never had the lock: {held:?}"
+    );
+    assert!(!early, "the lock was free while A was still heard from");
+    assert!(
+        matches!(b, Err(LimitError::Busy)),
+        "B was not turned away while A's step was alive: {b:?}"
+    );
+    assert!(
+        b_to > LOCK_SILENCE + Duration::from_secs(T634_DRAIN_S + 60),
+        "the check did not reach well past the first round of TERM and KILL: {b_to:?}"
+    );
+    assert!(
+        held_after_b,
+        "the lock went while a step of its change was still alive after KILL"
+    );
+    assert!(
+        marked_alive.trim().parse::<u32>().is_ok_and(|n| n > 0),
+        "the undying step was not alive when the lock was checked: {marked_alive:?}"
+    );
+    assert!(
+        freed_at >= let_go_at,
+        "the holder let go at {freed_at:?}, before the step was let die at {let_go_at:?}"
+    );
+    assert!(
+        freed_at <= let_go_at + Duration::from_secs(20),
+        "the holder kept the lock long after the step had gone: {freed_at:?} vs {let_go_at:?}"
+    );
+    assert!(lock_is_free(&server));
+    assert_eq!(leftovers(&server), "");
+}
