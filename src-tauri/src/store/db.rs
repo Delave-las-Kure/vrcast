@@ -84,6 +84,9 @@ pub type Result<T> = std::result::Result<T, DbError>;
 /// database, it only writes marks when the state moves.
 pub struct Db {
     conn: Mutex<Connection>,
+    /// ⚠ **T636 (QA-21 №3) — a change of a profile's way of signing in is one step, not three.**
+    /// See [`Db::sign_in_lock`].
+    sign_in: Mutex<()>,
 }
 
 impl Db {
@@ -118,6 +121,7 @@ impl Db {
 
         let db = Self {
             conn: Mutex::new(conn),
+            sign_in: Mutex::new(()),
         };
         db.migrate()?;
         Ok(db)
@@ -223,6 +227,27 @@ impl Db {
     pub fn with_conn_mut<T>(&self, f: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
         let mut conn = self.conn.lock().expect("the database mutex is poisoned");
         f(&mut conn)
+    }
+
+    /// Hold every change of a profile's way of signing in apart from every other (T636).
+    ///
+    /// Such a change is three things — read the profile, write the profile, write the secret in
+    /// the operating system's store — and the store is not in this database, so no SQLite
+    /// transaction can hold all three. Two writers exist: `server_update` (a person's form) and
+    /// the deployment keeping the key it made (`commands::deploy::switch_to_managed_key`, T616).
+    /// Interleaved, a form read as `password` could write `password` back over a profile the
+    /// deployment had just moved to `managed_key`, or write its new password into the store
+    /// after the deployment had put the key there — a profile and a store that disagree, with
+    /// every step having succeeded.
+    ///
+    /// Held around the whole change by both writers. A lock of its own rather than the
+    /// connection's: the store may take its time (a system keyring), and every other reader of
+    /// the database must not wait for it. Order: this one first, then the connection — never
+    /// the other way round. A poisoned lock is taken over: it guards no data of its own.
+    pub fn sign_in_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.sign_in
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

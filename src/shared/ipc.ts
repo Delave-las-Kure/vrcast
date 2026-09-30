@@ -133,12 +133,8 @@ export const ipc = {
    *  `replaceCaddyfile` (T611): the person ticked "replace it (a copy is kept)" for a
    *  Caddyfile that is somebody else's (`DeployPreview.foreign_caddyfile`). Without it the
    *  `configs` step refuses and leaves the file alone. */
-  deployRun: (
-    serverId: string,
-    ipv6: Ipv6Choice,
-    confirmed: boolean,
-    replaceCaddyfile: boolean,
-  ) => call<string>("deploy_run", { serverId, ipv6, confirmed, replaceCaddyfile }),
+  deployRun: (serverId: string, ipv6: Ipv6Choice, confirmed: boolean, replaceCaddyfile: boolean) =>
+    call<string>("deploy_run", { serverId, ipv6, confirmed, replaceCaddyfile }),
   serverUpgradePlan: (serverId: string) => call<UpgradePlan>("server_upgrade_plan", { serverId }),
   serverUpgradeRun: (serverId: string, confirmed: boolean) =>
     call<string>("server_upgrade_run", { serverId, confirmed }),
@@ -205,6 +201,12 @@ export const ipc = {
   // --- servers ---
   serversList: () => call<ServerProfile[]>("servers_list"),
   serverAdd: (input: ServerInput, secret: string) => call<string>("server_add", { input, secret }),
+  /**
+   * `secret`: `null` — leave the stored secret as it is; a string — replace it. T638: the
+   * empty string differs from `null` in exactly one move, `managed_key` → `key`, where it
+   * means "the key file has no passphrase" and deletes the made key from the store; elsewhere
+   * a move to or from `managed_key` needs a non-empty secret (`PROFILE_AUTH_NEEDS_SECRET`).
+   */
   serverUpdate: (id: string, input: ServerInput, secret: string | null) =>
     call<void>("server_update", { id, input, secret }),
   serverRemove: (id: string) => call<void>("server_remove", { id }),
