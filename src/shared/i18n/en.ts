@@ -691,6 +691,9 @@ export const en: Catalogue = {
       starting: "Starting…",
       started: "{n} video(s) started. The rest is on the Tasks tab.",
       noServer: "Choose a server first: there is nowhere to build a set.",
+      refused: "{n} video(s) were not started. The others were.",
+      retryThese: "Retry these",
+      forgetThese: "Clear this list",
     },
 
     ladder: {
