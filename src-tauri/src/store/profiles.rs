@@ -163,15 +163,27 @@ pub fn update_if_signs_in(db: &Db, p: &ServerProfile, read_as: AuthKind) -> Resu
 /// the meantime. And only from `password`, because that is the one way of signing in the made
 /// key replaces: a profile a person has since pointed at a key file of their own is theirs, and
 /// the run does not take it back. `false` — nothing was written.
-pub fn switch_to_managed_key(db: &Db, id: &str) -> Result<bool, DbError> {
+///
+/// ⚠ **T642 (QA-22 №2) — and only while the profile still points at the machine the key was
+/// made for.** `at_start` is the run's copy of the profile, taken when it started: the key was
+/// put on *that* address, port and user, and proved there. A profile a person has since pointed
+/// at another server (a new address, port or user — still on a password, the new server's)
+/// keeps its password: the key of the old server written over it would lock the person out of
+/// the new one. The condition is in the `UPDATE` itself, next to `auth_kind`; a rename or a
+/// change of any other field does not stop it.
+pub fn switch_to_managed_key(db: &Db, at_start: &ServerProfile) -> Result<bool, DbError> {
     db.with_conn(|c| {
         let changed = c.execute(
             "UPDATE server_profiles SET auth_kind = ?2, key_path = NULL
-             WHERE id = ?1 AND auth_kind = ?3",
+             WHERE id = ?1 AND auth_kind = ?3
+               AND host = ?4 AND port = ?5 AND username = ?6",
             rusqlite::params![
-                id,
+                at_start.id,
                 AuthKind::ManagedKey.as_str(),
-                AuthKind::Password.as_str()
+                AuthKind::Password.as_str(),
+                at_start.host,
+                at_start.port as i64,
+                at_start.user,
             ],
         )?;
         Ok(changed > 0)

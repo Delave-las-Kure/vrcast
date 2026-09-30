@@ -501,12 +501,17 @@ fn a_switch_to_the_made_key_between_the_check_and_the_write_is_not_written_over(
         let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
         let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
 
+        let at_start = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+            .unwrap()
+            .unwrap();
+
         let mut renamed = valid_input("Renamed");
         renamed.auth_kind = AuthKind::Password;
         let err = api::server_update_between(&s, &id, renamed, secret, &mut || {
             s.secrets.set(&reference, MADE_KEY).unwrap();
             assert!(
-                vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &id).unwrap(),
+                vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &at_start)
+                    .unwrap(),
                 "the switch in between did not happen"
             );
         })
@@ -533,6 +538,9 @@ fn a_new_password_typed_while_the_key_was_kept_is_checked_again_and_then_agrees(
     let s = state();
     let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
     let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+    let at_start = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+        .unwrap()
+        .unwrap();
 
     api::server_update_between(
         &s,
@@ -541,7 +549,7 @@ fn a_new_password_typed_while_the_key_was_kept_is_checked_again_and_then_agrees(
         Some("a-new-root-password"),
         &mut || {
             s.secrets.set(&reference, MADE_KEY).unwrap();
-            vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &id).unwrap();
+            vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &at_start).unwrap();
         },
     )
     .expect("a deliberate password was refused");
@@ -618,6 +626,108 @@ fn a_form_and_a_deployment_on_two_threads_never_leave_password_over_the_key() {
         assert_eq!(after.auth_kind, AuthKind::ManagedKey);
         assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
     }
+}
+
+// ---------- T642 (QA-22 №2): the key is kept only for the server it was made for ----------
+
+/// The run's copy of the profile at its start, as `commands::deploy::start` takes it.
+fn profile_now(
+    s: &vrcast_studio_lib::commands::AppState,
+    id: &str,
+) -> vrcast_studio_lib::domain::server_profile::ServerProfile {
+    vrcast_studio_lib::store::profiles::get(&s.db, id)
+        .unwrap()
+        .expect("the profile vanished")
+}
+
+#[test]
+fn a_profile_pointed_at_another_server_during_the_run_does_not_get_the_old_servers_key() {
+    // QA-22 №2: the run started for server A; meanwhile the person moved the same profile to
+    // server B (another address, port or user), left it on a password and typed B's password.
+    // The key made for A used to be written over B's password and the profile switched to
+    // `managed_key` — B out of reach. Now the key is not kept, B's password stays, and the
+    // error is what stops the run before `SshHardening` (the run turns a keeper's error into
+    // a failed `SshHardening` before sending anything of that step).
+    type Move = (&'static str, fn(&mut ServerInput));
+    let moves: [Move; 3] = [
+        ("address", |i| i.host = String::from("198.51.100.20")),
+        ("port", |i| i.port = 2222),
+        ("user", |i| i.user = String::from("deploy")),
+    ];
+    for (what, point_elsewhere) in moves {
+        let s = state();
+        let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+        let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+        let at_start = profile_now(&s, &id);
+
+        let mut b = valid_input("Server");
+        point_elsewhere(&mut b);
+        api::server_update(&s, &id, b.clone(), Some("password-of-server-b"))
+            .unwrap_or_else(|e| panic!("moving the {what} was refused: {e}"));
+
+        let err =
+            vrcast_studio_lib::commands::deploy::key_keeper(&s, &at_start, MADE_KEY.to_owned())()
+                .expect_err("the key made for A was kept over a profile moved to B");
+        assert!(err.contains("another server"), "{what}: {err}");
+
+        let after = &api::servers_list(&s).unwrap()[0];
+        assert_eq!(after.auth_kind, AuthKind::Password, "{what}");
+        assert_eq!(
+            (&after.host, after.port, &after.user),
+            (&b.host, b.port, &b.user),
+            "{what}"
+        );
+        assert_eq!(
+            s.secrets.get(&reference).unwrap(),
+            "password-of-server-b",
+            "{what}: B's password was written over"
+        );
+    }
+}
+
+#[test]
+fn the_switch_itself_is_conditional_on_the_server_the_run_started_on() {
+    // The `UPDATE` holds the same condition, for a change landing outside this application's
+    // lock (another copy on the same database): nothing is switched.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    let at_start = profile_now(&s, &id);
+    let mut b = valid_input("Server");
+    b.host = String::from("198.51.100.20");
+    api::server_update(&s, &id, b, None).unwrap();
+
+    assert!(
+        !vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &at_start).unwrap(),
+        "a profile moved to another server was switched to managed_key"
+    );
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0].auth_kind,
+        AuthKind::Password
+    );
+}
+
+#[test]
+fn a_rename_and_other_fields_changed_during_the_run_do_not_stop_the_key_being_kept() {
+    // The owner's decision 2026-09-30: only the address, port and user matter.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+    let at_start = profile_now(&s, &id);
+
+    let mut edited = valid_input("Renamed during the run");
+    edited.domain = String::from("other.example.com");
+    edited.video_dir = Some(String::from("/srv/other"));
+    edited.cdn_base = Some(String::from("https://cdn.example.com"));
+    api::server_update(&s, &id, edited, None).unwrap();
+
+    vrcast_studio_lib::commands::deploy::key_keeper(&s, &at_start, MADE_KEY.to_owned())()
+        .expect("the key was not kept after a rename");
+
+    let after = &api::servers_list(&s).unwrap()[0];
+    assert_eq!(after.auth_kind, AuthKind::ManagedKey);
+    assert_eq!(after.name, "Renamed during the run");
+    assert_eq!(after.domain, "other.example.com");
+    assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
 }
 
 // ---------- T638 (QA-21 №5): off the made key onto a key file with no passphrase ----------

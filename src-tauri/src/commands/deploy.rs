@@ -541,6 +541,15 @@ fn public_key_to_deploy_with(
 /// the `UPDATE` itself — rather than by writing the run's whole, older copy back over whatever
 /// was renamed since.
 ///
+/// ⚠ **T642 (QA-22 №2) — and only while the profile still points at the server the key was
+/// made for.** `profile` is the run's copy from its start; the key went onto that address,
+/// port and user and was proved there. Should the person have pointed the profile at another
+/// server in the meantime (still on a password — the new one's), the key is not kept: the old
+/// server's key over the new server's password would leave the new server out of reach
+/// through this profile. Nothing is written, the store is not touched, and the error stops the
+/// run before password logins are turned off — as for a profile that left `password` (T636).
+/// The same condition sits in the `UPDATE` as well. A rename, or any other field, still passes.
+///
 /// [`Db::sign_in_lock`]: crate::store::db::Db::sign_in_lock
 /// [`profiles::switch_to_managed_key`]: crate::store::profiles::switch_to_managed_key
 fn switch_to_managed_key(
@@ -555,6 +564,9 @@ fn switch_to_managed_key(
     if now.auth_kind != AuthKind::Password {
         return Err(no_longer_a_password(now.auth_kind));
     }
+    if !same_server(profile, &now) {
+        return Err(pointed_elsewhere(profile, &now));
+    }
 
     let reference = SecretRef::from_stored(&now.secret_ref);
     let before = secrets.get(&reference).ok();
@@ -564,7 +576,7 @@ fn switch_to_managed_key(
 
     // No file was made, so no path may be left behind: a leftover path is the sort of thing
     // that quietly gets used one day — the `UPDATE` clears it.
-    let switched = crate::store::profiles::switch_to_managed_key(db, &now.id);
+    let switched = crate::store::profiles::switch_to_managed_key(db, profile);
     if !matches!(switched, Ok(true)) {
         let _ = match &before {
             Some(old) => secrets.set(&reference, old),
@@ -573,14 +585,31 @@ fn switch_to_managed_key(
         return Err(match switched {
             Err(e) => e.into(),
             // Only something outside this application's lock — another copy of it on the same
-            // database — could get here: the profile was read as `password` a moment ago.
+            // database — could get here: the profile was read as it should be a moment ago.
             Ok(_) => match crate::store::profiles::get(db, &now.id)? {
-                Some(p) => no_longer_a_password(p.auth_kind),
+                Some(p) if p.auth_kind != AuthKind::Password => no_longer_a_password(p.auth_kind),
+                Some(p) => pointed_elsewhere(profile, &p),
                 None => super::servers::no_such_server(&now.id),
             },
         });
     }
     Ok(())
+}
+
+/// Whether a profile still points at the machine and account the run started on (T642).
+fn same_server(at_start: &ServerProfile, now: &ServerProfile) -> bool {
+    at_start.host == now.host && at_start.port == now.port && at_start.user == now.user
+}
+
+/// The run's made key is not kept over a profile pointed at another server now (T642). The
+/// cause names what moved — the address, port and user are not secrets, and without them a
+/// support log could not tell this refusal from the one above.
+fn pointed_elsewhere(at_start: &ServerProfile, now: &ServerProfile) -> AppError {
+    AppError::new(ErrorCode::InvalidInput).with_cause(format!(
+        "the profile now points at another server ({}@{}:{} instead of {}@{}:{}), so the key \
+         made for the old one was not kept",
+        now.user, now.host, now.port, at_start.user, at_start.host, at_start.port
+    ))
 }
 
 /// The run's made key is not kept over a profile that signs in some other way now (T636).
