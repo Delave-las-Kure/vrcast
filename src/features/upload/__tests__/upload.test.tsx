@@ -1132,6 +1132,84 @@ describe("T654 — one file into a new medium, confirmed after a warning", () =>
   });
 });
 
+describe("T656 — the suggested name follows the only file left", () => {
+  /** Add one.mp4, then two.mp4 — two separate picks. */
+  async function pickTwoOneAtATime() {
+    mockOpen
+      .mockResolvedValueOnce(["F:/qa/one.mp4"])
+      .mockResolvedValueOnce(["F:/qa/two.mp4"]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByDisplayValue("one.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("two.mp4");
+  }
+
+  const dropButton = (name: string) =>
+    screen.getByRole("button", {
+      name: fill(ru.ui.upload.dropOneFile, { name }, ru, "ru"),
+    });
+
+  it("removing the first file uploads the one left under its own name", async () => {
+    // QA-24A №7, the probe turned round: two.mp4 used to go up named one.mp4.
+    await pickTwoOneAtATime();
+    fireEvent.click(dropButton("one.mp4"));
+
+    expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("two.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+    expect(mockUploadStart.mock.calls[0][0]).toMatchObject({
+      local_path: "F:/qa/two.mp4",
+      remote_name: "two.mp4",
+    });
+  });
+
+  it("a name the person typed is kept when the files change", async () => {
+    mockOpen
+      .mockResolvedValueOnce(["F:/qa/one.mp4"])
+      .mockResolvedValueOnce(["F:/qa/two.mp4"]);
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText(ru.ui.upload.pickFile));
+    await screen.findByDisplayValue("one.mp4");
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldName), {
+      target: { value: "premiere.mp4" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("two.mp4");
+    fireEvent.click(dropButton("one.mp4"));
+
+    expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("premiere.mp4");
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
+    expect(mockUploadStart.mock.calls[0][0]).toMatchObject({
+      local_path: "F:/qa/two.mp4",
+      remote_name: "premiere.mp4",
+    });
+  });
+
+  it("a name cleared by hand goes back to following the file", async () => {
+    await pickTwoOneAtATime();
+    // Back to one file first, so the field is on screen, then emptied and a file removed.
+    fireEvent.click(dropButton("two.mp4"));
+    const field = screen.getByLabelText(ru.ui.upload.fieldName);
+    fireEvent.change(field, { target: { value: "" } });
+    mockOpen.mockResolvedValueOnce(["F:/qa/three.mp4"]);
+    fireEvent.click(screen.getByText(ru.ui.upload.pickFile));
+    await screen.findByText("three.mp4");
+    fireEvent.click(dropButton("one.mp4"));
+
+    expect(screen.getByLabelText(ru.ui.upload.fieldName)).toHaveValue("three.mp4");
+  });
+});
+
 describe("the queue", () => {
   function task(id: string, order: number): Task {
     return {

@@ -141,6 +141,14 @@ export function UploadScreen() {
 
   const [localPaths, setLocalPaths] = useState<string[]>([]);
   const [remoteName, setRemoteName] = useState("");
+  /**
+   * T656 — whether the served name is the person's own rather than the one suggested from
+   * the file. Only a suggestion follows the file: before, the name was filled in only while
+   * the field was empty, so add one.mp4, add two.mp4, remove one.mp4 sent two.mp4 under the
+   * name one.mp4 — and could ask to replace the wrong file on the server. Emptying the field
+   * hands it back to the suggestion.
+   */
+  const [nameEdited, setNameEdited] = useState(false);
   const [mediaId, setMediaId] = useState<string>("");
   const [newMediaTitle, setNewMediaTitle] = useState("");
   const [limitBps, setLimitBps] = useState<number | null>(null);
@@ -250,13 +258,23 @@ export function UploadScreen() {
   const [params] = useSearchParams();
 
   /**
+   * T656 — the served name suggested for what is chosen now: the file's own name when there
+   * is exactly one; nothing otherwise (several files each go under their own name). A name
+   * the person typed is left alone.
+   */
+  const suggestName = (paths: string[]) => {
+    if (nameEdited) return;
+    setRemoteName(paths.length === 1 ? basename(paths[0]) : "");
+  };
+
+  /**
    * Take files, however they arrived — chosen here or handed over by the preparation
    * screen (which always hands over exactly one).
    *
    * One function for both, so the two cannot come to differ: filling the name in from
    * the file name is the sort of thing that gets done on one path and forgotten on the
    * other. With more than one file the served name stops meaning anything — each file
-   * keeps its own, from its own name — so the field is left alone.
+   * keeps its own, from its own name.
    *
    * T580 — accumulates rather than replaces, the same as `BatchScreen.pick()`: a
    * person picking a season two folders at a time must not have the first folder's
@@ -267,7 +285,7 @@ export function UploadScreen() {
     uploadGenRef.current += 1;
     const merged = [...new Set([...localPaths, ...newPaths])];
     setLocalPaths(merged);
-    if (merged.length === 1 && !remoteName) setRemoteName(basename(merged[0]));
+    suggestName(merged);
     setPreflight(null);
     setStartedTask(null);
     setBatchSummary(null);
@@ -278,14 +296,14 @@ export function UploadScreen() {
   /**
    * T580 — drop one file from an already-chosen list, the same pattern as
    * `BatchScreen`'s own remove button. If this brings the list back down to exactly
-   * one file, the served name is filled in from it — same as choosing a single file
-   * from the start — rather than being left blank as if nothing had ever been chosen.
+   * one file, the served name is suggested from it — same as choosing a single file
+   * from the start — unless the person has typed a name of their own (T656).
    */
   const dropFile = (path: string) => {
     uploadGenRef.current += 1;
     const next = localPaths.filter((p) => p !== path);
     setLocalPaths(next);
-    if (next.length === 1 && !remoteName) setRemoteName(basename(next[0]));
+    suggestName(next);
     setPreflight(null);
     setStartedTask(null);
     setBatchSummary(null);
@@ -607,6 +625,7 @@ export function UploadScreen() {
                   value={remoteName}
                   onChange={(e) => {
                     setRemoteName(e.target.value);
+                    setNameEdited(e.target.value.trim() !== "");
                     setPreflight(null);
                   }}
                   placeholder="film_22.mp4"
