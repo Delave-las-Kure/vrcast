@@ -1335,6 +1335,8 @@ export const en: Catalogue = {
       nextUpload: "Send as one file",
       nextFailed:
         "The preparation failed, so there is nothing to go on with. The task says what happened.",
+      nextCancelled:
+        "The preparation was cancelled — no file was made, and the unfinished one was removed. To get the file, start the preparation again.",
     },
 
     library: {
