@@ -297,3 +297,137 @@ fn several_stranded_variants_are_all_named_and_in_order() {
         vec![String::from("v1"), String::from("v2"), String::from("v4")]
     );
 }
+
+// ---------- T660: a variant goes out in blocks, not whole ----------
+
+mod streaming {
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::tasks::engine::TaskContext;
+    use vrcast_studio_lib::tasks::ladder_build::{stream_blocks, StreamError, SEND_BLOCK};
+
+    /// A file of `left` bytes that exists nowhere: it is produced as it is read, so the test
+    /// itself never holds it — which is what lets it be larger than any block by a lot.
+    struct Endless {
+        left: u64,
+    }
+
+    impl AsyncRead for Endless {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let n = (buf.remaining() as u64).min(self.left) as usize;
+            buf.put_slice(&vec![0x5A; n]);
+            self.left -= n as u64;
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// A server that keeps nothing: it counts, and remembers the largest single write it was
+    /// handed — the most the sender ever held at once.
+    #[derive(Default)]
+    struct Counting {
+        total: u64,
+        largest: usize,
+        writes: usize,
+        /// Cancel the task after this many writes, to land a cancel mid-way.
+        cancel_after: Option<(usize, TaskContext)>,
+    }
+
+    impl AsyncWrite for Counting {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            self.total += buf.len() as u64;
+            self.largest = self.largest.max(buf.len());
+            self.writes += 1;
+            if let Some((after, ctx)) = &self.cancel_after {
+                // Raised through the token, which is what the engine raises too.
+                if self.writes >= *after {
+                    ctx.cancel_token().cancel();
+                }
+            }
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn ctx() -> TaskContext {
+        TaskContext::detached(Arc::new(Db::open_in_memory().expect("no database")))
+    }
+
+    #[tokio::test]
+    async fn memory_does_not_grow_with_the_size_of_the_variant() {
+        // QA-24B-01: the whole variant was read into memory before a byte was sent.
+        let size: u64 = 64 * 1024 * 1024 + 12_345;
+        let mut from = Endless { left: size };
+        let mut into = Counting::default();
+
+        let sent = stream_blocks(&mut from, &mut into, size, &ctx())
+            .await
+            .expect("the sending failed");
+
+        assert_eq!(sent, size);
+        assert_eq!(into.total, size, "not every byte arrived");
+        assert!(
+            into.largest <= SEND_BLOCK,
+            "a write of {} bytes was handed over at once — more than one block",
+            into.largest
+        );
+        assert!(
+            into.writes as u64 >= size / SEND_BLOCK as u64,
+            "it went across in {} writes, which is not block by block",
+            into.writes
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancel_mid_way_stops_between_blocks() {
+        let size: u64 = 32 * SEND_BLOCK as u64;
+        let task = ctx();
+        let mut from = Endless { left: size };
+        let mut into = Counting {
+            cancel_after: Some((3, task.clone())),
+            ..Default::default()
+        };
+
+        let outcome = stream_blocks(&mut from, &mut into, size, &task).await;
+
+        assert!(
+            matches!(outcome, Err(StreamError::Cancelled)),
+            "a cancel mid-way did not stop the sending: {outcome:?}"
+        );
+        assert!(
+            into.total < size,
+            "the whole variant was sent after the cancel"
+        );
+        assert!(
+            into.total <= 4 * SEND_BLOCK as u64,
+            "the cancel was not looked at between blocks: {} bytes went after it",
+            into.total
+        );
+    }
+
+    #[tokio::test]
+    async fn an_already_cancelled_task_sends_nothing() {
+        let task = ctx();
+        task.cancel_token().cancel();
+        let mut from = Endless { left: 10 * 1024 };
+        let mut into = Counting::default();
+        let outcome = stream_blocks(&mut from, &mut into, 10 * 1024, &task).await;
+        assert!(matches!(outcome, Err(StreamError::Cancelled)));
+        assert_eq!(into.total, 0);
+    }
+}

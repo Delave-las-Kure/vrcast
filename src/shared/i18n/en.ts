@@ -431,6 +431,7 @@ export const en: Catalogue = {
     STAGE_MEASURING_QUALITY: "measuring quality on the material itself",
     STAGE_PREPARING_MEASUREMENT: "preparing the measurement: reading the film and trial-encoding",
     STAGE_BUILDING_LADDER: "preparing the variants",
+    STAGE_SENDING_VARIANT: "sending a variant to the server",
     STAGE_CUTTING_SEGMENTS: "cutting into segments — on the server",
     STAGE_VERIFYING_LADDER: "checking that every variant is served",
     STAGE_STOP_UNCONFIRMED: "stopping on the server — not confirmed yet, trying again",

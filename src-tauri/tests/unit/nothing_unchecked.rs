@@ -86,7 +86,7 @@ fn the_ladder_decodes_a_variant_before_it_sends_it() {
         .find("validate::validate_in_task(&out_path")
         .expect("the ladder build no longer decodes a variant (T499)");
     let sent = text
-        .find("send(job, &out_path, &variant.file)")
+        .find("send(job, &out_path, &variant.file, ctx)")
         .expect("the ladder build no longer sends a variant");
 
     assert!(

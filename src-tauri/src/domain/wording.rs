@@ -200,6 +200,9 @@ detail_codes! {
     /// place the chunks and the anchor (T661). Minutes on a long film.
     StagePreparingMeasurement => "STAGE_PREPARING_MEASUREMENT",
     StageBuildingLadder => "STAGE_BUILDING_LADDER",
+    /// A prepared variant is on its way to the server, in blocks; the share is how much of
+    /// it has gone (T660).
+    StageSendingVariant => "STAGE_SENDING_VARIANT",
     StageCuttingSegments => "STAGE_CUTTING_SEGMENTS",
     StageVerifyingLadder => "STAGE_VERIFYING_LADDER",
     /// The build was stopped or failed, and the server has not yet confirmed that the
