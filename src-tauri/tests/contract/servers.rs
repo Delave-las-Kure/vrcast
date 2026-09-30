@@ -619,3 +619,85 @@ fn a_form_and_a_deployment_on_two_threads_never_leave_password_over_the_key() {
         assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
     }
 }
+
+// ---------- T638 (QA-21 №5): off the made key onto a key file with no passphrase ----------
+
+const OWN_KEY: &str = "C:/keys/id_ed25519";
+
+fn own_key_file(name: &str) -> ServerInput {
+    let mut input = valid_input(name);
+    input.auth_kind = AuthKind::Key;
+    input.key_path = Some(String::from(OWN_KEY));
+    input
+}
+
+#[test]
+fn moving_off_the_made_key_to_a_key_file_without_a_passphrase_is_allowed_and_clears_the_key() {
+    // The owner's decision 2026-09-30: `secret = ""` is "the file has no passphrase". The made
+    // private key is written over — it does not stay in the store to be handed to the file as
+    // its passphrase.
+    let s = state();
+    let (id, reference) = managed(&s);
+
+    api::server_update(&s, &id, own_key_file("Server"), Some(""))
+        .expect("a key file without a passphrase was refused");
+
+    let after = &api::servers_list(&s).unwrap()[0];
+    assert_eq!(after.auth_kind, AuthKind::Key);
+    assert_eq!(after.key_path.as_deref(), Some(OWN_KEY));
+    assert_eq!(
+        s.secrets.get(&reference).unwrap(),
+        "",
+        "the made key stayed in the store"
+    );
+}
+
+#[test]
+fn moving_off_the_made_key_to_a_key_file_with_a_passphrase_stores_the_passphrase() {
+    let s = state();
+    let (id, reference) = managed(&s);
+
+    api::server_update(&s, &id, own_key_file("Server"), Some("my-passphrase")).unwrap();
+
+    assert_eq!(api::servers_list(&s).unwrap()[0].auth_kind, AuthKind::Key);
+    assert_eq!(s.secrets.get(&reference).unwrap(), "my-passphrase");
+}
+
+#[test]
+fn moving_off_the_made_key_to_a_key_file_with_no_secret_at_all_is_still_refused() {
+    // `null` is "leave the store as it is" — and what it holds is the made private key, which a
+    // `key` profile would take for the file's passphrase.
+    let s = state();
+    let (id, reference) = managed(&s);
+
+    let err = api::server_update(&s, &id, own_key_file("Server"), None)
+        .expect_err("the made key was left in the store under a key-file profile");
+    assert!(err.says(DetailCode::ProfileAuthNeedsSecret), "{err}");
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0].auth_kind,
+        AuthKind::ManagedKey
+    );
+    assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
+}
+
+#[test]
+fn an_empty_secret_is_no_password_the_stale_form_is_still_refused() {
+    // The exception is for the file's passphrase alone: an empty password is not a password,
+    // and a stale form's `password` stays refused whichever absence it sends.
+    let s = state();
+    let (id, reference) = managed(&s);
+    for secret in [None, Some("")] {
+        let err = api::server_update(&s, &id, valid_input("Server"), secret)
+            .expect_err("managed_key -> password without a password");
+        assert!(err.says(DetailCode::ProfileAuthNeedsSecret), "{err}");
+    }
+    // Nor does it open a way onto the made key: to `managed_key` only a deployment moves.
+    let other = api::server_add(&s, own_key_file("Other"), "a-passphrase").unwrap();
+    let mut to_managed = valid_input("Other");
+    to_managed.auth_kind = AuthKind::ManagedKey;
+    let err = api::server_update(&s, &other, to_managed, Some(""))
+        .expect_err("key -> managed_key with an empty secret");
+    assert!(err.says(DetailCode::ProfileAuthNeedsSecret), "{err}");
+
+    assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
+}

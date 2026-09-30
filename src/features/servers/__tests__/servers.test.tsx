@@ -313,9 +313,7 @@ describe("editing a server profile", () => {
     expect(await screen.findByLabelText(ru.ui.wizard.fieldName)).toHaveValue("Мой сервер");
     expect(screen.getByLabelText(ru.ui.wizard.fieldHost)).toHaveValue("203.0.113.10");
     expect(screen.getByLabelText(ru.ui.wizard.fieldDomain)).toHaveValue("stream.example.com");
-    expect(screen.getByLabelText(ru.ui.wizard.fieldKeyPath)).toHaveValue(
-      "/home/u/.ssh/id_ed25519",
-    );
+    expect(screen.getByLabelText(ru.ui.wizard.fieldKeyPath)).toHaveValue("/home/u/.ssh/id_ed25519");
     expect(screen.getByLabelText(ru.ui.wizard.fieldPassphrase)).toHaveValue("");
   });
 
@@ -435,6 +433,77 @@ describe("editing a server profile", () => {
     ).toBeInTheDocument();
     // Still on the form: nothing was saved.
     expect(screen.getByText(ru.ui.servers.save)).toBeInTheDocument();
+  });
+
+  it("moves off the made key to a key file with no passphrase by sending an empty one (T638)", async () => {
+    // The owner's decision 2026-09-30: here, and only here, an empty field is a value — "the
+    // file has no passphrase", which also deletes the made key from the store — rather than
+    // "keep", which the core refuses for this move.
+    mockServersList.mockResolvedValue([makeProfile({ auth_kind: "managed_key", key_path: null })]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldAuth), {
+      target: { value: "key" },
+    });
+    // The field under it says what happens now, not "leave empty to keep".
+    expect(screen.getByText(ru.ui.servers.leaveMadeKeyForFileHint)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.servers.editSecretHint)).toBeNull();
+    expect(screen.getByLabelText(ru.ui.wizard.fieldPassphrase)).toHaveValue("");
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldKeyPath), {
+      target: { value: "C:/keys/id_ed25519" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ auth_kind: "key", key_path: "C:/keys/id_ed25519" }),
+        "",
+      ),
+    );
+  });
+
+  it("moving off the made key to a password still sends no empty password (T638)", async () => {
+    // An empty password is no password: the form sends `null`, and the core refuses the move
+    // (`PROFILE_AUTH_NEEDS_SECRET`) — the guard against a stale form stays as it was.
+    mockServersList.mockResolvedValue([makeProfile({ auth_kind: "managed_key", key_path: null })]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldAuth), {
+      target: { value: "password" },
+    });
+    expect(screen.getByText(ru.ui.servers.leaveMadeKeyForPasswordHint)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ auth_kind: "password" }),
+        null,
+      ),
+    );
+  });
+
+  it("an empty passphrase on an ordinary key profile still means keep (T638)", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    expect(await screen.findByText(ru.ui.servers.editSecretHint)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ auth_kind: "key" }),
+        null,
+      ),
+    );
   });
 });
 

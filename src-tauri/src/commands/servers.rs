@@ -139,6 +139,20 @@ pub(crate) fn no_such_server(id: &str) -> AppError {
 /// signing in and what the store holds agree again. The same the other way round: a profile
 /// declared `managed_key` over a store still holding a password would send the password as a
 /// key. An empty secret counts as none — the interface sends one only when a field was filled.
+///
+/// **T638 (QA-21 №5, the owner's decision 2026-09-30) — the one exception: from `managed_key`
+/// to a key file of the person's own, `secret = ""` is the passphrase, and it is "none".** For
+/// `key` the store holds the file's passphrase rather than a key, and a key without a
+/// passphrase is ordinary. So the two absences are told apart here, and only here:
+///
+/// - `secret: null` — "leave the store as it is". Refused as before: the store holds the made
+///   private key, and a `key` profile would hand it to the file as its passphrase;
+/// - `secret: ""` — "the file has no passphrase". Allowed: the empty passphrase is written over
+///   the entry, **which deletes the made key from the store** — the profile and the store agree
+///   again, on a key file with no passphrase.
+///
+/// Every other move to or from `managed_key` still needs a non-empty secret: an empty password
+/// is not a password, and a move *to* `managed_key` is made by a deployment, never by a form.
 fn refuse_stale_sign_in(
     existing: &ServerProfile,
     input: &ServerInput,
@@ -147,7 +161,10 @@ fn refuse_stale_sign_in(
     let moves = existing.auth_kind != input.auth_kind
         && (existing.auth_kind == AuthKind::ManagedKey || input.auth_kind == AuthKind::ManagedKey);
     let has_secret = secret.is_some_and(|s| !s.is_empty());
-    if moves && !has_secret {
+    let to_own_key_without_passphrase = existing.auth_kind == AuthKind::ManagedKey
+        && input.auth_kind == AuthKind::Key
+        && secret == Some("");
+    if moves && !has_secret && !to_own_key_without_passphrase {
         return Err(needs_secret(existing.auth_kind, input.auth_kind));
     }
     Ok(())
