@@ -253,6 +253,10 @@ mod ssh_exec_timeout;
 #[path = "integration/viewers_live.rs"]
 mod viewers_live;
 
+/// T664 — the watching of viewers comes back by itself after the network is cut.
+#[path = "integration/viewers_reconnect.rs"]
+mod viewers_reconnect;
+
 /// T321 — диагностика против настоящего контейнера: остановленная служба названа, медленный
 /// зритель опознан как узкий канал, а быстрый с паузами — не как голодающий.
 #[path = "integration/diag_live.rs"]

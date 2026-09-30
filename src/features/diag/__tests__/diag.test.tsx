@@ -42,6 +42,7 @@ vi.mock("../../../shared/ipc", async () => {
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
 const { DiagScreen } = await import("../DiagScreen");
+const { BitratePeaks } = await import("../BitratePeaks");
 
 const SNAPSHOT: Health["snapshot"] = {
   services: [{ name: "caddy", state: "active" }],
@@ -342,5 +343,106 @@ describe("T594 — DiagScreen ignores a stale health answer after a quick period
     expect(screen.getByTestId("reading-serving")).toHaveTextContent("nginx");
     expect(screen.getByTestId("reading-serving")).toHaveAttribute("data-rating", "fine");
     expect(mockLogs).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * T669 — QA-24B-10. Measuring a long file A, then choosing B: B's measurement finished first,
+ * and A's arrived afterwards and was taken as the answer — B's name on screen with A's
+ * figures, and A's shape handed to the diagnosis of B's stalls.
+ */
+describe("T669 — a late measurement of an earlier file does not replace the current one", () => {
+  function peaks(mbit: number): Peaks {
+    return {
+      seconds: 600,
+      average_bps: mbit * 1_000_000,
+      median_bps: mbit * 1_000_000,
+      one_second: { at_s: 2, length_s: 1, bitrate_bps: mbit * 1_000_000 },
+      wide: { at_s: 0, length_s: 10, bitrate_bps: mbit * 1_000_000 },
+      worst_wide: [],
+    };
+  }
+
+  function held<T>() {
+    let resolve: (v: T) => void = () => undefined;
+    let reject: (e: unknown) => void = () => undefined;
+    const promise = new Promise<T>((ok, fail) => {
+      resolve = ok;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("keeps the figures and the shape of the file chosen last", async () => {
+    const a = held<Peaks>();
+    const b = held<Peaks>();
+    mockOpen.mockResolvedValueOnce("F:/qa/a.mp4").mockResolvedValueOnce("F:/qa/b.mp4");
+    mockBitrate.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    const measured = vi.fn();
+    renderIn(<BitratePeaks onMeasured={measured} />);
+
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.diag.bitratePick }));
+    await waitFor(() => expect(mockBitrate).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.diag.bitratePick }));
+    await waitFor(() => expect(mockBitrate).toHaveBeenCalledTimes(2));
+
+    b.resolve(peaks(2));
+    await waitFor(() =>
+      expect(measured).toHaveBeenLastCalledWith({ average_mbit: 2, peak_10s_mbit: 2 }),
+    );
+    a.resolve(peaks(50));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.getByText("F:/qa/b.mp4")).toBeInTheDocument();
+    expect(measured).toHaveBeenLastCalledWith({ average_mbit: 2, peak_10s_mbit: 2 });
+    expect(measured).not.toHaveBeenCalledWith({ average_mbit: 50, peak_10s_mbit: 50 });
+    expect(screen.getByTestId("bitrate-average").textContent).not.toMatch(/50/);
+  });
+
+  it("an earlier file's failure arriving late does not blank the current one's figures", async () => {
+    const a = held<Peaks>();
+    const b = held<Peaks>();
+    mockOpen.mockResolvedValueOnce("F:/qa/a.mp4").mockResolvedValueOnce("F:/qa/b.mp4");
+    mockBitrate.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    const measured = vi.fn();
+    renderIn(<BitratePeaks onMeasured={measured} />);
+
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.diag.bitratePick }));
+    await waitFor(() => expect(mockBitrate).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.diag.bitratePick }));
+    await waitFor(() => expect(mockBitrate).toHaveBeenCalledTimes(2));
+
+    b.resolve(peaks(3));
+    await waitFor(() => expect(screen.getByTestId("bitrate-average")).toBeInTheDocument());
+    a.reject({ code: "INTERNAL" });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByTestId("bitrate-average")).toBeInTheDocument();
+    expect(measured).toHaveBeenLastCalledWith({ average_mbit: 3, peak_10s_mbit: 3 });
+  });
+
+  it("while the current file is still being measured, an earlier answer says nothing at all", async () => {
+    const a = held<Peaks>();
+    const b = held<Peaks>();
+    mockOpen.mockResolvedValueOnce("F:/qa/a.mp4").mockResolvedValueOnce("F:/qa/b.mp4");
+    mockBitrate.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    const measured = vi.fn();
+    renderIn(<BitratePeaks onMeasured={measured} />);
+
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.diag.bitratePick }));
+    await waitFor(() => expect(mockBitrate).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.diag.bitratePick }));
+    await waitFor(() => expect(mockBitrate).toHaveBeenCalledTimes(2));
+
+    a.resolve(peaks(50));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId("bitrate-average")).toBeNull();
+    expect(screen.getByText(ru.ui.diag.asking)).toBeInTheDocument();
+    expect(measured).not.toHaveBeenCalledWith({ average_mbit: 50, peak_10s_mbit: 50 });
   });
 });

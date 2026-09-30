@@ -701,6 +701,9 @@ export const en: Catalogue = {
       starting: "Starting…",
       started: "{n} video(s) started. The rest is on the Tasks tab.",
       noServer: "Choose a server first: there is nowhere to build a set.",
+      refused: "{n} video(s) were not started. The others were.",
+      retryThese: "Retry these",
+      forgetThese: "Clear this list",
     },
 
     ladder: {
@@ -1111,6 +1114,8 @@ export const en: Catalogue = {
       confirm: "Understood — cap it",
       cancel: "Cancel",
       noLadder: "This medium has no quality set — there is nothing to shorten",
+      previewing: "Working out what the viewer would be left with…",
+      applying: "Capping…",
 
       listTitle: "Limits in force",
       listEmpty: "Nothing is capped.",
@@ -1160,6 +1165,15 @@ export const en: Catalogue = {
           "The connection is open but nothing is moving. If it lasts, the viewer's film has cut out.",
       },
       watchingNow: "watching now",
+      reconnecting: "The connection to the server was lost — reconnecting…",
+      reconnectingTry: "Attempt {n}.",
+      staleAge: "The list below is the last one received, {age} ago. It may be different by now.",
+      staleNever: "No list has come from the server yet.",
+      stopped:
+        "Watching has stopped: the server will not let us in, and trying again will not help — its key has changed or the login is refused. Check the server in the Servers section.",
+      restart: "Start again",
+      ageSeconds: "{n} s",
+      ageMinutes: "{n} min",
     },
 
     sections: {
@@ -1337,6 +1351,8 @@ export const en: Catalogue = {
       replaceTitle: "Replace the finished file?",
       replaceYes: "Replace",
       replaceNo: "Keep it as it is",
+      nextCancelled:
+        "The preparation was cancelled — no file was made, and the unfinished one was removed. To get the file, start the preparation again.",
     },
 
     library: {

@@ -41,6 +41,24 @@ impl ViewersWatch {
             .and_then(|g| g.as_ref().map(|r| r.server_id.clone()))
     }
 
+    /// The watching of this server as it stands — `None` when it is not being watched, or
+    /// when the watch there has given up and has to be started afresh (T664).
+    pub fn alive_for(&self, server_id: &str) -> Option<ViewersUpdate> {
+        self.inner.lock().ok().and_then(|g| {
+            g.as_ref()
+                .filter(|r| r.server_id == server_id && r.watch.is_alive())
+                .map(|r| r.watch.current())
+        })
+    }
+
+    /// Where the watching stands, when there is one.
+    pub fn status(&self) -> Option<crate::domain::viewers::WatchStatus> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|r| r.watch.status()))
+    }
+
     /// Who is watching right now, by the server's clock as last read.
     ///
     /// Empty when nothing is being watched, which is a true answer rather than a
@@ -94,6 +112,9 @@ struct LibraryContext {
     by_file: HashMap<String, VariantFacts>,
     /// A quality set's short name to the medium it belongs to.
     by_slug: HashMap<String, String>,
+    /// A quality set's short name to what each of its rungs needs (T666) — read off the
+    /// set's description on the server when the watching starts.
+    needs: HashMap<String, HashMap<String, u64>>,
     places: Arc<std::sync::RwLock<crate::store::geo::Places>>,
 }
 
@@ -104,16 +125,15 @@ impl ViewerContext for LibraryContext {
             Asked::SetDescription { slug, .. }
             | Asked::RungPlaylist { slug, .. }
             | Asked::Segment { slug, .. }
-            | Asked::SetInit { slug, .. } => VariantFacts {
-                media_id: self.by_slug.get(slug).cloned(),
-                variant: asked.rung().map(str::to_owned),
-                // What a rung needs is written in the description of the quality set, and
-                // reading that is Phase 5's work (T186). Until then a viewer of a set is
-                // shown with everything except the speed they ought to be getting, and
-                // SlowLink cannot fire for them. Left honestly empty rather than filled
-                // with the medium's average, which is not what any one rung needs.
-                required_bps: None,
-            },
+            | Asked::SetInit { slug, .. } => crate::domain::viewers::set_facts(
+                asked,
+                self.by_slug.get(slug).cloned(),
+                // What a rung needs is its BANDWIDTH in the set's description (QA-24B-07:
+                // this used to be left empty, and SlowLink could never fire for a viewer of
+                // a set). A set whose description could not be read still has none — the
+                // medium's average is not what any one rung needs.
+                self.needs.get(slug),
+            ),
             Asked::Other => VariantFacts::default(),
         }
     }
@@ -176,8 +196,83 @@ impl LibraryContext {
         Self {
             by_file,
             by_slug,
+            needs: HashMap::new(),
             places,
         }
+    }
+
+    /// The quality sets on the server, by short name — the ones whose rungs' needs are read.
+    fn set_slugs(view: &super::library::LibraryView) -> Vec<String> {
+        let mut slugs: Vec<String> = view
+            .media
+            .iter()
+            .flat_map(|m| m.ladders.iter())
+            .filter(|l| l.exists_on_server)
+            .filter_map(|l| l.path.split('/').next().map(str::to_owned))
+            .collect();
+        slugs.sort();
+        slugs.dedup();
+        slugs
+    }
+}
+
+/// How a lost watching gets a new connection (T664).
+///
+/// **To the machine the watching began on, as it was confirmed then** — the profile as it
+/// was read at the start. Read afresh at every try it would follow an edit of the profile to
+/// another machine, and the list of that one's viewers would arrive under this one's name
+/// (the lesson of T647). What is read afresh is only whether the profile still exists: a
+/// server that was removed is not watched on.
+///
+/// Refusals are sorted into those that pass and those that do not: an address that does not
+/// answer is the network, and it comes back; a changed key, a refused login or a key that
+/// cannot be read wait for a person, and asking again every thirty seconds would only fill
+/// the server's log with failed logins.
+fn reconnect_to(
+    state: &AppState,
+    profile: crate::domain::server_profile::ServerProfile,
+) -> viewers::Reconnect {
+    let secrets = state.secrets.clone();
+    let db = state.db.clone();
+    Arc::new(move || {
+        let secrets = secrets.clone();
+        let db = db.clone();
+        let profile = profile.clone();
+        Box::pin(async move {
+            match crate::store::profiles::get(&db, &profile.id) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err(viewers::Retry::Permanent(String::from(
+                        "the server's profile was removed",
+                    )))
+                }
+                Err(e) => return Err(viewers::Retry::Transient(e.to_string())),
+            }
+            crate::server::gate::open(
+                secrets.as_ref(),
+                &profile,
+                crate::server::gate::Intent::Read,
+            )
+            .await
+            .map(|opened| opened.conn)
+            .map_err(sort_refusal)
+        })
+    })
+}
+
+/// Whether a refusal to connect passes by itself — see [`reconnect_to`].
+pub fn sort_refusal(refusal: crate::server::gate::Refusal) -> viewers::Retry {
+    use crate::server::gate::Refusal;
+    use crate::ssh::SshError;
+    let why = refusal.to_string();
+    match refusal {
+        Refusal::Ssh(
+            SshError::Unreachable { .. }
+            | SshError::Exec(_)
+            | SshError::Protocol(_)
+            | SshError::Sftp { .. },
+        ) => viewers::Retry::Transient(why),
+        _ => viewers::Retry::Permanent(why),
     }
 }
 
@@ -189,8 +284,23 @@ pub mod api {
     /// Repeating it for the same server is not an error and not a second watch: it is the
     /// ordinary thing to do when a screen is opened again, and starting a second would take
     /// standing channels that do not exist.
+    ///
+    /// ⚠ **But only over a watch that is alive** (T664, QA-24B-05). The name of the server
+    /// used to be enough, and a watch whose connection had died long ago answered "already
+    /// watching" for ever — reopening the screen could not bring it back. A watch that has
+    /// given up is replaced; one that is running, or getting its connection back, is kept,
+    /// and what it has is sent at once so the screen does not wait for the next poll.
     pub async fn viewers_watch_start(state: &AppState, server_id: &str) -> Result<()> {
-        if state.viewers.watching().as_deref() == Some(server_id) {
+        if let Some(current) = state.viewers.alive_for(server_id) {
+            // Only when there is something to say: before the first list, an empty one would
+            // read as "nobody is watching" when nobody has looked yet.
+            if current.as_of.is_some()
+                || current.watch != crate::domain::viewers::WatchState::Watching
+            {
+                let _ = state
+                    .events
+                    .send(super::super::AppEvent::ViewersUpdate(current));
+            }
             return Ok(());
         }
         // Whatever was being watched stops first, so that its two channels come back before
@@ -201,7 +311,7 @@ pub mod api {
             .ok_or_else(|| super::super::servers::no_such_server(server_id))?;
         let view = super::super::library::api::library_list(state, server_id, false).await?;
         let settings = crate::store::settings::load(&state.db)?;
-        let context = Arc::new(LibraryContext::build(&view, state.places.clone()));
+        let mut context = LibraryContext::build(&view, state.places.clone());
 
         // Watching only. A server that is somebody else's still shows who is pulling
         // from it — and that is exactly the sort of thing its owner would want to see.
@@ -213,9 +323,17 @@ pub mod api {
         .await?
         .conn;
 
+        // What each rung of each set needs (T666), read once here, as the library itself is.
+        // A set rebuilt while the watching runs (which is asked about when anybody is
+        // watching — T571) keeps its old figures until the screen is opened again.
+        context.needs =
+            viewers::rung_needs(&conn, &profile.video_dir, &LibraryContext::set_slugs(&view)).await;
+        let context = Arc::new(context);
+
         let (tx, mut updates) = tokio::sync::mpsc::channel(64);
-        let watch = viewers::start(
+        let watch = viewers::start_reconnecting(
             conn,
+            Some(reconnect_to(state, profile.clone())),
             server_id.to_owned(),
             context,
             settings.activity_threshold(),

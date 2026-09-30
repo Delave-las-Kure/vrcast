@@ -1339,6 +1339,15 @@ export interface Viewer {
 }
 
 /**
+ * Where the watching stands (T664).
+ *
+ * `reconnecting` — the connection to the server was lost and is being got back; the list is
+ * the last one there was, and `as_of` says how old. `stopped` — given up for a reason that
+ * waits for a person (a changed key, a refused login); opening the screen again starts over.
+ */
+export type WatchState = "watching" | "reconnecting" | "stopped";
+
+/**
  * The list, as it arrives — not as it is asked for.
  *
  * The core sends this every few seconds while watching is on. The interface does not poll:
@@ -1350,6 +1359,12 @@ export interface ViewersUpdateEvent {
   active: Viewer[];
   /** How many are watching each medium — for the card in the library (FR-056). */
   per_media: Record<string, number>;
+  /** Whether the list is current (T664). */
+  watch: WatchState;
+  /** When the list was last current, by this machine's clock (RFC 3339). Null before the first. */
+  as_of: string | null;
+  /** How many tries at getting the watching back have been made. Zero while watching. */
+  attempt: number;
 }
 
 /** What the person may change. */

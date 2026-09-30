@@ -152,8 +152,16 @@ pub mod ipc {
         state: State<'_, AppState>,
         server_id: String,
         refresh: Option<bool>,
+        cached_only: Option<bool>,
     ) -> Result<LibraryView> {
-        api::library_list(&state, &server_id, refresh.unwrap_or(false)).await
+        // `cached_only` (T651) — what a screen reads on `library:changed`: the answer, not
+        // another question. `refresh` wins over it: asking for the server outright is the
+        // stronger request.
+        if refresh.unwrap_or(false) || !cached_only.unwrap_or(false) {
+            api::library_list(&state, &server_id, refresh.unwrap_or(false)).await
+        } else {
+            api::library_list_known(&state, &server_id).await
+        }
     }
 
     #[tauri::command]
@@ -297,6 +305,198 @@ async fn ladder_view(
     }
 }
 
+/// The refreshes of a library under way, one per server (T651).
+///
+/// **Why a refresh is shared rather than simply started.** Every `library_list` without
+/// `refresh` used to start a whole new read of the server behind the cache it handed back —
+/// the connection, the catalogue, the listing, the disk and a header probe per file — and
+/// every screen opening the library, the viewers' watch and every `library:changed` asked
+/// again. Two screens open at once read the same server twice at the same moment for the
+/// same answer. Here a refresh already under way is joined instead, and a new one starts
+/// only when none is.
+///
+/// **Why not joined across a change.** A catalogue change (`AppState::invalidate_library`)
+/// makes a refresh started before it useless: it may have read the catalogue before the
+/// change was written. [`invalidated`] marks that; the old refresh is left to finish on its
+/// own for whoever already waits on it, but nobody new joins it and its answer is not kept
+/// — otherwise a person who renamed something could be shown, and have cached, the old name.
+///
+/// **Why `library:changed` only on a difference.** The event means "the library changed,
+/// read it again", and a screen does exactly that. A refresh that found everything as the
+/// cache already had it has nothing to say; sending the event anyway is what closed the loop
+/// cache → refresh → event → cache → refresh the audit found (QA-24A №2).
+///
+/// Public for the contract tests, which are a separate crate: `run` is how they check that
+/// two refreshes of one server read it once, and [`settle`] that an unchanged answer sends
+/// no event.
+pub mod refreshes {
+    use super::{AppError, ErrorCode, LibraryView, Result};
+    use crate::commands::AppState;
+    use crate::store::db::Db;
+    use crate::store::library_cache;
+    use futures::future::{BoxFuture, FutureExt, Shared};
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    /// A refresh that anyone may wait on; all of them get the same answer.
+    pub type Refresh = Shared<BoxFuture<'static, Result<LibraryView>>>;
+
+    #[derive(Default)]
+    struct Entry {
+        /// Bumped by every catalogue change — see [`invalidated`].
+        epoch: u64,
+        /// How many refreshes of this server are still running, joinable or not. The entry
+        /// is dropped at zero: once nothing runs, its epoch no longer compares with anything.
+        running: u32,
+        next_id: u64,
+        /// The refresh a newcomer joins: its id, the epoch it started in, and itself.
+        joinable: Option<(u64, u64, Refresh)>,
+    }
+
+    /// Keyed by the database as well as the server: tests build many states side by side,
+    /// with server identifiers of their own that may coincide. A running refresh holds a
+    /// clone of its `AppState` and with it the database, so an address cannot be reused by
+    /// another database while an entry still names it.
+    type Key = (usize, String);
+
+    static RUNNING: LazyLock<Mutex<HashMap<Key, Entry>>> = LazyLock::new(Default::default);
+
+    fn key(db: &Db, server_id: &str) -> Key {
+        (db as *const Db as usize, server_id.to_owned())
+    }
+
+    fn registry() -> std::sync::MutexGuard<'static, HashMap<Key, Entry>> {
+        // A panic while holding this lock leaves nothing half-written that matters: the
+        // map only says what is running.
+        RUNNING.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The refresh of this server's library: the one under way when there is one begun
+    /// since the last catalogue change, otherwise a new one.
+    ///
+    /// The work runs on its own task, so dropping what is returned does not stop it — that
+    /// is how a refresh "follows" the cached answer without anyone waiting for it.
+    pub fn run<F>(state: &AppState, server_id: &str, build: F) -> Refresh
+    where
+        F: FnOnce() -> BoxFuture<'static, Result<LibraryView>> + Send + 'static,
+    {
+        let key = key(&state.db, server_id);
+        let mut map = registry();
+        let entry = map.entry(key.clone()).or_default();
+        if let Some((_, epoch, refresh)) = &entry.joinable {
+            if *epoch == entry.epoch {
+                return refresh.clone();
+            }
+        }
+
+        let (id, epoch) = (entry.next_id, entry.epoch);
+        entry.next_id += 1;
+        entry.running += 1;
+
+        let finish = Finish {
+            key,
+            id,
+            state: state.clone(),
+        };
+        // Recorded as joinable before the work is spawned — and the registry let go of
+        // before spawning, since a task dropped on the spot (a runtime shutting down) runs
+        // `Finish` at once, which takes the registry too. The answer travels through a
+        // channel so that it can be recorded before the task exists.
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<LibraryView>>();
+        let refresh: Refresh = async move {
+            rx.await.unwrap_or_else(|_| {
+                tracing::error!("the library refresh stopped abnormally");
+                Err(AppError::new(ErrorCode::Internal))
+            })
+        }
+        .boxed()
+        .shared();
+        entry.joinable = Some((id, epoch, refresh.clone()));
+        drop(map);
+
+        let server = server_id.to_owned();
+        tokio::spawn(async move {
+            let outcome = build().await;
+            let map = registry();
+            let fresh = map.get(&finish.key).is_some_and(|e| e.epoch == epoch);
+            match &outcome {
+                Ok(view) if fresh => {
+                    // Under the lock, so that a catalogue change cannot slip between the
+                    // epoch check and the write and be overwritten by what preceded it.
+                    if let Err(e) = settle(&finish.state, &server, view) {
+                        tracing::warn!(server = %server, error = %e, "the refreshed library was not cached");
+                    }
+                }
+                Ok(_) => {
+                    tracing::debug!(server = %server, "a library refresh overtaken by a change was not kept")
+                }
+                Err(e) => {
+                    tracing::debug!(server = %server, error = %e, "the library refresh failed")
+                }
+            }
+            drop(map);
+            // No longer joinable before the answer goes out: whoever asks after this
+            // point gets a read of their own, not an answer that is already history.
+            drop(finish);
+            let _ = tx.send(outcome);
+        });
+        refresh
+    }
+
+    /// The bookkeeping at the end of a refresh, however it ends — finished, panicked, or
+    /// dropped with its runtime. Otherwise the server's entry would stay "running" and every
+    /// later refresh would join a dead one.
+    ///
+    /// Holds the refresh's `AppState` and lets it go only **after** the entry is cleared:
+    /// the key is the database's address, and that address must not be free for another
+    /// database while an entry still names it.
+    struct Finish {
+        key: Key,
+        id: u64,
+        state: AppState,
+    }
+
+    impl Drop for Finish {
+        fn drop(&mut self) {
+            let mut map = registry();
+            if let Some(e) = map.get_mut(&self.key) {
+                if e.joinable.as_ref().is_some_and(|(j, _, _)| *j == self.id) {
+                    e.joinable = None;
+                }
+                e.running = e.running.saturating_sub(1);
+                if e.running == 0 {
+                    map.remove(&self.key);
+                }
+            }
+        }
+    }
+
+    /// A catalogue change was written: a refresh begun before it is not to be joined or
+    /// kept. Called by `invalidate_library_parts` before it forgets the cache.
+    pub fn invalidated(db: &Db, server_id: &str) {
+        if let Some(e) = registry().get_mut(&key(db, server_id)) {
+            e.epoch += 1;
+        }
+    }
+
+    /// Keep a freshly read library, and say so only if it differs from what was kept.
+    ///
+    /// Returns whether it differed. No cache at all counts as a difference: whatever
+    /// forgot it expects the library to be read again.
+    pub fn settle(
+        state: &AppState,
+        server_id: &str,
+        view: &LibraryView,
+    ) -> std::result::Result<bool, crate::store::db::DbError> {
+        let changed = library_cache::load(&state.db, server_id)?.as_ref() != Some(view);
+        library_cache::save(&state.db, server_id, view)?;
+        if changed {
+            state.notify_library_changed(server_id);
+        }
+        Ok(changed)
+    }
+}
+
 pub mod api {
     use super::*;
     use crate::domain::links::Links;
@@ -309,6 +509,7 @@ pub mod api {
     use crate::ssh::Connection;
     use crate::store::{library_cache, profiles};
     use futures::stream::{self, StreamExt};
+    use futures::FutureExt;
 
     /// The profile behind an identifier, or a refusal naming it.
     ///
@@ -330,22 +531,57 @@ pub mod api {
         server_id: &str,
         refresh: bool,
     ) -> Result<LibraryView> {
+        let mode = if refresh {
+            Read::Server
+        } else {
+            Read::CacheThenRefresh
+        };
+        read(state, server_id, mode).await
+    }
+
+    /// A server's library as it is already known — **without** asking the server for a
+    /// refresh (T651).
+    ///
+    /// This is what a screen reads on `library:changed`. That event *is* the end of a
+    /// refresh; answering it with `library_list(refresh=false)` asked for another refresh,
+    /// whose end sent another event — an endless round of reading the whole server while a
+    /// person merely had the library open. Reading the answer and asking the question are
+    /// two different things, and this is only the first.
+    ///
+    /// Only when there is no cache at all (a change just forgot it) is the server read —
+    /// there is nothing else to show — and that read joins any already under way.
+    pub async fn library_list_known(state: &AppState, server_id: &str) -> Result<LibraryView> {
+        read(state, server_id, Read::Cache).await
+    }
+
+    /// How a library is to be read.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Read {
+        /// The cache when there is one; the server otherwise.
+        Cache,
+        /// The cache when there is one, with a refresh started behind it.
+        CacheThenRefresh,
+        /// The server, now.
+        Server,
+    }
+
+    async fn read(state: &AppState, server_id: &str, mode: Read) -> Result<LibraryView> {
         let profile = profile_of(state, server_id)?;
 
-        if !refresh {
+        if mode != Read::Server {
             if let Some(cached) = library_cache::load(&state.db, server_id)? {
-                // The refresh goes its own way: a person already sees the list, and any
-                // divergence from the server will arrive as an event and correct it.
-                spawn_background_refresh(state.clone(), profile.clone());
+                if mode == Read::CacheThenRefresh {
+                    // The refresh goes its own way: a person already sees the list, and a
+                    // divergence from the server will arrive as an event and correct it.
+                    // Nothing waits for it — it is already running on its own.
+                    drop(refresh(state, &profile));
+                }
                 return Ok(cached);
             }
         }
 
-        match build_from_server(state, &profile).await {
-            Ok(view) => {
-                library_cache::save(&state.db, server_id, &view)?;
-                Ok(view)
-            }
+        match refresh(state, &profile).await {
+            Ok(view) => Ok(view),
             Err(e) => {
                 // The server cannot be reached. Showing the last known state with a mark
                 // on it beats an empty screen: an empty one is indistinguishable from
@@ -362,21 +598,13 @@ pub mod api {
         }
     }
 
-    /// Refresh the cache aside from the answer, and report the change.
-    fn spawn_background_refresh(state: AppState, profile: ServerProfile) {
-        let server_id = profile.id.clone();
-        tokio::spawn(async move {
-            match build_from_server(&state, &profile).await {
-                Ok(view) => {
-                    if library_cache::save(&state.db, &server_id, &view).is_ok() {
-                        state.notify_library_changed(&server_id);
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!(server = %server_id, error = %e, "the background library refresh failed")
-                }
-            }
-        });
+    /// The one refresh of this server's library — joining the one already under way, if
+    /// any (T651).
+    fn refresh(state: &AppState, profile: &ServerProfile) -> super::refreshes::Refresh {
+        let (st, p) = (state.clone(), profile.clone());
+        super::refreshes::run(state, &profile.id, move || {
+            async move { build_from_server(&st, &p).await }.boxed()
+        })
     }
 
     /// Read the whole library from the server.

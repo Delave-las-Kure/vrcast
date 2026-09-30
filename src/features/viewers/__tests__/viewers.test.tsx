@@ -36,7 +36,7 @@ const mockLimitPreview = vi.fn(async (_request: { slug: string }) => ({
   warnings: [],
   below_lightest: false,
 }));
-const mockLimitSet = vi.fn(async () => undefined);
+const mockLimitSet = vi.fn(async (..._a: unknown[]) => undefined);
 
 /** What the core would send. Held so a test can push an update whenever it likes. */
 let send: ((update: ViewersUpdateEvent) => void) | null = null;
@@ -68,7 +68,7 @@ vi.mock("../../../shared/ipc", async () => {
       geoStatus: () => mockGeoStatus(),
       geoUpdate: () => mockGeoUpdate(),
       limitPreview: (...a: unknown[]) => mockLimitPreview(...(a as [{ slug: string }])),
-      limitSet: (...a: unknown[]) => mockLimitSet(...(a as [])),
+      limitSet: (...a: unknown[]) => mockLimitSet(...a),
       limitsList: () => Promise.resolve([]),
     }),
     onLibraryChanged: vi.fn(async () => () => {}),
@@ -117,10 +117,22 @@ function viewer(over: Partial<Viewer> = {}): Viewer {
   };
 }
 
-function update(active: Viewer[]): ViewersUpdateEvent {
+function update(
+  active: Viewer[],
+  watch: Partial<Pick<ViewersUpdateEvent, "watch" | "as_of" | "attempt">> = {},
+): ViewersUpdateEvent {
   const per_media: Record<string, number> = {};
   for (const v of active) if (v.media_id) per_media[v.media_id] = (per_media[v.media_id] ?? 0) + 1;
-  return { event: "viewers_update", server_id: "s1", active, per_media };
+  return {
+    event: "viewers_update",
+    server_id: "s1",
+    active,
+    per_media,
+    watch: "watching",
+    as_of: new Date().toISOString(),
+    attempt: 0,
+    ...watch,
+  };
 }
 
 beforeEach(() => {
@@ -229,6 +241,68 @@ describe("the viewers screen", () => {
   });
 });
 
+/**
+ * T664 — QA-24B-05. After a break in the connection the screen used to go on showing the last
+ * list as if it were now, with nothing to say it was old. The core now says where the
+ * watching stands on every update; the screen must say it too.
+ */
+describe("when the connection to the server is lost", () => {
+  it("says it is reconnecting, keeps the last list marked as old, and says how old", async () => {
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+
+    send?.(update([viewer()]));
+    const table = await screen.findByTestId("viewers-table");
+    expect(table.getAttribute("data-stale")).toBe("false");
+    expect(screen.queryByTestId("viewers-reconnecting")).toBeNull();
+
+    const fortySecondsAgo = new Date(Date.now() - 40_000).toISOString();
+    send?.(update([viewer()], { watch: "reconnecting", as_of: fortySecondsAgo, attempt: 2 }));
+
+    const notice = await screen.findByTestId("viewers-reconnecting");
+    expect(notice.textContent).toContain(ru.ui.viewers.reconnecting);
+    expect(notice.textContent).toContain("2");
+    // The age, in words, not only a colour.
+    expect(screen.getByTestId("viewers-age").textContent).toMatch(/4\d с/);
+    // The list is still there — it is the best there is — but it is marked.
+    expect(screen.getByText("203.0.113.9")).toBeInTheDocument();
+    expect(screen.getByTestId("viewers-table").getAttribute("data-stale")).toBe("true");
+  });
+
+  it("does not call an old empty list 'nobody is watching'", async () => {
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+
+    send?.(update([], { watch: "reconnecting", attempt: 1 }));
+    await screen.findByTestId("viewers-reconnecting");
+    expect(screen.queryByText(ru.ui.viewers.nobody)).toBeNull();
+  });
+
+  it("drops the marks as soon as a current list arrives again", async () => {
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+
+    send?.(update([viewer()], { watch: "reconnecting", attempt: 3 }));
+    await screen.findByTestId("viewers-reconnecting");
+
+    send?.(update([viewer()]));
+    await waitFor(() => expect(screen.queryByTestId("viewers-reconnecting")).toBeNull());
+    expect(screen.getByTestId("viewers-table").getAttribute("data-stale")).toBe("false");
+  });
+
+  it("when it has given up, says so and offers to start again — which starts it again", async () => {
+    renderIn(<ViewersScreen />, "en");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(1));
+
+    send?.(update([viewer()], { watch: "stopped", attempt: 4 }));
+    const stopped = await screen.findByTestId("viewers-stopped");
+    expect(stopped.textContent).toContain(en.ui.viewers.stopped);
+
+    fireEvent.click(screen.getByRole("button", { name: en.ui.viewers.restart }));
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(2));
+  });
+});
+
 describe("the tables of places", () => {
   it("says nothing while they are there and current", async () => {
     // The ordinary state. A line reporting it on every visit is noise, and noise in a corner
@@ -287,5 +361,56 @@ describe("the tables of places", () => {
       "the dialog asked the core about the medium by something that is not its slug, so the " +
         "core looks for a quality set at a path that does not exist",
     ).toBe("backrooms");
+  });
+
+  it("opens the cap on the film the viewer is watching, not the first in the catalogue (T668)", async () => {
+    // QA-24B-09: a viewer of film B got a dialog set to film A, and putting it right was a
+    // fourth action where SC-006 allows three.
+    mockLibraryList.mockResolvedValue({
+      server_id: "s1",
+      media: [
+        {
+          id: "m-a",
+          title: "Film A",
+          slug: "film-a",
+          files: [],
+          ladders: [],
+          total_bytes: 0,
+          created_at: "",
+        },
+        {
+          id: "m-b",
+          title: "Film B",
+          slug: "film-b",
+          files: [],
+          ladders: [],
+          total_bytes: 0,
+          created_at: "",
+        },
+      ],
+      unrecognized: [],
+      disk: null,
+      stale: false,
+    });
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalledWith("s1"));
+    send?.(update([viewer({ media_id: "m-b" })]));
+    expect(await screen.findByText("Film B")).toBeInTheDocument();
+
+    // 1. open it on the viewer; 2. set the cap; 3. agree.
+    fireEvent.click(await screen.findByRole("button", { name: ru.ui.limits.title }));
+    await waitFor(() => expect(mockLimitPreview).toHaveBeenCalled());
+    expect(mockLimitPreview.mock.calls[0][0].slug).toBe("film-b");
+    fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "3" } });
+    await waitFor(() => expect(mockLimitPreview).toHaveBeenCalledTimes(2));
+    expect(mockLimitPreview.mock.calls[1][0]).toMatchObject({ slug: "film-b" });
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("confirm"));
+    await waitFor(() => expect(mockLimitSet).toHaveBeenCalledTimes(1));
+    expect((mockLimitSet.mock.calls[0] as unknown[])[0]).toMatchObject({
+      ip: "203.0.113.9",
+      slug: "film-b",
+      cap_bps: 3_000_000,
+    });
   });
 });
