@@ -501,12 +501,17 @@ fn a_switch_to_the_made_key_between_the_check_and_the_write_is_not_written_over(
         let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
         let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
 
+        let at_start = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+            .unwrap()
+            .unwrap();
+
         let mut renamed = valid_input("Renamed");
         renamed.auth_kind = AuthKind::Password;
         let err = api::server_update_between(&s, &id, renamed, secret, &mut || {
             s.secrets.set(&reference, MADE_KEY).unwrap();
             assert!(
-                vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &id).unwrap(),
+                vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &at_start)
+                    .unwrap(),
                 "the switch in between did not happen"
             );
         })
@@ -533,6 +538,9 @@ fn a_new_password_typed_while_the_key_was_kept_is_checked_again_and_then_agrees(
     let s = state();
     let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
     let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+    let at_start = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+        .unwrap()
+        .unwrap();
 
     api::server_update_between(
         &s,
@@ -541,7 +549,7 @@ fn a_new_password_typed_while_the_key_was_kept_is_checked_again_and_then_agrees(
         Some("a-new-root-password"),
         &mut || {
             s.secrets.set(&reference, MADE_KEY).unwrap();
-            vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &id).unwrap();
+            vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &at_start).unwrap();
         },
     )
     .expect("a deliberate password was refused");
@@ -618,6 +626,108 @@ fn a_form_and_a_deployment_on_two_threads_never_leave_password_over_the_key() {
         assert_eq!(after.auth_kind, AuthKind::ManagedKey);
         assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
     }
+}
+
+// ---------- T642 (QA-22 №2): the key is kept only for the server it was made for ----------
+
+/// The run's copy of the profile at its start, as `commands::deploy::start` takes it.
+fn profile_now(
+    s: &vrcast_studio_lib::commands::AppState,
+    id: &str,
+) -> vrcast_studio_lib::domain::server_profile::ServerProfile {
+    vrcast_studio_lib::store::profiles::get(&s.db, id)
+        .unwrap()
+        .expect("the profile vanished")
+}
+
+#[test]
+fn a_profile_pointed_at_another_server_during_the_run_does_not_get_the_old_servers_key() {
+    // QA-22 №2: the run started for server A; meanwhile the person moved the same profile to
+    // server B (another address, port or user), left it on a password and typed B's password.
+    // The key made for A used to be written over B's password and the profile switched to
+    // `managed_key` — B out of reach. Now the key is not kept, B's password stays, and the
+    // error is what stops the run before `SshHardening` (the run turns a keeper's error into
+    // a failed `SshHardening` before sending anything of that step).
+    type Move = (&'static str, fn(&mut ServerInput));
+    let moves: [Move; 3] = [
+        ("address", |i| i.host = String::from("198.51.100.20")),
+        ("port", |i| i.port = 2222),
+        ("user", |i| i.user = String::from("deploy")),
+    ];
+    for (what, point_elsewhere) in moves {
+        let s = state();
+        let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+        let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+        let at_start = profile_now(&s, &id);
+
+        let mut b = valid_input("Server");
+        point_elsewhere(&mut b);
+        api::server_update(&s, &id, b.clone(), Some("password-of-server-b"))
+            .unwrap_or_else(|e| panic!("moving the {what} was refused: {e}"));
+
+        let err =
+            vrcast_studio_lib::commands::deploy::key_keeper(&s, &at_start, MADE_KEY.to_owned())()
+                .expect_err("the key made for A was kept over a profile moved to B");
+        assert!(err.contains("another server"), "{what}: {err}");
+
+        let after = &api::servers_list(&s).unwrap()[0];
+        assert_eq!(after.auth_kind, AuthKind::Password, "{what}");
+        assert_eq!(
+            (&after.host, after.port, &after.user),
+            (&b.host, b.port, &b.user),
+            "{what}"
+        );
+        assert_eq!(
+            s.secrets.get(&reference).unwrap(),
+            "password-of-server-b",
+            "{what}: B's password was written over"
+        );
+    }
+}
+
+#[test]
+fn the_switch_itself_is_conditional_on_the_server_the_run_started_on() {
+    // The `UPDATE` holds the same condition, for a change landing outside this application's
+    // lock (another copy on the same database): nothing is switched.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    let at_start = profile_now(&s, &id);
+    let mut b = valid_input("Server");
+    b.host = String::from("198.51.100.20");
+    api::server_update(&s, &id, b, None).unwrap();
+
+    assert!(
+        !vrcast_studio_lib::store::profiles::switch_to_managed_key(&s.db, &at_start).unwrap(),
+        "a profile moved to another server was switched to managed_key"
+    );
+    assert_eq!(
+        api::servers_list(&s).unwrap()[0].auth_kind,
+        AuthKind::Password
+    );
+}
+
+#[test]
+fn a_rename_and_other_fields_changed_during_the_run_do_not_stop_the_key_being_kept() {
+    // The owner's decision 2026-09-30: only the address, port and user matter.
+    let s = state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
+    let at_start = profile_now(&s, &id);
+
+    let mut edited = valid_input("Renamed during the run");
+    edited.domain = String::from("other.example.com");
+    edited.video_dir = Some(String::from("/srv/other"));
+    edited.cdn_base = Some(String::from("https://cdn.example.com"));
+    api::server_update(&s, &id, edited, None).unwrap();
+
+    vrcast_studio_lib::commands::deploy::key_keeper(&s, &at_start, MADE_KEY.to_owned())()
+        .expect("the key was not kept after a rename");
+
+    let after = &api::servers_list(&s).unwrap()[0];
+    assert_eq!(after.auth_kind, AuthKind::ManagedKey);
+    assert_eq!(after.name, "Renamed during the run");
+    assert_eq!(after.domain, "other.example.com");
+    assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
 }
 
 // ---------- T638 (QA-21 №5): off the made key onto a key file with no passphrase ----------
@@ -700,4 +810,180 @@ fn an_empty_secret_is_no_password_the_stale_form_is_still_refused() {
     assert!(err.says(DetailCode::ProfileAuthNeedsSecret), "{err}");
 
     assert_eq!(s.secrets.get(&reference).unwrap(), MADE_KEY);
+}
+
+// ---------- T644 (QA-22 №4): the store refuses the secret — the profile goes back ----------
+
+/// Something to run just before the store refuses: where another copy of the application could
+/// change the row.
+type OnRefuse = Box<dyn FnMut() + Send>;
+
+/// A store that can be told to refuse `set`.
+#[derive(Default)]
+struct RefusingStore {
+    inner: vrcast_studio_lib::store::secrets::InMemorySecretStore,
+    refuse: std::sync::atomic::AtomicBool,
+    on_refuse: std::sync::Mutex<Option<OnRefuse>>,
+}
+
+impl vrcast_studio_lib::store::secrets::SecretStore for RefusingStore {
+    fn set(
+        &self,
+        reference: &SecretRef,
+        value: &str,
+    ) -> vrcast_studio_lib::store::secrets::Result<()> {
+        if self.refuse.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some(f) = self.on_refuse.lock().unwrap().as_mut() {
+                f();
+            }
+            return Err(vrcast_studio_lib::store::secrets::SecretError::Backend(
+                String::from("the store is locked"),
+            ));
+        }
+        self.inner.set(reference, value)
+    }
+    fn get(&self, reference: &SecretRef) -> vrcast_studio_lib::store::secrets::Result<String> {
+        self.inner.get(reference)
+    }
+    fn delete(&self, reference: &SecretRef) -> vrcast_studio_lib::store::secrets::Result<()> {
+        self.inner.delete(reference)
+    }
+}
+
+fn refusing_state() -> (
+    vrcast_studio_lib::commands::AppState,
+    std::sync::Arc<RefusingStore>,
+) {
+    let store = std::sync::Arc::new(RefusingStore::default());
+    let s = vrcast_studio_lib::commands::AppState::with_db(
+        std::sync::Arc::new(vrcast_studio_lib::store::db::Db::open_in_memory().unwrap()),
+        store.clone(),
+    )
+    .unwrap();
+    (s, store)
+}
+
+fn signing_in(auth_kind: AuthKind, name: &str) -> ServerInput {
+    let mut input = valid_input(name);
+    input.auth_kind = auth_kind;
+    if auth_kind == AuthKind::Key {
+        input.key_path = Some(String::from(OWN_KEY));
+    }
+    input
+}
+
+/// Every change of the way of signing in a form can make, and each way kept with a new secret:
+/// (from, what the store holds, to, the new secret).
+const MOVES: [(AuthKind, &str, AuthKind, &str); 7] = [
+    (AuthKind::ManagedKey, MADE_KEY, AuthKind::Key, ""),
+    (
+        AuthKind::ManagedKey,
+        MADE_KEY,
+        AuthKind::Key,
+        "a-passphrase",
+    ),
+    (
+        AuthKind::ManagedKey,
+        MADE_KEY,
+        AuthKind::Password,
+        "a-password",
+    ),
+    (AuthKind::Password, SECRET, AuthKind::Key, "a-passphrase"),
+    (
+        AuthKind::Password,
+        SECRET,
+        AuthKind::Password,
+        "a-new-password",
+    ),
+    (
+        AuthKind::Key,
+        "old-passphrase",
+        AuthKind::Password,
+        "a-password",
+    ),
+    (
+        AuthKind::Key,
+        "old-passphrase",
+        AuthKind::Key,
+        "a-new-passphrase",
+    ),
+];
+
+#[test]
+fn a_refused_secret_puts_the_profile_back_as_it_was_on_every_move() {
+    // QA-22 №4: `managed_key` -> `key` with "", the store refused — the profile stayed `key`
+    // with the made private key in the store as its "passphrase". Now it is put back, the store
+    // keeps what it had, and the store's error comes back.
+    for (from, held, to, new_secret) in MOVES {
+        let (s, store) = refusing_state();
+        let id = api::server_add(&s, signing_in(from, "Server"), held).unwrap();
+        let before = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+            .unwrap()
+            .unwrap();
+        let reference = SecretRef::from_stored(&before.secret_ref);
+
+        store
+            .refuse
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut edit = signing_in(to, "Renamed");
+        edit.host = String::from("198.51.100.20");
+        let err = api::server_update(&s, &id, edit, Some(new_secret))
+            .expect_err("the store refused, and the update said it went through");
+        let case = format!("{from:?} -> {to:?}");
+        assert_eq!(err.code, ErrorCode::StorageFailed, "{case}: {err}");
+        assert!(!err.says(DetailCode::ProfileMayBeChanged), "{case}: {err}");
+
+        let after = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, before, "{case}: the profile was not put back");
+        assert_eq!(s.secrets.get(&reference).unwrap(), held, "{case}");
+    }
+}
+
+#[test]
+fn a_profile_changed_before_it_could_be_put_back_is_not_written_over_and_the_error_says_so() {
+    // The putting back is conditional, like the edit: should the row have changed in between
+    // (another copy of the application), nothing is written over it — and the error is loud
+    // that the profile may have been left changed.
+    let (s, store) = refusing_state();
+    let id = api::server_add(&s, signing_in(AuthKind::ManagedKey, "Server"), MADE_KEY).unwrap();
+    let db = s.db.clone();
+    let id2 = id.clone();
+    *store.on_refuse.lock().unwrap() = Some(Box::new(move || {
+        vrcast_studio_lib::store::profiles::set_fingerprint(&db, &id2, "SHA256:someone-else")
+            .unwrap();
+    }));
+    store
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let err = api::server_update(&s, &id, own_key_file("Server"), Some(""))
+        .expect_err("the store refused, and the update said it went through");
+    assert_eq!(err.code, ErrorCode::StorageFailed, "{err}");
+    assert!(err.says(DetailCode::ProfileMayBeChanged), "{err}");
+    let cause = err.cause.clone().unwrap_or_default();
+    assert!(cause.contains("may have been left changed"), "{cause}");
+    assert!(cause.contains("the store is locked"), "{cause}");
+
+    let after = vrcast_studio_lib::store::profiles::get(&s.db, &id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.host_fingerprint.as_deref(),
+        Some("SHA256:someone-else"),
+        "the other change was written over"
+    );
+}
+
+#[test]
+fn a_locked_store_does_not_stop_an_edit_that_brings_no_secret() {
+    // `secret: null` does not touch the store at all — a locked store does not stop a rename.
+    let (s, store) = refusing_state();
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    store
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    api::server_update(&s, &id, valid_input("Renamed"), None).expect("a rename was refused");
+    assert_eq!(api::servers_list(&s).unwrap()[0].name, "Renamed");
 }

@@ -155,6 +155,62 @@ pub fn update_if_signs_in(db: &Db, p: &ServerProfile, read_as: AuthKind) -> Resu
     })
 }
 
+/// Put a profile back as it was — **only while it is still exactly as `written` left it**
+/// (T644).
+///
+/// `server_update` writes the profile first and the secret after: should the operating
+/// system's store refuse the secret, the profile would stay switched (to `key`, say) over the
+/// store's old contents (the made key), and every later sign-in would read one as the other.
+/// So the edit is undone — every column [`update_if_signs_in`] wrote, back to `previous` — but
+/// conditionally, like the edit itself: should anything have changed the row since (another
+/// copy of the application, a fingerprint confirmed in between), nothing is written over it.
+/// `false` — nothing was put back; the profile may be as `written` left it, or changed since.
+pub fn restore_if_still(
+    db: &Db,
+    previous: &ServerProfile,
+    written: &ServerProfile,
+) -> Result<bool, DbError> {
+    db.with_conn(|c| {
+        let changed = c.execute(
+            "UPDATE server_profiles SET
+                name = ?2, host = ?3, port = ?4, username = ?5, auth_kind = ?6,
+                key_path = ?7, domain = ?8, video_dir = ?9, cdn_base = ?10,
+                host_fingerprint = ?11, ipv6_mode = ?12
+             WHERE id = ?1
+               AND name IS ?13 AND host IS ?14 AND port IS ?15 AND username IS ?16
+               AND auth_kind IS ?17 AND key_path IS ?18 AND domain IS ?19
+               AND video_dir IS ?20 AND cdn_base IS ?21 AND host_fingerprint IS ?22
+               AND ipv6_mode IS ?23",
+            rusqlite::params![
+                previous.id,
+                previous.name,
+                previous.host,
+                previous.port as i64,
+                previous.user,
+                previous.auth_kind.as_str(),
+                previous.key_path,
+                previous.domain,
+                previous.video_dir,
+                previous.cdn_base,
+                previous.host_fingerprint,
+                previous.ipv6_mode.map(|m| m.as_str()),
+                written.name,
+                written.host,
+                written.port as i64,
+                written.user,
+                written.auth_kind.as_str(),
+                written.key_path,
+                written.domain,
+                written.video_dir,
+                written.cdn_base,
+                written.host_fingerprint,
+                written.ipv6_mode.map(|m| m.as_str()),
+            ],
+        )?;
+        Ok(changed > 0)
+    })
+}
+
 /// Point a password profile at the key a deployment made for it (T616, T636): `auth_kind =
 /// managed_key`, no key path — **these two columns, and only from `password`**.
 ///
@@ -163,15 +219,27 @@ pub fn update_if_signs_in(db: &Db, p: &ServerProfile, read_as: AuthKind) -> Resu
 /// the meantime. And only from `password`, because that is the one way of signing in the made
 /// key replaces: a profile a person has since pointed at a key file of their own is theirs, and
 /// the run does not take it back. `false` — nothing was written.
-pub fn switch_to_managed_key(db: &Db, id: &str) -> Result<bool, DbError> {
+///
+/// ⚠ **T642 (QA-22 №2) — and only while the profile still points at the machine the key was
+/// made for.** `at_start` is the run's copy of the profile, taken when it started: the key was
+/// put on *that* address, port and user, and proved there. A profile a person has since pointed
+/// at another server (a new address, port or user — still on a password, the new server's)
+/// keeps its password: the key of the old server written over it would lock the person out of
+/// the new one. The condition is in the `UPDATE` itself, next to `auth_kind`; a rename or a
+/// change of any other field does not stop it.
+pub fn switch_to_managed_key(db: &Db, at_start: &ServerProfile) -> Result<bool, DbError> {
     db.with_conn(|c| {
         let changed = c.execute(
             "UPDATE server_profiles SET auth_kind = ?2, key_path = NULL
-             WHERE id = ?1 AND auth_kind = ?3",
+             WHERE id = ?1 AND auth_kind = ?3
+               AND host = ?4 AND port = ?5 AND username = ?6",
             rusqlite::params![
-                id,
+                at_start.id,
                 AuthKind::ManagedKey.as_str(),
-                AuthKind::Password.as_str()
+                AuthKind::Password.as_str(),
+                at_start.host,
+                at_start.port as i64,
+                at_start.user,
             ],
         )?;
         Ok(changed > 0)

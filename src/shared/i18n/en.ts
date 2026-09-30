@@ -226,8 +226,9 @@ export const en: Catalogue = {
       hint: "Reload the list of limits and try again — nothing was lost, but this change did not go through.",
     },
     LIMITS_ROLLBACK_FAILED: {
-      message: "The change of limits did not go through, and the previous limits were not put back",
-      hint: "Reload the list of limits: it shows what is really in force on the server now.",
+      message:
+        "The change of limits did not go through, and putting the previous limits back was not confirmed",
+      hint: "Reload the list of limits — it shows what is written in the rules file on the server. After a failed change that may differ from what the serving is using right now; its condition is in the diagnostics section.",
     },
 
     // --- tasks ---
@@ -297,6 +298,8 @@ export const en: Catalogue = {
     PROFILE_AUTH_NEEDS_SECRET:
       "The way of signing in is changing, but no new password or key was entered — the store would keep the old way’s secret and the next sign-in would fail. If the form was opened before a deployment, it may already have moved the server to its own key: close the form and open it again. To change the way of signing in, enter the password or the key’s passphrase.",
     PROFILE_NOT_FOUND: "There is no such server — its profile may have been deleted.",
+    PROFILE_MAY_BE_CHANGED:
+      "Putting the profile back as it was failed too — it may have been left changed, though the new password or passphrase was not saved. Open the profile, check its way of signing in and save it again.",
     FINGERPRINT_EMPTY: "The fingerprint is empty — there is nothing to confirm.",
 
     // --- what the single door says when it stays shut (T519(1)) ---
@@ -483,9 +486,9 @@ export const en: Catalogue = {
     WARN_CAP_BELOW_LIGHTEST:
       "The cap is below the lightest rung there is ({lightest_bps} bit/s). The viewer gets that rung anyway — an empty description would leave them with no video at all. If it is still too much, a lighter rung has to be built rather than chosen.",
     LIMITS_ROLLBACK_UNSUCCESSFUL:
-      "The change did not go through, and putting the previous limits back failed too — the serving may not be working. Check the server's condition in the diagnostics section before anything else.",
+      "The change did not go through, and putting the previous limits back failed (or the serving did not answer after they went back) — the serving may not be working. Check the server's condition in the diagnostics section before anything else.",
     LIMITS_ROLLBACK_NOT_STARTED:
-      "The change did not go through, and the previous limits were not put back: a command of this change is still running on the server, and putting back over it would mix the two. The serving is most likely working. Wait a minute, then reload the list: the rules of the failed change stayed in the file and come into force with the next change.",
+      "The change did not go through, and the previous limits were not put back: the end of this change's previous command on the server was not confirmed, and putting back over it could mix the two. The serving is most likely working. Wait a minute, then reload the list. If the change got as far as replacing the rules file, its new rules may have stayed in the file and would then come into force with the next change.",
     NOTICE_NO_HARDWARE_FOUND:
       "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
     NOTICE_SOFTWARE_AS_ASKED:

@@ -274,15 +274,60 @@ pub mod api {
             between();
             if profiles::update_if_signs_in(&state.db, &profile, existing.auth_kind)? {
                 if let Some(value) = secret {
-                    state
+                    if let Err(e) = state
                         .secrets
-                        .set(&SecretRef::from_stored(&profile.secret_ref), value)?;
+                        .set(&SecretRef::from_stored(&profile.secret_ref), value)
+                    {
+                        return Err(put_back(state, &existing, &profile, e.into()));
+                    }
                 }
                 return Ok(());
             }
         }
         let now = profiles::get(&state.db, id)?.ok_or_else(|| no_such_server(id))?;
         Err(needs_secret(now.auth_kind, input.auth_kind))
+    }
+
+    /// ⚠ **T644 (QA-22 №4, the owner's decision 2026-09-30) — the store refused the secret: the
+    /// profile goes back to what it was, and only then the error.**
+    ///
+    /// The profile is written first and the secret after, so a store that refuses (locked,
+    /// unavailable) used to leave the profile switched over the store's old contents — `key`
+    /// over the made private key, which the next sign-in hands to the file as its passphrase;
+    /// `password` over a key, sent as a password. Still under the caller's
+    /// [`Db::sign_in_lock`], the write is undone — conditionally, only while the row is still
+    /// what was written ([`profiles::restore_if_still`]) — and the store's error goes out as it
+    /// was. The store itself was not changed: `set` failed.
+    ///
+    /// Should the undo not happen (the database failed, or the row changed in between), the
+    /// error is loud about it: `PROFILE_MAY_BE_CHANGED` and a `cause` saying the profile may have
+    /// been left changed — the person has to look at it and save it again, rather than trust a
+    /// "nothing was saved" that is not known to be true.
+    ///
+    /// [`Db::sign_in_lock`]: crate::store::db::Db::sign_in_lock
+    fn put_back(
+        state: &AppState,
+        previous: &ServerProfile,
+        written: &ServerProfile,
+        refused: AppError,
+    ) -> AppError {
+        let why = match profiles::restore_if_still(&state.db, previous, written) {
+            Ok(true) => {
+                tracing::warn!(server = %previous.id, "the store refused the secret; the profile was put back as it was");
+                return refused;
+            }
+            Ok(false) => String::from("the profile changed in the meantime"),
+            Err(e) => crate::store::redact::safe_display(&e),
+        };
+        tracing::error!(server = %previous.id, why = %why, "the store refused the secret and the profile could not be put back");
+        let store = refused.cause.clone().unwrap_or_default();
+        let mut loud = refused.detail(DetailCode::ProfileMayBeChanged);
+        loud.cause = None;
+        loud.with_cause(format!(
+            "the system's secret store refused the secret ({store}), and putting the profile \
+             back failed too ({why}): the profile may have been left changed — check its way of \
+             signing in and save it again"
+        ))
     }
 
     /// The profile `server_update` would write over `existing`, checked.

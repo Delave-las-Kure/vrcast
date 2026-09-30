@@ -435,6 +435,32 @@ describe("editing a server profile", () => {
     expect(screen.getByText(ru.ui.servers.save)).toBeInTheDocument();
   });
 
+  it("says loudly that the profile may have been left changed when putting it back failed (T644)", async () => {
+    mockServersList.mockResolvedValue([makeProfile({ auth_kind: "managed_key", key_path: null })]);
+    mockServerUpdate.mockRejectedValue({
+      code: "STORAGE_FAILED",
+      details: [{ key: "PROFILE_MAY_BE_CHANGED", params: {} }],
+      cause:
+        "the system's secret store refused the secret (locked), and putting the profile back failed too (the profile changed in the meantime): the profile may have been left changed",
+    });
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldAuth), {
+      target: { value: "password" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldPassword), {
+      target: { value: "a-new-password" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    expect(
+      await screen.findByText(ru.details.PROFILE_MAY_BE_CHANGED, { exact: false }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/may have been left changed/)).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.servers.save)).toBeInTheDocument();
+  });
+
   it("moves off the made key to a key file with no passphrase by sending an empty one (T638)", async () => {
     // The owner's decision 2026-09-30: here, and only here, an empty field is a value — "the
     // file has no passphrase", which also deletes the made key from the store — rather than
