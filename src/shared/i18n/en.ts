@@ -429,6 +429,7 @@ export const en: Catalogue = {
     STAGE_VALIDATING: "checking playback",
     STAGE_CHECKSUM: "comparing checksums",
     STAGE_MEASURING_QUALITY: "measuring quality on the material itself",
+    STAGE_PREPARING_MEASUREMENT: "preparing the measurement: reading the film and trial-encoding",
     STAGE_BUILDING_LADDER: "preparing the variants",
     STAGE_CUTTING_SEGMENTS: "cutting into segments — on the server",
     STAGE_VERIFYING_LADDER: "checking that every variant is served",

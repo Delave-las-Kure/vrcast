@@ -210,3 +210,96 @@ async fn verifying_a_set_on_a_server_that_does_not_exist_fails_by_name() {
         .expect_err("a set was verified on a server that does not exist");
     assert_eq!(err.code, ErrorCode::InvalidInput);
 }
+
+// ---------- T661: preparing a measurement is part of its task ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preparing_a_measurement_is_a_visible_stage_of_its_task_and_a_cancel_reaches_it() {
+    use std::time::{Duration, Instant};
+    use vrcast_studio_lib::commands::error::DetailCode;
+    use vrcast_studio_lib::media::ffmpeg;
+    use vrcast_studio_lib::tasks::engine::TaskEvent;
+    use vrcast_studio_lib::tasks::state::TaskState;
+
+    // QA-24B-02: reading every packet and trial-encoding three pieces ran inside the
+    // command, before the task existed — invisible, and nothing could stop it.
+    let (Ok(ff), Ok(info)) = (ffmpeg::locate("ffmpeg"), ffmpeg::probe_self().await) else {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    };
+    if !info.has_libvmaf {
+        eprintln!("SKIPPED: this FFmpeg cannot measure quality");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("vrcast-t661-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let film = dir.join("film.mp4");
+    let made = std::process::Command::new(&ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=30",
+            "-t",
+            "60",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&film)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(made.status.success());
+
+    let state = state();
+    let mut events = state.tasks.subscribe();
+    let mut ask = measuring(&film.to_string_lossy());
+    ask.prefer_hardware = false;
+    let id = quality::quality_measure_start(&state, ask)
+        .await
+        .expect("the measurement did not start");
+
+    // The first thing the task says is that it is preparing — the work is in the task now.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut first_stage = None;
+    while first_stage.is_none() && Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Ok(TaskEvent::Progress {
+                id: which,
+                stage: Some(stage),
+                ..
+            })) if which == id => first_stage = Some(stage),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        first_stage,
+        Some(DetailCode::StagePreparingMeasurement),
+        "the task did not say it was preparing the measurement"
+    );
+
+    state.tasks.cancel(&id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let ended = loop {
+        if let Some(rec) = state.tasks.get(&id).unwrap() {
+            if rec.state.is_final() {
+                break rec.state;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the cancel did not reach the preparation"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(ended, TaskState::Cancelled);
+    let _ = std::fs::remove_dir_all(&dir);
+}

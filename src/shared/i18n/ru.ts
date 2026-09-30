@@ -423,6 +423,7 @@ export const ruCore: CatalogueCore = {
     STAGE_VALIDATING: "проверяем воспроизведение",
     STAGE_CHECKSUM: "сверяем контрольные суммы",
     STAGE_MEASURING_QUALITY: "мерим качество на самом материале",
+    STAGE_PREPARING_MEASUREMENT: "готовим замер: читаем фильм и пробуем кодировать",
     STAGE_BUILDING_LADDER: "готовим варианты",
     STAGE_CUTTING_SEGMENTS: "режем на отрезки — на сервере",
     STAGE_VERIFYING_LADDER: "проверяем, что отдаётся каждый вариант",

@@ -145,3 +145,125 @@ async fn pausing_and_carrying_on_work() {
 
     p.kill_tree().await.unwrap();
 }
+
+// ---------- T661: the heavy short runs go through the managed path too ----------
+
+mod run_to_end {
+    use std::time::{Duration, Instant};
+    use tokio_util::sync::CancellationToken;
+    use vrcast_studio_lib::tasks::process::{run_to_end, RunError};
+
+    use super::super::proc_check::{alive, children_of, long_running};
+
+    const HELPER: &str = "process::run_to_end::the_parent_that_gets_killed";
+    const HELPER_ENV: &str = "VRCAST_T661_HELPER";
+
+    #[tokio::test]
+    async fn a_program_that_says_nothing_is_stopped_for_it() {
+        let (prog, args) = long_running();
+        let started = Instant::now();
+        let outcome = run_to_end(prog, &args, None, Duration::from_millis(1_200)).await;
+        assert!(
+            matches!(outcome, Err(RunError::Stalled { .. })),
+            "a mute program was not stopped: {outcome:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_cancel_stops_it_and_waits_for_it() {
+        let (prog, args) = long_running();
+        let cancel = CancellationToken::new();
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            trigger.cancel();
+        });
+        let started = Instant::now();
+        let outcome = run_to_end(prog, &args, Some(&cancel), Duration::from_secs(600)).await;
+        assert!(matches!(outcome, Err(RunError::Cancelled)), "{outcome:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the cancel took {:?} to land",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_program_that_finishes_gives_back_what_it_said() {
+        let (prog, args): (&str, Vec<String>) = if cfg!(windows) {
+            ("cmd", vec!["/c".into(), "echo hello".into()])
+        } else {
+            ("sh", vec!["-c".into(), "echo hello".into()])
+        };
+        let done = run_to_end(prog, &args, None, Duration::from_secs(30))
+            .await
+            .expect("a program that finishes did not finish");
+        assert!(done.status.success());
+        assert!(String::from_utf8_lossy(&done.stdout).contains("hello"));
+    }
+
+    /// Half of the check below: the application that is killed. Started as a separate
+    /// process; without the environment it does nothing.
+    #[test]
+    #[ignore = "half of the parent-death check: started as a separate process"]
+    fn the_parent_that_gets_killed() {
+        if std::env::var(HELPER_ENV).is_err() {
+            return;
+        }
+        let rt = tokio::runtime::Runtime::new().expect("no runtime");
+        rt.block_on(async {
+            let (prog, args) = long_running();
+            let _ = run_to_end(prog, &args, None, Duration::from_secs(3600)).await;
+        });
+    }
+
+    #[test]
+    fn a_heavy_run_dies_with_the_application() {
+        // QA-24B-02, the real Windows probe: a `quiet(..).output()` child lived on 2.5 s past
+        // its parent's death, a `ManagedProcess` one did not. `run_to_end` is what the heavy
+        // short runs go through now; this kills its parent from outside, with no chance to
+        // tidy up, and looks for survivors.
+        let mut parent = std::process::Command::new(
+            std::env::current_exe().expect("could not find our own program"),
+        )
+        .args([HELPER, "--exact", "--ignored", "--test-threads=1"])
+        .env(HELPER_ENV, "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the parent did not start");
+
+        let pid = parent.id();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let children = loop {
+            let found = children_of(pid);
+            if !found.is_empty() {
+                break found;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the parent never started its child — nothing to check"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        let grandchildren: Vec<u32> = children.iter().flat_map(|c| children_of(*c)).collect();
+        assert!(children.iter().all(|c| alive(*c)));
+
+        parent.kill().expect("could not kill the parent");
+        let _ = parent.wait();
+        std::thread::sleep(Duration::from_millis(2_500));
+
+        let survivors: Vec<u32> = children
+            .iter()
+            .chain(grandchildren.iter())
+            .copied()
+            .filter(|p| alive(*p))
+            .collect();
+        assert!(
+            survivors.is_empty(),
+            "ORPHANED: {survivors:?} outlived the application that started them \
+             (children {children:?}, grandchildren {grandchildren:?})"
+        );
+    }
+}

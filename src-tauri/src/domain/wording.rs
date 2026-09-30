@@ -196,6 +196,9 @@ detail_codes! {
     StageValidating => "STAGE_VALIDATING",
     StageChecksum => "STAGE_CHECKSUM",
     StageMeasuringQuality => "STAGE_MEASURING_QUALITY",
+    /// Before the grid: every packet of the film read and three pieces of it encoded, to
+    /// place the chunks and the anchor (T661). Minutes on a long film.
+    StagePreparingMeasurement => "STAGE_PREPARING_MEASUREMENT",
     StageBuildingLadder => "STAGE_BUILDING_LADDER",
     StageCuttingSegments => "STAGE_CUTTING_SEGMENTS",
     StageVerifyingLadder => "STAGE_VERIFYING_LADDER",
