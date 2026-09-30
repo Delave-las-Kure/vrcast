@@ -225,6 +225,10 @@ export const en: Catalogue = {
       message: "Someone else changed the quality limits at the same moment",
       hint: "Reload the list of limits and try again — nothing was lost, but this change did not go through.",
     },
+    LIMITS_ROLLBACK_FAILED: {
+      message: "The change of limits did not go through, and the previous limits were not put back",
+      hint: "Reload the list of limits: it shows what is really in force on the server now.",
+    },
 
     // --- tasks ---
     TASK_CANCELLED: {
@@ -478,6 +482,10 @@ export const en: Catalogue = {
       "{count} viewers are watching from this address right now. That is ordinary for a household or an office: the limit reaches all of them, not only the one who is struggling.",
     WARN_CAP_BELOW_LIGHTEST:
       "The cap is below the lightest rung there is ({lightest_bps} bit/s). The viewer gets that rung anyway — an empty description would leave them with no video at all. If it is still too much, a lighter rung has to be built rather than chosen.",
+    LIMITS_ROLLBACK_UNSUCCESSFUL:
+      "The change did not go through, and putting the previous limits back failed too — the serving may not be working. Check the server's condition in the diagnostics section before anything else.",
+    LIMITS_ROLLBACK_NOT_STARTED:
+      "The change did not go through, and the previous limits were not put back: a command of this change is still running on the server, and putting back over it would mix the two. The serving is most likely working. Wait a minute, then reload the list: the rules of the failed change stayed in the file and come into force with the next change.",
     NOTICE_NO_HARDWARE_FOUND:
       "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
     NOTICE_SOFTWARE_AS_ASKED:

@@ -298,6 +298,14 @@ detail_codes! {
     WarnAddressShared => "WARN_ADDRESS_SHARED",
     /// `lightest_bps` — the lightest rung there is.
     WarnCapBelowLightest => "WARN_CAP_BELOW_LIGHTEST",
+
+    // --- a change of the limits whose previous rules did not come back (T640) ---
+    /// `LIMITS_ROLLBACK_FAILED`: putting back was tried and failed, or everything went back
+    /// and the serving still does not answer. The serving may be broken.
+    LimitsRollbackUnsuccessful => "LIMITS_ROLLBACK_UNSUCCESSFUL",
+    /// `LIMITS_ROLLBACK_FAILED`: putting back was not started — a command of this change may
+    /// still be running on the server (T635). The serving is most likely working.
+    LimitsRollbackNotStarted => "LIMITS_ROLLBACK_NOT_STARTED",
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 

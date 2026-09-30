@@ -178,3 +178,53 @@ describe("what is capped now", () => {
     );
   });
 });
+
+describe("when the previous limits did not come back (T640)", () => {
+  function rollbackFailed(key: "LIMITS_ROLLBACK_UNSUCCESSFUL" | "LIMITS_ROLLBACK_NOT_STARTED") {
+    return {
+      code: "LIMITS_ROLLBACK_FAILED" as const,
+      details: [{ key, params: {} }],
+      cause: "the serving would not take the new configuration: …",
+    };
+  }
+
+  it("lifting a cap whose undo was never started says a command is still running, not that the serving is broken", async () => {
+    mockList.mockResolvedValue([
+      { ip: "203.0.113.10", slug: "demo", cap_bps: 6_000_000, set_at: "2026-08-26T10:00:00Z" },
+    ]);
+    mockClear.mockRejectedValue(rollbackFailed("LIMITS_ROLLBACK_NOT_STARTED"));
+    renderIn(<LimitsList serverId="s1" />, "ru");
+    await waitFor(() => expect(screen.getByText(ru.ui.limits.remove)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(ru.ui.limits.remove));
+
+    await waitFor(() =>
+      expect(screen.getByText(ru.details.LIMITS_ROLLBACK_NOT_STARTED)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(ru.errors.LIMITS_ROLLBACK_FAILED.hint)).toBeInTheDocument();
+    expect(screen.queryByText(ru.details.LIMITS_ROLLBACK_UNSUCCESSFUL)).not.toBeInTheDocument();
+    expect(screen.queryByText(ru.errors.INTERNAL.message)).not.toBeInTheDocument();
+  });
+
+  it("putting a cap on whose undo failed says the serving may not be working", async () => {
+    mockSet.mockRejectedValue(rollbackFailed("LIMITS_ROLLBACK_UNSUCCESSFUL"));
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "en");
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("confirm"));
+
+    await waitFor(() =>
+      expect(screen.getByText(en.details.LIMITS_ROLLBACK_UNSUCCESSFUL)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(en.errors.LIMITS_ROLLBACK_FAILED.hint)).toBeInTheDocument();
+    expect(screen.queryByText(en.details.LIMITS_ROLLBACK_NOT_STARTED)).not.toBeInTheDocument();
+  });
+
+  it("the code alone, with no detail, still reads as its own message", async () => {
+    mockSet.mockRejectedValue({ code: "LIMITS_ROLLBACK_FAILED" });
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "ru");
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("confirm"));
+    await waitFor(() =>
+      expect(screen.getByText(ru.errors.LIMITS_ROLLBACK_FAILED.message)).toBeInTheDocument(),
+    );
+  });
+});

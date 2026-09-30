@@ -137,12 +137,27 @@ pub enum LimitError {
     #[error("the serving stopped answering, so the previous configuration was put back")]
     ServingStopped,
 
-    /// The worst case: the change failed **and** putting the old one back failed too.
+    /// The worst case: the change failed **and** putting the old one back failed too — a
+    /// step of the undo refused or failed (`LOST_LOCK` among them), or everything went back
+    /// and the serving still does not answer. `LIMITS_ROLLBACK_FAILED`, detail
+    /// `LIMITS_ROLLBACK_UNSUCCESSFUL` (T640).
     ///
     /// Told apart from the rest on purpose. Everything else leaves a working server and a
     /// person who can try again; this one needs them to go and look.
-    #[error("the serving is broken and the previous configuration would not go back: {0}")]
+    #[error("the previous configuration could not be put back: {0}")]
     RollbackFailed(String),
+
+    /// The change failed and putting the old one back was **not started** (T635, T640): a
+    /// step of this change going forward was not heard to end, and the barrier could not
+    /// confirm it had. Nothing was put back; the serving may well be working — the step
+    /// still going is most often a slow `caddy reload`. The failed change's files stay as it
+    /// left them, and the holder keeps the lock until that step is gone (T634).
+    ///
+    /// Its own variant rather than a sentence inside `RollbackFailed`, because the two send a
+    /// person to different places: one to a server that may be broken, the other to wait.
+    /// Same code (`LIMITS_ROLLBACK_FAILED`), detail `LIMITS_ROLLBACK_NOT_STARTED`.
+    #[error("the previous configuration was not put back, a step of this change may still be running on the server: {0}")]
+    RollbackNotStarted(String),
 
     /// Another change reached the server between this call's read and its write (T600).
     ///
@@ -611,22 +626,46 @@ pub fn unheard(outcome: &Result<crate::ssh::CommandOutput, SshError>) -> bool {
     !matches!(outcome, Ok(out) if out.exit_code.is_some())
 }
 
+/// Why putting back did not bring the previous configuration back (T640).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PutBackError {
+    /// The barrier did not confirm that every step going forward had ended: the putting
+    /// back never started (T635).
+    #[error("putting back was not started: {0}")]
+    NotStarted(String),
+    /// The putting back started and did not go through.
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl PutBackError {
+    /// The change's outcome, `before` — what failed first, if anything.
+    fn into_limit_error(self, before: Option<&LimitError>) -> LimitError {
+        let said = match before {
+            Some(e) => format!("{e}; then: {self}"),
+            None => self.to_string(),
+        };
+        match self {
+            PutBackError::NotStarted(_) => LimitError::RollbackNotStarted(said),
+            PutBackError::Failed(_) => LimitError::RollbackFailed(said),
+        }
+    }
+}
+
 /// Put back only once the barrier has confirmed nothing of the change is still going
-/// forward (T635): `settle` first, and `undo` only if it succeeded. Its error is the
-/// putting back's, and the putting back never started.
+/// forward (T635): `settle` first, and `undo` only if it succeeded. Its error is
+/// `NotStarted` — the putting back never started; the undo's own is `Failed` (T640).
 ///
 /// `pub` so the unit test can check the order with steps that only record themselves.
-pub async fn settle_then<S, SF, U, UF>(settle: S, undo: U) -> Result<(), String>
+pub async fn settle_then<S, SF, U, UF>(settle: S, undo: U) -> Result<(), PutBackError>
 where
     S: FnOnce() -> SF,
     SF: std::future::Future<Output = Result<(), String>>,
     U: FnOnce() -> UF,
     UF: std::future::Future<Output = Result<(), String>>,
 {
-    settle()
-        .await
-        .map_err(|e| format!("putting back was not started: {e}"))?;
-    undo().await
+    settle().await.map_err(PutBackError::NotStarted)?;
+    undo().await.map_err(PutBackError::Failed)
 }
 
 tokio::task_local! {
@@ -730,7 +769,7 @@ impl Serving<'_> {
     /// **Nothing is put back while a step going forward may still be running** (T635). A
     /// step whose end was not heard — given up on at its ceiling, its channel failed — may go
     /// on on the server; the putting back waits for it first (`Serving::settle`), and if its
-    /// end cannot be confirmed it is not started at all: `RollbackFailed`, and the lock stays
+    /// end cannot be confirmed it is not started at all: `RollbackNotStarted`, and the lock stays
     /// with the holder until the step is gone (T634).
     ///
     /// **Why removing comes last (T602).** Until the reload the rules the web server holds
@@ -976,7 +1015,7 @@ impl Serving<'_> {
         if let Err(e) = swapped {
             return Err(match self.put_back(txn, &prepared).await {
                 Ok(()) => e,
-                Err(undo) => LimitError::RollbackFailed(format!("{e}; then: {undo}")),
+                Err(undo) => undo.into_limit_error(Some(&e)),
             });
         }
 
@@ -1149,7 +1188,7 @@ impl Serving<'_> {
     async fn roll_back(&self, txn: &Txn<'_>, prepared: &Prepared) -> Result<(), LimitError> {
         self.put_back(txn, prepared)
             .await
-            .map_err(LimitError::RollbackFailed)?;
+            .map_err(|undo| undo.into_limit_error(None))?;
         if !self.serving_answers().await {
             return Err(LimitError::RollbackFailed(String::from(
                 "the previous configuration went back and the serving still does not answer",
@@ -1488,7 +1527,7 @@ impl Serving<'_> {
     /// was lost (or that was given up on at `EXEC_CEILING`) could still be running, and take
     /// effect after the undo had put the old files back and reloaded them — Caddy's memory
     /// and the files on disk no longer the same (QA-21 №2).
-    async fn put_back(&self, txn: &Txn<'_>, prepared: &Prepared) -> Result<(), String> {
+    async fn put_back(&self, txn: &Txn<'_>, prepared: &Prepared) -> Result<(), PutBackError> {
         settle_then(|| self.settle(txn), || self.undo(txn, prepared)).await
     }
 
@@ -1499,7 +1538,7 @@ impl Serving<'_> {
     ///
     /// Not confirmed — a step still alive after every round, an answer that is no answer,
     /// or the barrier itself not run — is an error, and nothing is put back: the caller
-    /// reports `RollbackFailed` (`LIMITS_ROLLBACK_FAILED`). The lock stays with the holder,
+    /// reports `RollbackNotStarted` (`LIMITS_ROLLBACK_FAILED`, T640). The lock stays with the holder,
     /// which goes on sending TERM and KILL for as long as the step is alive (T634).
     ///
     /// `/proc` that cannot be read is the one answer that lets the undo go ahead unconfirmed,
