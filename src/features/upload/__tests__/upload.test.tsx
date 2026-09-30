@@ -984,6 +984,154 @@ describe("what is said before it starts", () => {
   });
 });
 
+describe("T654 — one file into a new medium, confirmed after a warning", () => {
+  const viewers: AppError = { code: "VIEWERS_ACTIVE", details: [] };
+
+  beforeEach(() => {
+    // A queued answer a test expects never to be asked for (the SLUG_TAKEN below) would
+    // otherwise be handed to the next test: `clearAllMocks` keeps the once-queue.
+    mockMediaCreate.mockReset();
+    mockMediaDelete.mockReset();
+    mockUploadStart.mockReset();
+    mockUploadStart.mockResolvedValue("t-1");
+  });
+
+  /** One file, a new medium called `title`, and "Upload" pressed. */
+  async function sendOneIntoANewMedium(title: string) {
+    renderIn(
+      <MemoryRouter>
+        <UploadScreen />
+      </MemoryRouter>,
+    );
+    await chooseAFile();
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldMedia), {
+      target: { value: "__new__" },
+    });
+    fireEvent.change(await screen.findByLabelText(ru.ui.upload.newMediaLabel), {
+      target: { value: title },
+    });
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+  }
+
+  it("the confirmation repeats the upload, not the creation of the medium", async () => {
+    // QA-24A №5, the probe turned round: the second `mediaCreate` the old code sent was
+    // refused `SLUG_TAKEN` and the confirmed upload never went out.
+    mockMediaCreate
+      .mockResolvedValueOnce("m-new")
+      .mockRejectedValueOnce({ code: "SLUG_TAKEN", details: [] } as AppError);
+    mockUploadStart.mockRejectedValueOnce(viewers).mockResolvedValueOnce("t-2");
+    await sendOneIntoANewMedium("Новый фильм");
+
+    fireEvent.click(await screen.findByText(ru.ui.preflight.uploadAnyway));
+
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
+    expect(mockMediaCreate).toHaveBeenCalledTimes(1);
+    const [first, second] = mockUploadStart.mock.calls.map((c) => c[0]);
+    // The very request that was refused, now confirmed — the medium already resolved.
+    expect(second).toEqual({ ...(first as object), confirmed: true });
+    expect(second).toMatchObject({
+      media_id: "m-new",
+      local_path: "F:\\видео\\фильм 22.mp4",
+      remote_name: "фильм 22.mp4",
+    });
+    expect(await screen.findByText(ru.ui.upload.started)).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument();
+  });
+
+  it("the medium made is selected as an existing one from then on", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Новый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+
+    const select = screen.getByLabelText(ru.ui.upload.fieldMedia) as HTMLSelectElement;
+    expect(select.value).toBe("m-new");
+    expect(
+      Array.from(select.options).some((o) => o.value === "m-new" && o.text === "Новый фильм"),
+    ).toBe(true);
+    expect(screen.queryByLabelText(ru.ui.upload.newMediaLabel)).not.toBeInTheDocument();
+  });
+
+  it("declining leaves the empty medium named and offered for deletion", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Отклонённый фильм");
+
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    // Not while the question is still open: the answer may yet put the file into it.
+    expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    expect(
+      await screen.findByText(
+        fill(ru.ui.upload.orphanedMediaWarning, { title: "Отклонённый фильм" }, ru, "ru"),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.upload.orphanedMediaDelete)).toBeInTheDocument();
+    // Nothing was deleted behind the person's back.
+    expect(mockMediaDelete).not.toHaveBeenCalled();
+  });
+
+  it("pressing Upload again after declining puts the file into it, not a second medium", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers).mockResolvedValueOnce("t-3");
+    await sendOneIntoANewMedium("Новый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    fireEvent.click(screen.getByText(ru.ui.upload.start));
+
+    await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
+    expect(mockMediaCreate).toHaveBeenCalledTimes(1);
+    expect(mockUploadStart).toHaveBeenLastCalledWith(
+      expect.objectContaining({ media_id: "m-new", confirmed: false }),
+    );
+    await screen.findByText(ru.ui.upload.started);
+    expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument();
+  });
+
+  it("deleting the empty medium takes it out of the list and off the form", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Удаляемый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+
+    mockMediaDelete.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "Удаляемый фильм", files: 0, bytes: 0 } },
+      ],
+    } as AppError);
+    fireEvent.click(await screen.findByText(ru.ui.upload.orphanedMediaDelete));
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledWith("s1", "m-new", false));
+
+    mockMediaDelete.mockResolvedValueOnce("ok");
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteYes));
+    await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledWith("s1", "m-new", true));
+
+    await waitFor(() =>
+      expect(screen.queryByText(ru.ui.upload.orphanedMediaDelete)).not.toBeInTheDocument(),
+    );
+    const select = screen.getByLabelText(ru.ui.upload.fieldMedia) as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(Array.from(select.options).some((o) => o.value === "m-new")).toBe(false);
+  });
+
+  it("a changed form drops the warning rather than confirming a request no longer on screen", async () => {
+    mockMediaCreate.mockResolvedValueOnce("m-new");
+    mockUploadStart.mockRejectedValueOnce(viewers);
+    await sendOneIntoANewMedium("Новый фильм");
+    await screen.findByText(ru.ui.preflight.uploadAnyway);
+
+    fireEvent.change(screen.getByLabelText(ru.ui.upload.fieldLimit), {
+      target: { value: "1250000" },
+    });
+
+    expect(screen.queryByText(ru.ui.preflight.uploadAnyway)).not.toBeInTheDocument();
+  });
+});
+
 describe("the queue", () => {
   function task(id: string, order: number): Task {
     return {
