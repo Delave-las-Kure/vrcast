@@ -106,8 +106,10 @@ async fn a_hung_remote_command_is_given_up_on_rather_than_waited_for_forever() {
 ///
 /// `Context::ran`/`Context::asks` (`src/server/deploy/mod.rs`) go through
 /// `Context::exec_marked`, and it — like `put_file`'s own commands — through one private
-/// `send`, which calls `self.conn.exec(&self.run.wrap(command))` (T609: the same `exec`, the
-/// command marked and in a group of its own). There is no second implementation of running
+/// `send`, which calls `self.conn.exec_if(&wrapped, …)` with `wrapped = self.run.wrap(command)`
+/// (T609: the command marked and in a group of its own; T637: `exec_if` is `exec` with the
+/// last "stopping?" asked right before `channel.exec` — the same `exec_gated`, the same
+/// `EXEC_CEILING`). There is no second implementation of running
 /// a command for deploy steps to fall into. Grep rather than a second live-container run: a
 /// step stuck on `exec` for real (the `apt-get`/dpkg-lock scenario from the task) would cost
 /// minutes to reproduce honestly with a hung Docker container, for no more assurance than
@@ -126,12 +128,68 @@ fn deploy_steps_run_commands_through_the_same_timeout_bounded_exec() {
         "deploy/mod.rs runs remote commands in more than one place, or in none — {why}"
     );
     assert!(
-        text.contains("self.conn.exec(&self.run.wrap(command))"),
-        "the one send no longer calls `conn.exec` — {why}"
+        text.contains("let wrapped = self.run.wrap(command);")
+            && text.contains("self.conn.exec_if(&wrapped, move || gate.open())"),
+        "the one send no longer calls `conn.exec_if` with the marked command — {why}"
+    );
+    let exec = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ssh/exec.rs"),
+    )
+    .expect("could not read ssh/exec.rs");
+    assert!(
+        exec.contains("self.exec_gated(command, EXEC_CEILING, still_wanted).await"),
+        "`exec_if` no longer runs under the T595 `EXEC_CEILING` — {why}"
     );
     assert!(
         text.contains("let said = self.exec_marked(command).await?;")
             && text.contains("Ok(self.exec_marked(command).await?.stdout.trim() == \"yes\")"),
         "Context::ran/Context::asks no longer go through `exec_marked` — {why}"
     );
+}
+
+/// T637 — `exec_if` with a gate that says no sends nothing, and gives its channel back.
+///
+/// Nothing sent: the command would leave a file, and the file is not there. Channel given
+/// back: twelve refusals in a row — more than sshd's `MaxSessions` of 10 — and an ordinary
+/// command after them still gets a channel; a refused channel left open would hold a session
+/// on the server until the connection closed. And a yes runs the command as `exec` does.
+#[tokio::test]
+async fn a_command_held_back_at_its_channel_is_not_sent_and_leaves_no_channel_open() {
+    let server = TestServer::start().expect("the container would not come up");
+    let conn = connect(&server).await;
+
+    for _ in 0..12 {
+        let held = tokio::time::timeout(
+            Duration::from_secs(20),
+            conn.exec_if("touch /tmp/t637-sent", || false),
+        )
+        .await
+        .expect("a command held back at its channel hung")
+        .expect("a command held back at its channel failed");
+        assert!(
+            held.is_none(),
+            "a gate that said no still ran the command: {held:?}"
+        );
+    }
+    assert_eq!(conn.brief_channels_in_use(), 0);
+
+    let out = tokio::time::timeout(
+        Duration::from_secs(20),
+        conn.exec("test -e /tmp/t637-sent && echo sent || echo not-sent"),
+    )
+    .await
+    .expect("an ordinary command after the held-back ones hung — their channels were not closed")
+    .expect("an ordinary command after the held-back ones failed");
+    assert_eq!(
+        out.trimmed(),
+        "not-sent",
+        "a command held back at its channel reached the server"
+    );
+
+    let let_through = conn
+        .exec_if("echo let-through", || true)
+        .await
+        .expect("a command let through failed")
+        .expect("a gate that said yes held the command back");
+    assert!(let_through.ok() && let_through.stdout.contains("let-through"));
 }

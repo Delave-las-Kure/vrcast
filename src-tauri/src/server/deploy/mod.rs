@@ -425,6 +425,12 @@ impl Context<'_> {
     /// stop was confirmed — the command not yet started when the person cancelled (the first
     /// changing block of an apply, say) went to the server anyway (QA-20 №6). See
     /// [`send_settled`].
+    ///
+    /// ⚠ **T637 — and a stop asked while the channel is being got ready.** After that check
+    /// `exec` still waits for a place for a channel and for the channel to open (refusals
+    /// retried with pauses); a cancel in that window used to be let through too (QA-21 №4).
+    /// The last answer to "stopping?" is now given with the channel open, immediately before
+    /// the command goes ([`crate::ssh::Connection::exec_if`], [`SendGate`]).
     async fn send(&self, sending: Sending, command: &str) -> Result<crate::ssh::CommandOutput> {
         let wrapped = self.run.wrap(command);
         send_settled(
@@ -433,7 +439,7 @@ impl Context<'_> {
             |patience| {
                 crate::server::marked::stop_confirmed(self.conn, RUN_VAR, &self.run.mark, patience)
             },
-            || self.conn.exec(&wrapped),
+            |gate| self.conn.exec_if(&wrapped, move || gate.open()),
         )
         .await
     }
@@ -533,7 +539,8 @@ impl Context<'_> {
     ///
     /// T630: the first half is a new operation like any command — an unheard command of this
     /// run is settled first ([`settle_unheard`]), and a stop asked during that wait refuses it
-    /// before anything is written. Only the second half (the move, or the tidying) goes
+    /// before anything is written. T637: so does a stop asked while the file channel is being
+    /// got ready. Only the second half (the move, or the tidying) goes
     /// whatever was asked ([`Sending::Finishing`]).
     pub async fn put_file(&self, path: &str, body: &str) -> Result<()> {
         use tokio::io::AsyncWriteExt;
@@ -554,6 +561,12 @@ impl Context<'_> {
         );
         let temp = format!("{path}{TEMP_SUFFIX}");
         let sftp = self.conn.sftp().await?;
+        // T637: getting the file channel waits for a place and for the channel to open, as a
+        // command's does; a stop asked meanwhile holds the write back, before anything of it
+        // reaches the server (the `create` below is the first thing that does).
+        if self.run.is_stopping() {
+            return Err(DeployError::Cancelled);
+        }
         // `create` and not `write`: the library's `write` opens without creating, and on
         // a path that does not exist yet gives "no such file" — the name promises one
         // thing and does another (caught on a live server on 2026-08-25).
@@ -597,26 +610,58 @@ impl Context<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sending {
     /// A command not yet begun: refused ([`DeployError::Cancelled`]) if a stop was asked by the
-    /// time it would go — including during the wait for an unheard command before it.
+    /// time it would go — including during the wait for an unheard command before it, and
+    /// while its channel was being got ready (T637).
     New,
     /// The second half of an operation already begun and not to be left halved (the move or
     /// the tidying of [`Context::put_file`]): sent whether or not a stop was asked.
     Finishing,
 }
 
-/// Send one command of a run once whatever of it went unheard is settled (T619, T630).
+/// The last word on whether a command of a run goes (T637), handed by [`send_settled`] to
+/// whatever sends it and asked **with the channel open, immediately before the command is
+/// sent** — nothing awaited in between ([`crate::ssh::Connection::exec_if`]).
+///
+/// [`SendGate::open`] answers no for a [`Sending::New`] command once the run has been asked to
+/// stop, and yes for [`Sending::Finishing`] whatever was asked. A yes is also the moment the
+/// command counts as sent: the time is kept as the run's command in flight (T609, T619) — not
+/// earlier, while a channel was still being waited for and nothing had gone.
+pub struct SendGate<'r> {
+    run: &'r RunMark,
+    sending: Sending,
+}
+
+impl SendGate<'_> {
+    /// May the command go now? A yes records it as sent.
+    pub fn open(self) -> bool {
+        if self.sending == Sending::New && self.run.is_stopping() {
+            return false;
+        }
+        *self.run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(std::time::Instant::now());
+        true
+    }
+}
+
+/// Send one command of a run once whatever of it went unheard is settled (T619, T630, T637).
 ///
 /// First [`settle_unheard`] with `stop`. Then — for [`Sending::New`] — the stop is asked about
 /// **again**: the wait may have lasted up to an unheard command's `EXEC_CEILING`, and a cancel
 /// that came in during it is honoured by not starting the command (QA-20 №6); the check before
-/// the wait (`exec_marked`) cannot see it. [`Sending::Finishing`] goes regardless. `exec` is
-/// sent only then; the time it was sent is kept until an exit status comes back (on an error
-/// too: whatever the error, it may have been started).
+/// the wait (`exec_marked`) cannot see it. [`Sending::Finishing`] goes regardless.
+///
+/// Then `exec` is handed a [`SendGate`], which it must ask once its channel is open, right
+/// before sending: getting a channel may itself take a while (a queue for a place, refusals
+/// retried), and a cancel during it holds a new command back as well (QA-21 №4). `exec`
+/// answers `Ok(None)` when the gate said no — nothing was sent, and the run is
+/// [`DeployError::Cancelled`]. Once the gate said yes the time is kept until an exit status
+/// comes back (on an error too: whatever the error, it may have been started). An error
+/// before the gate was asked (no channel to be had) leaves nothing on record — nothing went.
 ///
 /// Public, with the stop and the sending passed in, so it is checked without a server
 /// (`tests/unit/deploy_unheard.rs`).
-pub async fn send_settled<F, Fut, E, EFut>(
-    run: &RunMark,
+pub async fn send_settled<'r, F, Fut, E, EFut>(
+    run: &'r RunMark,
     sending: Sending,
     stop: F,
     exec: E,
@@ -629,15 +674,18 @@ where
             crate::server::marked::StopProblem,
         >,
     >,
-    E: FnOnce() -> EFut,
-    EFut: std::future::Future<Output = std::result::Result<crate::ssh::CommandOutput, SshError>>,
+    E: FnOnce(SendGate<'r>) -> EFut,
+    EFut: std::future::Future<
+        Output = std::result::Result<Option<crate::ssh::CommandOutput>, SshError>,
+    >,
 {
     settle_unheard(run, stop).await?;
     if sending == Sending::New && run.is_stopping() {
         return Err(DeployError::Cancelled);
     }
-    *run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
-    let said = exec().await?;
+    let Some(said) = exec(SendGate { run, sending }).await? else {
+        return Err(DeployError::Cancelled);
+    };
     if said.exit_code.is_some() {
         *run.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
