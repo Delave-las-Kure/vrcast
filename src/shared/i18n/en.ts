@@ -310,17 +310,17 @@ export const en: Catalogue = {
     PROFILE_KEY_PATH_REQUIRED: "Signing in by key needs the path to the private key file.",
     PROFILE_KEY_PATH_UNUSED: "Signing in by password does not use a key path — remove it.",
     PROFILE_AUTH_NEEDS_SECRET:
-      "The way of signing in is changing, but no new password or key was entered — the store would keep the old way’s secret and the next sign-in would fail. If the form was opened before a deployment, it may already have moved the server to its own key: close the form and open it again. To change the way of signing in, enter the password or the key’s passphrase.",
+      "The sign-in method is changing — enter the new password or the key's passphrase.",
     PROFILE_NOT_FOUND: "There is no such server — its profile may have been deleted.",
     PROFILE_MAY_BE_CHANGED:
-      "Putting the profile back as it was failed too — it may have been left changed, though the new password or passphrase was not saved. Open the profile, check its way of signing in and save it again.",
+      "The profile may have been left changed. Open it, check the sign-in method and save.",
     FINGERPRINT_EMPTY: "The fingerprint is empty — there is nothing to confirm.",
 
     // --- what the single door says when it stays shut (T519(1)) ---
     SERVER_FOREIGN_WEB_SERVER_RUNNING:
       "Something called {name} is already running on this server — it is not our own serving.",
     SERVER_FOREIGN_CONFIG_WITHOUT_STATE:
-      "There is a web-server configuration on this server with no state file of ours beside it — it looks set up by hand, or by another tool.",
+      "A web-server configuration without our state file — set up by someone else.",
     SERVER_FOREIGN_STATE_UNREADABLE:
       "Our own state file is on this server but could not be read ({problem}).",
     SERVER_FOREIGN_UNKNOWN: "The server was judged foreign, but no reason was given.",
@@ -329,8 +329,7 @@ export const en: Catalogue = {
       "The server is already deployed and at a version this application is happy with.",
 
     // --- domain field ---
-    DOMAIN_EMPTY:
-      "Enter the domain you serve from — without it there is no viewer link to hand out and no way to check that serving works.",
+    DOMAIN_EMPTY: "Enter the domain you serve from.",
     DOMAIN_HAS_SPACES: "The domain must not contain spaces.",
     DOMAIN_HAS_PATH: "Enter the domain only, without a path: stream.example.com, say.",
     DOMAIN_HAS_USER_OR_PORT: "Enter the domain only — no user and no port.",
@@ -344,8 +343,7 @@ export const en: Catalogue = {
     VIDEO_DIR_NOT_ABSOLUTE: "The path must start from the root, with a slash.",
     VIDEO_DIR_HAS_DOTDOT: "The path must not contain “..” — give the directory in full.",
     VIDEO_DIR_HAS_NEWLINE: "The path must not contain a line break.",
-    VIDEO_DIR_AT_ROOT:
-      "The serving directory is at the root of the file system — there is nowhere beside it to assemble a file, and assembling inside it is not allowed: a half-transferred file would become visible to viewers.",
+    VIDEO_DIR_AT_ROOT: "The directory cannot be at the root of the file system.",
 
     // --- CDN address field ---
     CDN_BASE_NO_SCHEME: "The CDN address must begin with https:// or http://.",
@@ -453,24 +451,20 @@ export const en: Catalogue = {
     STEP_NET_TIMEOUT: "the server did not answer within {seconds} s",
     STEP_NET_SILENT_CLOSED:
       "the connection was accepted and closed at once: SSH does not answer on this port",
-    STEP_NET_SILENT:
-      "connections are accepted, but SSH stays silent. Some hosting providers' attack protection behaves this way: it answers on any port, even one with nothing behind it. Check the port number — SSH may be listening on another",
+    STEP_NET_SILENT: "connection accepted, but SSH is silent — check the port number",
     STEP_NET_NOT_SSH: "something other than SSH answers on port {port}: “{got}”",
-    STEP_LOGIN_FINGERPRINT_UNCONFIRMED:
-      "the server's fingerprint has not been confirmed yet — confirm it and the check will go on",
+    STEP_LOGIN_FINGERPRINT_UNCONFIRMED: "fingerprint not confirmed",
     STEP_LOGIN_OK: "signed in as {user}",
     STEP_VIDEO_DIR_OK: "{dir} is readable and writable",
     STEP_VIDEO_DIR_MISSING_OR_DENIED:
       "the directory {dir} does not exist, or the user {user} has no permission for it",
     STEP_DOMAIN_OK_NO_FILES:
       "{domain} answers over HTTPS (code {code}); there are no files in the directory, so serving itself cannot be checked yet",
-    STEP_DOMAIN_FILE_NOT_SERVED:
-      "the domain answers, but the file is not served: {url} returned code {code}. The file is on the server, so this is a serving configuration problem",
+    STEP_DOMAIN_FILE_NOT_SERVED: "the domain answers, but the file is not served: {url} → {code}",
     STEP_DOMAIN_OK: "files are being served: checked on {url}",
     STEP_DOMAIN_EMPTY_BODY: "{url} returned code {code}, but the body was empty",
     STEP_DOMAIN_TIMEOUT: "{domain} did not answer within {seconds} s",
-    STEP_DOMAIN_NO_CONNECTION:
-      "could not connect to {domain}: check that the domain record leads to this server",
+    STEP_DOMAIN_NO_CONNECTION: "no connection to {domain} — check the domain record",
     SYSTEM_ERROR: "{text}",
 
     // --- why a stream cannot simply be carried across ---
@@ -503,16 +497,14 @@ export const en: Catalogue = {
       "{count} variants were already on the server and were not made again. The application asked the server what is there rather than its own note about a previous run: a note outlives the thing it describes.",
     NOTICE_REENCODED_FOR_KEYFRAMES:
       "This rung could have been carried across without re-encoding — its quality needs no change. But segments can only be cut at a keyframe, and this source's keyframes sit differently from the other rungs': the boundaries would stop lining up, and a viewer changing quality would see it stall. So the rung is re-encoded after all — hours instead of minutes.",
-    WARN_LIMIT_FOLLOWS_THE_ADDRESS:
-      "A limit is put on an address, and an address is not a person. If this viewer's address changes, the limit stays on the old one and lands on whoever takes it next; and they come back to the full set under their new one.",
-    WARN_ADDRESS_SHARED:
-      "{count} viewers are watching from this address right now. That is ordinary for a household or an office: the limit reaches all of them, not only the one who is struggling.",
+    WARN_LIMIT_FOLLOWS_THE_ADDRESS: "The limit is put on an address, not on a person.",
+    WARN_ADDRESS_SHARED: "{count} viewers are on this address — the limit reaches all of them.",
     WARN_CAP_BELOW_LIGHTEST:
-      "The cap is below the lightest rung there is ({lightest_bps} bit/s). The viewer gets that rung anyway — an empty description would leave them with no video at all. If it is still too much, a lighter rung has to be built rather than chosen.",
+      "The cap is below the lightest rung ({lightest_bps} bit/s) — the viewer gets that rung.",
     LIMITS_ROLLBACK_UNSUCCESSFUL:
-      "The change did not go through, and putting the previous limits back failed (or the serving did not answer after they went back) — the serving may not be working. Check the server's condition in the diagnostics section before anything else.",
+      "Putting the previous limits back failed — the serving may not be working. Check Diagnostics.",
     LIMITS_ROLLBACK_NOT_STARTED:
-      "The change did not go through, and the previous limits were not put back: the end of this change's previous command on the server was not confirmed, and putting back over it could mix the two. The serving is most likely working. Wait a minute, then reload the list. If the change got as far as replacing the rules file, its new rules may have stayed in the file and would then come into force with the next change.",
+      "The previous limits were not put back: the end of the previous command was not confirmed. Reload the list in a minute. If the change got as far as replacing the file, the new rules may have stayed.",
     NOTICE_NO_HARDWARE_FOUND:
       "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
     NOTICE_SOFTWARE_AS_ASKED:
@@ -530,13 +522,12 @@ export const en: Catalogue = {
       "A build of the set “{slug}” is already running on this server. Wait for it to finish.",
     UPLOAD_NAME_RESERVED: "That name belongs to an internal serving entry — choose another.",
     DOMAIN_ADD_RECORD:
-      "Create a {record} record for “{name}” with the value {value} at your domain registrar. The change takes a few minutes to spread; the check can be run again.",
-    DOMAIN_FIX_RECORD:
-      "The {record} record for “{name}” currently leads to {to}. Change it to {value} — most often this is a record left over from the domain’s previous life.",
+      "Add a {record} record for “{name}” with the value {value} at your registrar.",
+    DOMAIN_FIX_RECORD: "The {record} record for “{name}” leads to {to} — change it to {value}.",
     DOMAIN_REMOVE_RECORD:
-      "The {record} record for “{name}” leads to {to}, and IPv6 is to be turned off. Remove it: otherwise the domain goes on promising an address that will stop answering, and some viewers will try it first.",
+      "Remove the {record} record for “{name}” (leads to {to}): IPv6 will be off.",
     DOMAIN_SERVER_HAS_NO_IPV6:
-      "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
+      "The server has no IPv6, but the AAAA record for “{name}” leads to {to} — remove it.",
     CHANGE_LOOKS_ONLY: "only looks; changes nothing",
     CHANGE_INSTALLS_PACKAGES: "installs {count|plural:package}: {names}",
     CHANGE_CREATES_SWAP_FILE: "creates a {megabytes} MB swap file",
@@ -647,28 +638,24 @@ export const en: Catalogue = {
     HEALTH_DISK: "{free_mb} MB free of {total_mb} on the disk.",
     HEALTH_NETWORK_TUNED: "The network is tuned: {congestion}.",
     HEALTH_NETWORK_UNTUNED:
-      "The network is not set the way it was measured: {congestion}/{qdisc} instead of {wanted_congestion}/{wanted_qdisc}. The serving works, only slower.",
+      "Network: {congestion}/{qdisc} instead of {wanted_congestion}/{wanted_qdisc} — slower.",
     HEALTH_READAHEAD_OK: "The disk's readahead is {kb} KB.",
-    HEALTH_READAHEAD_SMALL:
-      "The disk's readahead is {kb} KB instead of {wanted_kb}. Measured, that is the difference between 17 and 40–60 MB/s.",
-    HEALTH_NO_AUTO_RESTART:
-      "The serving does not come back on its own: after a crash it will lie there until somebody notices.",
+    HEALTH_READAHEAD_SMALL: "Disk readahead {kb} KB instead of {wanted_kb}.",
+    HEALTH_NO_AUTO_RESTART: "The serving does not restart itself after a crash.",
     HEALTH_AUTO_RESTART: "The serving comes back on its own: {mode}.",
 
     // Why the picture stops (FR-072). The conclusion is sometimes wrong, and has to be arguable.
     STALLS_TOO_SHORT: "Too short a stretch — {seconds} s. There is nothing to judge by.",
-    STALLS_KEEPING_UP:
-      "The viewer is keeping up: {ratio}× of real time received, link {mbit_s} Mbit/s. The gaps between their requests are a full buffer, not a stall.",
+    STALLS_KEEPING_UP: "The viewer keeps up: {ratio}× real time, link {mbit_s} Mbit/s.",
     STALLS_SERVER_LINK:
       "The server's own link is the limit: {out_mbit_s} Mbit/s going out of {capacity_mbit_s} possible.",
-    STALLS_DISK:
-      "{disk_read_mb_s} MB/s is being read off the disk, and {ratio}× of real time received. The viewers are spread along the timeline and their pieces do not fit in memory.",
+    STALLS_DISK: "The disk is the limit: {disk_read_mb_s} MB/s read, {ratio}× real time received.",
     STALLS_FILE_PEAKS:
-      "The viewer's {mbit_s} Mbit/s carries the average bitrate of {average_mbit} but not the ten-second peak of {peak_10s_mbit}. It is the file that hangs the player; a re-encode with the peaks capped is the cure.",
+      "The file's peaks: link {mbit_s} Mbit/s, average {average_mbit}, 10 s peak {peak_10s_mbit}.",
     STALLS_THE_PLAYER:
-      "Not the viewer's link. While anything was arriving it arrived at {in_download_mbit_s} Mbit/s, which would keep up with a film needing {average_mbit}. The shortfall built up in the gaps, when the viewer was asking for nothing: a player stopped, a decoder that could not keep pace, or somebody pressing pause. Over the clock they got {mbit_s} Mbit/s, a ratio of {ratio}. Player restarts: {restarts}, segments skipped: {skipped}.",
+      "The player, not the link: {in_download_mbit_s} Mbit/s against {average_mbit} needed; by the clock {mbit_s} Mbit/s, ratio {ratio}. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
-      "The viewer's link is short: {ratio}× of real time received at {mbit_s} Mbit/s (inside the downloads — {in_download_mbit_s}). Segments skipped: {skipped}, player restarts: {restarts}.",
+      "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}). Skipped: {skipped}, restarts: {restarts}.",
   },
 
   plurals: {
