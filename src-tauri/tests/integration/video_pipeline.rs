@@ -170,9 +170,14 @@ async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
     make_film(&film, "640x360", 15);
 
     let mut events = state.subscribe();
-    let added = video::video_add(&state, &server_id, &[film.to_string_lossy().into_owned()])
-        .await
-        .expect("adding failed");
+    let added = video::video_add(
+        &state,
+        &server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .expect("adding failed");
     assert!(added.refused.is_empty(), "{:?}", added.refused);
     let id = added.added[0].id.clone();
 
@@ -261,9 +266,14 @@ async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
     }
 
     // ---- the same file again is a second video, and the taken name is a choice ----
-    let again = video::video_add(&state, &server_id, &[film.to_string_lossy().into_owned()])
-        .await
-        .unwrap();
+    let again = video::video_add(
+        &state,
+        &server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .unwrap();
     let second = again.added[0].id.clone();
     let ready = until(
         &state,
@@ -339,9 +349,14 @@ fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
 
 /// Add a film, give it the two measured rungs, start it, and wait until it stops.
 async fn build_one(state: &AppState, server_id: &str, film: &Path) -> VideoView {
-    let added = video::video_add(state, server_id, &[film.to_string_lossy().into_owned()])
-        .await
-        .expect("adding failed");
+    let added = video::video_add(
+        state,
+        server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .expect("adding failed");
     assert!(added.refused.is_empty(), "{:?}", added.refused);
     let id = added.added[0].id.clone();
     let planned = until(state, &id, "the plan", Duration::from_secs(120), |v| {
@@ -441,6 +456,159 @@ async fn replace_under_a_taken_name_builds_every_rung_anew_for_another_film_of_t
     drop(scratch);
 }
 
+// ---------- «Build a set» for a medium already in the library (T675) ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touched() {
+    use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
+    use vrcast_studio_lib::commands::library::api as library;
+    use vrcast_studio_lib::domain::video::VideoAction;
+
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t675-into");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+
+    // A medium as the shell script left them: one file, named the way a rung's would be.
+    let medium = library::media_create(&state, &server_id, "Old Film", Some("old-film"))
+        .await
+        .expect("the medium was not made");
+    server
+        .exec_inside(&format!(
+            "head -c 300000 /dev/urandom > '{VIDEO_DIR}/old-film_9.mp4'"
+        ))
+        .unwrap();
+    library::file_move(&state, &server_id, "old-film_9.mp4", &medium, true)
+        .await
+        .expect("the file was not filed under the medium");
+    let single = digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4"));
+
+    let film = scratch.0.join("anything.mp4");
+    make_film(&film, "1280x720", 12);
+    let path = film.to_string_lossy().into_owned();
+
+    // More than one file for a medium: refused whole.
+    let err = video::video_add(
+        &state,
+        &server_id,
+        &[path.clone(), path.clone()],
+        Some(&medium),
+    )
+    .await
+    .expect_err("two files were taken for one medium");
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+
+    // **A rung whose prepared file would be the medium's own file**: 9 Mbit/s is
+    // `old-film_9.mp4`. The build stops before anything is made, and the file is as it was.
+    let added = video::video_add(
+        &state,
+        &server_id,
+        std::slice::from_ref(&path),
+        Some(&medium),
+    )
+    .await
+    .expect("the medium did not take the film");
+    let clash = added.added[0].clone();
+    assert_eq!(clash.slug, "old-film");
+    assert_eq!(clash.title, "Old Film");
+    assert_eq!(clash.media_id.as_deref(), Some(medium.as_str()));
+    until(
+        &state,
+        &clash.id,
+        "the plan",
+        Duration::from_secs(120),
+        |v| v.state != VideoState::Planning,
+    )
+    .await;
+    let mut nine = two_rungs();
+    nine[0].bitrate_bps = 9_000_000;
+    nine[0].maxrate_bps = 9_900_000;
+    nine[0].bufsize_bps = 9_900_000;
+    video::video_set_rungs(&state, &clash.id, Some(nine)).unwrap();
+    video::video_start(&state, std::slice::from_ref(&clash.id));
+    let stopped = until(
+        &state,
+        &clash.id,
+        "the clash",
+        Duration::from_secs(300),
+        |v| matches!(v.state, VideoState::Problem | VideoState::Done),
+    )
+    .await;
+    let problem = stopped.problem.expect("it was not stopped");
+    assert_eq!(problem.error.code, ErrorCode::InvalidInput, "{problem:?}");
+    assert_eq!(problem.error.details[0].key, DetailCode::RungFileClaimed);
+    assert_eq!(
+        problem.actions,
+        vec![VideoAction::EditRungs, VideoAction::Rename]
+    );
+    assert_eq!(
+        digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")),
+        single
+    );
+
+    // While it is on the list unfinished, the medium does not take a second film.
+    let err = video::video_add(
+        &state,
+        &server_id,
+        std::slice::from_ref(&path),
+        Some(&medium),
+    )
+    .await
+    .expect_err("a second film was taken for a medium already on its way");
+    assert_eq!(err.code, ErrorCode::MediaSetInWork);
+
+    // Other rungs: the set is built into the medium, beside its file.
+    video::video_set_rungs(&state, &clash.id, Some(two_rungs())).unwrap();
+    video::video_retry(&state, &clash.id, false).unwrap();
+    let done = until(
+        &state,
+        &clash.id,
+        "the set",
+        Duration::from_secs(400),
+        |v| matches!(v.state, VideoState::Done | VideoState::Problem),
+    )
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    assert_eq!(done.media_id.as_deref(), Some(medium.as_str()));
+    assert!(done
+        .link
+        .unwrap()
+        .origin
+        .ends_with("/videos/old-film/master.m3u8"));
+    the_set_is_served(&server, "old-film");
+    // The single file is still there, the same bytes, and still the medium's.
+    assert_eq!(
+        digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")),
+        single
+    );
+    let view = library::library_list(&state, &server_id, true)
+        .await
+        .unwrap();
+    let m = view.media.iter().find(|m| m.id == medium).unwrap();
+    assert!(m.files.iter().any(|f| f.path == "old-film_9.mp4"), "{m:?}");
+    assert!(
+        m.ladders.iter().any(|l| l.path == "old-film/master.m3u8"),
+        "{m:?}"
+    );
+
+    // Now it has a set: another one is refused.
+    let err = video::video_add(
+        &state,
+        &server_id,
+        std::slice::from_ref(&path),
+        Some(&medium),
+    )
+    .await
+    .expect_err("a second set was taken for a medium that has one");
+    assert_eq!(err.code, ErrorCode::MediaHasSet);
+    drop(scratch);
+}
+
 // ---------- killed, and carried on ----------
 
 mod env_names {
@@ -476,7 +644,9 @@ fn the_first_run_of_a_video_that_gets_killed() {
             &origin,
         );
         let server_id = attach_secret(&state);
-        let added = video::video_add(&state, &server_id, &[film]).await.unwrap();
+        let added = video::video_add(&state, &server_id, &[film], None)
+            .await
+            .unwrap();
         let id = added.added[0].id.clone();
         until(&state, &id, "the plan", Duration::from_secs(120), |v| {
             v.state == VideoState::Ready

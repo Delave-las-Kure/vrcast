@@ -511,6 +511,20 @@ function MediaCard({
           )}
 
           <div className="media__actions">
+            {/* T675 — a set built from a film on this computer into this medium. Not for one
+                that already has a set: the core would refuse it as MEDIA_HAS_SET. */}
+            {media.ladders.length === 0 && (
+              <Link
+                className="button-link"
+                to={`/video?media=${encodeURIComponent(media.id)}`}
+                aria-disabled={disabled || undefined}
+                onClick={(e) => {
+                  if (disabled) e.preventDefault();
+                }}
+              >
+                {t.ui.library.buildSet}
+              </Link>
+            )}
             <button onClick={onRename} disabled={disabled}>
               {t.ui.library.renameMedia}
             </button>

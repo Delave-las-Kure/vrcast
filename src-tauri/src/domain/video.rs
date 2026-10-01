@@ -251,6 +251,17 @@ pub fn actions_for(error: &AppError) -> Vec<VideoAction> {
         ErrorCode::RungAboveSource | ErrorCode::BufsizeTooLarge | ErrorCode::LevelExceeded => {
             vec![A::EditRungs, A::Retry]
         }
+        // A medium's own file under a rung's name (T675/T676): another bitrate for that rung
+        // names the file differently, another short name names them all differently. Retry
+        // would meet the same file. (The screen offers «rename» only while there is no medium.)
+        ErrorCode::InvalidInput
+            if error
+                .details
+                .iter()
+                .any(|d| d.key == DetailCode::RungFileClaimed) =>
+        {
+            vec![A::EditRungs, A::Rename]
+        }
         _ => vec![A::Retry],
     }
 }

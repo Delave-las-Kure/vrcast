@@ -63,35 +63,41 @@ export function VideoScreen() {
     };
   }, []);
 
-  const add = useCallback(async () => {
-    if (!active) return;
-    const chosen = await open({
-      multiple: true,
-      directory: false,
-      filters: [{ name: w.pickFilter, extensions: VIDEO_EXTENSIONS }],
-    });
-    const paths = Array.isArray(chosen) ? chosen : typeof chosen === "string" ? [chosen] : [];
-    if (paths.length === 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const answer = await ipc.videoAdd(active.id, paths);
-      setVideos((list) => answer.added.reduce(upsert, list));
-      setRefused(answer.refused);
-    } catch (e) {
-      setError(toAppError(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [active, w.pickFilter]);
+  const add = useCallback(
+    async (mediaId: string | null = null) => {
+      if (!active) return;
+      const chosen = await open({
+        // A medium takes one film (T675); otherwise any number.
+        multiple: mediaId === null,
+        directory: false,
+        filters: [{ name: w.pickFilter, extensions: VIDEO_EXTENSIONS }],
+      });
+      const paths = Array.isArray(chosen) ? chosen : typeof chosen === "string" ? [chosen] : [];
+      if (paths.length === 0) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const answer = await ipc.videoAdd(active.id, paths, mediaId);
+        setVideos((list) => answer.added.reduce(upsert, list));
+        setRefused(answer.refused);
+      } catch (e) {
+        setError(toAppError(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [active, w.pickFilter],
+  );
 
-  // The library's «Add video» lands here with `?add=1`: the file dialog opens once, and the
-  // address is cleaned so going back to this screen does not open it again.
+  // The library's «Add video» lands here with `?add=1`, its «Build a set» with `?media=<id>`
+  // (T675): the file dialog opens once, and the address is cleaned so going back to this
+  // screen does not open it again.
   useEffect(() => {
-    if (params.get("add") !== "1" || !active || asked.current) return;
+    const media = params.get("media");
+    if ((params.get("add") !== "1" && !media) || !active || asked.current) return;
     asked.current = true;
     setParams({}, { replace: true });
-    void add();
+    void add(media);
   }, [params, active, add, setParams]);
 
   const fail = useCallback((id: string, e: AppError | null) => {

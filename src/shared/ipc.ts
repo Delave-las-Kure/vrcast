@@ -415,9 +415,10 @@ export const ipc = {
 
   // --- videos in work (T672) ---
   /** Add files; each gets a plan and waits for «Start». Each file on its own: a refusal
-   *  names its file and reason, the rest are added. */
-  videoAdd: (serverId: string, paths: string[]) =>
-    call<VideoAdded>("video_add", { serverId, paths }),
+   *  names its file and reason, the rest are added. With `mediaId` (T675): one file, built
+   *  into that medium of the library (its short name; its own files stay). */
+  videoAdd: (serverId: string, paths: string[], mediaId: string | null) =>
+    call<VideoAdded>("video_add", { serverId, paths, mediaId }),
   /** Every video, in the order added — after a restart too. */
   videoList: () => call<VideoView[]>("video_list"),
   /** Choose the audio track (from zero). Before encoding only. */

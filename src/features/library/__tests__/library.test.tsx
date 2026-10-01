@@ -166,6 +166,19 @@ describe("the library", () => {
     expect(link.getAttribute("href")).toBe("/video?add=1");
   });
 
+  it("offers «Build a set» on a medium without one, leading to the Video screen (T675)", async () => {
+    mockLibraryList.mockResolvedValue(
+      view({ media: [media(), media({ id: "m2", title: "С набором", ladders: [ladderSet()] })] }),
+    );
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+    const build = await screen.findByRole("link", { name: ru.ui.library.buildSet });
+    expect(build.getAttribute("href")).toBe("/video?media=m1");
+    // A medium that already has a set is not offered one: the core would refuse it.
+    fireEvent.click(screen.getByRole("button", { name: /С набором/ }));
+    expect(screen.getAllByRole("link", { name: ru.ui.library.buildSet })).toHaveLength(1);
+  });
+
   it("says the server is out of reach rather than showing nothing", async () => {
     useServers.setState({ profiles: [], loading: false, error: null });
     mockServersList.mockResolvedValue([]);
