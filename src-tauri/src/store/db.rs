@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// The schema version this build of the application understands.
-pub const SCHEMA_VERSION: u32 = 21;
+pub const SCHEMA_VERSION: u32 = 22;
 
 /// Migrations are applied in order; the number is the `user_version` after applying it.
 /// A migration already released must never be changed — only followed by the next one.
@@ -44,6 +44,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
         include_str!("migrations/0020_tasks_updated_at_index.sql"),
     ),
     (21, include_str!("migrations/0021_videos.sql")),
+    (22, include_str!("migrations/0022_videos_seq.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -253,10 +254,31 @@ impl Db {
 }
 
 /// A timestamp in a form fit for storing and for comparing as strings.
+///
+/// **Always nine digits of the second's fraction.** The well-known RFC 3339 format drops the
+/// fraction's trailing zeros, and a fraction of varying width does not compare as text the
+/// way it does as time: `…:05.1234Z` is greater than `…:05.12345678Z` because `Z` is greater
+/// than `5`. Everything that orders or compares these strings — the video list, «newer than
+/// what is shown» on the screen, the latest timings — got the same second's events in either
+/// order (the flaky `video::the_list_keeps_the_order_videos_were_added_in`). Fixed width is
+/// still RFC 3339, and `parse_rfc3339` reads it.
 pub fn now_rfc3339() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"))
+    rfc3339_fixed(time::OffsetDateTime::now_utc())
+}
+
+/// `at` as [`now_rfc3339`] writes it: UTC, nine digits of fraction.
+pub fn rfc3339_fixed(at: time::OffsetDateTime) -> String {
+    let t = at.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:09}Z",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second(),
+        t.nanosecond()
+    )
 }
 
 /// Parse a timestamp back into seconds since the epoch.

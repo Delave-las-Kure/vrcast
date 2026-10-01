@@ -46,10 +46,15 @@ fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState 
 
 /// A real film. `seconds` long at `size`, with sound, keyframes every second.
 fn make_film(path: &Path, size: &str, seconds: u32) {
+    make_film_from(path, &format!("testsrc2=size={size}:rate=24"), seconds);
+}
+
+/// The same, with the picture from another lavfi source — another film of the same length.
+fn make_film_from(path: &Path, picture: &str, seconds: u32) {
     let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg: run `npm run ffmpeg`");
     let out = std::process::Command::new(ff)
         .args(["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i"])
-        .arg(format!("testsrc2=size={size}:rate=24:duration={seconds}"))
+        .arg(format!("{picture}:duration={seconds}"))
         .args(["-f", "lavfi", "-i"])
         .arg(format!("sine=frequency=440:duration={seconds}"))
         .args([
@@ -165,9 +170,14 @@ async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
     make_film(&film, "640x360", 15);
 
     let mut events = state.subscribe();
-    let added = video::video_add(&state, &server_id, &[film.to_string_lossy().into_owned()])
-        .await
-        .expect("adding failed");
+    let added = video::video_add(
+        &state,
+        &server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .expect("adding failed");
     assert!(added.refused.is_empty(), "{:?}", added.refused);
     let id = added.added[0].id.clone();
 
@@ -256,9 +266,14 @@ async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
     }
 
     // ---- the same file again is a second video, and the taken name is a choice ----
-    let again = video::video_add(&state, &server_id, &[film.to_string_lossy().into_owned()])
-        .await
-        .unwrap();
+    let again = video::video_add(
+        &state,
+        &server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .unwrap();
     let second = again.added[0].id.clone();
     let ready = until(
         &state,
@@ -288,9 +303,9 @@ async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
         problem.actions,
         vec![VideoAction::Replace, VideoAction::Rename]
     );
-    // «Replace»: build into the medium that has the name; what is on the server is found
-    // done, and it is finished quickly.
-    video::video_replace(&state, &second)
+    // «Replace»: build into the medium that has the name. Its old set is removed first and
+    // built again whole (T676); the medium stays the same one.
+    video::video_replace(&state, &second, false)
         .await
         .expect("replace was refused");
     let replaced = until(
@@ -303,6 +318,295 @@ async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
     .await;
     assert_eq!(replaced.state, VideoState::Done, "{:?}", replaced.problem);
     assert_eq!(replaced.media_id, done.media_id);
+}
+
+// ---------- «Replace» under a taken name (T676) ----------
+
+/// What a file on the server is, by its bytes.
+fn digest(server: &TestServer, path: &str) -> String {
+    server
+        .exec_inside(&format!("md5sum '{path}' | cut -d' ' -f1"))
+        .unwrap_or_else(|e| panic!("{path} is not on the server: {e}"))
+        .trim()
+        .to_owned()
+}
+
+/// Every file of the set `slug` on the server, by its bytes: the prepared rungs, the cut
+/// segments, their playlists and the master.
+fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
+    let names = server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && ls -1 {slug}_*.mp4 && find '{slug}' -type f \\( -name '*.ts' -o -name '*.m3u8' \\) | sort"
+        ))
+        .expect("the set could not be listed");
+    names
+        .lines()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| (n.to_owned(), digest(server, &format!("{VIDEO_DIR}/{n}"))))
+        .collect()
+}
+
+/// Add a film, give it the two measured rungs, start it, and wait until it stops.
+async fn build_one(state: &AppState, server_id: &str, film: &Path) -> VideoView {
+    let added = video::video_add(
+        state,
+        server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .expect("adding failed");
+    assert!(added.refused.is_empty(), "{:?}", added.refused);
+    let id = added.added[0].id.clone();
+    let planned = until(state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    assert_eq!(planned.state, VideoState::Ready, "{:?}", planned.problem);
+    video::video_set_rungs(state, &id, Some(two_rungs())).unwrap();
+    let started = video::video_start(state, std::slice::from_ref(&id));
+    assert!(started[0].error.is_none(), "{:?}", started[0].error);
+    until(state, &id, "the build", Duration::from_secs(400), |v| {
+        matches!(
+            v.state,
+            VideoState::Done | VideoState::Problem | VideoState::Cancelled
+        )
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replace_under_a_taken_name_builds_every_rung_anew_for_another_film_of_the_same_length() {
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t676-replace");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+
+    // Two films of the same length and the same name, in two folders: what `ladder_build`
+    // would take for each other by length alone.
+    std::fs::create_dir_all(scratch.0.join("a")).unwrap();
+    std::fs::create_dir_all(scratch.0.join("b")).unwrap();
+    let first = scratch.0.join("a").join("Same Name.mp4");
+    let second = scratch.0.join("b").join("Same Name.mp4");
+    make_film(&first, "1280x720", 12);
+    make_film_from(&second, "testsrc=size=1280x720:rate=24", 12);
+
+    let done = build_one(&state, &server_id, &first).await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    let slug = done.slug.clone();
+    let before = the_set(&server, &slug);
+    assert!(
+        before.iter().any(|(n, _)| n.ends_with("_2.mp4"))
+            && before.iter().any(|(n, _)| n.ends_with("master.m3u8")),
+        "{before:?}"
+    );
+
+    // The other film under the same name stops on the name, with «Replace» to press.
+    let stopped = build_one(&state, &server_id, &second).await;
+    assert_eq!(stopped.slug, slug);
+    assert_eq!(stopped.state, VideoState::Problem);
+    assert_eq!(
+        stopped.problem.as_ref().unwrap().error.code,
+        vrcast_studio_lib::commands::error::ErrorCode::SlugTaken
+    );
+    // Nothing of the first set was touched by stopping.
+    assert_eq!(the_set(&server, &slug), before);
+
+    video::video_replace(&state, &stopped.id, false)
+        .await
+        .expect("replace was refused");
+    let replaced = until(
+        &state,
+        &stopped.id,
+        "the replace",
+        Duration::from_secs(400),
+        |v| matches!(v.state, VideoState::Done | VideoState::Problem),
+    )
+    .await;
+    assert_eq!(replaced.state, VideoState::Done, "{:?}", replaced.problem);
+    assert_eq!(replaced.media_id, done.media_id, "not the same medium");
+    the_set_is_served(&server, &slug);
+
+    // **Every rung is new**: no prepared file, no segment and no playlist of the first film
+    // is left under the name — each was made again from the second film.
+    let after = the_set(&server, &slug);
+    let rungs_after: Vec<&String> = after
+        .iter()
+        .filter(|(n, _)| n.ends_with(".mp4"))
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(rungs_after.len(), 2, "{after:?}");
+    for (name, old) in &before {
+        if let Some((_, new)) = after.iter().find(|(n, _)| n == name) {
+            if name.ends_with(".ts") || name.ends_with(".mp4") {
+                assert_ne!(new, old, "{name} is still the first film's");
+            }
+        }
+    }
+    for (name, _) in after.iter().filter(|(n, _)| n.ends_with(".mp4")) {
+        let had = before.iter().find(|(n, _)| n == name).map(|(_, d)| d);
+        assert!(had.is_some(), "{name} was not there before");
+    }
+    drop(scratch);
+}
+
+// ---------- «Build a set» for a medium already in the library (T675) ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touched() {
+    use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
+    use vrcast_studio_lib::commands::library::api as library;
+    use vrcast_studio_lib::domain::video::VideoAction;
+
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t675-into");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+
+    // A medium as the shell script left them: one file, named the way a rung's would be.
+    let medium = library::media_create(&state, &server_id, "Old Film", Some("old-film"))
+        .await
+        .expect("the medium was not made");
+    server
+        .exec_inside(&format!(
+            "head -c 300000 /dev/urandom > '{VIDEO_DIR}/old-film_9.mp4'"
+        ))
+        .unwrap();
+    library::file_move(&state, &server_id, "old-film_9.mp4", &medium, true)
+        .await
+        .expect("the file was not filed under the medium");
+    let single = digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4"));
+
+    let film = scratch.0.join("anything.mp4");
+    make_film(&film, "1280x720", 12);
+    let path = film.to_string_lossy().into_owned();
+
+    // More than one file for a medium: refused whole.
+    let err = video::video_add(
+        &state,
+        &server_id,
+        &[path.clone(), path.clone()],
+        Some(&medium),
+    )
+    .await
+    .expect_err("two files were taken for one medium");
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+
+    // **A rung whose prepared file would be the medium's own file**: 9 Mbit/s is
+    // `old-film_9.mp4`. The build stops before anything is made, and the file is as it was.
+    let added = video::video_add(
+        &state,
+        &server_id,
+        std::slice::from_ref(&path),
+        Some(&medium),
+    )
+    .await
+    .expect("the medium did not take the film");
+    let clash = added.added[0].clone();
+    assert_eq!(clash.slug, "old-film");
+    assert_eq!(clash.title, "Old Film");
+    assert_eq!(clash.media_id.as_deref(), Some(medium.as_str()));
+    until(
+        &state,
+        &clash.id,
+        "the plan",
+        Duration::from_secs(120),
+        |v| v.state != VideoState::Planning,
+    )
+    .await;
+    let mut nine = two_rungs();
+    nine[0].bitrate_bps = 9_000_000;
+    nine[0].maxrate_bps = 9_900_000;
+    nine[0].bufsize_bps = 9_900_000;
+    video::video_set_rungs(&state, &clash.id, Some(nine)).unwrap();
+    video::video_start(&state, std::slice::from_ref(&clash.id));
+    let stopped = until(
+        &state,
+        &clash.id,
+        "the clash",
+        Duration::from_secs(300),
+        |v| matches!(v.state, VideoState::Problem | VideoState::Done),
+    )
+    .await;
+    let problem = stopped.problem.expect("it was not stopped");
+    assert_eq!(problem.error.code, ErrorCode::InvalidInput, "{problem:?}");
+    assert_eq!(problem.error.details[0].key, DetailCode::RungFileClaimed);
+    assert_eq!(
+        problem.actions,
+        vec![VideoAction::EditRungs, VideoAction::Rename]
+    );
+    assert_eq!(
+        digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")),
+        single
+    );
+
+    // While it is on the list unfinished, the medium does not take a second film.
+    let err = video::video_add(
+        &state,
+        &server_id,
+        std::slice::from_ref(&path),
+        Some(&medium),
+    )
+    .await
+    .expect_err("a second film was taken for a medium already on its way");
+    assert_eq!(err.code, ErrorCode::MediaSetInWork);
+
+    // Other rungs: the set is built into the medium, beside its file.
+    video::video_set_rungs(&state, &clash.id, Some(two_rungs())).unwrap();
+    video::video_retry(&state, &clash.id, false).unwrap();
+    let done = until(
+        &state,
+        &clash.id,
+        "the set",
+        Duration::from_secs(400),
+        |v| matches!(v.state, VideoState::Done | VideoState::Problem),
+    )
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    assert_eq!(done.media_id.as_deref(), Some(medium.as_str()));
+    assert!(done
+        .link
+        .unwrap()
+        .origin
+        .ends_with("/videos/old-film/master.m3u8"));
+    the_set_is_served(&server, "old-film");
+    // The single file is still there, the same bytes, and still the medium's.
+    assert_eq!(
+        digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")),
+        single
+    );
+    let view = library::library_list(&state, &server_id, true)
+        .await
+        .unwrap();
+    let m = view.media.iter().find(|m| m.id == medium).unwrap();
+    assert!(m.files.iter().any(|f| f.path == "old-film_9.mp4"), "{m:?}");
+    assert!(
+        m.ladders.iter().any(|l| l.path == "old-film/master.m3u8"),
+        "{m:?}"
+    );
+
+    // Now it has a set: another one is refused.
+    let err = video::video_add(
+        &state,
+        &server_id,
+        std::slice::from_ref(&path),
+        Some(&medium),
+    )
+    .await
+    .expect_err("a second set was taken for a medium that has one");
+    assert_eq!(err.code, ErrorCode::MediaHasSet);
+    drop(scratch);
 }
 
 // ---------- killed, and carried on ----------
@@ -340,7 +644,9 @@ fn the_first_run_of_a_video_that_gets_killed() {
             &origin,
         );
         let server_id = attach_secret(&state);
-        let added = video::video_add(&state, &server_id, &[film]).await.unwrap();
+        let added = video::video_add(&state, &server_id, &[film], None)
+            .await
+            .unwrap();
         let id = added.added[0].id.clone();
         until(&state, &id, "the plan", Duration::from_secs(120), |v| {
             v.state == VideoState::Ready

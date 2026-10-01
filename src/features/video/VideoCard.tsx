@@ -58,6 +58,8 @@ export function VideoCard({
   const [editing, setEditing] = useState(false);
   const [naming, setNaming] = useState(false);
   const [title, setTitle] = useState(video.title);
+  /** «Replace» (T676): the one-line question, then — if somebody is watching — «anyway». */
+  const [replacing, setReplacing] = useState<"ask" | "viewers" | null>(null);
 
   const run = async (act: () => Promise<VideoView | void>) => {
     setBusy(true);
@@ -80,10 +82,23 @@ export function VideoCard({
       return retry ? ipc.videoRetry(id, false) : named;
     });
 
+  const replace = (confirmed: boolean) =>
+    run(async () => {
+      try {
+        const next = await ipc.videoReplace(id, confirmed);
+        setReplacing(null);
+        return next;
+      } catch (e) {
+        // Somebody is watching (as T571): nothing was removed, «anyway» is the way on.
+        setReplacing(toAppError(e).code === "FILE_IN_USE" ? "viewers" : null);
+        throw e;
+      }
+    });
+
   const doAction = (a: VideoProblemAction) => {
     if (a === "retry") void run(() => ipc.videoRetry(id, false));
     else if (a === "build_anyway") void run(() => ipc.videoRetry(id, true));
-    else if (a === "replace") void run(() => ipc.videoReplace(id));
+    else if (a === "replace") setReplacing("ask");
     else if (a === "edit_rungs") setEditing(true);
     else {
       setTitle(video.title);
@@ -105,6 +120,7 @@ export function VideoCard({
   const problemActions = video.state === "problem" ? (video.problem?.actions ?? []) : [];
   // «Rename» puts the name field up and its own «Retry» beside it; the field is the action.
   const renameOffered = problemActions.includes("rename") && canSetName(video);
+  const confirming = replacing !== null && problemActions.includes("replace");
 
   return (
     <li className={`video video--${video.state}`} data-testid={`video-${video.id}`}>
@@ -191,7 +207,24 @@ export function VideoCard({
         </div>
       )}
 
-      {!naming && (
+      {confirming && (
+        <div className="video__confirm" role="group" aria-label={w.replace}>
+          {replacing === "ask" && <p>{fill(w.replaceAsk, { title: video.title }, t, lang)}</p>}
+          <button
+            type="button"
+            className="button--danger"
+            disabled={busy}
+            onClick={() => void replace(replacing === "viewers")}
+          >
+            {replacing === "viewers" ? w.replaceAnyway : w.replace}
+          </button>
+          <button type="button" disabled={busy} onClick={() => setReplacing(null)}>
+            {t.ui.common.cancel}
+          </button>
+        </div>
+      )}
+
+      {!naming && !confirming && (
         <div className="video__actions">
           {canStart(video) && (
             <button

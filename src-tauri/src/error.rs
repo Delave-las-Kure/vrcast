@@ -167,6 +167,13 @@ error_codes! {
     /// What was pressed does not apply to the video as it is now (pausing one that is not
     /// going, removing one that is). The cause says its state and stage. Nothing changed.
     VideoNotNow => "VIDEO_NOT_NOW",
+    /// `video_add` with a medium (T675) refused: the medium already has a quality set — in
+    /// the catalogue, or as a set of its name left on the server that no medium claims
+    /// (detail `OLD_SET_UNRECOGNIZED`). Nothing was added.
+    MediaHasSet => "MEDIA_HAS_SET",
+    /// `video_add` with a medium (T675) refused: a set of this medium is being built, or
+    /// another video on the list is on its way to it. Nothing was added.
+    MediaSetInWork => "MEDIA_SET_IN_WORK",
 
     // --- removing everything (FR-114) ---
     /// `forget_everything` refused: a task is alive (queued, running, or paused with its work

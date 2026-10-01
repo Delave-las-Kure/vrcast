@@ -80,6 +80,9 @@ export type ErrorCode =
   // videos in work (T672)
   | "VIDEO_NOT_FOUND"
   | "VIDEO_NOT_NOW"
+  // a set for a medium already in the library (T675)
+  | "MEDIA_HAS_SET"
+  | "MEDIA_SET_IN_WORK"
   // removing everything (FR-114, T643)
   | "FORGET_TASKS_RUNNING"
   | "FORGET_IN_PROGRESS"
@@ -368,7 +371,9 @@ export type DetailCode =
   | "STALLS_VIEWER_LINK"
   | "STALLS_THE_PLAYER"
   // Videos in work (T672).
-  | "VIDEO_ALREADY_LISTED";
+  | "VIDEO_ALREADY_LISTED"
+  | "RUNG_FILE_CLAIMED"
+  | "OLD_SET_UNRECOGNIZED";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {

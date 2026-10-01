@@ -34,12 +34,12 @@ const mockVideoSetAudio = vi.fn();
 const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
-const mockOpen = vi.fn<() => Promise<string[] | string | null>>();
+const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
 /** The screen's own `video:update` listener, held so a test can send an event. */
 let push: ((v: VideoView) => void) | null = null;
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (o: unknown) => mockOpen(o) }));
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -374,7 +374,11 @@ describe("adding videos", () => {
     fireEvent.click(await screen.findByRole("button", { name: ru.ui.video.add }));
 
     await waitFor(() =>
-      expect(mockVideoAdd).toHaveBeenCalledWith("srv_1", ["F:/films/a.mkv", "F:/films/notes.txt"]),
+      expect(mockVideoAdd).toHaveBeenCalledWith(
+        "srv_1",
+        ["F:/films/a.mkv", "F:/films/notes.txt"],
+        null,
+      ),
     );
     const a = await card("a");
     expect(a.getByText(ru.ui.video.planning)).toBeInTheDocument();
@@ -389,7 +393,34 @@ describe("adding videos", () => {
     show("ru", "/video?add=1");
 
     await waitFor(() => expect(mockOpen).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mockVideoAdd).toHaveBeenCalledWith("srv_1", ["F:/films/a.mkv"]));
+    await waitFor(() =>
+      expect(mockVideoAdd).toHaveBeenCalledWith("srv_1", ["F:/films/a.mkv"], null),
+    );
+  });
+
+  it("builds a set into the medium the library sent here: one file, with its id (T675)", async () => {
+    mockOpen.mockResolvedValue("F:/films/Фильм.mkv");
+    mockVideoAdd.mockResolvedValue({
+      added: [video({ id: "a", media_id: "m1", state: "planning", plan: null })],
+      refused: [],
+    });
+    show("ru", "/video?media=m1");
+
+    await waitFor(() => expect(mockOpen).toHaveBeenCalledTimes(1));
+    expect(mockOpen.mock.calls[0][0]).toMatchObject({ multiple: false });
+    await waitFor(() =>
+      expect(mockVideoAdd).toHaveBeenCalledWith("srv_1", ["F:/films/Фильм.mkv"], "m1"),
+    );
+    // It is on this screen with its plan coming, like any other video.
+    expect((await card("a")).getByText(ru.ui.video.planning)).toBeInTheDocument();
+  });
+
+  it("says why a medium would not take a set, and adds nothing (T675)", async () => {
+    mockOpen.mockResolvedValue("F:/films/Фильм.mkv");
+    mockVideoAdd.mockRejectedValue({ code: "MEDIA_HAS_SET", details: [], cause: null });
+    show("ru", "/video?media=m1");
+    expect(await screen.findByText(ru.errors.MEDIA_HAS_SET.message)).toBeInTheDocument();
+    expect(screen.queryByTestId(/^video-/)).toBeNull();
   });
 
   it("says there is no server rather than offering to add", async () => {
@@ -575,7 +606,38 @@ describe("a problem", () => {
     await waitFor(() => expect(mockVideoRetry).toHaveBeenCalledWith("v1", false));
 
     fireEvent.click((await card("v2")).getByRole("button", { name: ru.ui.video.replace }));
-    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v2"));
+    // T676 — asked first, in one line; nothing is sent until it is answered.
+    const ask = (await card("v2")).getByRole("group", { name: ru.ui.video.replace });
+    expect(ask).toHaveTextContent("Старый набор «Фильм» будет удалён и собран заново");
+    expect(mockVideoReplace).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole("button", { name: ru.ui.video.replace }));
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v2", false));
+  });
+
+  it("asks «replace anyway» when somebody is watching, and «cancel» sends nothing", async () => {
+    mockVideoList.mockResolvedValue([problem("SLUG_TAKEN", ["replace", "rename"])]);
+    mockVideoReplace.mockImplementation(() =>
+      Promise.resolve(problem("SLUG_TAKEN", ["replace", "rename"])),
+    );
+    mockVideoReplace.mockRejectedValueOnce({ code: "FILE_IN_USE", details: [], cause: null });
+    show();
+    const c = await card();
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.replace }));
+    fireEvent.click(
+      within(c.getByRole("group", { name: ru.ui.video.replace })).getByRole("button", {
+        name: ru.ui.video.replace,
+      }),
+    );
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v1", false));
+    fireEvent.click(await c.findByRole("button", { name: ru.ui.video.replaceAnyway }));
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v1", true));
+
+    // Asked again and let go: nothing more is sent, the problem's buttons are back.
+    mockVideoReplace.mockClear();
+    fireEvent.click(await c.findByRole("button", { name: ru.ui.video.replace }));
+    fireEvent.click(c.getByRole("button", { name: ru.ui.common.cancel }));
+    expect(c.queryByRole("group", { name: ru.ui.video.replace })).toBeNull();
+    expect(mockVideoReplace).not.toHaveBeenCalled();
   });
 
   it("asks for another name and goes on with it", async () => {

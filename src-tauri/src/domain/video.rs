@@ -251,8 +251,90 @@ pub fn actions_for(error: &AppError) -> Vec<VideoAction> {
         ErrorCode::RungAboveSource | ErrorCode::BufsizeTooLarge | ErrorCode::LevelExceeded => {
             vec![A::EditRungs, A::Retry]
         }
+        // A medium's own file under a rung's name (T675/T676): another bitrate for that rung
+        // names the file differently, another short name names them all differently. Retry
+        // would meet the same file. (The screen offers «rename» only while there is no medium.)
+        ErrorCode::InvalidInput
+            if error
+                .details
+                .iter()
+                .any(|d| d.key == DetailCode::RungFileClaimed) =>
+        {
+            vec![A::EditRungs, A::Rename]
+        }
         _ => vec![A::Retry],
     }
+}
+
+/// Whether `name`, at the top of the serving directory, is a prepared rung of the set `slug`:
+/// `{slug}_{whole megabits}.mp4` (`ladder_build::file_name`), or one still being sent
+/// (`.part`, `tasks::ladder_build::send_file`).
+pub fn is_rung_file(slug: &str, name: &str) -> bool {
+    let name = name.strip_suffix(".part").unwrap_or(name);
+    name.strip_prefix(slug)
+        .and_then(|rest| rest.strip_prefix('_'))
+        .and_then(|rest| rest.strip_suffix(".mp4"))
+        .is_some_and(|mbit| !mbit.is_empty() && mbit.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// What a set of `slug` has on the server, as «Replace» sees it (T676).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OldSet {
+    /// The set's own directory `{slug}/` is there: its rungs' segments and `master.m3u8`.
+    pub dir: bool,
+    /// Prepared rungs `{slug}_{N}.mp4` (and half-sent `.part`) that no medium claims.
+    pub files: Vec<String>,
+    /// Files with a rung's name that a medium **does** claim: a person's own file, which a
+    /// build would take for a finished rung or write over. Not removed — refused.
+    pub in_the_way: Vec<String>,
+}
+
+impl OldSet {
+    /// Whether there is anything of an old set to remove.
+    pub fn is_empty(&self) -> bool {
+        !self.dir && self.files.is_empty()
+    }
+
+    /// The top-level entries removing it touches, in the order given.
+    pub fn tops(&self, slug: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.dir {
+            out.push(slug.to_owned());
+        }
+        out.extend(self.files.iter().cloned());
+        out
+    }
+}
+
+/// What of a set of `slug` is on the server (T676).
+///
+/// **Why the prepared files go too, not only the directory.** `ladder_build` takes a rung for
+/// done when `{slug}_{N}.mp4` is on the server and lasts as long as the source, within a
+/// second; the cutting then leaves alone a `v{N}/` already cut whole. Another film of the same
+/// length under the same name passes both. Removing only the directory would leave the first
+/// check passing and every rung of the old film would be cut again into the new set.
+///
+/// `entries` is the top of the serving directory as `(name, is_dir)`; `claimed` every path a
+/// medium claims in the catalogue. A claimed file is never removed here (T577, part b).
+pub fn old_set(slug: &str, entries: &[(String, bool)], claimed: &[&str]) -> OldSet {
+    let mut out = OldSet::default();
+    for (name, is_dir) in entries {
+        if *is_dir {
+            out.dir |= name == slug;
+            continue;
+        }
+        if !is_rung_file(slug, name) {
+            continue;
+        }
+        if claimed.contains(&name.as_str()) {
+            out.in_the_way.push(name.clone());
+        } else {
+            out.files.push(name.clone());
+        }
+    }
+    out.files.sort();
+    out.in_the_way.sort();
+    out
 }
 
 /// The title a file is offered under: its own name without the extension.

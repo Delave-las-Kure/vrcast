@@ -43,6 +43,7 @@ const RELEASED: &[&str] = &[
     include_str!("../../src/store/migrations/0019_task_result.sql"),
     include_str!("../../src/store/migrations/0020_tasks_updated_at_index.sql"),
     include_str!("../../src/store/migrations/0021_videos.sql"),
+    include_str!("../../src/store/migrations/0022_videos_seq.sql"),
 ];
 
 /// A directory that removes itself, so a failing test does not leave databases behind.
@@ -336,4 +337,55 @@ fn no_column_of_the_schema_is_meant_to_hold_a_secret() {
         Ok(())
     })
     .expect("reading the schema failed");
+}
+
+#[test]
+fn videos_kept_before_0022_keep_the_order_they_were_added_in() {
+    // Their `created_at` is the old way of writing a time — the fraction without its trailing
+    // zeros — and read as text it puts the second one first. The order of insertion survives.
+    let scratch = Scratch::new("videos-seq");
+    let path = scratch.db_path();
+    {
+        let old = database_at(&path, 21);
+        old.execute(
+            "INSERT INTO server_profiles
+             (id, name, host, port, username, auth_kind, secret_ref, domain, video_dir,
+              is_active, created_at)
+             VALUES ('s1', 'S', 'a.example.test', 22, 'root', 'key', 'server/s1',
+                     'v.example.test', '/v', 1, '2026-10-01T10:00:00Z')",
+            [],
+        )
+        .unwrap();
+        for (id, at) in [
+            ("first", "2026-10-01T10:00:05.5Z"),
+            ("second", "2026-10-01T10:00:05.123456789Z"),
+        ] {
+            old.execute(
+                "INSERT INTO videos (id, server_id, source_path, title, slug, created_at,
+                                     updated_at)
+                 VALUES (?1, 's1', 'p', 't', 's', ?2, ?2)",
+                [id, at],
+            )
+            .unwrap();
+        }
+    }
+    let db = Db::open(&path).expect("the old database would not open");
+    let ids: Vec<String> = vrcast_studio_lib::store::videos::list(&db)
+        .unwrap()
+        .into_iter()
+        .map(|v| v.id)
+        .collect();
+    assert_eq!(ids, vec!["first", "second"]);
+    // And the next one goes after them.
+    vrcast_studio_lib::store::videos::save(
+        &db,
+        &vrcast_studio_lib::store::videos::VideoRow::new("third", "s1", "p", "t", "s"),
+    )
+    .unwrap();
+    let ids: Vec<String> = vrcast_studio_lib::store::videos::list(&db)
+        .unwrap()
+        .into_iter()
+        .map(|v| v.id)
+        .collect();
+    assert_eq!(ids, vec!["first", "second", "third"]);
 }

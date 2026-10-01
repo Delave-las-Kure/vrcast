@@ -415,9 +415,10 @@ export const ipc = {
 
   // --- videos in work (T672) ---
   /** Add files; each gets a plan and waits for «Start». Each file on its own: a refusal
-   *  names its file and reason, the rest are added. */
-  videoAdd: (serverId: string, paths: string[]) =>
-    call<VideoAdded>("video_add", { serverId, paths }),
+   *  names its file and reason, the rest are added. With `mediaId` (T675): one file, built
+   *  into that medium of the library (its short name; its own files stay). */
+  videoAdd: (serverId: string, paths: string[], mediaId: string | null) =>
+    call<VideoAdded>("video_add", { serverId, paths, mediaId }),
   /** Every video, in the order added — after a restart too. */
   videoList: () => call<VideoView[]>("video_list"),
   /** Choose the audio track (from zero). Before encoding only. */
@@ -436,8 +437,10 @@ export const ipc = {
   /** Carry on from the stage it stopped at. `confirmed` — «build anyway» (viewers on the
    *  server, objections to the ladder); false for a plain «retry». */
   videoRetry: (id: string, confirmed: boolean) => call<VideoView>("video_retry", { id, confirmed }),
-  /** The short name is taken: build into the medium that has it. */
-  videoReplace: (id: string) => call<VideoView>("video_replace", { id }),
+  /** The short name is taken: remove the old set of that name and build it again whole
+   *  (T676). `confirmed` — «anyway» while somebody is watching (FILE_IN_USE). */
+  videoReplace: (id: string, confirmed: boolean) =>
+    call<VideoView>("video_replace", { id, confirmed }),
   /** Off the list only; nothing on the server is touched. */
   videoRemove: (id: string) => call<void>("video_remove", { id }),
 };

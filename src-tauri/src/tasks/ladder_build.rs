@@ -102,6 +102,17 @@ pub enum BuildError {
 
     #[error("the serving could not be reached: {0}")]
     Unreachable(String),
+
+    /// A rung's prepared file `{slug}_{N}.mp4` is a file a medium claims in the catalogue,
+    /// and what is on the server under that name is not this rung done (T675). It would be
+    /// written over — somebody's file, removed without being asked (T577, part b). Refused
+    /// before anything is encoded.
+    #[error("{0} belongs to a medium and is not this rung: it is not written over")]
+    FileClaimed(String),
+
+    /// The catalogue could not be read to ask the above.
+    #[error("the catalogue could not be read: {0}")]
+    Catalogue(String),
 }
 
 /// What is being built.
@@ -168,6 +179,14 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     for said in work.iter().flat_map(|w| w.notices.clone()) {
         ctx.add_notice(said);
     }
+
+    // **A file somebody owns is never written over** (T675). A medium's own single file is
+    // often named the way a rung's prepared file is — `film_9.mp4`, the shell script's
+    // convention — and a build into that medium would replace it. Asked once, before a byte
+    // is encoded: a claimed file that already is this rung, whole, is taken as it is (a
+    // rebuild of the same set whose rungs a person filed under the medium); anything else
+    // under a claimed name stops the build here, with the file untouched.
+    refuse_claimed(job, &work).await?;
 
     // **Will it fit?** Asked once, here, before a byte is encoded. A set is hours of work
     // and tens of gigabytes; running into the end of the disk halfway leaves the first
@@ -510,6 +529,30 @@ pub async fn room_for_the_set(
             rungs: work.len(),
         }),
     }
+}
+
+/// Refuse a build that would write over a file a medium claims (T675). See [`run`].
+async fn refuse_claimed(job: &BuildJob<'_>, work: &[VariantWork]) -> Result<(), BuildError> {
+    let manifest = crate::server::manifest_io::read(job.conn, job.video_dir)
+        .await
+        .map_err(|e| BuildError::Catalogue(e.to_string()))?;
+    let claimed = manifest.all_claimed_paths();
+    for variant in work {
+        if !claimed.contains(&variant.file.as_str()) {
+            continue;
+        }
+        if !variant_already_there(
+            job.conn,
+            job.video_dir,
+            &variant.file,
+            job.source.duration_s,
+        )
+        .await?
+        {
+            return Err(BuildError::FileClaimed(variant.file.clone()));
+        }
+    }
+    Ok(())
 }
 
 pub async fn variant_already_there(

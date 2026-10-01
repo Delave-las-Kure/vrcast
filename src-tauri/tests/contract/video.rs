@@ -149,6 +149,7 @@ async fn each_file_is_taken_or_refused_on_its_own() {
             silent.clone(),
             good.clone(),
         ],
+        None,
     )
     .await
     .expect("adding went wrong as a whole");
@@ -189,7 +190,7 @@ async fn each_file_is_taken_or_refused_on_its_own() {
     assert_eq!(twice.error.details[0].key, DetailCode::VideoAlreadyListed);
 
     // And it is not added again while it is on its way.
-    let again = video::video_add(&state, &server, std::slice::from_ref(&good))
+    let again = video::video_add(&state, &server, std::slice::from_ref(&good), None)
         .await
         .unwrap();
     assert!(again.added.is_empty());
@@ -202,7 +203,7 @@ async fn each_file_is_taken_or_refused_on_its_own() {
 #[tokio::test]
 async fn a_video_for_a_server_that_does_not_exist_is_refused_whole() {
     let state = state();
-    let err = video::video_add(&state, "srv_nobody", &[String::from("x.mp4")])
+    let err = video::video_add(&state, "srv_nobody", &[String::from("x.mp4")], None)
         .await
         .expect_err("videos were added for nowhere");
     assert_eq!(err.code, ErrorCode::InvalidInput);
@@ -217,7 +218,7 @@ async fn the_plan_comes_back_with_its_rungs_sizes_time_and_room() {
     let film = films.film("plan.mp4", true).unwrap();
     let state = state();
     let server = server(&state);
-    let id = video::video_add(&state, &server, &[film])
+    let id = video::video_add(&state, &server, &[film], None)
         .await
         .unwrap()
         .added[0]
@@ -263,7 +264,7 @@ async fn what_a_state_does_not_allow_is_refused_and_changes_nothing() {
     let film = films.film("states.mp4", true).unwrap();
     let state = state();
     let server = server(&state);
-    let id = video::video_add(&state, &server, &[film])
+    let id = video::video_add(&state, &server, &[film], None)
         .await
         .unwrap()
         .added[0]
@@ -350,7 +351,7 @@ async fn a_start_that_cannot_reach_the_server_stops_on_a_problem_with_a_retry() 
     let state = state();
     let server = server(&state);
     let mut events = state.subscribe();
-    let id = video::video_add(&state, &server, &[film])
+    let id = video::video_add(&state, &server, &[film], None)
         .await
         .unwrap()
         .added[0]
@@ -468,4 +469,139 @@ fn a_video_waiting_for_start_is_not_paused_or_resumed_by_a_restart() {
     use vrcast_studio_lib::domain::video::{after_restart, AfterRestart};
     assert_eq!(after_restart(VideoState::Ready), AfterRestart::Leave);
     assert_eq!(after_restart(VideoState::Paused), AfterRestart::Leave);
+}
+
+// ---------- «Replace» (T676) ----------
+
+/// A video stopped on a taken name, as `next_task` leaves it: no medium of its own yet.
+fn stopped_on_a_taken_name(state: &AppState, server: &str, id: &str) {
+    let mut row = VideoRow::new(id, server, "C:/nowhere/film.mp4", "Film", "film");
+    row.stage = VideoStage::Planned;
+    row.state = VideoState::Problem;
+    row.problem_json = Some(
+        serde_json::json!({
+            "error": vrcast_studio_lib::commands::error::AppError::new(ErrorCode::SlugTaken),
+            "actions": ["replace", "rename"],
+        })
+        .to_string(),
+    );
+    rows::save(&state.db, &row).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replace_is_only_for_a_taken_name_and_asks_the_server_before_anything_changes() {
+    let state = state();
+    let server = server(&state);
+    stopped_on_a_taken_name(&state, &server, "taken");
+
+    // The server does not answer: nothing was removed, so nothing changes — the video is
+    // still stopped on its name, with the same two choices, and «Replace» can be pressed again.
+    let err = video::video_replace(&state, "taken", false)
+        .await
+        .expect_err("replace went ahead without asking the server");
+    assert_ne!(err.code, ErrorCode::VideoNotNow, "{err:?}");
+    let after = video::video_get(&state, "taken").unwrap();
+    assert_eq!(after.state, VideoState::Problem);
+    assert!(after.media_id.is_none());
+    assert_eq!(
+        after.problem.unwrap().actions,
+        vec![VideoAction::Replace, VideoAction::Rename]
+    );
+    assert!(state.tasks.list().unwrap().is_empty(), "work was started");
+
+    // Not for a video that is not stopped on its name, nor one that has its medium.
+    let mut ready = VideoRow::new("ready", &server, "C:/nowhere/a.mp4", "A", "a");
+    ready.state = VideoState::Ready;
+    rows::save(&state.db, &ready).unwrap();
+    let mut owned = VideoRow::new("owned", &server, "C:/nowhere/b.mp4", "B", "b");
+    owned.state = VideoState::Problem;
+    owned.media_id = Some(String::from("m_b"));
+    rows::save(&state.db, &owned).unwrap();
+    for id in ["ready", "owned"] {
+        for confirmed in [false, true] {
+            let err = video::video_replace(&state, id, confirmed)
+                .await
+                .expect_err("replace was taken in a state that does not allow it");
+            assert_eq!(err.code, ErrorCode::VideoNotNow, "{id}");
+        }
+    }
+    assert_eq!(
+        video::video_replace(&state, "nobody", false)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::VideoNotFound
+    );
+}
+
+// ---------- «Build a set» for a medium already in the library (T675) ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_set_for_a_medium_takes_one_file_and_asks_the_server_before_adding_anything() {
+    let state = state();
+    let server = server(&state);
+
+    // One file for one medium: two, or none, is refused as a whole, before the server.
+    for paths in [
+        vec![String::from("a.mp4"), String::from("b.mp4")],
+        Vec::new(),
+    ] {
+        let err = video::video_add(&state, &server, &paths, Some("m_1"))
+            .await
+            .expect_err("a medium took a number of files other than one");
+        assert_eq!(err.code, ErrorCode::InvalidInput, "{paths:?}");
+    }
+
+    // Another video already on its way to this medium: refused as in work, also before the
+    // server is asked.
+    let mut going = VideoRow::new("going", &server, "C:/nowhere/x.mp4", "X", "x");
+    going.state = VideoState::Working;
+    going.media_id = Some(String::from("m_1"));
+    rows::save(&state.db, &going).unwrap();
+    let err = video::video_add(&state, &server, &[String::from("y.mp4")], Some("m_1"))
+        .await
+        .expect_err("a second set was started for a medium already on its way");
+    assert_eq!(err.code, ErrorCode::MediaSetInWork);
+
+    // A finished one does not hold the medium; the server is asked then, and a server that
+    // does not answer refuses the call with its own code. Nothing was added either way.
+    let mut finished = rows::get(&state.db, "going").unwrap().unwrap();
+    finished.state = VideoState::Done;
+    rows::save(&state.db, &finished).unwrap();
+    let err = video::video_add(&state, &server, &[String::from("y.mp4")], Some("m_1"))
+        .await
+        .expect_err("a medium nobody could look at was taken");
+    assert!(
+        !matches!(
+            err.code,
+            ErrorCode::InvalidInput | ErrorCode::MediaSetInWork | ErrorCode::MediaHasSet
+        ),
+        "{err:?}"
+    );
+    assert_eq!(video::video_list(&state).unwrap().len(), 1);
+}
+
+#[test]
+fn a_medium_s_set_refusals_say_what_to_do() {
+    // The two codes are ours, and a problem about a medium's own file under a rung's name
+    // offers another rung or another name, not a retry that would meet the same file.
+    use vrcast_studio_lib::commands::error::AppError;
+    use vrcast_studio_lib::domain::video::actions_for;
+    assert_eq!(
+        ErrorCode::parse("MEDIA_HAS_SET"),
+        Some(ErrorCode::MediaHasSet)
+    );
+    assert_eq!(
+        ErrorCode::parse("MEDIA_SET_IN_WORK"),
+        Some(ErrorCode::MediaSetInWork)
+    );
+    let claimed = AppError::new(ErrorCode::InvalidInput).detail(DetailCode::RungFileClaimed);
+    assert_eq!(
+        actions_for(&claimed),
+        vec![VideoAction::EditRungs, VideoAction::Rename]
+    );
+    assert_eq!(
+        actions_for(&AppError::new(ErrorCode::InvalidInput)),
+        vec![VideoAction::Retry]
+    );
 }

@@ -459,6 +459,76 @@ fn the_list_keeps_the_order_videos_were_added_in() {
 }
 
 #[test]
+fn the_order_holds_when_the_times_are_the_same_or_read_backwards() {
+    // The flake (2026-10-01): the list was ordered by `created_at`, a string. Here the times
+    // are equal for two and, for the third, earlier as text than the first — the order of
+    // adding is what comes back regardless.
+    let db = db();
+    let server = with_server(&db);
+    for (id, at) in [
+        ("first", "2026-10-01T10:00:05.123456789Z"),
+        ("second", "2026-10-01T10:00:05.123456789Z"),
+        ("third", "2026-10-01T10:00:05.000000000Z"),
+    ] {
+        let mut row = VideoRow::new(id, &server, id, id, id);
+        row.created_at = at.to_owned();
+        videos::save(&db, &row).unwrap();
+    }
+    // Saving again (an update) does not move a video in the list.
+    let mut first = videos::get(&db, "first").unwrap().unwrap();
+    first.title = String::from("renamed");
+    videos::save(&db, &first).unwrap();
+    let ids: Vec<String> = videos::list(&db)
+        .unwrap()
+        .into_iter()
+        .map(|v| v.id)
+        .collect();
+    assert_eq!(ids, vec!["first", "second", "third"]);
+}
+
+#[test]
+fn a_removed_video_s_place_is_not_given_to_an_earlier_one() {
+    let db = db();
+    let server = with_server(&db);
+    for id in ["a", "b", "c"] {
+        videos::save(&db, &VideoRow::new(id, &server, id, id, id)).unwrap();
+    }
+    videos::remove(&db, "c").unwrap();
+    videos::save(&db, &VideoRow::new("d", &server, "d", "d", "d")).unwrap();
+    let ids: Vec<String> = videos::list(&db)
+        .unwrap()
+        .into_iter()
+        .map(|v| v.id)
+        .collect();
+    assert_eq!(ids, vec!["a", "b", "d"]);
+}
+
+#[test]
+fn stored_times_compare_as_text_the_way_they_do_as_time() {
+    // The cause of the flake: the fraction of a second used to lose its trailing zeros, and
+    // `…05.1234Z` came after `…05.12345678Z` as text.
+    use vrcast_studio_lib::store::db::{now_rfc3339, parse_rfc3339, rfc3339_fixed};
+    let base = time::OffsetDateTime::from_unix_timestamp(1_790_000_005).unwrap();
+    let earlier = rfc3339_fixed(base + time::Duration::nanoseconds(123_456_780));
+    let later = rfc3339_fixed(base + time::Duration::nanoseconds(123_456_789));
+    let much_later = rfc3339_fixed(base + time::Duration::nanoseconds(500_000_000));
+    assert!(
+        earlier < later && later < much_later,
+        "{earlier} {later} {much_later}"
+    );
+    assert_eq!(earlier.len(), "2026-09-21T13:20:05.123456780Z".len());
+    assert_eq!(
+        rfc3339_fixed(base),
+        format!("{}.000000000Z", &rfc3339_fixed(base)[..19])
+    );
+    // Still RFC 3339, read back the same.
+    assert_eq!(parse_rfc3339(&later).unwrap(), 1_790_000_005);
+    let now = now_rfc3339();
+    assert!(parse_rfc3339(&now).is_ok(), "{now}");
+    assert!(now.ends_with('Z') && now.len() == earlier.len(), "{now}");
+}
+
+#[test]
 fn removing_a_video_removes_only_the_row() {
     let db = db();
     let server = with_server(&db);
@@ -529,4 +599,75 @@ fn an_encoders_speed_is_remembered_per_encoder() {
         videos::encode_speed(&db, "h264_nvenc").unwrap(),
         Some(999.0)
     );
+}
+
+// ---------- «Replace»: what of an old set goes (T676) ----------
+
+fn top(entries: &[(&str, bool)]) -> Vec<(String, bool)> {
+    entries.iter().map(|(n, d)| (n.to_string(), *d)).collect()
+}
+
+#[test]
+fn a_rung_file_is_the_slug_an_underscore_whole_megabits_and_mp4() {
+    for yes in ["film_8.mp4", "film_12.mp4", "film_8.mp4.part"] {
+        assert!(video::is_rung_file("film", yes), "{yes}");
+    }
+    for no in [
+        "film.mp4",
+        "film_.mp4",
+        "film_8a.mp4",
+        "film_8.mkv",
+        "film-2_8.mp4",
+        "films_8.mp4",
+        "other_8.mp4",
+        "film",
+    ] {
+        assert!(!video::is_rung_file("film", no), "{no}");
+    }
+}
+
+#[test]
+fn the_old_set_is_its_directory_and_its_unclaimed_rung_files() {
+    let entries = top(&[
+        ("film", true),
+        ("film_8.mp4", false),
+        ("film_4.mp4.part", false),
+        ("film_2.mp4", false),
+        // Another medium's, and the medium's own single file: not the set's.
+        ("film-2", true),
+        ("film-2_8.mp4", false),
+        ("film.mp4", false),
+        ("library.json", false),
+    ]);
+    let old = video::old_set("film", &entries, &["film.mp4", "film/master.m3u8"]);
+    assert!(old.dir);
+    assert_eq!(
+        old.files,
+        vec!["film_2.mp4", "film_4.mp4.part", "film_8.mp4"]
+    );
+    assert!(old.in_the_way.is_empty());
+    assert_eq!(
+        old.tops("film"),
+        vec!["film", "film_2.mp4", "film_4.mp4.part", "film_8.mp4"]
+    );
+    assert!(!old.is_empty());
+}
+
+#[test]
+fn a_claimed_file_with_a_rung_s_name_is_in_the_way_not_removed() {
+    // Somebody filed `film_8.mp4` under a medium by hand: it is theirs (T577, part b), and a
+    // build would take it for a finished rung.
+    let entries = top(&[("film_8.mp4", false), ("film_4.mp4", false)]);
+    let old = video::old_set("film", &entries, &["film_8.mp4"]);
+    assert_eq!(old.in_the_way, vec!["film_8.mp4"]);
+    assert_eq!(old.files, vec!["film_4.mp4"]);
+}
+
+#[test]
+fn nothing_under_the_name_is_nothing_to_remove() {
+    let old = video::old_set("film", &top(&[("other", true), ("film.mp4", false)]), &[]);
+    assert!(old.is_empty());
+    assert!(old.tops("film").is_empty());
+    // A file called like the directory is not the directory.
+    assert!(!video::old_set("film", &top(&[("film", false)]), &[]).dir);
 }

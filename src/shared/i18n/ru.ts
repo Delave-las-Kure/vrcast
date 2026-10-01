@@ -299,6 +299,14 @@ export const ruCore: CatalogueCore = {
       message: "Сейчас это сделать нельзя",
       hint: "Видео в другом состоянии. Обновите экран.",
     },
+    MEDIA_HAS_SET: {
+      message: "У этого медиа уже есть набор качеств",
+      hint: "Сначала удалите старый набор или откройте ссылку медиа.",
+    },
+    MEDIA_SET_IN_WORK: {
+      message: "Набор для этого медиа уже собирается",
+      hint: "Он на экране «Видео».",
+    },
   },
 
   details: {
@@ -634,6 +642,10 @@ export const ruCore: CatalogueCore = {
     STALLS_VIEWER_LINK:
       "Не хватает канала зрителя: {ratio}× при {mbit_s} Мбит/с (в закачках {in_download_mbit_s}). Пропусков: {skipped}, перезапусков: {restarts}.",
     VIDEO_ALREADY_LISTED: "Это видео уже в списке",
+    RUNG_FILE_CLAIMED:
+      "Файл «{name}» принадлежит медиа и не перезаписывается. Смените ступени или имя.",
+    OLD_SET_UNRECOGNIZED:
+      "На сервере лежит «{name}» — старый набор под этим именем. Удалите его в «Не распознано».",
   },
 
   plurals: {
@@ -1092,6 +1104,8 @@ const ui = {
     retry: "Повторить",
     buildAnyway: "Всё равно собрать",
     replace: "Заменить",
+    replaceAsk: "Старый набор «{title}» будет удалён и собран заново",
+    replaceAnyway: "Всё равно заменить",
     stagesLabel: "Этапы",
     stages: {
       measuring: "Замер",
@@ -1128,6 +1142,7 @@ const ui = {
     ladders: "Наборы качеств: {list}",
     laddersHeading: "Наборы качеств",
     renameMedia: "Переименовать",
+    buildSet: "Собрать набор",
     deleteMedia: "Удалить медиа",
     diskFree: "Свободно",
     diskOf: "из",

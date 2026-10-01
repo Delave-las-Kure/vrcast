@@ -221,9 +221,9 @@ pub fn run() {
             // are logged and not fatal, in the same spirit as the sweep above this one:
             // a full journal is a nuisance a person can live with for one more run, and
             // refusing to start over housekeeping would be a worse trade.
-            let purge_before = (time::OffsetDateTime::now_utc() - time::Duration::days(90))
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
+            let purge_before = crate::store::db::rfc3339_fixed(
+                time::OffsetDateTime::now_utc() - time::Duration::days(90),
+            );
             match crate::tasks::store::purge_finished_before(&state.db, &purge_before) {
                 Ok(0) => {}
                 Ok(n) => tracing::info!(purged = n, "old finished tasks were cleared out"),

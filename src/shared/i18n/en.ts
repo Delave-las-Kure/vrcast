@@ -301,6 +301,14 @@ export const en: Catalogue = {
       message: "This cannot be done right now",
       hint: "The video is in another state. Refresh the screen.",
     },
+    MEDIA_HAS_SET: {
+      message: "This medium already has a quality set",
+      hint: "Delete the old set first, or open the medium's link.",
+    },
+    MEDIA_SET_IN_WORK: {
+      message: "A set for this medium is already on its way",
+      hint: "Look for it on the Video screen.",
+    },
   },
 
   details: {
@@ -648,6 +656,10 @@ export const en: Catalogue = {
       "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}). Skipped: {skipped}, restarts: {restarts}.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
+    RUNG_FILE_CLAIMED:
+      "The file “{name}” belongs to a medium and is not overwritten. Change the rungs or the name.",
+    OLD_SET_UNRECOGNIZED:
+      "“{name}” is on the server — an old set under this name. Delete it under “Not recognised”.",
   },
 
   plurals: {
@@ -1099,6 +1111,8 @@ export const en: Catalogue = {
       retry: "Retry",
       buildAnyway: "Build anyway",
       replace: "Replace",
+      replaceAsk: "The old set “{title}” will be removed and built again",
+      replaceAnyway: "Replace anyway",
       stagesLabel: "Stages",
       stages: {
         measuring: "Measure",
@@ -1135,6 +1149,7 @@ export const en: Catalogue = {
       ladders: "Quality ladders: {list}",
       laddersHeading: "Quality ladders",
       renameMedia: "Rename",
+      buildSet: "Build a set",
       deleteMedia: "Delete the medium",
       diskFree: "Free",
       diskOf: "of",
