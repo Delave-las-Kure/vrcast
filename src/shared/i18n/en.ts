@@ -790,28 +790,18 @@ export const en: Catalogue = {
       // the number it is about: a bare "a step down" is true of every rung but the top and
       // explains none of them.
       reasons: {
-        probed_anchor:
-          "The top of the ladder: at {mbps} Mbit/s the material stops asking for more, and further bits go into what nobody can see.",
-        capped_by_source:
-          "The top was cut to {mbps} Mbit/s — that is all there is in the source. There is nothing above it to encode.",
-        capped_by_upscale:
-          "The top was cut to {mbps} Mbit/s: above it the picture is upscaled, and the extra bits go into stretched pixels.",
-        step_down: "A step down from the one above: {mbps} Mbit/s, {times} times less.",
-        fallback_constant:
-          "The material could not be measured, so {mbps} Mbit/s comes from the old constant. The constant knows nothing about this material.",
-        lowered_for_density:
-          "The height was lowered to {height}: at {mbps} Mbit/s and the full frame there would be too few bits per pixel, and the picture would break into squares.",
-        full_resolution:
-          "The frame was left whole — {width}×{height}: at {mbps} Mbit/s the density holds.",
-        single_rung_only:
-          "The material is too light for a ladder: one rung, {mbps} Mbit/s. A second would differ from the first by less than anyone can see.",
-        measured_optimum:
-          "The height {height} was chosen by the measurement, not by the formula: at {mbps} Mbit/s it scored the best VMAF of those tried.",
-        borrowed_measurement: "The measurement behind this rung was taken on another file.",
-        filled_a_gap:
-          "This rung is here to break the fall: the step from the one above to the next one down was too big, and a player cannot make that jump. Its {mbps} Mbit/s is a real measured point, but it was picked for the ladder rather than for the picture.",
-        edited_by_hand:
-          "The bitrate — {mbps} Mbit/s — was typed in by hand. The frame and the ceiling have been reworked to match it, but nobody has measured how it actually looks yet.",
+        probed_anchor: "Top: above {mbps} Mbit/s nobody sees a difference.",
+        capped_by_source: "Cut to {mbps} Mbit/s — all the source has.",
+        capped_by_upscale: "Cut to {mbps} Mbit/s — above it is upscale.",
+        step_down: "Step down: {mbps} Mbit/s, {times} times less.",
+        fallback_constant: "Not measured: {mbps} Mbit/s from a constant.",
+        lowered_for_density: "Height {height}: at {mbps} Mbit/s a full frame breaks up.",
+        full_resolution: "Full frame {width}×{height} — {mbps} Mbit/s is enough.",
+        single_rung_only: "One rung, {mbps} Mbit/s — a second would look the same.",
+        measured_optimum: "Height {height} — best measured VMAF at {mbps} Mbit/s.",
+        borrowed_measurement: "Measured on another file.",
+        filled_a_gap: "{mbps} Mbit/s — fills a step that was too big.",
+        edited_by_hand: "{mbps} Mbit/s typed in by hand, not measured.",
       },
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",
@@ -820,8 +810,7 @@ export const en: Catalogue = {
       measuredColumnVmaf: "VMAF",
       measuredColumnActual: "Came out at",
       measuredChosen: "taken into the ladder",
-      droppedAbove:
-        "Dropped as excessive: {list}. Past the quality target those bits are paid for by every viewer and seen by none.",
+      droppedAbove: "Dropped as excess: {list}.",
 
       build: "Build the set",
       buildBlocked: "Cannot be built: the rungs are not measured",
