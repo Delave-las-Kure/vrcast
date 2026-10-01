@@ -270,3 +270,21 @@ async fn the_cache_with_a_refresh_behind_it_does_start_one() {
         "Film"
     );
 }
+
+#[tokio::test]
+async fn reading_from_the_cache_writes_nothing_and_says_nothing() {
+    // T679: a read records the older sets' rung files in the catalogue only inside a refresh
+    // of the server. A read from the cache (`cached_only`) starts none — so it writes
+    // nothing, and has nothing to announce.
+    let (s, id) = state_with_server();
+    library_cache::save(&s.db, &id, &view(&id, "Film")).unwrap();
+    let mut rx = s.subscribe();
+
+    let known = api::library_list_known(&s, &id).await.unwrap();
+    assert_eq!(known.media[0].title, "Film");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        library_events(&mut rx).is_empty(),
+        "a read from the cache announced a change"
+    );
+}

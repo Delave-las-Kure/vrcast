@@ -286,3 +286,171 @@ fn renaming_a_medium_moves_its_set_files_with_the_short_name() {
         .renames
         .contains(&("film_9v.mp4".to_owned(), "fresh_9v.mp4".to_owned())));
 }
+
+// ---------- T679: what a read found is recorded once ----------
+
+mod recorded_once {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use vrcast_studio_lib::domain::set_files::to_record;
+    use vrcast_studio_lib::server::set_files::{record_found, Recorded};
+
+    /// An older set on the server: the master serves 9 and 4, the rung files lie beside it,
+    /// and the catalogue records none of them.
+    fn older_set() -> (Manifest, Vec<SetRecord>, Vec<&'static str>) {
+        let m = catalogue(vec![
+            medium("m1", "film", &[], &["film/master.m3u8"]),
+            medium("m2", "other", &["other.mp4"], &[]),
+        ]);
+        let sets = vec![set_of(0, "film", MASTER_9_4, "")];
+        let files = vec!["film_9.mp4", "film_4.mp4", "film_7.mp4", "other.mp4"];
+        (m, sets, files)
+    }
+
+    /// One read the way `build_from_server` does it, against a catalogue held in `server`:
+    /// read, attribute, record. `fail` makes the write fail. Returns what was recorded and
+    /// what the read shows.
+    async fn read_once(
+        server: &RefCell<Manifest>,
+        present: bool,
+        may_change: bool,
+        writes: &Cell<usize>,
+        fail: bool,
+    ) -> (Recorded, Manifest) {
+        let (_, sets, files) = older_set();
+        let recorded = server.borrow().clone();
+        let seen = adopt(&recorded, &sets, &files);
+        let done = record_found(present, may_change, &recorded, &seen, |next, base| {
+            writes.set(writes.get() + 1);
+            async move {
+                if fail {
+                    return Err(String::from("permission denied"));
+                }
+                let mut held = server.borrow_mut();
+                if !Manifest::write_allowed(base, held.generation) {
+                    return Err(String::from("conflict"));
+                }
+                *held = next;
+                Ok(())
+            }
+        })
+        .await;
+        (done, seen)
+    }
+
+    #[tokio::test]
+    async fn the_first_read_records_what_it_found_and_the_second_writes_nothing() {
+        let (m, _, _) = older_set();
+        let server = RefCell::new(m.clone());
+        let writes = Cell::new(0);
+
+        let (done, seen) = read_once(&server, true, true, &writes, false).await;
+        assert_eq!(done, Recorded::Written);
+        assert_eq!(writes.get(), 1);
+        let held = server.borrow().clone();
+        assert_eq!(held.generation, m.generation + 1, "not written as a change");
+        assert_eq!(held.media[0].set_files, vec!["film_4.mp4", "film_9.mp4"]);
+        assert!(held.media[1].set_files.is_empty());
+        assert_eq!(
+            held.media[1].files,
+            vec!["other.mp4"],
+            "another medium touched"
+        );
+        // `film_7.mp4` is not served by the master: not the set's, not recorded.
+        assert!(!held.to_json().contains("film_7.mp4"));
+        assert_eq!(seen.media[0].set_files, held.media[0].set_files);
+
+        let (done, again) = read_once(&server, true, true, &writes, false).await;
+        assert_eq!(done, Recorded::Nothing, "the second read wrote again");
+        assert_eq!(writes.get(), 1);
+        assert_eq!(server.borrow().generation, m.generation + 1);
+        assert_eq!(again.media[0].set_files, seen.media[0].set_files);
+    }
+
+    #[tokio::test]
+    async fn without_the_application_s_catalogue_nothing_is_written() {
+        let (m, _, _) = older_set();
+        let server = RefCell::new(m.clone());
+        let writes = Cell::new(0);
+        let (done, seen) = read_once(&server, false, true, &writes, false).await;
+        assert_eq!(done, Recorded::Nothing);
+        assert_eq!(writes.get(), 0);
+        assert_eq!(*server.borrow(), m);
+        // The read still shows what it found.
+        assert_eq!(seen.media[0].set_files, vec!["film_4.mp4", "film_9.mp4"]);
+    }
+
+    #[tokio::test]
+    async fn a_server_this_application_may_not_change_is_not_written() {
+        let (m, _, _) = older_set();
+        let server = RefCell::new(m.clone());
+        let writes = Cell::new(0);
+        let (done, _) = read_once(&server, true, false, &writes, false).await;
+        assert_eq!(done, Recorded::Nothing);
+        assert_eq!(writes.get(), 0);
+        assert_eq!(*server.borrow(), m);
+    }
+
+    #[tokio::test]
+    async fn a_failed_write_does_not_break_the_read_and_the_next_read_tries_again() {
+        let (m, _, _) = older_set();
+        let server = RefCell::new(m.clone());
+        let writes = Cell::new(0);
+
+        let (done, seen) = read_once(&server, true, true, &writes, true).await;
+        assert_eq!(done, Recorded::Failed);
+        assert_eq!(writes.get(), 1, "a failed write was repeated in a loop");
+        assert_eq!(*server.borrow(), m, "a failed write changed the catalogue");
+        assert_eq!(seen.media[0].set_files, vec!["film_4.mp4", "film_9.mp4"]);
+
+        let (done, _) = read_once(&server, true, true, &writes, false).await;
+        assert_eq!(done, Recorded::Written, "the next read did not try again");
+        assert_eq!(writes.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_catalogue_changed_meanwhile_is_not_overwritten() {
+        let (m, sets, files) = older_set();
+        let recorded = m.clone();
+        let seen = adopt(&recorded, &sets, &files);
+        // Another copy of the application wrote in between.
+        let mut theirs = m.prepared_for_write();
+        theirs.media[1].title = String::from("Renamed elsewhere");
+        let server = RefCell::new(theirs.clone());
+        let held_at = &server;
+        let done = record_found(true, true, &recorded, &seen, |next, base| async move {
+            let mut held = held_at.borrow_mut();
+            if !Manifest::write_allowed(base, held.generation) {
+                return Err(String::from("conflict"));
+            }
+            *held = next;
+            Ok(())
+        })
+        .await;
+        assert_eq!(done, Recorded::Failed);
+        assert_eq!(*server.borrow(), theirs);
+    }
+
+    #[test]
+    fn only_additions_are_recorded_and_one_name_stays_under_one_medium() {
+        // A recorded file the view hides (gone for now) is not taken out by a read.
+        let mut film = medium("m1", "film", &[], &["film/master.m3u8"]);
+        film.set_files = vec!["film_2.mp4".into()];
+        let recorded = catalogue(vec![film, medium("m2", "other", &[], &[])]);
+        let mut seen = recorded.clone();
+        seen.media[0].set_files = vec!["film_9.mp4".into()];
+        let next = to_record(&recorded, &seen).expect("nothing to record");
+        assert_eq!(next.media[0].set_files, vec!["film_2.mp4", "film_9.mp4"]);
+        assert_eq!(next.generation, recorded.generation + 1);
+
+        // Nothing new — nothing to write.
+        let mut same = recorded.clone();
+        same.media[0].set_files.clear();
+        assert!(to_record(&recorded, &same).is_none());
+        assert!(to_record(&recorded, &recorded).is_none());
+
+        // A view of another catalogue writes nothing.
+        let other = catalogue(vec![medium("m9", "film", &[], &[])]);
+        assert!(to_record(&recorded, &other).is_none());
+    }
+}

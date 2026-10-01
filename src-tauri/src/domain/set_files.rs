@@ -11,9 +11,13 @@
 //! medium whenever the library is read — **only by matching them against the set itself**,
 //! never by a name alone: a file is the set's when the set's own record `.prepared` names it,
 //! or when it is `{slug}_{N}[v[k]].mp4` for a rung `v{N}` the set's `master.m3u8` serves.
-//! Attributing is not writing: reading the library changes nothing on the server (a read may
-//! be of somebody else's machine). The catalogue takes the attribution the next time this
-//! application writes that medium for its own reasons — a rename, a deletion.
+//! **The attribution is written into the catalogue once, at the first read that finds it**
+//! (T679, the owner's decision of 2026-10-02) — through the same write every other change
+//! takes (`manifest_io::write`: the generation, the sum, the lock), only on a server that
+//! already keeps this application's catalogue and that this application may change, and only
+//! when the attribution adds something the catalogue does not record ([`to_record`]). A read
+//! of somebody else's machine, of a server with no catalogue, or from the cache writes
+//! nothing; a write that fails leaves the read as it was and is tried again at the next read.
 //!
 //! **One rule holds every set file, recorded or found**: it is named as a rung of its own
 //! medium's short name (`ladder_build::rung_mbit_of`), it is on the server, and no medium has
@@ -165,6 +169,62 @@ pub fn record_built(next: &mut Manifest, slug: &str, built: &[String]) -> bool {
     files.sort();
     files.dedup();
     true
+}
+
+/// The catalogue to write so that it records what reading it attributed (T679), or `None`
+/// when there is nothing to add.
+///
+/// `recorded` — the catalogue as read off the server; `seen` — [`adopt`]'s view of it. Only
+/// **additions** are written: a rung file the view credits a medium with and the catalogue
+/// does not record under it. What the view leaves out of a record (a file gone from the
+/// server, a name that no longer fits) is not taken out of the catalogue by a read — the view
+/// already hides it, and a file missing for a moment (a rebuild under way) is not forgotten
+/// for good. A name written under one medium is taken from any other that records it: one
+/// name, one medium. The result is prepared for writing over `recorded.generation`.
+///
+/// A view that does not match the catalogue medium by medium (another catalogue altogether)
+/// writes nothing.
+pub fn to_record(recorded: &Manifest, seen: &Manifest) -> Option<Manifest> {
+    if recorded.media.len() != seen.media.len()
+        || recorded
+            .media
+            .iter()
+            .zip(&seen.media)
+            .any(|(r, s)| r.id != s.id || r.slug != s.slug)
+    {
+        return None;
+    }
+    let additions: Vec<(usize, Vec<String>)> = recorded
+        .media
+        .iter()
+        .zip(&seen.media)
+        .enumerate()
+        .filter_map(|(i, (r, s))| {
+            let fresh: Vec<String> = s
+                .set_files
+                .iter()
+                .filter(|f| !r.set_files.contains(f))
+                .cloned()
+                .collect();
+            (!fresh.is_empty()).then_some((i, fresh))
+        })
+        .collect();
+    if additions.is_empty() {
+        return None;
+    }
+    let mut next = recorded.prepared_for_write();
+    for (index, fresh) in additions {
+        for (i, m) in next.media.iter_mut().enumerate() {
+            if i != index {
+                m.set_files.retain(|f| !fresh.contains(f));
+            }
+        }
+        let files = &mut next.media[index].set_files;
+        files.extend(fresh);
+        files.sort();
+        files.dedup();
+    }
+    Some(next)
 }
 
 /// The sets whose records are to be read: `(media_index, slug)` for every medium that has a
