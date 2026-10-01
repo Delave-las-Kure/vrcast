@@ -388,6 +388,7 @@ export const en: Catalogue = {
     CONFIRM_DELETE:
       "{files} {files|plural:file} ({bytes|bytes}) will be deleted. This cannot be undone.",
     VIEWERS_ACTIVE_DELETE: "Open connections: {connections}. Deleting may cut playback.",
+    CONFIRM_DELETE_SET_FILES: "Among them, the set's rung files: {names}.",
     MEDIA_BUSY_BUILDING:
       "The quality set “{slug}” is being built on the server right now — deletion will wait until the build finishes.",
     MEDIA_BUSY_UPLOADING:
@@ -1148,6 +1149,7 @@ export const en: Catalogue = {
       shortName: "Short name:",
       ladders: "Quality ladders: {list}",
       laddersHeading: "Quality ladders",
+      setFilesHeading: "The set's rung files",
       renameMedia: "Rename",
       buildSet: "Build a set",
       setBuilding: "Set is building",

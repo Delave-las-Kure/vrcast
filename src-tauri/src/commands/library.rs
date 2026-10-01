@@ -74,6 +74,11 @@ pub struct MediaView {
     pub files: Vec<FileView>,
     /// The quality sets built for this medium.
     pub ladders: Vec<LadderSetView>,
+    /// The prepared rung files of the medium's set (T678): `{slug}_{N}.mp4` beside `{slug}/`.
+    /// Not files to hand out — the set is — but they take room and go when the medium goes,
+    /// so they are shown with it rather than as «not recognised».
+    #[serde(default)]
+    pub set_files: Vec<FileView>,
     /// How much the medium's files take up in all — what a deletion would free.
     pub total_bytes: u64,
     pub created_at: String,
@@ -126,7 +131,7 @@ impl LibraryView {
     pub fn accounted_entries(&self) -> usize {
         self.media
             .iter()
-            .map(|m| m.files.len() + m.ladders.len())
+            .map(|m| m.files.len() + m.ladders.len() + m.set_files.len())
             .sum::<usize>()
             + self.unrecognized.len()
     }
@@ -145,6 +150,10 @@ pub struct DeletionImpact {
     /// account arrives in Phase 4 along with watching the serving log. Calling this "the
     /// file's viewers" would tell a person something we do not know.
     pub active_connections: usize,
+    /// The set's prepared rung files among `files` (T678), by name — said separately, so a
+    /// person sees what they are.
+    #[serde(default)]
+    pub set_files: Vec<String>,
 }
 
 /// The thin wrappers for the shell. There is no logic here — only calls into `api`.
@@ -510,7 +519,9 @@ pub mod api {
     use crate::domain::media::{self, Media};
     use crate::domain::server_profile::ServerProfile;
     use crate::server::gate::{self, Intent};
-    use crate::server::{disk, listing, manifest_io, probe_moov, reconcile, SERVICE_ENTRIES};
+    use crate::server::{
+        disk, listing, manifest_io, probe_moov, reconcile, set_files, SERVICE_ENTRIES,
+    };
     use crate::ssh::connection::BRIEF_CHANNELS;
     use crate::ssh::Connection;
     use crate::store::{library_cache, profiles};
@@ -658,6 +669,9 @@ pub mod api {
 
         let manifest = manifest_io::read(&conn, dir).await?;
         let entries = listing::list(&conn, dir).await?;
+        // The sets' rung files, recorded or found by the sets' own word (T678). A view only:
+        // nothing is written by reading.
+        let manifest = set_files::adopted(&conn, dir, &manifest, &entries, None).await;
         let matched = reconcile::reconcile(&manifest, &entries);
 
         // Room on the disk is no reason to refuse the library: even when it cannot be
@@ -728,10 +742,27 @@ pub mod api {
             let views: Vec<FileView> = probed_files.by_ref().take(files.files.len()).collect();
             let ladders: Vec<LadderSetView> =
                 probed_ladders.by_ref().take(files.ladders.len()).collect();
+            // No header probe: nobody is handed these one by one, and a set has a rung file
+            // per rung — that many more round trips for nothing a person reads.
+            let set_file_views: Vec<FileView> = files
+                .set_files
+                .iter()
+                .map(|f| {
+                    file_view(
+                        profile,
+                        &f.path,
+                        f.size_bytes,
+                        probe_moov::FileParams::default(),
+                        f.exists,
+                    )
+                })
+                .collect();
 
-            // A quality ladder counts towards the medium's size: deleting frees it too.
+            // A quality ladder counts towards the medium's size: deleting frees it too. So do
+            // the set's rung files (T678).
             let total: u64 = files.files.iter().map(|f| f.size_bytes).sum::<u64>()
-                + files.ladders.iter().map(|l| l.size_bytes).sum::<u64>();
+                + files.ladders.iter().map(|l| l.size_bytes).sum::<u64>()
+                + files.set_files.iter().map(|f| f.size_bytes).sum::<u64>();
 
             media_views.push(MediaView {
                 id: media.id.clone(),
@@ -739,6 +770,7 @@ pub mod api {
                 slug: media.slug.clone(),
                 files: views,
                 ladders,
+                set_files: set_file_views,
                 total_bytes: total,
                 created_at: media.created_at.clone(),
                 set_work: None,
@@ -934,6 +966,16 @@ pub mod api {
 
         let mut next = manifest.prepared_for_write();
         let mut moves: Vec<(String, String)> = Vec::new();
+        // The set's rung files move with the short name (T678) — a set built before T678
+        // included, found by the set's own word and recorded by this write. Only this medium's
+        // are taken from the view: the others are not this write's business.
+        if new_slug.is_some_and(|s| s != next.media[index].slug) {
+            let entries = listing::list(&conn, &profile.video_dir).await?;
+            let seen =
+                set_files::adopted(&conn, &profile.video_dir, &manifest, &entries, Some(index))
+                    .await;
+            next.media[index].set_files = seen.media[index].set_files.clone();
+        }
         let media = &mut next.media[index];
         if let Some(t) = new_title {
             media.title = t.to_owned();
@@ -1000,6 +1042,7 @@ pub mod api {
                 moves = plan.renames;
                 media.files = plan.files;
                 media.ladders = plan.ladders;
+                media.set_files = plan.set_files;
                 media.slug = s.to_owned();
             }
         }
@@ -1043,10 +1086,25 @@ pub mod api {
             return Err(no_such_media(media_id));
         };
 
+        // **The set's rung files go with the medium** (T678): those the catalogue records,
+        // and those of a set built before T678, found by the set's own word. The same view
+        // the library shows and the confirmation names — what is named is what is removed.
+        // A listing that fails stops the deletion: without it the recorded rung files could
+        // not be checked, and would be left behind unsaid.
+        let entries = match listing::list(&conn, &profile.video_dir).await {
+            Ok(entries) => entries,
+            Err(e) => {
+                conn.close().await;
+                return Err(e.into());
+            }
+        };
+        let seen =
+            set_files::adopted(&conn, &profile.video_dir, &manifest, &entries, Some(index)).await;
+
         if !confirmed {
-            let impact = impact_of(&conn, &profile, &manifest, index).await;
+            let impact = impact_of(&conn, &seen, &entries, index).await;
             conn.close().await;
-            return Err(confirmation_needed(&manifest.media[index].title, &impact));
+            return Err(confirmation_needed(&seen.media[index].title, &impact));
         }
 
         // ⚠ **T596 — checked before a single byte moves, the same as the confirmation
@@ -1059,14 +1117,14 @@ pub mod api {
         if let Some(err) = refuse_if_busy(
             state,
             server_id,
-            &tops_of(manifest.media[index].all_paths()),
+            &tops_of(seen.media[index].all_paths()),
             ErrorCode::MediaBusy,
         )? {
             conn.close().await;
             return Err(err);
         }
 
-        let media = manifest.media[index].clone();
+        let media = seen.media[index].clone();
         remove_entries(&conn, &profile.video_dir, media.all_paths()).await?;
 
         let mut next = manifest.prepared_for_write();
@@ -1165,6 +1223,7 @@ pub mod api {
                 files: 1,
                 bytes: entry.size_bytes,
                 active_connections: active_connections(&conn).await,
+                set_files: Vec::new(),
             };
             conn.close().await;
             return Err(confirmation_needed(path, &impact));
@@ -1185,11 +1244,16 @@ pub mod api {
         // It leaves the catalogue in the same act: the file is gone, and a reference to it
         // in the catalogue would turn into a file forever missing.
         let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
-        if manifest.all_claimed_paths().contains(&path) {
+        if manifest
+            .media
+            .iter()
+            .any(|m| m.all_paths().any(|p| p == path))
+        {
             let mut next = manifest.prepared_for_write();
             for m in &mut next.media {
                 m.files.retain(|p| p != path);
                 m.ladders.retain(|p| p != path);
+                m.set_files.retain(|p| p != path);
             }
             manifest_io::write(&conn, &profile.video_dir, &next, manifest.generation).await?;
         }
@@ -1234,6 +1298,15 @@ pub mod api {
                     .with("connections", impact.active_connections),
             );
         }
+        // The set's rung files, by name (T678): they are counted above, and a person who
+        // never made them by hand is owed what they are.
+        if !impact.set_files.is_empty() {
+            error = error.with_detail(
+                Detail::new(DetailCode::ConfirmDeleteSetFiles)
+                    .with("count", impact.set_files.len())
+                    .with("names", impact.set_files.join(", ")),
+            );
+        }
         error.with_cause(format!(
             "files={}, bytes={}, connections={}",
             impact.files, impact.bytes, impact.active_connections
@@ -1242,26 +1315,25 @@ pub mod api {
 
     async fn impact_of(
         conn: &Connection,
-        profile: &ServerProfile,
-        manifest: &Manifest,
+        seen: &Manifest,
+        entries: &[listing::Entry],
         index: usize,
     ) -> DeletionImpact {
-        let media = &manifest.media[index];
-        let entries = listing::list(conn, &profile.video_dir)
-            .await
-            .unwrap_or_default();
-        let matched = reconcile::reconcile(manifest, &entries);
+        let media = &seen.media[index];
+        let matched = reconcile::reconcile(seen, entries);
 
         let files = matched.media_files.get(index);
         let bytes = files.map_or(0, |f| {
             f.files.iter().map(|x| x.size_bytes).sum::<u64>()
                 + f.ladders.iter().map(|x| x.size_bytes).sum::<u64>()
+                + f.set_files.iter().map(|x| x.size_bytes).sum::<u64>()
         });
 
         DeletionImpact {
-            files: media.files.len() + media.ladders.len(),
+            files: media.files.len() + media.ladders.len() + media.set_files.len(),
             bytes,
             active_connections: active_connections(conn).await,
+            set_files: media.set_files.clone(),
         }
     }
 

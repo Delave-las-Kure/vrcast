@@ -533,6 +533,20 @@ function MediaCard({
             </div>
           )}
 
+          {/* T678 — what the set was cut from: the set's own, shown so the room they take is
+              accounted for, and gone with the medium. Not handed out one by one, so no
+              delete of their own here. */}
+          {(media.set_files?.length ?? 0) > 0 && (
+            <div className="set-files" data-testid={`set-files-${media.id}`}>
+              <p className="muted media__note">{t.ui.library.setFilesHeading}</p>
+              <ul className="file-list">
+                {media.set_files?.map((f) => (
+                  <FileRow key={f.path} file={f} />
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="media__actions">
             {/* T675 — a set built from a film on this computer into this medium. Not for one
                 that already has a set: the core would refuse it as MEDIA_HAS_SET; nor while a

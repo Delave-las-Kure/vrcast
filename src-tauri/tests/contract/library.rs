@@ -168,6 +168,7 @@ fn a_library_s_completeness_is_counted_over_every_visible_file() {
                 origin_url: String::from("https://stream.example.com/videos/film/master.m3u8"),
                 cdn_url: None,
             }],
+            set_files: vec![file_view("film_4.mp4")],
             total_bytes: 2048,
             created_at: String::from("2026-08-01T10:00:00Z"),
             set_work: None,
@@ -177,8 +178,9 @@ fn a_library_s_completeness_is_counted_over_every_visible_file() {
         stale: false,
     };
 
-    // Two files of the medium, one quality ladder, one unrecognised.
-    assert_eq!(view.accounted_entries(), 4);
+    // Two files of the medium, one quality ladder, one rung file of the set (T678), one
+    // unrecognised.
+    assert_eq!(view.accounted_entries(), 5);
 }
 
 #[test]

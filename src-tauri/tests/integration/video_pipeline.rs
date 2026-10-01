@@ -582,7 +582,7 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
     assert_eq!(verdict.variants_in_master, 2);
 
     // The library: the medium has its file and its set; the renamed rung is not taken for
-    // the medium's file, and is shown exactly as the other prepared rung is.
+    // the medium's file. Both rungs are the set's own (T678), not «not recognised».
     let view = library::library_list(&state, &server_id, true)
         .await
         .unwrap();
@@ -596,11 +596,18 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
         m.ladders.iter().any(|l| l.path == "old-film/master.m3u8"),
         "{m:?}"
     );
-    let loose = |name: &str| view.unrecognized.iter().any(|f| f.path == name);
     assert_eq!(
-        loose("old-film_9v.mp4"),
-        loose("old-film_1.mp4"),
-        "the renamed rung is shown otherwise than an ordinary one: {:?}",
+        m.set_files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["old-film_1.mp4", "old-film_9v.mp4"],
+        "{m:?}"
+    );
+    let loose = |name: &str| view.unrecognized.iter().any(|f| f.path == name);
+    assert!(
+        !loose("old-film_9v.mp4") && !loose("old-film_1.mp4"),
+        "a rung of the set is shown as not recognised: {:?}",
         view.unrecognized
     );
     eprintln!(
@@ -668,8 +675,39 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
         "the rung was made again under its first name"
     );
 
-    // **Deleting the medium** takes its set with it — the directory, the record inside it —
-    // and nothing that is not the medium's.
+    // **Deleting the medium** takes its set with it — the directory, the record inside it,
+    // and the set's prepared rung files (T678) — and nothing that is not the medium's: another
+    // medium's single file, and a loose file named like a rung the set does not serve.
+    let other = library::media_create(&state, &server_id, "Other", Some("other"))
+        .await
+        .expect("the other medium was not made");
+    server
+        .exec_inside(&format!(
+            "head -c 1000 /dev/urandom > '{VIDEO_DIR}/other_9.mp4' && \
+             head -c 1000 /dev/urandom > '{VIDEO_DIR}/old-film_7.mp4'"
+        ))
+        .unwrap();
+    library::file_move(&state, &server_id, "other_9.mp4", &other, true)
+        .await
+        .expect("the other medium's file was not filed");
+    let others = digest(&server, &format!("{VIDEO_DIR}/other_9.mp4"));
+    let loose_one = digest(&server, &format!("{VIDEO_DIR}/old-film_7.mp4"));
+
+    // The confirmation names them.
+    let asked = library::media_delete(&state, &server_id, &medium, false)
+        .await
+        .expect_err("deleted without confirmation");
+    let named = asked
+        .details
+        .iter()
+        .find(|d| d.key.as_str() == "CONFIRM_DELETE_SET_FILES")
+        .unwrap_or_else(|| panic!("the set's rung files are not named: {asked:?}"));
+    assert_eq!(
+        named.params.get("names").and_then(|v| v.as_str()),
+        Some("old-film_1.mp4, old-film_9v.mp4"),
+        "{asked:?}"
+    );
+
     library::media_delete(&state, &server_id, &medium, true)
         .await
         .expect("the medium was not deleted");
@@ -682,7 +720,26 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
     let left = server
         .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -1"))
         .unwrap_or_default();
-    eprintln!("T677 left on the server after deleting the medium: {left:?}");
+    eprintln!("T678 left on the server after deleting the medium: {left:?}");
+    for gone in ["old-film_1.mp4", "old-film_9v.mp4", "old-film_9.mp4"] {
+        assert!(
+            !left.lines().any(|l| l.trim() == gone),
+            "{gone} outlived its medium: {left:?}"
+        );
+    }
+    assert_eq!(digest(&server, &format!("{VIDEO_DIR}/other_9.mp4")), others);
+    assert_eq!(
+        digest(&server, &format!("{VIDEO_DIR}/old-film_7.mp4")),
+        loose_one
+    );
+    let view = library::library_list(&state, &server_id, true)
+        .await
+        .unwrap();
+    assert!(
+        view.unrecognized.iter().any(|f| f.path == "old-film_7.mp4"),
+        "{:?}",
+        view.unrecognized
+    );
     drop(scratch);
 }
 

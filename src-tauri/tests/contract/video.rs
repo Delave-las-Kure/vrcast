@@ -697,6 +697,7 @@ async fn the_library_says_a_medium_s_set_is_building_or_stopped_not_missing() {
         slug: id.to_owned(),
         files: Vec::new(),
         ladders: Vec::new(),
+        set_files: Vec::new(),
         total_bytes: 0,
         created_at: String::from("2026-10-02T00:00:00Z"),
         set_work: None,

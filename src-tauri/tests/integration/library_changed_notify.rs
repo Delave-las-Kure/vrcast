@@ -296,7 +296,7 @@ async fn the_pair_ladder_build_runs_on_success_notifies_library_changed_and_clea
     // holding.
     let conn = connect(&server).await;
     let attached =
-        vrcast_studio_lib::commands::ladder::attach_built_set(&conn, VIDEO_DIR, "t578ladder")
+        vrcast_studio_lib::commands::ladder::attach_built_set(&conn, VIDEO_DIR, "t578ladder", &[])
             .await
             .expect("the set was not attached to any medium");
     assert_eq!(
@@ -342,7 +342,8 @@ fn ladder_build_calls_attach_and_invalidate_together_on_success() {
     let text = std::fs::read_to_string(&path).expect("could not read ladder.rs");
 
     let guard = text
-        .find("if outcome.is_ok() {")
+        // T678: the guard binds the build's outcome, since its rung files go to the catalogue.
+        .find("if let Ok(built) = &outcome {")
         .expect("ladder_build's closure no longer guards attaching on outcome.is_ok()");
     // The next closing brace at the same nesting level as the `if` would take real brace
     // counting to find exactly; a generous slice past the guard is enough to prove both

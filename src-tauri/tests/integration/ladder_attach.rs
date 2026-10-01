@@ -113,7 +113,7 @@ async fn a_built_set_is_filed_under_its_medium_as_a_nested_ladder_with_real_part
     // The step this task added: what `ladder_build::run` calls once the set is on the
     // server, over the same connection a real build would still be holding.
     let conn = connect(&server).await;
-    let attached = attach_built_set(&conn, VIDEO_DIR, "backrooms")
+    let attached = attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
         .await
         .expect("the set was not attached to any medium");
     assert_eq!(
@@ -193,7 +193,7 @@ async fn a_slug_matching_no_medium_is_left_unattached_rather_than_invented() {
         .expect("the quality set was not laid out");
 
     let conn = connect(&server).await;
-    let attached = attach_built_set(&conn, VIDEO_DIR, "nobody-owns-this").await;
+    let attached = attach_built_set(&conn, VIDEO_DIR, "nobody-owns-this", &[]).await;
     conn.close().await;
     assert!(
         attached.is_none(),
@@ -209,5 +209,205 @@ async fn a_slug_matching_no_medium_is_left_unattached_rather_than_invented() {
             .any(|f| f.path == "nobody-owns-this"),
         "the unmatched set did not surface as unrecognised: {:?}",
         view.unrecognized
+    );
+}
+
+// ---------- T678: the set's prepared rung files are its medium's ----------
+
+/// The catalogue as it lies on the server, read past the application.
+fn catalogue_text(server: &TestServer) -> String {
+    server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/library.json'"))
+        .expect("the catalogue could not be read")
+}
+
+#[tokio::test]
+async fn a_set_built_before_t678_has_its_rung_files_found_by_its_master_and_deleted_with_it() {
+    use vrcast_studio_lib::commands::error::DetailCode;
+
+    let (server, state, server_id) = setup().await;
+    let media_id = library::media_create(&state, &server_id, "Задние комнаты", Some("backrooms"))
+        .await
+        .expect("the medium was not created");
+    let other = library::media_create(&state, &server_id, "Другое", Some("other"))
+        .await
+        .expect("the other medium was not created");
+
+    // A set as a build before T678 left it: the master (serving v1, v2, v3) filed under the
+    // medium, the prepared rung files beside it, and no record of them in the catalogue.
+    hls_fixture::lay_out_ladder(&server, "backrooms").expect("the quality set was not laid out");
+    server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && for f in backrooms_1.mp4 backrooms_2.mp4 backrooms_3.mp4 \
+             backrooms_7.mp4 other_1.mp4; do head -c 5000 /dev/urandom > \"$f\"; done"
+        ))
+        .unwrap();
+    let conn = connect(&server).await;
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+        .await
+        .expect("the set was not attached");
+    conn.close().await;
+    library::file_move(&state, &server_id, "other_1.mp4", &other, true)
+        .await
+        .expect("the other medium's file was not filed");
+    assert!(
+        !catalogue_text(&server).contains("set_files"),
+        "the catalogue already records set files: the older set is not modelled"
+    );
+    let others = server
+        .exec_inside(&format!("md5sum '{VIDEO_DIR}/other_1.mp4'"))
+        .unwrap();
+    let loose_one = server
+        .exec_inside(&format!("md5sum '{VIDEO_DIR}/backrooms_7.mp4'"))
+        .unwrap();
+
+    // Reading the library attributes the rungs the master serves — and only those.
+    let view = library::library_list(&state, &server_id, true)
+        .await
+        .expect("the library would not read");
+    let m = view.media.iter().find(|m| m.id == media_id).unwrap();
+    assert_eq!(
+        m.set_files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["backrooms_1.mp4", "backrooms_2.mp4", "backrooms_3.mp4"],
+        "{m:?}"
+    );
+    assert!(m
+        .set_files
+        .iter()
+        .all(|f| f.exists_on_server && f.size_bytes == 5000));
+    let loose: Vec<&str> = view.unrecognized.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(loose, vec!["backrooms_7.mp4"], "{loose:?}");
+    // Reading changed nothing on the server.
+    assert!(!catalogue_text(&server).contains("set_files"));
+
+    // The confirmation names them and counts them.
+    let asked = library::media_delete(&state, &server_id, &media_id, false)
+        .await
+        .expect_err("deleted without confirmation");
+    let count = asked
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::ConfirmDelete)
+        .and_then(|d| d.params.get("files"))
+        .and_then(|v| v.as_u64());
+    assert_eq!(count, Some(4), "{asked:?}");
+    let named = asked
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::ConfirmDeleteSetFiles)
+        .and_then(|d| d.params.get("names"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    assert_eq!(
+        named.as_deref(),
+        Some("backrooms_1.mp4, backrooms_2.mp4, backrooms_3.mp4")
+    );
+
+    library::media_delete(&state, &server_id, &media_id, true)
+        .await
+        .expect("the medium was not deleted");
+    let left = server
+        .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -1"))
+        .unwrap();
+    let left: Vec<&str> = left.lines().map(str::trim).collect();
+    for gone in [
+        "backrooms",
+        "backrooms_1.mp4",
+        "backrooms_2.mp4",
+        "backrooms_3.mp4",
+    ] {
+        assert!(
+            !left.contains(&gone),
+            "{gone} outlived its medium: {left:?}"
+        );
+    }
+    assert_eq!(
+        server
+            .exec_inside(&format!("md5sum '{VIDEO_DIR}/other_1.mp4'"))
+            .unwrap(),
+        others
+    );
+    assert_eq!(
+        server
+            .exec_inside(&format!("md5sum '{VIDEO_DIR}/backrooms_7.mp4'"))
+            .unwrap(),
+        loose_one
+    );
+}
+
+#[tokio::test]
+async fn a_build_records_its_rung_files_under_the_medium_in_the_catalogue() {
+    let (server, state, server_id) = setup().await;
+    let media_id = library::media_create(&state, &server_id, "Задние комнаты", Some("backrooms"))
+        .await
+        .expect("the medium was not created");
+    hls_fixture::lay_out_ladder(&server, "backrooms").expect("the quality set was not laid out");
+    server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && for f in backrooms_1.mp4 backrooms_2v.mp4 backrooms_3.mp4; \
+             do head -c 5000 /dev/urandom > \"$f\"; done"
+        ))
+        .unwrap();
+
+    let conn = connect(&server).await;
+    let built = vec![
+        String::from("backrooms_1.mp4"),
+        String::from("backrooms_2v.mp4"),
+        String::from("backrooms_3.mp4"),
+    ];
+    let attached = attach_built_set(&conn, VIDEO_DIR, "backrooms", &built).await;
+    conn.close().await;
+    assert_eq!(attached.as_deref(), Some(media_id.as_str()));
+
+    let text = catalogue_text(&server);
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        parsed["media"][0]["set_files"],
+        serde_json::json!(["backrooms_1.mp4", "backrooms_2v.mp4", "backrooms_3.mp4"]),
+        "{text}"
+    );
+    assert_eq!(parsed["media"][0]["files"], serde_json::json!([]), "{text}");
+}
+
+#[tokio::test]
+async fn renaming_a_medium_moves_an_older_set_s_rung_files_and_records_them() {
+    let (server, state, server_id) = setup().await;
+    let media_id = library::media_create(&state, &server_id, "Задние комнаты", Some("backrooms"))
+        .await
+        .expect("the medium was not created");
+    hls_fixture::lay_out_ladder(&server, "backrooms").expect("the quality set was not laid out");
+    server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && for f in backrooms_1.mp4 backrooms_7.mp4; \
+             do head -c 5000 /dev/urandom > \"$f\"; done"
+        ))
+        .unwrap();
+    let conn = connect(&server).await;
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+        .await
+        .expect("the set was not attached");
+    conn.close().await;
+
+    library::media_rename(&state, &server_id, &media_id, None, Some("rooms"), true)
+        .await
+        .expect("the rename was refused");
+
+    let left = server
+        .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -1"))
+        .unwrap();
+    let left: Vec<&str> = left.lines().map(str::trim).collect();
+    assert!(
+        left.contains(&"rooms") && left.contains(&"rooms_1.mp4"),
+        "{left:?}"
+    );
+    // Not the set's (the master serves no 7): left under its own name.
+    assert!(left.contains(&"backrooms_7.mp4"), "{left:?}");
+    let parsed: serde_json::Value = serde_json::from_str(&catalogue_text(&server)).unwrap();
+    assert_eq!(
+        parsed["media"][0]["set_files"],
+        serde_json::json!(["rooms_1.mp4"])
     );
 }

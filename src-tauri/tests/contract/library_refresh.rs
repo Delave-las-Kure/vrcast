@@ -46,6 +46,7 @@ fn view(server_id: &str, title: &str) -> LibraryView {
             slug: String::from("one"),
             files: Vec::new(),
             ladders: Vec::new(),
+            set_files: Vec::new(),
             total_bytes: 0,
             created_at: String::from("2026-01-01T00:00:00Z"),
             set_work: None,

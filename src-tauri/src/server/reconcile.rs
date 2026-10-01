@@ -39,6 +39,8 @@ pub struct MediaFiles {
     pub files: Vec<ResolvedFile>,
     /// Quality ladders: the path and whether it exists.
     pub ladders: Vec<ResolvedFile>,
+    /// The set's prepared rung files (T678): the name, the size and whether it exists.
+    pub set_files: Vec<ResolvedFile>,
 }
 
 /// A catalogue file matched against the facts.
@@ -95,6 +97,8 @@ pub fn reconcile(manifest: &Manifest, entries: &[Entry]) -> Reconciled {
 
         let files: Vec<ResolvedFile> = media.files.iter().map(|p| resolve(p, false)).collect();
         let ladders: Vec<ResolvedFile> = media.ladders.iter().map(|p| resolve(p, true)).collect();
+        let set_files: Vec<ResolvedFile> =
+            media.set_files.iter().map(|p| resolve(p, false)).collect();
 
         for path in media.all_paths() {
             claimed.insert(top_level(path));
@@ -104,6 +108,7 @@ pub fn reconcile(manifest: &Manifest, entries: &[Entry]) -> Reconciled {
             media_id: media.id.clone(),
             files,
             ladders,
+            set_files,
         });
     }
 

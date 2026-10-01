@@ -145,6 +145,8 @@ impl Manifest {
         for m in &mut next.media {
             m.files.retain(|p| p != path);
             m.ladders.retain(|p| p != path);
+            // A set's rung file filed by hand becomes what it is filed as (T678).
+            m.set_files.retain(|p| p != path);
         }
         let target = next
             .media
@@ -177,6 +179,11 @@ impl Manifest {
     }
 
     /// Every file and quality-ladder description belonging to media.
+    ///
+    /// **Not a set's rung files** (`Media::set_files`, T678): those are the set's own — a
+    /// rebuild of the set reuses or replaces them, «Replace» removes them with the set — and
+    /// not a person's files to keep a build away from. Every caller asks "is this somebody's
+    /// file?" before writing or removing, and means `files`/`ladders`.
     pub fn all_claimed_paths(&self) -> Vec<&str> {
         self.media
             .iter()

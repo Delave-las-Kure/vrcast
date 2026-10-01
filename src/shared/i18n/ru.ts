@@ -384,6 +384,7 @@ export const ruCore: CatalogueCore = {
     MANIFEST_MALFORMED: "Опись библиотеки на сервере испорчена и не читается.",
     CONFIRM_DELETE: "Удалится {files} {files|plural:file} ({bytes|bytes}). Отменить нельзя.",
     VIEWERS_ACTIVE_DELETE: "Открыто соединений: {connections}. Удаление может оборвать просмотр.",
+    CONFIRM_DELETE_SET_FILES: "Среди них файлы ступеней набора: {names}.",
     MEDIA_BUSY_BUILDING:
       "Набор качеств «{slug}» сейчас собирается на сервере — удаление подождёт, пока сборка закончится.",
     MEDIA_BUSY_UPLOADING:
@@ -1141,6 +1142,7 @@ const ui = {
     shortName: "Короткое имя:",
     ladders: "Наборы качеств: {list}",
     laddersHeading: "Наборы качеств",
+    setFilesHeading: "Файлы ступеней набора",
     renameMedia: "Переименовать",
     buildSet: "Собрать набор",
     setBuilding: "Набор собирается",

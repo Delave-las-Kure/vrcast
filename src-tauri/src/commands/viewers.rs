@@ -168,6 +168,18 @@ impl LibraryContext {
                     },
                 );
             }
+            // The set's prepared rung files (T678): served by their own names too, though
+            // nobody is handed them; a viewer on one is on this medium.
+            for file in &media.set_files {
+                by_file.insert(
+                    file.path.clone(),
+                    VariantFacts {
+                        media_id: Some(media.id.clone()),
+                        variant: Some(file.path.clone()),
+                        required_bps: file.bitrate_bps,
+                    },
+                );
+            }
             // A ladder is recorded by the path of its description; what a viewer asks for
             // is named by the directory it sits in.
             for ladder in &media.ladders {

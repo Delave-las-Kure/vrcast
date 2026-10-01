@@ -24,6 +24,7 @@ pub mod manifest_io;
 pub mod marked;
 pub mod probe_moov;
 pub mod reconcile;
+pub mod set_files;
 pub mod upgrade;
 pub mod upload;
 pub mod viewers;
