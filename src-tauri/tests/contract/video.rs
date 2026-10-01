@@ -680,3 +680,130 @@ async fn a_medium_s_video_waiting_on_an_old_set_goes_on_only_through_replace() {
         ErrorCode::VideoNotNow
     );
 }
+
+// ---------- the library while a medium's set is on its way (T677) ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_library_says_a_medium_s_set_is_building_or_stopped_not_missing() {
+    use vrcast_studio_lib::commands::library::{api as library, LibraryView, MediaView};
+    use vrcast_studio_lib::domain::video::SetWorkState;
+    use vrcast_studio_lib::store::library_cache;
+
+    let state = state();
+    let server = server(&state);
+    let medium = |id: &str| MediaView {
+        id: id.to_owned(),
+        title: id.to_owned(),
+        slug: id.to_owned(),
+        files: Vec::new(),
+        ladders: Vec::new(),
+        total_bytes: 0,
+        created_at: String::from("2026-10-02T00:00:00Z"),
+        set_work: None,
+    };
+    // What the server last said: four media, no sets on any — the state right after
+    // «Replace» removed the old one.
+    let known = LibraryView {
+        server_id: server.clone(),
+        media: vec![
+            medium("m_go"),
+            medium("m_stop"),
+            medium("m_plan"),
+            medium("m_none"),
+        ],
+        unrecognized: Vec::new(),
+        disk: None,
+        stale: false,
+    };
+    library_cache::save(&state.db, &server, &known).unwrap();
+
+    let row = |id: &str, media: &str, st: VideoState, stage: VideoStage, started: bool| {
+        let mut r = VideoRow::new(id, &server, "C:/nowhere/film.mp4", "Film", media);
+        r.media_id = Some(media.to_owned());
+        r.state = st;
+        r.stage = stage;
+        r.start_requested = started;
+        rows::save(&state.db, &r).unwrap();
+    };
+    row(
+        "v_go",
+        "m_go",
+        VideoState::Working,
+        VideoStage::Encoding,
+        true,
+    );
+    row(
+        "v_stop",
+        "m_stop",
+        VideoState::Problem,
+        VideoStage::Cutting,
+        true,
+    );
+    // A plan nobody started yet says nothing about the set.
+    row(
+        "v_plan",
+        "m_plan",
+        VideoState::Ready,
+        VideoStage::Planned,
+        false,
+    );
+
+    let view = library::library_list_known(&state, &server).await.unwrap();
+    let work = |id: &str| {
+        view.media
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .set_work
+            .clone()
+    };
+    let go = work("m_go").expect("a set on its way reads as nothing");
+    assert_eq!(go.state, SetWorkState::Building);
+    assert_eq!(go.video_id, "v_go");
+    let stop = work("m_stop").expect("a stopped build reads as nothing");
+    assert_eq!(stop.state, SetWorkState::Stopped);
+    assert_eq!(stop.video_id, "v_stop");
+    assert!(work("m_plan").is_none());
+    assert!(work("m_none").is_none());
+    // It crosses to the screen as plain words, and is never kept in the cache.
+    let json = serde_json::to_value(&view.media[0]).unwrap();
+    assert_eq!(json["set_work"]["state"], "building");
+    assert_eq!(json["set_work"]["video_id"], "v_go");
+    assert!(library_cache::load(&state.db, &server)
+        .unwrap()
+        .unwrap()
+        .media
+        .iter()
+        .all(|m| m.set_work.is_none()));
+
+    // When it changes, the library is told: «Retry» on the stopped one makes it building
+    // (and the server, not answering, stops it again).
+    let mut events = state.subscribe();
+    video::video_retry(&state, "v_stop", false).unwrap();
+    let told = std::iter::from_fn(|| events.try_recv().ok())
+        .any(|e| matches!(e, AppEvent::LibraryChanged { ref server_id } if server_id == &server));
+    assert!(
+        told,
+        "the library was not told its medium's set is on its way again"
+    );
+    until(
+        &state,
+        "v_stop",
+        "stopping again",
+        Duration::from_secs(20),
+        |v| v.state == VideoState::Problem,
+    )
+    .await;
+    let again = library::library_list_known(&state, &server).await.unwrap();
+    assert_eq!(
+        again
+            .media
+            .iter()
+            .find(|m| m.id == "m_stop")
+            .unwrap()
+            .set_work
+            .as_ref()
+            .map(|w| w.state),
+        Some(SetWorkState::Stopped)
+    );
+}

@@ -537,6 +537,16 @@ export interface MediaView {
   ladders: LadderSetView[];
   total_bytes: number;
   created_at: string;
+  /** T677 — a video on the «Video» screen building this medium's set: `building`, or
+   *  `stopped` on a problem or by a person; `null` when none is. From this machine's videos,
+   *  not from the server. */
+  set_work?: SetWork | null;
+}
+
+/** T677 — a video building a medium's set, as the library shows it. */
+export interface SetWork {
+  state: "building" | "stopped";
+  video_id: string;
 }
 
 export interface DiskUsage {

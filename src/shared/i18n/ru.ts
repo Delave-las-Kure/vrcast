@@ -1143,6 +1143,8 @@ const ui = {
     laddersHeading: "Наборы качеств",
     renameMedia: "Переименовать",
     buildSet: "Собрать набор",
+    setBuilding: "Набор собирается",
+    setStopped: "Сборка остановлена",
     deleteMedia: "Удалить медиа",
     diskFree: "Свободно",
     diskOf: "из",

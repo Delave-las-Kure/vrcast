@@ -740,3 +740,35 @@ fn a_rung_named_around_a_medium_s_file_is_a_rung_of_its_set() {
     assert_eq!(old.files, vec!["film_9v.mp4"]);
     assert_eq!(old.in_the_way, vec!["film_9.mp4"]);
 }
+
+#[test]
+fn a_video_says_its_medium_s_set_is_building_once_begun_and_stopped_while_it_waits() {
+    use vrcast_studio_lib::domain::video::{set_work_of, SetWorkState as W};
+    use VideoStage as G;
+    use VideoState as S;
+    // Going, paused, stopping: building.
+    for st in [S::Working, S::Paused, S::Cancelling] {
+        assert_eq!(
+            set_work_of(st, G::Encoding, true),
+            Some(W::Building),
+            "{st:?}"
+        );
+    }
+    // «Replace» on a video still waiting for its plan: building from the moment it is pressed.
+    assert_eq!(
+        set_work_of(S::Planning, G::Planned, true),
+        Some(W::Building)
+    );
+    // Begun, then stopped on a problem or by a person: stopped.
+    assert_eq!(set_work_of(S::Problem, G::Cutting, true), Some(W::Stopped));
+    assert_eq!(
+        set_work_of(S::Cancelled, G::Encoding, false),
+        Some(W::Stopped)
+    );
+    assert_eq!(set_work_of(S::Problem, G::Planned, true), Some(W::Stopped));
+    // Nothing begun: a plan, a plan that failed, one waiting on a set nobody owns; and done.
+    assert_eq!(set_work_of(S::Planning, G::Planned, false), None);
+    assert_eq!(set_work_of(S::Ready, G::Planned, false), None);
+    assert_eq!(set_work_of(S::Problem, G::Planned, false), None);
+    assert_eq!(set_work_of(S::Done, G::Done, true), None);
+}

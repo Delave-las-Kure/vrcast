@@ -77,6 +77,12 @@ pub struct MediaView {
     /// How much the medium's files take up in all — what a deletion would free.
     pub total_bytes: u64,
     pub created_at: String,
+    /// A video on the «Video» screen building this medium's set (T677): `building`, or
+    /// `stopped` on a problem or by a person. `null` when none is. Not read from the server —
+    /// filled in from this machine's videos every time the library is handed out, so a set
+    /// being rebuilt after «Replace» reads as on its way rather than as missing.
+    #[serde(default)]
+    pub set_work: Option<crate::domain::video::SetWork>,
 }
 
 /// Room on the server's disk (FR-017).
@@ -566,6 +572,40 @@ pub mod api {
     }
 
     async fn read(state: &AppState, server_id: &str, mode: Read) -> Result<LibraryView> {
+        read_from(state, server_id, mode)
+            .await
+            .map(|view| with_set_work(state, view))
+    }
+
+    /// Mark each medium whose set a video on this machine is building (T677).
+    ///
+    /// Applied to whatever is handed out — from the server, the cache, or the cache marked
+    /// stale — and never kept in the cache: it changes with the videos, not with the server.
+    /// The most telling video wins when there are several (one going over one stopped).
+    pub fn with_set_work(state: &AppState, mut view: LibraryView) -> LibraryView {
+        use crate::domain::video::{set_work_of, SetWork, SetWorkState};
+        let videos = crate::store::videos::list(&state.db).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "the videos were not read for the library");
+            Vec::new()
+        });
+        for media in &mut view.media {
+            media.set_work = videos
+                .iter()
+                .filter(|v| {
+                    v.server_id == view.server_id && v.media_id.as_deref() == Some(&media.id)
+                })
+                .filter_map(|v| {
+                    set_work_of(v.state, v.stage, v.start_requested).map(|s| SetWork {
+                        state: s,
+                        video_id: v.id.clone(),
+                    })
+                })
+                .min_by_key(|w| w.state != SetWorkState::Building);
+        }
+        view
+    }
+
+    async fn read_from(state: &AppState, server_id: &str, mode: Read) -> Result<LibraryView> {
         let profile = profile_of(state, server_id)?;
 
         if mode != Read::Server {
@@ -701,6 +741,7 @@ pub mod api {
                 ladders,
                 total_bytes: total,
                 created_at: media.created_at.clone(),
+                set_work: None,
             });
         }
 

@@ -231,6 +231,9 @@ struct Hub {
     /// Videos whose next task is being put on the queue right now (the medium being made,
     /// the build's quick refusals being asked).
     starting: Mutex<HashSet<String>>,
+    /// What each video last said about its medium's set (T677), so the library is told only
+    /// when that changes, not on every tick of a bar.
+    set_work: Mutex<HashMap<String, (String, String, video::SetWorkState)>>,
 }
 
 struct Live {
@@ -299,9 +302,36 @@ fn change<T>(state: &AppState, id: &str, f: impl FnOnce(&mut VideoRow) -> Result
 
 fn emit(state: &AppState, id: &str) {
     if let Ok(row) = load(state, id) {
+        tell_library(state, id, Some(&row));
         let _ = state
             .events
             .send(super::AppEvent::VideoUpdate(Box::new(view_of(state, &row))));
+    }
+}
+
+/// Tell the library when what a video says about its medium's set changes (T677) — it shows
+/// «building» or «stopped» beside the medium (`library::api::with_set_work`). `None` for a
+/// video taken off the list.
+fn tell_library(state: &AppState, id: &str, row: Option<&VideoRow>) {
+    let now = row.and_then(|r| {
+        let media = r.media_id.clone()?;
+        let work = video::set_work_of(r.state, r.stage, r.start_requested)?;
+        Some((r.server_id.clone(), media, work))
+    });
+    let was = {
+        let mut known = lock(&state.videos.inner.set_work);
+        let was = known.get(id).cloned();
+        if was == now {
+            return;
+        }
+        match &now {
+            Some(n) => known.insert(id.to_owned(), n.clone()),
+            None => known.remove(id),
+        };
+        was
+    };
+    for (server, _, _) in [was, now].into_iter().flatten() {
+        state.notify_library_changed(&server);
     }
 }
 
@@ -1947,6 +1977,7 @@ pub mod api {
         }
         rows::remove(&state.db, id).map_err(storage)?;
         lock(&state.videos.inner.live).remove(id);
+        tell_library(state, id, None);
         Ok(())
     }
 

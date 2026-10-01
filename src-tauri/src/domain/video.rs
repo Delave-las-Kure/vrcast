@@ -127,6 +127,52 @@ impl VideoState {
     }
 }
 
+/// What the library says about a medium whose set a video is building (T677).
+///
+/// **Why the library has to say it.** «Replace» removes the old set before building it
+/// again, and a medium whose set's directory is gone reads as «not on the server» — for the
+/// hours the new one takes, about a set that is on its way. A first set, or one built into a
+/// medium of the library, is the same story with nothing to show yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetWorkState {
+    /// A video is building this medium's set: going, paused, stopping, or about to start.
+    Building,
+    /// The video building it stopped — on a problem, or by a person — and waits on the
+    /// «Video» screen.
+    Stopped,
+}
+
+/// A video building a medium's set, as the library shows it (T677).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetWork {
+    pub state: SetWorkState,
+    /// The video on the «Video» screen.
+    pub video_id: String,
+}
+
+/// What a video says about its medium's set, from its state alone (T677).
+///
+/// `None` while nothing of the set has been begun: a plan waiting for «Start», a video
+/// added stopped on a set nobody owns (it waits for «Replace»), a finished one. Once it was
+/// started — `start_requested`, which «Start», «Retry» and «Replace» set — or is past its
+/// plan, it is building until it ends, and stopped while it waits on a person.
+pub fn set_work_of(
+    state: VideoState,
+    stage: VideoStage,
+    start_requested: bool,
+) -> Option<SetWorkState> {
+    let begun = start_requested || stage > VideoStage::Planned;
+    match state {
+        VideoState::Working | VideoState::Paused | VideoState::Cancelling => {
+            Some(SetWorkState::Building)
+        }
+        VideoState::Planning if start_requested => Some(SetWorkState::Building),
+        VideoState::Problem | VideoState::Cancelled if begun => Some(SetWorkState::Stopped),
+        _ => None,
+    }
+}
+
 /// What a person may do to a video in a given state.
 ///
 /// One table, so that a command and a screen cannot disagree about what is offered. Each

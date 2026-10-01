@@ -179,6 +179,45 @@ describe("the library", () => {
     expect(screen.getAllByRole("link", { name: ru.ui.library.buildSet })).toHaveLength(1);
   });
 
+  it("says a medium's set is building or stopped, with the way to «Video» (T677)", async () => {
+    mockLibraryList.mockResolvedValue(
+      view({
+        media: [
+          // Its old set removed by «Replace»: on its way back, not «not on the server».
+          media({
+            ladders: [ladderSet({ exists_on_server: false })],
+            set_work: { state: "building", video_id: "v1" },
+          }),
+          media({
+            id: "m2",
+            title: "Остановленный",
+            set_work: { state: "stopped", video_id: "v2" },
+          }),
+          media({ id: "m3", title: "Обычный" }),
+        ],
+      }),
+    );
+    draw();
+    const building = await screen.findByTestId("set-work-m1");
+    expect(within(building).getByRole("link", { name: ru.ui.library.setBuilding })).toHaveAttribute(
+      "href",
+      "/video",
+    );
+    expect(
+      within(screen.getByTestId("set-work-m2")).getByRole("link", {
+        name: ru.ui.library.setStopped,
+      }),
+    ).toHaveAttribute("href", "/video");
+    expect(screen.queryByTestId("set-work-m3")).toBeNull();
+
+    // Opened, the set being rebuilt is not «not on the server», and no second set is offered.
+    fireEvent.click(screen.getByText("Название фильма"));
+    expect(await screen.findByText("nazvanie-filma/master.m3u8")).toBeInTheDocument();
+    expect(screen.queryByText(ru.ui.library.missingWarning)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Остановленный/ }));
+    expect(screen.queryAllByRole("link", { name: ru.ui.library.buildSet })).toHaveLength(0);
+  });
+
   it("says the server is out of reach rather than showing nothing", async () => {
     useServers.setState({ profiles: [], loading: false, error: null });
     mockServersList.mockResolvedValue([]);

@@ -1150,6 +1150,8 @@ export const en: Catalogue = {
       laddersHeading: "Quality ladders",
       renameMedia: "Rename",
       buildSet: "Build a set",
+      setBuilding: "Set is building",
+      setStopped: "Build stopped",
       deleteMedia: "Delete the medium",
       diskFree: "Free",
       diskOf: "of",
