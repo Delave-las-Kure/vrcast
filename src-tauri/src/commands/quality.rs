@@ -295,7 +295,7 @@ pub mod api {
     ) -> Result<()> {
         // The ladder as the core would offer it — asked for rather than assembled here, so
         // that what is built is what a person would have been shown.
-        let plan = super::super::ladder::api::ladder_plan(
+        let plan = super::super::ladder::api::ladder_plan_until(
             state,
             &super::super::ladder::LadderRequest {
                 path: measured.path.clone(),
@@ -305,6 +305,8 @@ pub mod api {
                 declared_layout: None,
                 measured_peak_bps: None,
             },
+            // The chain's own task decides when it stops, not a screen (T670(2)).
+            Some(&ctx.cancel_token()),
         )
         .await?;
 

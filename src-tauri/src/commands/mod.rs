@@ -105,6 +105,9 @@ pub struct AppState {
     /// corrupt the tables mid-write. Arc'd for the same reason as `places` — `AppState` is
     /// cloned, and clones must share one lock, not each get their own.
     pub geo_fetch: Arc<tokio::sync::Mutex<()>>,
+    /// The ladder screen's plan questions still in flight (T670(2)): a question about
+    /// another file stops their complexity probes. Shared between clones, like `geo_fetch`.
+    pub plan_probes: ladder::PlanProbes,
 }
 
 impl AppState {
@@ -203,6 +206,7 @@ impl AppState {
                     .unwrap_or_default(),
             )),
             geo_fetch: Arc::new(tokio::sync::Mutex::new(())),
+            plan_probes: ladder::PlanProbes::default(),
         })
     }
 
