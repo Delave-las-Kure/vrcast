@@ -303,3 +303,181 @@ async fn preparing_a_measurement_is_a_visible_stage_of_its_task_and_a_cancel_rea
     assert_eq!(ended, TaskState::Cancelled);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------- T670(1): the loan's check stops with its task ----------
+
+/// A donor measured well enough to have a top rung, and a borrower that took its points —
+/// the state `quality_measure_reuse` leaves behind before the check runs.
+fn a_loan(
+    state: &vrcast_studio_lib::commands::AppState,
+    film: &str,
+) -> vrcast_studio_lib::store::measurements::Run {
+    use vrcast_studio_lib::domain::measured_ladder::Point;
+    use vrcast_studio_lib::store::measurements::{begin, lend, record, Material, Run};
+
+    let a_run = |key: &str, path: &str| Run {
+        source_key: key.to_owned(),
+        codec: String::from("h264"),
+        source_path: path.to_owned(),
+        width: 1280,
+        height: 720,
+        fps: 30,
+        source_bitrate_bps: 8_000_000,
+        heavier_codec: false,
+        native_height: None,
+        anchor_mbps: 6,
+        chunk_starts: vec![0, 20, 40],
+        chunk_s: 10,
+        borrowed_from: None,
+        check_pending: false,
+        donor_anchor_mbps: None,
+        shape: None,
+        material: Some(Material {
+            codec: String::from("h264"),
+            pix_fmt: String::from("yuv420p"),
+            color_transfer: None,
+            duration_s: 60.0,
+            peak_bps: Some(9_000_000),
+        }),
+    };
+    let donor = a_run("1:donor.mp4", "F:/films/donor.mp4");
+    begin(&state.db, &donor).unwrap();
+    for (bitrate_mbps, vmaf) in [(2, 90.0), (4, 94.0), (6, 96.5), (8, 97.5)] {
+        record(
+            &state.db,
+            &donor.source_key,
+            "h264",
+            &Point {
+                bitrate_mbps,
+                height: 720,
+                actual_bps: bitrate_mbps * 1_000_000,
+                vmaf,
+            },
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+    }
+    let borrowed = lend(
+        &state.db,
+        &donor.source_key,
+        "h264",
+        &a_run("2:borrower.mp4", film),
+    )
+    .expect("the loan was refused");
+    assert!(borrowed.check_pending);
+    borrowed
+}
+
+#[tokio::test]
+async fn a_cancelled_task_does_not_measure_the_loans_cell_and_leaves_the_loan_provisional() {
+    use std::sync::Arc;
+    use vrcast_studio_lib::media::ffmpeg;
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::tasks::engine::TaskContext;
+
+    // The cancel is looked at before the first chunk, but the encoder binary is located
+    // before that — without one nothing here gets as far as the question.
+    if ffmpeg::locate("ffmpeg").is_err() {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    }
+
+    let state = state();
+    // A film that is not there: before T670(1) the cell was measured under a token nobody
+    // held, so it went on to encode — and ended `LADDER_NOT_MEASURED` on a missing file
+    // rather than `TASK_CANCELLED`.
+    let borrowed = a_loan(&state, "F:/nowhere/t670-borrower.mp4");
+    let task = TaskContext::detached(Arc::new(Db::open_in_memory().unwrap()));
+    task.cancel_token().cancel();
+
+    let err = vrcast_studio_lib::commands::quality::held(
+        &state,
+        &borrowed,
+        "1:donor.mp4",
+        &vrcast_studio_lib::media::encoders::Encoder::Software,
+        &task,
+    )
+    .await
+    .expect_err("a cancelled check reported a verdict");
+    assert_eq!(err.code, ErrorCode::TaskCancelled);
+
+    // Not taken back (a cancel is not a verdict) and not vouched for either.
+    let still = vrcast_studio_lib::store::measurements::run(&state.db, "2:borrower.mp4", "h264")
+        .unwrap()
+        .expect("a cancelled check threw the loan away");
+    assert!(still.check_pending, "a cancelled check cleared the mark");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_the_loans_check_stops_it_between_chunks() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use vrcast_studio_lib::media::ffmpeg;
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::tasks::engine::TaskContext;
+
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("vrcast-t670-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let film = dir.join("borrower.mp4");
+    let made = std::process::Command::new(&ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=30",
+            "-t",
+            "60",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&film)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(made.status.success());
+
+    let state = state();
+    let borrowed = a_loan(&state, &film.to_string_lossy());
+    let task = TaskContext::detached(Arc::new(Db::open_in_memory().unwrap()));
+
+    // Pressed while the first chunk is being encoded.
+    let pressing = task.cancel_token();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        pressing.cancel();
+    });
+    let started = Instant::now();
+    let outcome = vrcast_studio_lib::commands::quality::held(
+        &state,
+        &borrowed,
+        "1:donor.mp4",
+        &vrcast_studio_lib::media::encoders::Encoder::Software,
+        &task,
+    )
+    .await;
+    let took = started.elapsed();
+
+    let err = outcome.expect_err("a check cancelled mid-way reported a verdict");
+    assert_eq!(err.code, ErrorCode::TaskCancelled, "{err:?}");
+    // One chunk's encode at most — the cell is three encodes and three scorings.
+    assert!(
+        took < Duration::from_secs(60),
+        "the cancel was not heard until the cell was done: {took:?}"
+    );
+    let still = vrcast_studio_lib::store::measurements::run(&state.db, "2:borrower.mp4", "h264")
+        .unwrap()
+        .expect("a cancelled check threw the loan away");
+    assert!(still.check_pending);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -467,7 +467,8 @@ pub mod api {
                             // and a check run on a different encoder than it says would be
                             // worse than one that refuses.
                             let (encoder, _) = pick_encoder(true).await?;
-                            let notice = held(&onward, &borrowed, &donor_key, &encoder).await?;
+                            let notice =
+                                held(&onward, &borrowed, &donor_key, &encoder, &ctx).await?;
                             measurements::checked(&onward.db, &borrowed_key, &borrowed_codec)
                                 .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
                             if let Some(n) = notice {
@@ -529,14 +530,23 @@ pub mod api {
 /// downstream would go on showing it as a ladder. The film needs half an hour of its own.
 ///
 /// The cost is one cell: three chunks of ten seconds, about a minute against the half hour a
-/// full measurement takes. ⚠ It is spent inside this call, so the screen that asked waits for
-/// it. Moving it into the task engine, with progress and a way to stop, is worth doing and is
-/// not done here.
-async fn held(
+/// full measurement takes. It runs inside its own task (T478).
+///
+/// **And it stops with that task** (T670(1)). The cell used to be measured under a fresh
+/// cancellation token nobody held, so a cancel pressed on the check went unheard until the
+/// whole cell was done. It takes the task's context now — the cancel cannot be left
+/// unconnected without the call failing to compile — and a cancel is looked at between the
+/// cell's chunks (`vmaf::measure_point`'s own granularity, the same the full measurement has).
+/// A cancelled check ends `TASK_CANCELLED` and leaves the loan provisional (`check_pending`):
+/// a check that did not run is not a check that passed, and a build from it stays refused.
+///
+/// Public so that the cancel can be checked without a real loan and a real film.
+pub async fn held(
     state: &super::AppState,
     borrowed: &Run,
     from_key: &str,
     encoder: &encoders::Encoder,
+    ctx: &crate::tasks::engine::TaskContext,
 ) -> Result<Option<Detail>> {
     let donor_points = measurements::points(&state.db, from_key, &borrowed.codec)
         .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))?;
@@ -564,7 +574,7 @@ async fn held(
         borrowed.chunk_s,
         cell,
         encoder,
-        &tokio_util::sync::CancellationToken::new(),
+        &ctx.cancel_token(),
     )
     .await
     .map_err(vmaf_error)?;
