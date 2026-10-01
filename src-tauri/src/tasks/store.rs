@@ -298,6 +298,45 @@ pub fn save_notices(db: &Db, id: &str, notices: &[Detail]) -> Result<(), DbError
     })
 }
 
+/// Write what the task had to say, replacing what was there — an empty list clears it.
+///
+/// For the one case where a finished task's notices change after it has ended (T653): the
+/// duty to remove an upload's part-file, kept as a notice so a person sees it, is replaced by
+/// "removed later" once it has been done — or dropped when another upload took the file
+/// over.
+pub fn replace_notices(db: &Db, id: &str, notices: &[Detail]) -> Result<(), DbError> {
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET notices = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, notices_json(notices), now_rfc3339()],
+        )?;
+        Ok(())
+    })
+}
+
+/// Every task of `kind` whose notices include `code` (T653).
+///
+/// The text is narrowed in SQL and the answer decided on the parsed notices: a code's name
+/// appearing inside another's value is not the code.
+pub fn carrying_notice(
+    db: &Db,
+    kind: TaskKind,
+    code: DetailCode,
+) -> Result<Vec<TaskRecord>, DbError> {
+    let pattern = format!("%\"{}\"%", code.as_str());
+    let rows = db.with_conn(|c| {
+        let mut stmt = c.prepare("SELECT * FROM tasks WHERE kind = ?1 AND notices LIKE ?2")?;
+        let rows = stmt
+            .query_map(rusqlite::params![kind.as_str(), pattern], row_to_record)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })?;
+    Ok(rows
+        .into_iter()
+        .filter(|t| t.notices.iter().any(|n| n.key == code))
+        .collect())
+}
+
 /// Write what the task produced, once it is known to have produced anything (T519(3)).
 ///
 /// Not withheld from finished records, for the same reason as [`save_notices`]: this is

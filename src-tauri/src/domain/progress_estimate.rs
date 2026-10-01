@@ -4,17 +4,30 @@
 //! flickers so badly it cannot be read. Nor can the average over all time: after a
 //! break and half an hour idle it shows half of what is really happening.
 //!
-//! So speed is worked out over a sliding window of the last few seconds. And there is
-//! a separate rule about pauses: if more than a window has passed between two samples,
-//! what was accumulated no longer describes what is happening and is thrown away.
-//! Without that rule a person sees "four hundred hours left" after a pause and decides
-//! everything is broken.
+//! So speed is worked out over a sliding window of the last few seconds — and never over
+//! fewer than two samples, so there is always something to measure against.
+//!
+//! **A pause is said, not guessed** (T659, QA-24A №10). What was gathered before a pause, a
+//! break or a restart no longer describes what is happening and is thrown away — but the
+//! transfer says when that happened, by calling [`ProgressEstimate::reset`] (and then
+//! [`ProgressEstimate::record`] the point it starts from again). The estimate used to guess
+//! it instead: any two samples further apart than the averaging window counted as a pause.
+//! A sample is taken once per window of the file, and on a slow or capped link one window
+//! takes longer than that — four megabytes at two megabits is sixteen seconds — so every
+//! sample looked like the first after a pause, and the speed and time left never appeared at
+//! all. A gap is still taken for a stall when it is longer than any one window can take
+//! ([`LONGEST_WINDOW`]): by then the transfer has given the connection up anyway.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// The stretch the average is taken over.
 const WINDOW: Duration = Duration::from_secs(10);
+
+/// The longest one window of a transfer may take before the connection is presumed gone
+/// (`server::upload::write_window` gives up on it then). Two samples further apart than this
+/// cannot be one slow window, and are not measured across.
+pub const LONGEST_WINDOW: Duration = Duration::from_secs(600);
 
 /// How many samples are kept. No more is needed: at four events a second (R-15) that
 /// many will not accumulate within the averaging window anyway.
@@ -43,19 +56,20 @@ impl ProgressEstimate {
 
     /// Record how much has been sent in all by this moment.
     pub fn record(&mut self, now: Instant, transferred: u64) {
-        // A gap longer than the averaging window means a pause, a break or a
-        // restart. What was accumulated before it says nothing about the speed now.
+        // Longer than any window can take: not a slow link but a stall the transfer did not
+        // report. What was accumulated before it says nothing about the speed now.
         if let Some((last, _)) = self.samples.back() {
-            if now.saturating_duration_since(*last) > self.window {
+            if now.saturating_duration_since(*last) > LONGEST_WINDOW.max(self.window) {
                 self.samples.clear();
             }
         }
 
         self.samples.push_back((now, transferred));
 
-        // Everything older than the window goes, but the last sample is kept: without
-        // it there is nothing to compare the next one against.
-        while self.samples.len() > 1 {
+        // Everything older than the window goes — but the last two samples always stay:
+        // on a slow link one window of the file takes longer than the averaging window,
+        // and the speed is then the speed of that last window rather than nothing.
+        while self.samples.len() > 2 {
             let Some((oldest, _)) = self.samples.front() else {
                 break;
             };
@@ -95,6 +109,9 @@ impl ProgressEstimate {
     }
 
     /// Forget what was accumulated — on a pause, a break, or resuming after a restart.
+    ///
+    /// The one way a pause reaches the estimate (T659). Follow it with a `record` of where
+    /// the transfer starts again, so the first window after it already gives a speed.
     pub fn reset(&mut self) {
         self.samples.clear();
     }

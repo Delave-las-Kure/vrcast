@@ -300,13 +300,27 @@ pub async fn transfer_once(
     let mut sent = offset;
     let mut buf = vec![0u8; WINDOW_BYTES as usize];
 
+    // Where this attempt starts from, as the estimate's first sample (T659): the first
+    // window then already gives a speed, however long it takes. The time spent reconnecting
+    // before it is not counted — the caller resets the estimate after a break.
+    estimate.reset();
+    estimate.record(Instant::now(), offset);
+
     loop {
         // Cancelling and pausing are checked between windows: tearing off a write in the
         // middle would leave a broken tail in the file that has to be written over
         // afterwards.
+        //
+        // A pause is said to the estimate here, where it is known (T659): the time spent
+        // paused is not transfer time, and what was gathered before it is thrown away.
+        let was_paused = ctx.is_paused();
         ctx.wait_while_paused().await;
         if ctx.is_cancelled() {
             return Err(UploadError::Cancelled);
+        }
+        if was_paused {
+            estimate.reset();
+            estimate.record(Instant::now(), sent);
         }
 
         let read = local
@@ -358,10 +372,12 @@ fn report(ctx: &TaskContext, plan: &UploadPlan, estimate: &ProgressEstimate, sen
         sent as f64 / plan.total_bytes as f64
     };
     let remaining = plan.total_bytes.saturating_sub(sent);
+    // Unknown is sent as unknown (T659): a zero here used to stand for "not yet known", and
+    // a zero speed is a claim of its own — that nothing is moving.
     ctx.report_transfer(
         progress,
-        estimate.speed_bps().unwrap_or(0) as i64,
-        estimate.eta(remaining).map_or(0, |d| d.as_secs() as i64),
+        estimate.speed_bps().map(|b| b as i64),
+        estimate.eta(remaining).map(|d| d.as_secs() as i64),
     );
     // And separately — to disk, far less often. An upload runs for hours, and after the
     // application restarts a person must see how much has already been sent, not zero.
@@ -395,19 +411,30 @@ pub async fn publish(conn: &Connection, plan: &UploadPlan) -> Result<()> {
 ///
 /// A failure to clean up is not returned: the cancellation has already happened, and there
 /// is no point turning it into a failure because a staged file would not delete. But
-/// keeping quiet will not do either — litter piles up unnoticed.
+/// keeping quiet will not do either — litter piles up unnoticed. Callers that can keep the
+/// duty to remove it for later use [`remove_staged`] instead (T653).
 pub async fn cleanup(conn: &Connection, remote_temp: &str) {
-    let result = conn
+    if let Err(e) = remove_staged(conn, remote_temp).await {
+        tracing::warn!(file = remote_temp, error = %e, "the staged file would not delete");
+    }
+}
+
+/// Remove a staged file, saying whether it is gone (T653).
+///
+/// `rm -f`: a file that is not there any more is gone, which is what was asked — so
+/// repeating this is safe (principle V), and a later attempt after an earlier one quietly
+/// succeeded is not a failure.
+pub async fn remove_staged(conn: &Connection, remote_temp: &str) -> Result<()> {
+    let out = conn
         .exec(&format!("rm -f -- {}", shell_quote(remote_temp)))
-        .await;
-    match result {
-        Ok(out) if out.ok() => {}
-        Ok(out) => {
-            tracing::warn!(file = remote_temp, stderr = %out.stderr.trim(), "the staged file would not delete")
-        }
-        Err(e) => {
-            tracing::warn!(file = remote_temp, error = %e, "the staged file would not delete")
-        }
+        .await?;
+    if out.ok() {
+        Ok(())
+    } else {
+        Err(UploadError::Failed(format!(
+            "the staged file would not delete: {}",
+            out.stderr.trim()
+        )))
     }
 }
 
