@@ -14,22 +14,16 @@
 import { useState } from "react";
 import type { AppError, MediaView } from "../../../shared/contract";
 import { useLang, useT } from "../../../shared/i18n";
-import { fill, renderError } from "../../../shared/i18n/render";
+import { fill } from "../../../shared/i18n/render";
+import { ErrorFolded } from "../../shared/ErrorNotice";
 
 /**
- * A refusal inside a dialog: what happened, and what to do about it.
- *
- * Both halves (T519). Two dialogs took only `.message` — a rename refused because the short
- * name is taken said so and not what a free one looks like, which is the whole of the advice.
+ * A refusal inside a dialog: one line, what to do folded under "Details" (T519, T674).
  */
 function DialogError({ error }: { error: AppError }) {
-  const t = useT();
-  const { lang } = useLang();
-  const { message, hint } = renderError(error, t, lang);
   return (
     <div className="dialog__error">
-      <p className="dialog__error-message">{message}</p>
-      {hint && <p className="dialog__error-hint">{hint}</p>}
+      <ErrorFolded error={error} lineClassName="dialog__error-message" />
     </div>
   );
 }

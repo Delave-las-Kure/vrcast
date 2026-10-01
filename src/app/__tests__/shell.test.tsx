@@ -369,9 +369,24 @@ describe("showing errors", () => {
     renderIn(<ErrorNotice error={err} />);
 
     expect(screen.getByText(ru.errors.HOST_KEY_CHANGED.message)).toBeInTheDocument();
-    expect(screen.getByText(ru.errors.HOST_KEY_CHANGED.hint)).toBeInTheDocument();
+    // T674: one line in sight; the advice and the cause are folded under «Подробнее».
+    const more = screen.getByText(ru.ui.common.more).closest("details")!;
+    expect(more.open).toBe(false);
+    expect(within(more).getByText(ru.errors.HOST_KEY_CHANGED.hint)).toBeInTheDocument();
     // The particulars are shown as they arrived: they can be searched for.
-    expect(screen.getByText(err.cause!)).toBeInTheDocument();
+    expect(within(more).getByText(err.cause!)).toBeInTheDocument();
+  });
+
+  it("puts what the core named under the fold, beside the code's own line", () => {
+    const err: AppError = {
+      code: "REMOTE_DISK_FULL",
+      details: [{ key: "NOT_ENOUGH_SPACE", params: { short_by: 1024, needed: 2048, free: 1024 } }],
+    };
+    renderIn(<ErrorNotice error={err} />);
+
+    expect(screen.getByText(ru.errors.REMOTE_DISK_FULL.message)).toBeInTheDocument();
+    const more = screen.getByText(ru.ui.common.more).closest("details")!;
+    expect(more.textContent).toContain("1,0 КБ");
   });
 
   it("words the same error in English when English is chosen", () => {

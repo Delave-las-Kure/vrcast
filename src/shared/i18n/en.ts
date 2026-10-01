@@ -17,23 +17,23 @@ export const en: Catalogue = {
     // --- reaching the server ---
     SSH_AUTH_FAILED: {
       message: "The server refused the sign-in details",
-      hint: "Check the user name and the password or key. If the server only offers key-based sign-in, a password will not do — set up a key.",
+      hint: "Check the user name and the password or key.",
     },
     SSH_UNREACHABLE: {
       message: "Could not reach the server",
-      hint: "Check that the server is switched on, the address is right, and the port is reachable from outside.",
+      hint: "Check that the server is on and the address and port are right.",
     },
     HOST_KEY_CHANGED: {
       message: "The server's fingerprint has changed",
-      hint: "This happens after a server is rebuilt — in that case confirm the new fingerprint. If the server has not changed, do not connect: this may be an impersonation.",
+      hint: "If the server was rebuilt, confirm the new fingerprint. If not, do not connect.",
     },
     HOST_KEY_UNCONFIRMED: {
       message: "The server's fingerprint has not been confirmed yet",
-      hint: "Compare the fingerprint shown with the one your hosting provider gives, then confirm it.",
+      hint: "Compare it with your hosting panel and confirm it.",
     },
     HOST_KEY_IS_CERTIFICATE: {
       message: "The server presented a certificate instead of a key",
-      hint: "This application works with servers that present an ordinary key. Turn off host certificates on the server.",
+      hint: "Turn off the host certificate on the server.",
     },
     KEY_NEEDS_PASSPHRASE: {
       message: "The key is protected by a passphrase",
@@ -41,103 +41,103 @@ export const en: Catalogue = {
     },
     KEY_UNREADABLE: {
       message: "The key file could not be read",
-      hint: "Check the path, and that this is the private key rather than its public half (the one ending in .pub).",
+      hint: "Choose the private key, not the .pub file.",
     },
     VIDEO_DIR_DENIED: {
       message: "No access to the video directory on the server",
-      hint: "Make sure the path is right and that the user has permission for that directory.",
+      hint: "Check the path and the user's permissions on it.",
     },
 
     // --- domain ---
     DOMAIN_NOT_SERVING: {
       message: "The domain is not serving video",
-      hint: "Nothing answers on the domain. Check the server's condition in the diagnostics section.",
+      hint: "Open Diagnostics.",
     },
     DOMAIN_NOT_POINTED: {
       message: "The domain is not attached to the server",
-      hint: "Create an A record for this name at your registrar, pointing at the server's address. The change takes a few minutes to spread across the network.",
+      hint: "Add an A record pointing at the server's address and wait a few minutes.",
     },
     DOMAIN_POINTS_ELSEWHERE: {
       message: "The domain leads to a different server",
-      hint: "Correct the A record so that it points at this server's address.",
+      hint: "Point the A record at this server's address.",
     },
     IPV6_MISMATCH: {
       message: "The IPv6 choice does not match the domain records",
-      hint: "Either add an AAAA record for this server's IPv6 address, or choose to disable IPv6 during deployment.",
+      hint: "Add an AAAA record for the server's IPv6, or disable IPv6 when deploying.",
     },
 
     // --- server state and deployment ---
     SERVER_NEEDS_UPGRADE: {
       message: "The server side needs updating",
-      hint: "The server is running a version older than this application works with. Update it from the server’s card — the files and the catalogue are kept.",
+      hint: "Update it from the server's card. Files are kept.",
     },
     SERVER_FOREIGN: {
       message: "Something else is already serving from this server",
-      hint: "The application does not touch other people's configuration. Use a clean server, or remove the other setup by hand.",
+      hint: "Use a clean server, or remove the other setup by hand.",
     },
     SERVER_TOO_NEW: {
       message: "The server side is newer than this application understands",
-      hint: "Update the application: working with a server whose arrangements it does not understand is not safe.",
+      hint: "Update the application.",
     },
     DEPLOY_STEP_FAILED: {
       message: "A deployment step did not go through",
-      hint: "See which step it stopped at and run the deployment again — the steps that already succeeded will not be repeated.",
+      hint: "Run the deployment again — finished steps will not repeat.",
     },
     SWAP_FAILED: {
       message: "The swap file could not be created",
-      hint: "Free up space on the server's disk: the swap file needs at least a gigabyte.",
+      hint: "Free at least 1 GB on the server's disk.",
     },
     DEPLOY_ALREADY_RUNNING: {
       message: "A deployment or upgrade of this server is already running",
-      hint: "Wait for the current operation to finish — starting it again would repeat the same steps on the server once more.",
+      hint: "Wait for it to finish.",
     },
     ROLLBACK_NO_COPY: {
       message: "Nothing to put back: the server has no copy of its settings",
-      hint: "A copy is taken at the start of every deployment and upgrade. There is none here — this application has not run on the server, or the copy was removed. Nothing on the server was changed.",
+      hint: "A copy is made by each deployment and upgrade. Nothing on the server was changed.",
     },
 
     // --- library ---
     SLUG_TAKEN: {
       message: "That name is already taken",
-      hint: "Choose another name: this one belongs to a different medium.",
+      hint: "Choose another name.",
     },
     MANIFEST_CONFLICT: {
       message: "The catalogue was changed by another application",
-      hint: "Another copy of the application is working with this server. Refresh the list and try again.",
+      hint: "Refresh the list and try again.",
     },
     FILE_MISSING_ON_SERVER: {
       message: "The file is no longer on the server",
-      hint: "It was deleted outside the application. Refresh the library so the list matches what is really there.",
+      hint: "Refresh the library.",
     },
     FILE_IN_USE: {
       message: "Someone is watching this file right now",
-      hint: "Deleting or renaming it will cut their viewing short. Wait until they finish, or confirm deliberately.",
+      hint: "Deleting or renaming will cut the viewing short. Wait, or confirm.",
     },
     MEDIA_BUSY: {
       message: "This medium is being processed by the server right now",
-      hint: "A build of its quality set or an upload of one of its files is still running. Wait for it to finish and try deleting again.",
+      hint: "Wait for the build or upload to finish, then try again.",
     },
     FILE_BUSY: {
       message: "This file is being processed by the server right now",
-      hint: "A build of its quality set or an upload of it is still running. Wait for it to finish and try deleting again.",
+      hint: "Wait for the build or upload to finish, then try again.",
     },
 
     // --- preparing files ---
     FFMPEG_BROKEN: {
       message: "The video tool will not start",
-      hint: "Reinstall the application: the video tool that ships with it is damaged.",
+      hint: "Reinstall the application.",
     },
     NO_AUDIO_TRACKS: {
       message: "The file has no audio track at all",
-      hint: "Choose a different source: there is nothing to serve without sound.",
+      hint: "Choose another file.",
     },
     DECODE_VALIDATION_FAILED: {
       message: "The finished file failed the playback check",
-      hint: "The file is damaged and not fit to serve. Try preparing it again from the source.",
+      hint: "Prepare the file again from the source.",
     },
     NO_HW_ENCODER: {
       message: "Hardware acceleration is not available",
-      hint: "Preparation will run on the processor — slower, but just as good. If acceleration ought to be there, close whatever has taken the graphics card.",
+      hint: "The processor encodes instead — slower, same quality.",
     },
     LOCAL_DISK_FULL: {
       message: "Not enough room on this computer's disk",
@@ -147,150 +147,150 @@ export const en: Catalogue = {
     // --- transfer ---
     REMOTE_DISK_FULL: {
       message: "Not enough room on the server's disk",
-      hint: "Free up space on the server: delete media you no longer need from the library.",
+      hint: "Delete media you no longer need in the library.",
     },
     CHECKSUM_MISMATCH: {
       message: "The transferred file differs from the source",
-      hint: "The transfer was corrupted. The file was not put into service — start the upload again.",
+      hint: "The file was not published. Start the upload again.",
     },
     VIEWERS_ACTIVE: {
       message: "Someone is watching right now",
-      hint: "An upload will push what they are watching out of the server's memory and their playback will stall. Better to wait until they finish.",
+      hint: "Viewers' playback may stall. Better to wait until they finish.",
     },
     NAME_EXISTS: {
       message: "A file with that name is already being served",
-      hint: "Choose another name, or confirm the replacement. Remember that a cached copy at the CDN will keep serving the old one for a while.",
+      hint: "Choose another name or confirm the replacement.",
     },
 
     // --- quality ladders ---
     RUNG_ABOVE_SOURCE: {
       message: "The quality rung is higher than the source itself",
-      hint: "Lower the rung: detail that is not in the source will not appear, and the file will only grow.",
+      hint: "Lower the rung.",
     },
     BUFSIZE_TOO_LARGE: {
       message: "The buffer is too large for the chosen peak limit",
-      hint: "Make the buffer roughly equal to the peak limit, or real peaks will exceed the limit and viewers will see stalls.",
+      hint: "Make the buffer about equal to the peak limit.",
     },
     LEVEL_EXCEEDED: {
       message: "The stream does not fit the chosen compatibility level",
-      hint: "The level is judged by two limits — per frame and per second. Lower the bitrate, the frame rate, or the resolution.",
+      hint: "Lower the bitrate, the frame rate or the resolution.",
     },
     LADDER_INCOMPLETE: {
       message: "The quality ladder was not built in full",
-      hint: "Some variants are not being served. Run the build again — the finished ones will not be rebuilt.",
+      hint: "Run the build again — finished variants are kept.",
     },
     VMAF_UNAVAILABLE: {
       message: "This build of FFmpeg cannot measure quality",
-      hint: "A quality ladder is chosen by measuring the material rather than by formula, and without libvmaf there is nothing to measure with. Reinstall the application — its FFmpeg is built with libvmaf.",
+      hint: "Reinstall the application.",
     },
     LADDER_OBJECTION: {
       message: "Stopped: there are objections to the ladder that came out",
-      hint: "The measurement finished and the rungs were chosen, and they are ones this application will not send to a server unasked. What is wrong is in the task's notes. Open this file's ladder, change it or accept it yourself, and build. The rest of the queue carries on.",
+      hint: "Open this video's rungs, fix or accept them, and build.",
     },
     LADDER_NOT_MEASURED: {
       message: "The quality of this material has not been measured yet",
-      hint: "Rungs taken from the formula are a guess: on one film it asks for twice what is needed, on another it understates. Run the measurement, or borrow one from the first episode of the same season.",
+      hint: "Run the measurement, or borrow the first episode's.",
     },
     MEASUREMENT_NOT_FOUND: {
       message: "There is no such measurement",
-      hint: "It may have been deleted, or taken for a different target codec. Measurements do not carry between codecs: AV1's advantage over H.264 melts as the bitrate rises, and there is no constant multiplier.",
+      hint: "Run the measurement again.",
     },
     MEASUREMENT_DIFFERENT_MATERIAL: {
       message: "That measurement was taken on different material",
-      hint: "Frame size, frame rate and the height the material really has must all agree. Native 4K and an upscale behave differently: the point where the resolution should drop sits somewhere else entirely.",
+      hint: "Measure this file on its own.",
     },
     LADDER_CHECK_PENDING: {
       message: "The borrowed measurement is still being checked",
-      hint: "The measurement came from another film, and one cell of the grid is being measured on this one to compare against the donor. That takes under a minute and its progress is in the task list. Building before the answer risks hours of encoding on a ladder that was never about this film.",
+      hint: "Wait about a minute and try again.",
     },
     MEASUREMENT_NOT_THIS_MATERIAL: {
       message: "The measurement did not fit this film",
-      hint: "Every field matched — frame, frame rate, codec, pixel format — and the picture did not. One cell was measured to find out: on the same rung the donor and this film disagreed by more than episodes of one season ever do. This film needs a measurement of its own.",
+      hint: "Measure this file on its own.",
     },
     NO_LADDER_FOR_MEDIA: {
       message: "This medium has no quality ladder",
-      hint: "Build a quality ladder first: capping quality means choosing from the rungs that exist.",
+      hint: "Build a quality set first.",
     },
 
     // --- web server configuration ---
     CADDY_VALIDATE_FAILED: {
       message: "The new server configuration turned out to be invalid",
-      hint: "Nothing was applied and serving continues as before. Please report this error — it is a fault in the application.",
+      hint: "Serving continues as before. Please report this error.",
     },
     CADDY_RELOAD_FAILED: {
       message: "The server did not accept the new configuration",
-      hint: "The previous configuration was restored and serving works. Check the server's condition in the diagnostics section.",
+      hint: "The previous settings were restored. Check Diagnostics.",
     },
     LIMITS_CONFLICT: {
       message: "Someone else changed the quality limits at the same moment",
-      hint: "Reload the list of limits and try again — nothing was lost, but this change did not go through.",
+      hint: "Reload the list and try again.",
     },
     LIMITS_ROLLBACK_FAILED: {
       message:
         "The change of limits did not go through, and putting the previous limits back was not confirmed",
-      hint: "Reload the list of limits — it shows what is written in the rules file on the server. After a failed change that may differ from what the serving is using right now; its condition is in the diagnostics section.",
+      hint: "Reload the list: it shows the rules file, which may differ from what is serving.",
     },
 
     // --- tasks ---
     TASK_CANCELLED: {
       message: "The task was cancelled",
-      hint: "Nothing to do: the task was stopped at your command.",
+      hint: "Nothing to do.",
     },
     TASK_NOT_FOUND: {
       message: "Task not found",
-      hint: "The task has already finished or been stopped. Refresh the task list.",
+      hint: "Refresh the task list.",
     },
     TASK_BAD_TRANSITION: {
       message: "The task is in a state this cannot be done from",
-      hint: "Refresh the task list: their state has changed.",
+      hint: "Refresh the task list.",
     },
     TASK_NOT_PAUSABLE: {
       message: "A task of this kind cannot be paused",
-      hint: "Short tasks are not paused — it is simpler to cancel one and run it again.",
+      hint: "Cancel it and run it again.",
     },
 
     // --- "Remove everything" (FR-114, T643) ---
     FORGET_TASKS_RUNNING: {
       message: "Stop the tasks first",
-      hint: "While any task is going — a deployment, an upgrade, an upload, a preparation, a measurement — the data is not removed: the task could write back what was removed. Wait for the tasks to finish or cancel them on the tasks screen, then try again. Nothing was removed.",
+      hint: "Let the tasks finish or cancel them. Nothing was removed.",
     },
     FORGET_IN_PROGRESS: {
       message: "The application's data is being removed right now",
-      hint: "While the removal runs, no new task starts. Wait for it to finish and try again. Nothing was changed.",
+      hint: "Until it ends, no new task starts. Wait and try again.",
     },
     FORGET_PREVIEW_STALE: {
       message: "The list of what would go has changed",
-      hint: "Since you looked at it, the server profiles or the servers that would become unreachable for good have changed — a deployment may have finished and left its key only here. Nothing was removed. Look at the new list and confirm again.",
+      hint: "Nothing was removed. Check the new list and confirm again.",
     },
 
     // --- input and confirmation ---
     INVALID_INPUT: {
       message: "The details entered will not do",
-      hint: "Correct the marked fields and try again. What exactly is wrong is in the message.",
+      hint: "Correct the field and try again.",
     },
     CONFIRMATION_REQUIRED: {
       message: "Confirmation needed",
-      hint: "Read what is about to happen, then confirm. There will be no undoing it.",
+      hint: "Confirm it. It cannot be undone.",
     },
 
     // --- updating the application itself ---
     UPDATE_CHECK_FAILED: {
       message: "Could not check for updates",
-      hint: "Check the network connection and try again. The application carries on as before.",
+      hint: "Check the connection and try again.",
     },
     UPDATE_INSTALL_FAILED: {
       message: "Could not install the update",
-      hint: "Download the installer from the releases page and run it yourself. The copy you have is untouched.",
+      hint: "Download the installer from the releases page.",
     },
 
     // --- everything else ---
     STORAGE_FAILED: {
       message: "Could not reach local storage",
-      hint: "Check that there is room on the disk and that the application has permission for its own data directory.",
+      hint: "Check disk space and access to the data folder.",
     },
     INTERNAL: {
       message: "An internal error in the application",
-      hint: "Please report this error. If it keeps happening, the logs in the diagnostics section will help.",
+      hint: "Please report it, with the logs from Diagnostics.",
     },
   },
 
@@ -684,6 +684,7 @@ export const en: Catalogue = {
   ui: {
     common: {
       dismiss: "Dismiss",
+      more: "Details",
       cancel: "Cancel",
       close: "Close",
       refresh: "Refresh",
@@ -1488,6 +1489,7 @@ export const en: Catalogue = {
         failed: "failed",
         cancelled: "cancelled",
       },
+      notes: "Notes: {n}",
       batchStop: "Stop the whole batch",
       batchIs: "Batch: {films} video(s), {left} task(s) left.",
       batchStopped: "Stopped {n} task(s)",
