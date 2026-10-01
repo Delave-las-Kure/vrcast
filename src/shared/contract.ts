@@ -1667,7 +1667,7 @@ export type VideoStage =
 export type VideoState =
   "planning" | "ready" | "working" | "paused" | "problem" | "cancelling" | "cancelled" | "done";
 
-/** What a problem offers to press. `retry` → `videoRetry(id)`; `build_anyway` →
+/** What a problem offers to press. `retry` → `videoRetry(id, false)`; `build_anyway` →
  *  `videoRetry(id, true)`; `edit_rungs` → the rung editor, then `videoSetRungs` and
  *  `videoRetry`; `replace` → `videoReplace(id)`; `rename` → `videoSetName`, then `videoRetry`. */
 export type VideoProblemAction = "retry" | "build_anyway" | "edit_rungs" | "replace" | "rename";
