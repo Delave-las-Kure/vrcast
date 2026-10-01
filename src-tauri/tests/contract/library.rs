@@ -170,6 +170,7 @@ fn a_library_s_completeness_is_counted_over_every_visible_file() {
             }],
             total_bytes: 2048,
             created_at: String::from("2026-08-01T10:00:00Z"),
+            set_work: None,
         }],
         unrecognized: vec![file_view("unclear.mp4")],
         disk: None,

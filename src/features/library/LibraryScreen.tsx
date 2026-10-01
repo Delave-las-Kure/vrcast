@@ -20,7 +20,13 @@ import { Link } from "react-router-dom";
 import type { AppError, LadderSetView, LibraryView, MediaView } from "../../shared/contract";
 import { ipc, onLibraryChanged, onViewersUpdate, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
-import { formatBitrate, formatBytes, formatDuration, formatResolution, usedFraction } from "../../shared/i18n/format";
+import {
+  formatBitrate,
+  formatBytes,
+  formatDuration,
+  formatResolution,
+  usedFraction,
+} from "../../shared/i18n/format";
 import { fill, renderError } from "../../shared/i18n/render";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorNotice } from "../shared/ErrorNotice";
@@ -337,9 +343,7 @@ export function LibraryScreen() {
           error={dialogError}
           fileInUse={renameFileInUse}
           onCancel={() => setDialog(null)}
-          onRename={(title, slug, confirmed) =>
-            void doRename(dialog.media, title, slug, confirmed)
-          }
+          onRename={(title, slug, confirmed) => void doRename(dialog.media, title, slug, confirmed)}
         />
       )}
       {dialog?.kind === "delete" && (
@@ -459,6 +463,19 @@ function MediaCard({
         </span>
       </button>
 
+      {/* T677 — a set on its way, or stopped on the way: said beside the medium, with the way
+          to the video that is building it, rather than letting a removed old set read as
+          missing. */}
+      {media.set_work && (
+        <p className="media__set-work" data-testid={`set-work-${media.id}`}>
+          <Link to="/video">
+            {media.set_work.state === "building"
+              ? t.ui.library.setBuilding
+              : t.ui.library.setStopped}
+          </Link>
+        </p>
+      )}
+
       {open && (
         <>
           <p className="muted media__note">
@@ -504,7 +521,13 @@ function MediaCard({
               <p className="muted media__note">{t.ui.library.laddersHeading}</p>
               <ul className="file-list">
                 {media.ladders.map((set) => (
-                  <LadderSetRow key={set.path} set={set} t={t} lang={lang} />
+                  <LadderSetRow
+                    key={set.path}
+                    set={set}
+                    onItsWay={Boolean(media.set_work)}
+                    t={t}
+                    lang={lang}
+                  />
                 ))}
               </ul>
             </div>
@@ -512,8 +535,9 @@ function MediaCard({
 
           <div className="media__actions">
             {/* T675 — a set built from a film on this computer into this medium. Not for one
-                that already has a set: the core would refuse it as MEDIA_HAS_SET. */}
-            {media.ladders.length === 0 && (
+                that already has a set: the core would refuse it as MEDIA_HAS_SET; nor while a
+                video is building one (T677). */}
+            {media.ladders.length === 0 && !media.set_work && (
               <Link
                 className="button-link"
                 to={`/video?media=${encodeURIComponent(media.id)}`}
@@ -543,10 +567,23 @@ function MediaCard({
  *  `LadderSetView` carries no codec information — that column is simply left off rather
  *  than shown as a dash, which would claim the core looked and found nothing rather than
  *  never having asked. */
-function LadderSetRow({ set, t, lang }: { set: LadderSetView; t: Catalogue; lang: Lang }) {
+function LadderSetRow({
+  set,
+  onItsWay,
+  t,
+  lang,
+}: {
+  set: LadderSetView;
+  /** A video is building this medium's set (T677): a directory removed by «Replace» is on
+   *  its way back, not lost — the medium's own line says so. */
+  onItsWay: boolean;
+  t: Catalogue;
+  lang: Lang;
+}) {
   const l = t.ui.library;
+  const missing = !set.exists_on_server && !onItsWay;
   return (
-    <li className={`file ${set.exists_on_server ? "" : "file--missing"}`}>
+    <li className={`file ${missing ? "file--missing" : ""}`}>
       <div className="file__head">
         <span className="file__name">{set.path}</span>
         <span className="file__size">{formatBytes(set.size_bytes, lang)}</span>
@@ -567,7 +604,7 @@ function LadderSetRow({ set, t, lang }: { set: LadderSetView; t: Catalogue; lang
         )}
       </div>
 
-      {!set.exists_on_server && <p className="file__warning">{l.missingWarning}</p>}
+      {missing && <p className="file__warning">{l.missingWarning}</p>}
 
       <div className="file__actions">
         {/* `CopyLink` asks for a `FileView`; a `LadderSetView` is missing the codec fields

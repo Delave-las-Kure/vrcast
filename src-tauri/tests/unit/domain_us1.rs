@@ -623,3 +623,18 @@ fn a_ladder_goes_among_the_ladders() {
         vec![String::from("film/master.m3u8")]
     );
 }
+
+#[test]
+fn a_rung_named_around_a_medium_s_file_is_suggested_with_its_work() {
+    // T677: `film_9v.mp4` is the 9 Mbit/s rung of `film`, made beside the medium's own
+    // `film_9.mp4`; left unclaimed it is offered with the rest of its work.
+    let files = owned(&["film_9v.mp4", "film_4.mp4", "film_9v2.mp4", "film_9x.mp4"]);
+    let s = grouping::suggest(&files);
+    assert_eq!(s.groups.len(), 1, "groups: {:?}", s.groups);
+    assert_eq!(s.groups[0].key, "film");
+    assert_eq!(
+        s.groups[0].files,
+        vec!["film_9v.mp4", "film_4.mp4", "film_9v2.mp4"]
+    );
+    assert_eq!(s.singles, vec!["film_9x.mp4"]);
+}

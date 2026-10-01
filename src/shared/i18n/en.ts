@@ -302,8 +302,8 @@ export const en: Catalogue = {
       hint: "The video is in another state. Refresh the screen.",
     },
     MEDIA_HAS_SET: {
-      message: "This medium already has a quality set",
-      hint: "Delete the old set first, or open the medium's link.",
+      message: "A quality set under this name already exists",
+      hint: "“Replace” removes a set nobody owns; a medium's own set is deleted in the library.",
     },
     MEDIA_SET_IN_WORK: {
       message: "A set for this medium is already on its way",
@@ -659,7 +659,7 @@ export const en: Catalogue = {
     RUNG_FILE_CLAIMED:
       "The file “{name}” belongs to a medium and is not overwritten. Change the rungs or the name.",
     OLD_SET_UNRECOGNIZED:
-      "“{name}” is on the server — an old set under this name. Delete it under “Not recognised”.",
+      "“{name}” is on the server — a set nobody owns under this name. “Replace” removes it.",
   },
 
   plurals: {
@@ -1150,6 +1150,8 @@ export const en: Catalogue = {
       laddersHeading: "Quality ladders",
       renameMedia: "Rename",
       buildSet: "Build a set",
+      setBuilding: "Set is building",
+      setStopped: "Build stopped",
       deleteMedia: "Delete the medium",
       diskFree: "Free",
       diskOf: "of",

@@ -48,6 +48,7 @@ fn view(server_id: &str, title: &str) -> LibraryView {
             ladders: Vec::new(),
             total_bytes: 0,
             created_at: String::from("2026-01-01T00:00:00Z"),
+            set_work: None,
         }],
         unrecognized: Vec::new(),
         disk: None,

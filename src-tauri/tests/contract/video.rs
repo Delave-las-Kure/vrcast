@@ -605,3 +605,205 @@ fn a_medium_s_set_refusals_say_what_to_do() {
         vec![VideoAction::Retry]
     );
 }
+
+// ---------- a set nobody owns under a medium's name (T677) ----------
+
+/// A video for a medium, as `video_add` leaves it when a set of the medium's name nobody
+/// claims lies on the server: stopped on that, before its plan, with «Replace».
+fn waiting_on_an_old_set(state: &AppState, server: &str, id: &str) {
+    use vrcast_studio_lib::commands::error::AppError;
+    use vrcast_studio_lib::domain::wording::Detail;
+    let mut row = VideoRow::new(id, server, "C:/nowhere/film.mp4", "Film", "film");
+    row.media_id = Some(String::from("m_film"));
+    row.own_medium = true;
+    row.state = VideoState::Problem;
+    let error = AppError::new(ErrorCode::MediaHasSet)
+        .with_detail(Detail::new(DetailCode::OldSetUnrecognized).with("name", "film"));
+    row.problem_json = Some(
+        serde_json::json!({
+            "actions": vrcast_studio_lib::domain::video::actions_for(&error),
+            "error": error,
+        })
+        .to_string(),
+    );
+    rows::save(&state.db, &row).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_medium_s_video_waiting_on_an_old_set_goes_on_only_through_replace() {
+    let state = state();
+    let server = server(&state);
+    waiting_on_an_old_set(&state, &server, "held");
+
+    let shown = video::video_get(&state, "held").unwrap();
+    let problem = shown.problem.expect("no problem shown");
+    assert_eq!(problem.error.code, ErrorCode::MediaHasSet);
+    assert_eq!(problem.actions, vec![VideoAction::Replace]);
+    assert_eq!(
+        serde_json::to_value(&problem.error).unwrap()["details"][0]["key"],
+        "OLD_SET_UNRECOGNIZED"
+    );
+
+    // «Retry» would build over the old set: it leaves the video where it was, and starts
+    // nothing.
+    let after = video::video_retry(&state, "held", false).unwrap();
+    assert_eq!(after.state, VideoState::Problem);
+    assert_eq!(
+        after.problem.unwrap().actions,
+        vec![VideoAction::Replace],
+        "retry took the video off its old set"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(state.tasks.list().unwrap().is_empty(), "work was started");
+
+    // «Replace» is taken for it although the video has its medium (T676's own case has none):
+    // it goes to the server, which does not answer, and nothing changes.
+    let err = video::video_replace(&state, "held", false)
+        .await
+        .expect_err("replace went ahead without asking the server");
+    assert_ne!(err.code, ErrorCode::VideoNotNow, "{err:?}");
+    let after = video::video_get(&state, "held").unwrap();
+    assert_eq!(after.state, VideoState::Problem);
+    assert_eq!(after.media_id.as_deref(), Some("m_film"));
+    assert_eq!(after.problem.unwrap().actions, vec![VideoAction::Replace]);
+
+    // A medium's video stopped on anything else is not offered «Replace».
+    let mut other = VideoRow::new("other", &server, "C:/nowhere/b.mp4", "B", "b");
+    other.state = VideoState::Problem;
+    other.media_id = Some(String::from("m_b"));
+    rows::save(&state.db, &other).unwrap();
+    assert_eq!(
+        video::video_replace(&state, "other", true)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::VideoNotNow
+    );
+}
+
+// ---------- the library while a medium's set is on its way (T677) ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_library_says_a_medium_s_set_is_building_or_stopped_not_missing() {
+    use vrcast_studio_lib::commands::library::{api as library, LibraryView, MediaView};
+    use vrcast_studio_lib::domain::video::SetWorkState;
+    use vrcast_studio_lib::store::library_cache;
+
+    let state = state();
+    let server = server(&state);
+    let medium = |id: &str| MediaView {
+        id: id.to_owned(),
+        title: id.to_owned(),
+        slug: id.to_owned(),
+        files: Vec::new(),
+        ladders: Vec::new(),
+        total_bytes: 0,
+        created_at: String::from("2026-10-02T00:00:00Z"),
+        set_work: None,
+    };
+    // What the server last said: four media, no sets on any — the state right after
+    // «Replace» removed the old one.
+    let known = LibraryView {
+        server_id: server.clone(),
+        media: vec![
+            medium("m_go"),
+            medium("m_stop"),
+            medium("m_plan"),
+            medium("m_none"),
+        ],
+        unrecognized: Vec::new(),
+        disk: None,
+        stale: false,
+    };
+    library_cache::save(&state.db, &server, &known).unwrap();
+
+    let row = |id: &str, media: &str, st: VideoState, stage: VideoStage, started: bool| {
+        let mut r = VideoRow::new(id, &server, "C:/nowhere/film.mp4", "Film", media);
+        r.media_id = Some(media.to_owned());
+        r.state = st;
+        r.stage = stage;
+        r.start_requested = started;
+        rows::save(&state.db, &r).unwrap();
+    };
+    row(
+        "v_go",
+        "m_go",
+        VideoState::Working,
+        VideoStage::Encoding,
+        true,
+    );
+    row(
+        "v_stop",
+        "m_stop",
+        VideoState::Problem,
+        VideoStage::Cutting,
+        true,
+    );
+    // A plan nobody started yet says nothing about the set.
+    row(
+        "v_plan",
+        "m_plan",
+        VideoState::Ready,
+        VideoStage::Planned,
+        false,
+    );
+
+    let view = library::library_list_known(&state, &server).await.unwrap();
+    let work = |id: &str| {
+        view.media
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .set_work
+            .clone()
+    };
+    let go = work("m_go").expect("a set on its way reads as nothing");
+    assert_eq!(go.state, SetWorkState::Building);
+    assert_eq!(go.video_id, "v_go");
+    let stop = work("m_stop").expect("a stopped build reads as nothing");
+    assert_eq!(stop.state, SetWorkState::Stopped);
+    assert_eq!(stop.video_id, "v_stop");
+    assert!(work("m_plan").is_none());
+    assert!(work("m_none").is_none());
+    // It crosses to the screen as plain words, and is never kept in the cache.
+    let json = serde_json::to_value(&view.media[0]).unwrap();
+    assert_eq!(json["set_work"]["state"], "building");
+    assert_eq!(json["set_work"]["video_id"], "v_go");
+    assert!(library_cache::load(&state.db, &server)
+        .unwrap()
+        .unwrap()
+        .media
+        .iter()
+        .all(|m| m.set_work.is_none()));
+
+    // When it changes, the library is told: «Retry» on the stopped one makes it building
+    // (and the server, not answering, stops it again).
+    let mut events = state.subscribe();
+    video::video_retry(&state, "v_stop", false).unwrap();
+    let told = std::iter::from_fn(|| events.try_recv().ok())
+        .any(|e| matches!(e, AppEvent::LibraryChanged { ref server_id } if server_id == &server));
+    assert!(
+        told,
+        "the library was not told its medium's set is on its way again"
+    );
+    until(
+        &state,
+        "v_stop",
+        "stopping again",
+        Duration::from_secs(20),
+        |v| v.state == VideoState::Problem,
+    )
+    .await;
+    let again = library::library_list_known(&state, &server).await.unwrap();
+    assert_eq!(
+        again
+            .media
+            .iter()
+            .find(|m| m.id == "m_stop")
+            .unwrap()
+            .set_work
+            .as_ref()
+            .map(|w| w.state),
+        Some(SetWorkState::Stopped)
+    );
+}

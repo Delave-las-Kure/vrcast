@@ -830,6 +830,12 @@ button:focus-visible {
   font-style: normal;
 }
 
+/* T677 — a set on its way, or stopped on the way, beside the medium. */
+.media__set-work {
+  margin: 0 16px 10px;
+  font-size: 13px;
+}
+
 .media__note {
   margin: 0 16px 10px;
   font-size: 13px;

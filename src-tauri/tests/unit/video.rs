@@ -671,3 +671,104 @@ fn nothing_under_the_name_is_nothing_to_remove() {
     // A file called like the directory is not the directory.
     assert!(!video::old_set("film", &top(&[("film", false)]), &[]).dir);
 }
+
+// ---------- a set nobody owns under a medium's name (T677) ----------
+
+#[test]
+fn a_set_nobody_owns_under_a_medium_s_name_is_a_problem_with_replace_not_a_refusal() {
+    let entries = top(&[
+        ("film", true),
+        ("film_8.mp4", false),
+        // The medium's own single file, named like a rung: its own, not the old set's.
+        ("film_4.mp4", false),
+    ]);
+    let problem = video::old_set_problem("film", &entries, &["film_4.mp4"])
+        .expect("a set nobody owns was not seen");
+    assert_eq!(problem.code, ErrorCode::MediaHasSet);
+    assert_eq!(problem.details[0].key, DetailCode::OldSetUnrecognized);
+    assert!(video::is_old_set_problem(&problem));
+    assert_eq!(video::actions_for(&problem), vec![VideoAction::Replace]);
+    // What «Replace» would remove: the directory and the loose rung, never the medium's file.
+    let old = video::unclaimed_old_set("film", &entries, &["film_4.mp4"]);
+    assert_eq!(old.tops("film"), vec!["film", "film_8.mp4"]);
+
+    // «Replace» may be pressed on it although the video has its medium already; on any other
+    // problem of such a video it may not.
+    let error = Some(&problem);
+    assert!(video::may_replace(
+        VideoState::Problem,
+        VideoStage::Planned,
+        true,
+        error
+    ));
+    assert!(!video::may_replace(
+        VideoState::Ready,
+        VideoStage::Planned,
+        true,
+        error
+    ));
+    let other = AppError::new(ErrorCode::SshUnreachable);
+    assert!(!video::may_replace(
+        VideoState::Problem,
+        VideoStage::Planned,
+        true,
+        Some(&other)
+    ));
+    // A plain «this medium has a set» is a refusal, not this.
+    assert!(!video::is_old_set_problem(&AppError::new(
+        ErrorCode::MediaHasSet
+    )));
+}
+
+#[test]
+fn a_directory_filed_in_the_catalogue_is_somebody_s_set_not_nobody_s() {
+    let entries = top(&[("film", true)]);
+    assert!(video::old_set_problem("film", &entries, &["film/master.m3u8"]).is_none());
+    assert!(video::unclaimed_old_set("film", &entries, &["film/master.m3u8"]).is_empty());
+    // Nothing under the name: nothing to wait on.
+    assert!(video::old_set_problem("film", &top(&[("other", true)]), &[]).is_none());
+}
+
+#[test]
+fn a_rung_named_around_a_medium_s_file_is_a_rung_of_its_set() {
+    // What «Replace» and the old-set check look for (T676/T677) knows the new names too.
+    for yes in ["film_9v.mp4", "film_9v2.mp4", "film_9v.mp4.part"] {
+        assert!(video::is_rung_file("film", yes), "{yes}");
+    }
+    let entries = top(&[("film_9v.mp4", false), ("film_9.mp4", false)]);
+    let old = video::old_set("film", &entries, &["film_9.mp4"]);
+    assert_eq!(old.files, vec!["film_9v.mp4"]);
+    assert_eq!(old.in_the_way, vec!["film_9.mp4"]);
+}
+
+#[test]
+fn a_video_says_its_medium_s_set_is_building_once_begun_and_stopped_while_it_waits() {
+    use vrcast_studio_lib::domain::video::{set_work_of, SetWorkState as W};
+    use VideoStage as G;
+    use VideoState as S;
+    // Going, paused, stopping: building.
+    for st in [S::Working, S::Paused, S::Cancelling] {
+        assert_eq!(
+            set_work_of(st, G::Encoding, true),
+            Some(W::Building),
+            "{st:?}"
+        );
+    }
+    // «Replace» on a video still waiting for its plan: building from the moment it is pressed.
+    assert_eq!(
+        set_work_of(S::Planning, G::Planned, true),
+        Some(W::Building)
+    );
+    // Begun, then stopped on a problem or by a person: stopped.
+    assert_eq!(set_work_of(S::Problem, G::Cutting, true), Some(W::Stopped));
+    assert_eq!(
+        set_work_of(S::Cancelled, G::Encoding, false),
+        Some(W::Stopped)
+    );
+    assert_eq!(set_work_of(S::Problem, G::Planned, true), Some(W::Stopped));
+    // Nothing begun: a plan, a plan that failed, one waiting on a set nobody owns; and done.
+    assert_eq!(set_work_of(S::Planning, G::Planned, false), None);
+    assert_eq!(set_work_of(S::Ready, G::Planned, false), None);
+    assert_eq!(set_work_of(S::Problem, G::Planned, false), None);
+    assert_eq!(set_work_of(S::Done, G::Done, true), None);
+}

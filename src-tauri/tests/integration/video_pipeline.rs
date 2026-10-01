@@ -459,10 +459,10 @@ async fn replace_under_a_taken_name_builds_every_rung_anew_for_another_film_of_t
 // ---------- «Build a set» for a medium already in the library (T675) ----------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touched() {
-    use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
+async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_which_stays_byte_for_byte(
+) {
+    use vrcast_studio_lib::commands::error::ErrorCode;
     use vrcast_studio_lib::commands::library::api as library;
-    use vrcast_studio_lib::domain::video::VideoAction;
 
     super::fixture::logging_if_requested();
     let server = TestServer::start().expect("the container would not come up");
@@ -504,7 +504,8 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touche
     assert_eq!(err.code, ErrorCode::InvalidInput);
 
     // **A rung whose prepared file would be the medium's own file**: 9 Mbit/s is
-    // `old-film_9.mp4`. The build stops before anything is made, and the file is as it was.
+    // `old-film_9.mp4`. Not a refusal (T677, the owner's decision of 2026-10-02): the rung
+    // is made under the next free name, and the medium's file is not touched.
     let added = video::video_add(
         &state,
         &server_id,
@@ -513,43 +514,19 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touche
     )
     .await
     .expect("the medium did not take the film");
-    let clash = added.added[0].clone();
-    assert_eq!(clash.slug, "old-film");
-    assert_eq!(clash.title, "Old Film");
-    assert_eq!(clash.media_id.as_deref(), Some(medium.as_str()));
+    let into = added.added[0].clone();
+    assert_eq!(into.slug, "old-film");
+    assert_eq!(into.title, "Old Film");
+    assert_eq!(into.media_id.as_deref(), Some(medium.as_str()));
+    assert!(into.problem.is_none(), "{:?}", into.problem);
     until(
         &state,
-        &clash.id,
+        &into.id,
         "the plan",
         Duration::from_secs(120),
         |v| v.state != VideoState::Planning,
     )
     .await;
-    let mut nine = two_rungs();
-    nine[0].bitrate_bps = 9_000_000;
-    nine[0].maxrate_bps = 9_900_000;
-    nine[0].bufsize_bps = 9_900_000;
-    video::video_set_rungs(&state, &clash.id, Some(nine)).unwrap();
-    video::video_start(&state, std::slice::from_ref(&clash.id));
-    let stopped = until(
-        &state,
-        &clash.id,
-        "the clash",
-        Duration::from_secs(300),
-        |v| matches!(v.state, VideoState::Problem | VideoState::Done),
-    )
-    .await;
-    let problem = stopped.problem.expect("it was not stopped");
-    assert_eq!(problem.error.code, ErrorCode::InvalidInput, "{problem:?}");
-    assert_eq!(problem.error.details[0].key, DetailCode::RungFileClaimed);
-    assert_eq!(
-        problem.actions,
-        vec![VideoAction::EditRungs, VideoAction::Rename]
-    );
-    assert_eq!(
-        digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")),
-        single
-    );
 
     // While it is on the list unfinished, the medium does not take a second film.
     let err = video::video_add(
@@ -562,16 +539,15 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touche
     .expect_err("a second film was taken for a medium already on its way");
     assert_eq!(err.code, ErrorCode::MediaSetInWork);
 
-    // Other rungs: the set is built into the medium, beside its file.
-    video::video_set_rungs(&state, &clash.id, Some(two_rungs())).unwrap();
-    video::video_retry(&state, &clash.id, false).unwrap();
-    let done = until(
-        &state,
-        &clash.id,
-        "the set",
-        Duration::from_secs(400),
-        |v| matches!(v.state, VideoState::Done | VideoState::Problem),
-    )
+    let mut nine = two_rungs();
+    nine[0].bitrate_bps = 9_000_000;
+    nine[0].maxrate_bps = 9_900_000;
+    nine[0].bufsize_bps = 9_900_000;
+    video::video_set_rungs(&state, &into.id, Some(nine.clone())).unwrap();
+    video::video_start(&state, std::slice::from_ref(&into.id));
+    let done = until(&state, &into.id, "the set", Duration::from_secs(400), |v| {
+        matches!(v.state, VideoState::Done | VideoState::Problem)
+    })
     .await;
     assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
     assert_eq!(done.media_id.as_deref(), Some(medium.as_str()));
@@ -580,20 +556,59 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touche
         .unwrap()
         .origin
         .ends_with("/videos/old-film/master.m3u8"));
-    the_set_is_served(&server, "old-film");
-    // The single file is still there, the same bytes, and still the medium's.
+
+    // The single file is still there, byte for byte, and still the medium's.
     assert_eq!(
         digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")),
         single
     );
+    // The rung went under the next free name, and the set says so for carrying on.
+    let renamed = format!("{VIDEO_DIR}/old-film_9v.mp4");
+    let made = identity(&server, &renamed).expect("the rung was not made as old-film_9v.mp4");
+    let record = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/old-film/.prepared'"))
+        .expect("the set has no record of its prepared files");
+    assert!(record.contains("v9=old-film_9v.mp4"), "{record}");
+    assert!(record.contains("v1=old-film_1.mp4"), "{record}");
+
+    // **The set is served by its master.m3u8**, which names the rungs' own playlists — the
+    // check a viewer's player would make, every rung, every first segment.
+    the_set_is_served(&server, "old-film");
+    let master = format!("{}/videos/old-film/master.m3u8", origin_of(&server));
+    let verdict = vrcast_studio_lib::server::hls_verify::verify(&master, 2)
+        .await
+        .expect("the set could not be asked for");
+    assert!(verdict.ok(), "{:?}", verdict.broken());
+    assert_eq!(verdict.variants_in_master, 2);
+
+    // The library: the medium has its file and its set; the renamed rung is not taken for
+    // the medium's file, and is shown exactly as the other prepared rung is.
     let view = library::library_list(&state, &server_id, true)
         .await
         .unwrap();
     let m = view.media.iter().find(|m| m.id == medium).unwrap();
-    assert!(m.files.iter().any(|f| f.path == "old-film_9.mp4"), "{m:?}");
+    assert_eq!(
+        m.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+        vec!["old-film_9.mp4"],
+        "{m:?}"
+    );
     assert!(
         m.ladders.iter().any(|l| l.path == "old-film/master.m3u8"),
         "{m:?}"
+    );
+    let loose = |name: &str| view.unrecognized.iter().any(|f| f.path == name);
+    assert_eq!(
+        loose("old-film_9v.mp4"),
+        loose("old-film_1.mp4"),
+        "the renamed rung is shown otherwise than an ordinary one: {:?}",
+        view.unrecognized
+    );
+    eprintln!(
+        "T677 unrecognised after the build: {:?}",
+        view.unrecognized
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>()
     );
 
     // Now it has a set: another one is refused.
@@ -606,6 +621,68 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_which_is_not_touche
     .await
     .expect_err("a second set was taken for a medium that has one");
     assert_eq!(err.code, ErrorCode::MediaHasSet);
+
+    // **Carrying on finds the rung under the name it was given**, even once the medium's
+    // file is gone and the first name is free again: built again, the 9 Mbit/s rung is found
+    // done as old-film_9v.mp4 — not made a second time as old-film_9.mp4.
+    library::file_delete(&state, &server_id, "old-film_9.mp4", true)
+        .await
+        .expect("the single file was not deleted");
+    let task = vrcast_studio_lib::commands::ladder::api::ladder_build(
+        &state,
+        vrcast_studio_lib::commands::ladder::BuildRequest {
+            server_id: server_id.clone(),
+            path: path.clone(),
+            slug: String::from("old-film"),
+            rungs: nine,
+            audio_track: 0,
+            prefer_hardware: true,
+            batch: None,
+            confirmed: true,
+        },
+    )
+    .await
+    .expect("the rebuild was refused");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let ended = loop {
+        let t = state.tasks.get(&task).unwrap().unwrap();
+        if t.state.is_final() {
+            break t;
+        }
+        assert!(Instant::now() < deadline, "the rebuild never ended");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(
+        ended.state,
+        vrcast_studio_lib::tasks::state::TaskState::Completed,
+        "{:?}",
+        ended.error
+    );
+    assert_eq!(
+        identity(&server, &renamed).as_deref(),
+        Some(made.as_str()),
+        "the renamed rung was made again"
+    );
+    assert!(
+        identity(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")).is_none(),
+        "the rung was made again under its first name"
+    );
+
+    // **Deleting the medium** takes its set with it — the directory, the record inside it —
+    // and nothing that is not the medium's.
+    library::media_delete(&state, &server_id, &medium, true)
+        .await
+        .expect("the medium was not deleted");
+    assert!(
+        server
+            .exec_inside(&format!("test ! -e '{VIDEO_DIR}/old-film'"))
+            .is_ok(),
+        "the set's directory outlived its medium"
+    );
+    let left = server
+        .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -1"))
+        .unwrap_or_default();
+    eprintln!("T677 left on the server after deleting the medium: {left:?}");
     drop(scratch);
 }
 
