@@ -57,7 +57,6 @@ export function WorkDir() {
   return (
     <fieldset>
       <legend>{words.workDir}</legend>
-      <p className="appearance__means">{words.workDirMeans}</p>
       <p data-testid="work-dir">{chosen ?? words.workDirDefault}</p>
       <button type="button" onClick={() => void pick()}>
         {words.workDirPick}

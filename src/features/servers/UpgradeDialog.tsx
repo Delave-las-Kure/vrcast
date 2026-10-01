@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 
 import { StepList } from "../deploy/StepList";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { More } from "../shared/More";
 import { useServers } from "./store";
 import { useT } from "../../shared/i18n";
 import { ipc, onTaskDone } from "../../shared/ipc";
@@ -164,7 +165,9 @@ export function UpgradeDialog({
             <div role="dialog" aria-label={words.rollBackTitle}>
               <h4>{words.rollBackTitle}</h4>
               <p>{words.rollBackReturns}</p>
-              <p>{words.rollBackKeeps}</p>
+              <More>
+                <p>{words.rollBackKeeps}</p>
+              </More>
               <button
                 type="button"
                 disabled={rollingBack}

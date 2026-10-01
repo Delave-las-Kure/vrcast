@@ -308,10 +308,14 @@ h1 {
   color: var(--danger);
 }
 
-/* The advice is not the failure: read as ordinary text so the eye goes to the red line
-   first and then to what to do about it. */
-.task__error-hint {
-  margin: 4px 0 0;
+/* Notes a task worked out (T416), folded (T674). */
+.task__notices-fold {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.task__notices-fold summary {
+  cursor: pointer;
   color: var(--text-muted);
 }
 
@@ -391,6 +395,8 @@ button:focus-visible {
 
 .notice__message {
   display: block;
+  margin: 0;
+  font-weight: 600;
 }
 
 .notice__hint,
@@ -402,6 +408,31 @@ button:focus-visible {
 .notice__cause {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* An error's advice, particulars and technical cause, folded under "Details" (T674): the line
+   says what happened, and the rest is there for whoever asks. */
+.more,
+.error-more {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.more summary,
+.error-more summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.more p,
+.error-more p {
+  margin: 4px 0 0;
+}
+
+.error-more__cause {
+  color: var(--text-muted);
+  font-size: 12px;
+  word-break: break-word;
 }
 
 .notice__close {
@@ -949,11 +980,6 @@ button:focus-visible {
 .dialog__error-message {
   margin: 0;
   color: var(--danger);
-}
-
-.dialog__error-hint {
-  margin: 4px 0 0;
-  color: var(--text-muted);
 }
 
 .notice--stale {

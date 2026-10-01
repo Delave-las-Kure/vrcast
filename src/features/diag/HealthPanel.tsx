@@ -61,7 +61,6 @@ export function HealthPanel({ health }: { health: Health }) {
 
       <details className="diag-raw">
         <summary>{words.rawTitle}</summary>
-        <p className="diag-hint">{words.rawHint}</p>
         <pre data-testid="diag-raw">{JSON.stringify(health.snapshot, null, 2)}</pre>
       </details>
     </section>

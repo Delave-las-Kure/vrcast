@@ -152,7 +152,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
               <div className="notice__body">
                 <strong className="notice__message">{w.importFound}</strong>
                 <p className="notice__hint">
-                  {suggestion.source} {w.importExplain}
+                  {suggestion.source}
                   {suggestion.needs_passphrase && w.importNeedsPassphrase}
                 </p>
               </div>
@@ -172,7 +172,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             onFieldChange={(key, value) => setInput((prev) => ({ ...prev, [key]: value }))}
             secret={secret}
             onSecretChange={setSecret}
-            secretHint={w.secretHint}
+            secretHint={null}
             busy={busy}
             submitLabel={w.next}
             busyLabel={w.checking}
@@ -186,7 +186,6 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
         <section className="wizard__stage">
           <p>{w.fingerprintLead}</p>
           <code className="fingerprint">{fingerprint}</code>
-          <p className="muted">{w.fingerprintWhy}</p>
           <div className="form__actions">
             <button type="button" onClick={() => void abandon()} disabled={busy}>
               {w.abandon}

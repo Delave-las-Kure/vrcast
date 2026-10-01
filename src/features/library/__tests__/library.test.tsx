@@ -265,9 +265,7 @@ describe("the library", () => {
 
 describe("a medium's built quality sets (T529)", () => {
   it("shows every parameter known about a set, and offers to copy its link", async () => {
-    mockLibraryList.mockResolvedValue(
-      view({ media: [media({ ladders: [ladderSet()] })] }),
-    );
+    mockLibraryList.mockResolvedValue(view({ media: [media({ ladders: [ladderSet()] })] }));
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
 
@@ -385,9 +383,7 @@ describe("what was not recognised", () => {
     expect(mockFileMove).not.toHaveBeenCalled();
 
     fireEvent.change(select, { target: { value: "m2" } });
-    await waitFor(() =>
-      expect(mockFileMove).toHaveBeenCalledWith("srv_1", "film.mp4", "m2", true),
-    );
+    await waitFor(() => expect(mockFileMove).toHaveBeenCalledWith("srv_1", "film.mp4", "m2", true));
   });
 
   it("does not offer to move a file to the medium it is already in", async () => {
@@ -440,7 +436,7 @@ describe("deleting", () => {
 
     // The numbers come from the core; the sentence around them is ours, and it
     // counts in Russian: three files is «3 файла», not «3 файл».
-    const spelled = await screen.findByText(/Будет снято 3 файла/);
+    const spelled = await screen.findByText(/Удалится 3 файла/);
     expect(spelled).toBeInTheDocument();
     expect(spelled.textContent).toContain("4,2 ГБ");
     expect(mockMediaDelete).toHaveBeenCalledWith("srv_1", "m1", false);
@@ -467,7 +463,7 @@ describe("deleting", () => {
     fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
     fireEvent.click(await screen.findByText(ru.ui.library.deleteNo));
 
-    await waitFor(() => expect(screen.queryByText(/Будет снято 1 файл/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/Удалится 1 файл/)).not.toBeInTheDocument());
     expect(mockMediaDelete).not.toHaveBeenCalledWith("srv_1", "m1", true);
   });
 
@@ -489,7 +485,7 @@ describe("deleting", () => {
 
     fireEvent.click(await screen.findByText("Название фильма"));
     fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
-    await screen.findByText(/Будет снято 3 файла/);
+    await screen.findByText(/Удалится 3 файла/);
 
     mockMediaDelete.mockRejectedValueOnce({ code: "INTERNAL" } satisfies AppError);
     fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
@@ -539,9 +535,9 @@ describe("deleting", () => {
     fireEvent.click(await screen.findByText("Название фильма"));
     fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
 
-    const renameDialog = (
-      await screen.findByText(ru.ui.library.fieldSlug)
-    ).closest("form") as HTMLElement;
+    const renameDialog = (await screen.findByText(ru.ui.library.fieldSlug)).closest(
+      "form",
+    ) as HTMLElement;
     fireEvent.change(screen.getByLabelText(ru.ui.library.fieldSlug), {
       target: { value: "drugoe" },
     });
@@ -598,7 +594,10 @@ describe("T589 — askBeforeDelete/askBeforeDeleteFile are guarded by their own 
     rejectDelete({
       code: "CONFIRMATION_REQUIRED",
       details: [
-        { key: "CONFIRM_DELETE", params: { what: "Название фильма", files: 3, bytes: 4_509_715_660 } },
+        {
+          key: "CONFIRM_DELETE",
+          params: { what: "Название фильма", files: 3, bytes: 4_509_715_660 },
+        },
       ],
     } as AppError);
 
@@ -606,7 +605,7 @@ describe("T589 — askBeforeDelete/askBeforeDeleteFile are guarded by their own 
     // is scoped to that single round trip, not stuck forever — and the dialog opened
     // exactly once, pointing at the still-current medium.
     await waitFor(() => expect(deleteButton).toBeEnabled());
-    expect(await screen.findByText(/Будет снято 3 файла/)).toBeInTheDocument();
+    expect(await screen.findByText(/Удалится 3 файла/)).toBeInTheDocument();
     expect(mockMediaDelete).toHaveBeenCalledTimes(1);
   });
 });
@@ -641,7 +640,9 @@ describe("renaming", () => {
     fireEvent.click(await screen.findByText("Название фильма"));
     fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
 
-    const dialog = (await screen.findByText(ru.ui.library.fieldSlug)).closest("form") as HTMLElement;
+    const dialog = (await screen.findByText(ru.ui.library.fieldSlug)).closest(
+      "form",
+    ) as HTMLElement;
 
     fireEvent.change(screen.getByLabelText(ru.ui.library.fieldSlug), {
       target: { value: "drugoe" },
@@ -665,7 +666,9 @@ describe("renaming", () => {
     fireEvent.click(await screen.findByText("Название фильма"));
     fireEvent.click(await screen.findByText(ru.ui.library.renameMedia));
 
-    const dialog = (await screen.findByText(ru.ui.library.fieldSlug)).closest("form") as HTMLElement;
+    const dialog = (await screen.findByText(ru.ui.library.fieldSlug)).closest(
+      "form",
+    ) as HTMLElement;
 
     fireEvent.change(screen.getByLabelText(ru.ui.library.fieldTitle), {
       target: { value: "Другое название" },

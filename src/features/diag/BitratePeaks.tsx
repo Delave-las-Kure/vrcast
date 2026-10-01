@@ -110,7 +110,6 @@ export function BitratePeaks({
   return (
     <section className="diag-bitrate">
       <h3>{words.bitrateTitle}</h3>
-      <p className="diag-hint">{words.bitrateHint}</p>
 
       <button type="button" onClick={pick}>
         {words.bitratePick}

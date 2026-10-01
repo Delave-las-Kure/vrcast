@@ -17,23 +17,23 @@ export const en: Catalogue = {
     // --- reaching the server ---
     SSH_AUTH_FAILED: {
       message: "The server refused the sign-in details",
-      hint: "Check the user name and the password or key. If the server only offers key-based sign-in, a password will not do — set up a key.",
+      hint: "Check the user name and the password or key.",
     },
     SSH_UNREACHABLE: {
       message: "Could not reach the server",
-      hint: "Check that the server is switched on, the address is right, and the port is reachable from outside.",
+      hint: "Check that the server is on and the address and port are right.",
     },
     HOST_KEY_CHANGED: {
       message: "The server's fingerprint has changed",
-      hint: "This happens after a server is rebuilt — in that case confirm the new fingerprint. If the server has not changed, do not connect: this may be an impersonation.",
+      hint: "If the server was rebuilt, confirm the new fingerprint. If not, do not connect.",
     },
     HOST_KEY_UNCONFIRMED: {
       message: "The server's fingerprint has not been confirmed yet",
-      hint: "Compare the fingerprint shown with the one your hosting provider gives, then confirm it.",
+      hint: "Compare it with your hosting panel and confirm it.",
     },
     HOST_KEY_IS_CERTIFICATE: {
       message: "The server presented a certificate instead of a key",
-      hint: "This application works with servers that present an ordinary key. Turn off host certificates on the server.",
+      hint: "Turn off the host certificate on the server.",
     },
     KEY_NEEDS_PASSPHRASE: {
       message: "The key is protected by a passphrase",
@@ -41,103 +41,103 @@ export const en: Catalogue = {
     },
     KEY_UNREADABLE: {
       message: "The key file could not be read",
-      hint: "Check the path, and that this is the private key rather than its public half (the one ending in .pub).",
+      hint: "Choose the private key, not the .pub file.",
     },
     VIDEO_DIR_DENIED: {
       message: "No access to the video directory on the server",
-      hint: "Make sure the path is right and that the user has permission for that directory.",
+      hint: "Check the path and the user's permissions on it.",
     },
 
     // --- domain ---
     DOMAIN_NOT_SERVING: {
       message: "The domain is not serving video",
-      hint: "Nothing answers on the domain. Check the server's condition in the diagnostics section.",
+      hint: "Open Diagnostics.",
     },
     DOMAIN_NOT_POINTED: {
       message: "The domain is not attached to the server",
-      hint: "Create an A record for this name at your registrar, pointing at the server's address. The change takes a few minutes to spread across the network.",
+      hint: "Add an A record pointing at the server's address and wait a few minutes.",
     },
     DOMAIN_POINTS_ELSEWHERE: {
       message: "The domain leads to a different server",
-      hint: "Correct the A record so that it points at this server's address.",
+      hint: "Point the A record at this server's address.",
     },
     IPV6_MISMATCH: {
       message: "The IPv6 choice does not match the domain records",
-      hint: "Either add an AAAA record for this server's IPv6 address, or choose to disable IPv6 during deployment.",
+      hint: "Add an AAAA record for the server's IPv6, or disable IPv6 when deploying.",
     },
 
     // --- server state and deployment ---
     SERVER_NEEDS_UPGRADE: {
       message: "The server side needs updating",
-      hint: "The server is running a version older than this application works with. Update it from the server’s card — the files and the catalogue are kept.",
+      hint: "Update it from the server's card. Files are kept.",
     },
     SERVER_FOREIGN: {
       message: "Something else is already serving from this server",
-      hint: "The application does not touch other people's configuration. Use a clean server, or remove the other setup by hand.",
+      hint: "Use a clean server, or remove the other setup by hand.",
     },
     SERVER_TOO_NEW: {
       message: "The server side is newer than this application understands",
-      hint: "Update the application: working with a server whose arrangements it does not understand is not safe.",
+      hint: "Update the application.",
     },
     DEPLOY_STEP_FAILED: {
       message: "A deployment step did not go through",
-      hint: "See which step it stopped at and run the deployment again — the steps that already succeeded will not be repeated.",
+      hint: "Run the deployment again — finished steps will not repeat.",
     },
     SWAP_FAILED: {
       message: "The swap file could not be created",
-      hint: "Free up space on the server's disk: the swap file needs at least a gigabyte.",
+      hint: "Free at least 1 GB on the server's disk.",
     },
     DEPLOY_ALREADY_RUNNING: {
       message: "A deployment or upgrade of this server is already running",
-      hint: "Wait for the current operation to finish — starting it again would repeat the same steps on the server once more.",
+      hint: "Wait for it to finish.",
     },
     ROLLBACK_NO_COPY: {
       message: "Nothing to put back: the server has no copy of its settings",
-      hint: "A copy is taken at the start of every deployment and upgrade. There is none here — this application has not run on the server, or the copy was removed. Nothing on the server was changed.",
+      hint: "A copy is made by each deployment and upgrade. Nothing on the server was changed.",
     },
 
     // --- library ---
     SLUG_TAKEN: {
       message: "That name is already taken",
-      hint: "Choose another name: this one belongs to a different medium.",
+      hint: "Choose another name.",
     },
     MANIFEST_CONFLICT: {
       message: "The catalogue was changed by another application",
-      hint: "Another copy of the application is working with this server. Refresh the list and try again.",
+      hint: "Refresh the list and try again.",
     },
     FILE_MISSING_ON_SERVER: {
       message: "The file is no longer on the server",
-      hint: "It was deleted outside the application. Refresh the library so the list matches what is really there.",
+      hint: "Refresh the library.",
     },
     FILE_IN_USE: {
       message: "Someone is watching this file right now",
-      hint: "Deleting or renaming it will cut their viewing short. Wait until they finish, or confirm deliberately.",
+      hint: "Deleting or renaming will cut the viewing short. Wait, or confirm.",
     },
     MEDIA_BUSY: {
       message: "This medium is being processed by the server right now",
-      hint: "A build of its quality set or an upload of one of its files is still running. Wait for it to finish and try deleting again.",
+      hint: "Wait for the build or upload to finish, then try again.",
     },
     FILE_BUSY: {
       message: "This file is being processed by the server right now",
-      hint: "A build of its quality set or an upload of it is still running. Wait for it to finish and try deleting again.",
+      hint: "Wait for the build or upload to finish, then try again.",
     },
 
     // --- preparing files ---
     FFMPEG_BROKEN: {
       message: "The video tool will not start",
-      hint: "Reinstall the application: the video tool that ships with it is damaged.",
+      hint: "Reinstall the application.",
     },
     NO_AUDIO_TRACKS: {
       message: "The file has no audio track at all",
-      hint: "Choose a different source: there is nothing to serve without sound.",
+      hint: "Choose another file.",
     },
     DECODE_VALIDATION_FAILED: {
       message: "The finished file failed the playback check",
-      hint: "The file is damaged and not fit to serve. Try preparing it again from the source.",
+      hint: "Prepare the file again from the source.",
     },
     NO_HW_ENCODER: {
       message: "Hardware acceleration is not available",
-      hint: "Preparation will run on the processor — slower, but just as good. If acceleration ought to be there, close whatever has taken the graphics card.",
+      hint: "The processor encodes instead — slower, same quality.",
     },
     LOCAL_DISK_FULL: {
       message: "Not enough room on this computer's disk",
@@ -147,150 +147,150 @@ export const en: Catalogue = {
     // --- transfer ---
     REMOTE_DISK_FULL: {
       message: "Not enough room on the server's disk",
-      hint: "Free up space on the server: delete media you no longer need from the library.",
+      hint: "Delete media you no longer need in the library.",
     },
     CHECKSUM_MISMATCH: {
       message: "The transferred file differs from the source",
-      hint: "The transfer was corrupted. The file was not put into service — start the upload again.",
+      hint: "The file was not published. Start the upload again.",
     },
     VIEWERS_ACTIVE: {
       message: "Someone is watching right now",
-      hint: "An upload will push what they are watching out of the server's memory and their playback will stall. Better to wait until they finish.",
+      hint: "Viewers' playback may stall. Better to wait until they finish.",
     },
     NAME_EXISTS: {
       message: "A file with that name is already being served",
-      hint: "Choose another name, or confirm the replacement. Remember that a cached copy at the CDN will keep serving the old one for a while.",
+      hint: "Choose another name or confirm the replacement.",
     },
 
     // --- quality ladders ---
     RUNG_ABOVE_SOURCE: {
       message: "The quality rung is higher than the source itself",
-      hint: "Lower the rung: detail that is not in the source will not appear, and the file will only grow.",
+      hint: "Lower the rung.",
     },
     BUFSIZE_TOO_LARGE: {
       message: "The buffer is too large for the chosen peak limit",
-      hint: "Make the buffer roughly equal to the peak limit, or real peaks will exceed the limit and viewers will see stalls.",
+      hint: "Make the buffer about equal to the peak limit.",
     },
     LEVEL_EXCEEDED: {
       message: "The stream does not fit the chosen compatibility level",
-      hint: "The level is judged by two limits — per frame and per second. Lower the bitrate, the frame rate, or the resolution.",
+      hint: "Lower the bitrate, the frame rate or the resolution.",
     },
     LADDER_INCOMPLETE: {
       message: "The quality ladder was not built in full",
-      hint: "Some variants are not being served. Run the build again — the finished ones will not be rebuilt.",
+      hint: "Run the build again — finished variants are kept.",
     },
     VMAF_UNAVAILABLE: {
       message: "This build of FFmpeg cannot measure quality",
-      hint: "A quality ladder is chosen by measuring the material rather than by formula, and without libvmaf there is nothing to measure with. Reinstall the application — its FFmpeg is built with libvmaf.",
+      hint: "Reinstall the application.",
     },
     LADDER_OBJECTION: {
       message: "Stopped: there are objections to the ladder that came out",
-      hint: "The measurement finished and the rungs were chosen, and they are ones this application will not send to a server unasked. What is wrong is in the task's notes. Open this file's ladder, change it or accept it yourself, and build. The rest of the queue carries on.",
+      hint: "Open this video's rungs, fix or accept them, and build.",
     },
     LADDER_NOT_MEASURED: {
       message: "The quality of this material has not been measured yet",
-      hint: "Rungs taken from the formula are a guess: on one film it asks for twice what is needed, on another it understates. Run the measurement, or borrow one from the first episode of the same season.",
+      hint: "Run the measurement, or borrow the first episode's.",
     },
     MEASUREMENT_NOT_FOUND: {
       message: "There is no such measurement",
-      hint: "It may have been deleted, or taken for a different target codec. Measurements do not carry between codecs: AV1's advantage over H.264 melts as the bitrate rises, and there is no constant multiplier.",
+      hint: "Run the measurement again.",
     },
     MEASUREMENT_DIFFERENT_MATERIAL: {
       message: "That measurement was taken on different material",
-      hint: "Frame size, frame rate and the height the material really has must all agree. Native 4K and an upscale behave differently: the point where the resolution should drop sits somewhere else entirely.",
+      hint: "Measure this file on its own.",
     },
     LADDER_CHECK_PENDING: {
       message: "The borrowed measurement is still being checked",
-      hint: "The measurement came from another film, and one cell of the grid is being measured on this one to compare against the donor. That takes under a minute and its progress is in the task list. Building before the answer risks hours of encoding on a ladder that was never about this film.",
+      hint: "Wait about a minute and try again.",
     },
     MEASUREMENT_NOT_THIS_MATERIAL: {
       message: "The measurement did not fit this film",
-      hint: "Every field matched — frame, frame rate, codec, pixel format — and the picture did not. One cell was measured to find out: on the same rung the donor and this film disagreed by more than episodes of one season ever do. This film needs a measurement of its own.",
+      hint: "Measure this file on its own.",
     },
     NO_LADDER_FOR_MEDIA: {
       message: "This medium has no quality ladder",
-      hint: "Build a quality ladder first: capping quality means choosing from the rungs that exist.",
+      hint: "Build a quality set first.",
     },
 
     // --- web server configuration ---
     CADDY_VALIDATE_FAILED: {
       message: "The new server configuration turned out to be invalid",
-      hint: "Nothing was applied and serving continues as before. Please report this error — it is a fault in the application.",
+      hint: "Serving continues as before. Please report this error.",
     },
     CADDY_RELOAD_FAILED: {
       message: "The server did not accept the new configuration",
-      hint: "The previous configuration was restored and serving works. Check the server's condition in the diagnostics section.",
+      hint: "The previous settings were restored. Check Diagnostics.",
     },
     LIMITS_CONFLICT: {
       message: "Someone else changed the quality limits at the same moment",
-      hint: "Reload the list of limits and try again — nothing was lost, but this change did not go through.",
+      hint: "Reload the list and try again.",
     },
     LIMITS_ROLLBACK_FAILED: {
       message:
         "The change of limits did not go through, and putting the previous limits back was not confirmed",
-      hint: "Reload the list of limits — it shows what is written in the rules file on the server. After a failed change that may differ from what the serving is using right now; its condition is in the diagnostics section.",
+      hint: "Reload the list: it shows the rules file, which may differ from what is serving.",
     },
 
     // --- tasks ---
     TASK_CANCELLED: {
       message: "The task was cancelled",
-      hint: "Nothing to do: the task was stopped at your command.",
+      hint: "Nothing to do.",
     },
     TASK_NOT_FOUND: {
       message: "Task not found",
-      hint: "The task has already finished or been stopped. Refresh the task list.",
+      hint: "Refresh the task list.",
     },
     TASK_BAD_TRANSITION: {
       message: "The task is in a state this cannot be done from",
-      hint: "Refresh the task list: their state has changed.",
+      hint: "Refresh the task list.",
     },
     TASK_NOT_PAUSABLE: {
       message: "A task of this kind cannot be paused",
-      hint: "Short tasks are not paused — it is simpler to cancel one and run it again.",
+      hint: "Cancel it and run it again.",
     },
 
     // --- "Remove everything" (FR-114, T643) ---
     FORGET_TASKS_RUNNING: {
       message: "Stop the tasks first",
-      hint: "While any task is going — a deployment, an upgrade, an upload, a preparation, a measurement — the data is not removed: the task could write back what was removed. Wait for the tasks to finish or cancel them on the tasks screen, then try again. Nothing was removed.",
+      hint: "Let the tasks finish or cancel them. Nothing was removed.",
     },
     FORGET_IN_PROGRESS: {
       message: "The application's data is being removed right now",
-      hint: "While the removal runs, no new task starts. Wait for it to finish and try again. Nothing was changed.",
+      hint: "Until it ends, no new task starts. Wait and try again.",
     },
     FORGET_PREVIEW_STALE: {
       message: "The list of what would go has changed",
-      hint: "Since you looked at it, the server profiles or the servers that would become unreachable for good have changed — a deployment may have finished and left its key only here. Nothing was removed. Look at the new list and confirm again.",
+      hint: "Nothing was removed. Check the new list and confirm again.",
     },
 
     // --- input and confirmation ---
     INVALID_INPUT: {
       message: "The details entered will not do",
-      hint: "Correct the marked fields and try again. What exactly is wrong is in the message.",
+      hint: "Correct the field and try again.",
     },
     CONFIRMATION_REQUIRED: {
       message: "Confirmation needed",
-      hint: "Read what is about to happen, then confirm. There will be no undoing it.",
+      hint: "Confirm it. It cannot be undone.",
     },
 
     // --- updating the application itself ---
     UPDATE_CHECK_FAILED: {
       message: "Could not check for updates",
-      hint: "Check the network connection and try again. The application carries on as before.",
+      hint: "Check the connection and try again.",
     },
     UPDATE_INSTALL_FAILED: {
       message: "Could not install the update",
-      hint: "Download the installer from the releases page and run it yourself. The copy you have is untouched.",
+      hint: "Download the installer from the releases page.",
     },
 
     // --- everything else ---
     STORAGE_FAILED: {
       message: "Could not reach local storage",
-      hint: "Check that there is room on the disk and that the application has permission for its own data directory.",
+      hint: "Check disk space and access to the data folder.",
     },
     INTERNAL: {
       message: "An internal error in the application",
-      hint: "Please report this error. If it keeps happening, the logs in the diagnostics section will help.",
+      hint: "Please report it, with the logs from Diagnostics.",
     },
   },
 
@@ -310,17 +310,17 @@ export const en: Catalogue = {
     PROFILE_KEY_PATH_REQUIRED: "Signing in by key needs the path to the private key file.",
     PROFILE_KEY_PATH_UNUSED: "Signing in by password does not use a key path — remove it.",
     PROFILE_AUTH_NEEDS_SECRET:
-      "The way of signing in is changing, but no new password or key was entered — the store would keep the old way’s secret and the next sign-in would fail. If the form was opened before a deployment, it may already have moved the server to its own key: close the form and open it again. To change the way of signing in, enter the password or the key’s passphrase.",
+      "The sign-in method is changing — enter the new password or the key's passphrase.",
     PROFILE_NOT_FOUND: "There is no such server — its profile may have been deleted.",
     PROFILE_MAY_BE_CHANGED:
-      "Putting the profile back as it was failed too — it may have been left changed, though the new password or passphrase was not saved. Open the profile, check its way of signing in and save it again.",
+      "The profile may have been left changed. Open it, check the sign-in method and save.",
     FINGERPRINT_EMPTY: "The fingerprint is empty — there is nothing to confirm.",
 
     // --- what the single door says when it stays shut (T519(1)) ---
     SERVER_FOREIGN_WEB_SERVER_RUNNING:
       "Something called {name} is already running on this server — it is not our own serving.",
     SERVER_FOREIGN_CONFIG_WITHOUT_STATE:
-      "There is a web-server configuration on this server with no state file of ours beside it — it looks set up by hand, or by another tool.",
+      "A web-server configuration without our state file — set up by someone else.",
     SERVER_FOREIGN_STATE_UNREADABLE:
       "Our own state file is on this server but could not be read ({problem}).",
     SERVER_FOREIGN_UNKNOWN: "The server was judged foreign, but no reason was given.",
@@ -329,8 +329,7 @@ export const en: Catalogue = {
       "The server is already deployed and at a version this application is happy with.",
 
     // --- domain field ---
-    DOMAIN_EMPTY:
-      "Enter the domain you serve from — without it there is no viewer link to hand out and no way to check that serving works.",
+    DOMAIN_EMPTY: "Enter the domain you serve from.",
     DOMAIN_HAS_SPACES: "The domain must not contain spaces.",
     DOMAIN_HAS_PATH: "Enter the domain only, without a path: stream.example.com, say.",
     DOMAIN_HAS_USER_OR_PORT: "Enter the domain only — no user and no port.",
@@ -344,8 +343,7 @@ export const en: Catalogue = {
     VIDEO_DIR_NOT_ABSOLUTE: "The path must start from the root, with a slash.",
     VIDEO_DIR_HAS_DOTDOT: "The path must not contain “..” — give the directory in full.",
     VIDEO_DIR_HAS_NEWLINE: "The path must not contain a line break.",
-    VIDEO_DIR_AT_ROOT:
-      "The serving directory is at the root of the file system — there is nowhere beside it to assemble a file, and assembling inside it is not allowed: a half-transferred file would become visible to viewers.",
+    VIDEO_DIR_AT_ROOT: "The directory cannot be at the root of the file system.",
 
     // --- CDN address field ---
     CDN_BASE_NO_SCHEME: "The CDN address must begin with https:// or http://.",
@@ -371,19 +369,17 @@ export const en: Catalogue = {
     DELETE_FILES_FAILED: "Could not delete the files on the server.",
     MANIFEST_MALFORMED: "The library catalogue on the server is corrupt and cannot be read.",
     CONFIRM_DELETE:
-      "Delete “{what}”? {files} {files|plural:file} will be removed, freeing {bytes|bytes}.",
-    VIEWERS_ACTIVE_DELETE:
-      "The server is serving data right now — {connections} connections are open. Deleting may cut someone's viewing short.",
+      "{files} {files|plural:file} ({bytes|bytes}) will be deleted. This cannot be undone.",
+    VIEWERS_ACTIVE_DELETE: "Open connections: {connections}. Deleting may cut playback.",
     MEDIA_BUSY_BUILDING:
       "The quality set “{slug}” is being built on the server right now — deletion will wait until the build finishes.",
     MEDIA_BUSY_UPLOADING:
       "The file “{name}” is being uploaded to the server right now — deletion will wait until the upload finishes.",
 
     // --- preparing files ---
-    FFMPEG_SELF_BROKEN:
-      "The bundled FFmpeg does not work — there is nothing to prepare files with. Reinstall the application: an antivirus may have removed part of it.",
+    FFMPEG_SELF_BROKEN: "The bundled FFmpeg does not work. Reinstall the application.",
     FFMPEG_NO_X264:
-      "The bundled FFmpeg was built without the software H.264 encoder. On a machine without a suitable graphics card there would be nothing to prepare files with.",
+      "The bundled FFmpeg has no software H.264 — without a graphics card there is nothing to encode with.",
     PROBE_NO_VIDEO: "There is no video in this file — perhaps the wrong file was chosen.",
     PROBE_UNREADABLE: "The file could not be parsed: it is damaged, or it is not video.",
     CONVERT_NO_OUT_PATH: "Where to put the prepared file was not specified.",
@@ -394,9 +390,9 @@ export const en: Catalogue = {
     CONVERT_OUT_BUSY:
       "Another preparation is already writing this file: {out_path}. Wait for it to end, or choose another place.",
     CONVERT_REPLACE_FAILED:
-      "The new file is ready and checked, but it could not replace the old one ({out_path}) — perhaps the old one is open in another program. The new one was left here: {kept_at}",
+      "Could not replace {out_path} (open elsewhere?). The new file: {kept_at}",
     VALIDATE_STALLED:
-      "The playback check hung: the decoder did not move a single frame in {seconds} s and was stopped. Whether the file plays is unknown, and it is not offered for upload. File: {out_path}",
+      "The playback check stalled for {seconds} s and was stopped. File: {out_path}",
     CONVERT_VALIDATE_NO_FFMPEG:
       "There is nothing to check playback with: the bundled FFmpeg does not work.",
     CONVERT_NO_ENCODER:
@@ -406,11 +402,9 @@ export const en: Catalogue = {
     PLAN_NO_SUCH_TRACK:
       "There is no audio track {number} in the file — there are {available} in all.",
     PLAN_HEIGHT_ZERO: "The frame height cannot be zero.",
-    PLAN_HEIGHT_ABOVE_SOURCE:
-      "You are asking for {asked} lines where the source has {source}. The picture can be stretched, but no detail will appear from it — only the file and the time will grow.",
+    PLAN_HEIGHT_ABOVE_SOURCE: "Height {asked} is above the source ({source}).",
     PLAN_BITRATE_ZERO: "The target bitrate cannot be zero.",
-    PLAN_BITRATE_ABOVE_SOURCE:
-      "You are asking for {asked_kbps} kbit/s from a source at {source_kbps} kbit/s. Encoding above the source is pointless: detail that is not there will not be added, and space and bandwidth go to waste.",
+    PLAN_BITRATE_ABOVE_SOURCE: "{asked_kbps} kbit/s is above the source ({source_kbps} kbit/s).",
 
     // --- how a long task can end badly ---
     CONVERT_VALIDATION_FAILED: "{problems} The file was left where it is: {out_path}",
@@ -453,24 +447,20 @@ export const en: Catalogue = {
     STEP_NET_TIMEOUT: "the server did not answer within {seconds} s",
     STEP_NET_SILENT_CLOSED:
       "the connection was accepted and closed at once: SSH does not answer on this port",
-    STEP_NET_SILENT:
-      "connections are accepted, but SSH stays silent. Some hosting providers' attack protection behaves this way: it answers on any port, even one with nothing behind it. Check the port number — SSH may be listening on another",
+    STEP_NET_SILENT: "connection accepted, but SSH is silent — check the port number",
     STEP_NET_NOT_SSH: "something other than SSH answers on port {port}: “{got}”",
-    STEP_LOGIN_FINGERPRINT_UNCONFIRMED:
-      "the server's fingerprint has not been confirmed yet — confirm it and the check will go on",
+    STEP_LOGIN_FINGERPRINT_UNCONFIRMED: "fingerprint not confirmed",
     STEP_LOGIN_OK: "signed in as {user}",
     STEP_VIDEO_DIR_OK: "{dir} is readable and writable",
     STEP_VIDEO_DIR_MISSING_OR_DENIED:
       "the directory {dir} does not exist, or the user {user} has no permission for it",
     STEP_DOMAIN_OK_NO_FILES:
       "{domain} answers over HTTPS (code {code}); there are no files in the directory, so serving itself cannot be checked yet",
-    STEP_DOMAIN_FILE_NOT_SERVED:
-      "the domain answers, but the file is not served: {url} returned code {code}. The file is on the server, so this is a serving configuration problem",
+    STEP_DOMAIN_FILE_NOT_SERVED: "the domain answers, but the file is not served: {url} → {code}",
     STEP_DOMAIN_OK: "files are being served: checked on {url}",
     STEP_DOMAIN_EMPTY_BODY: "{url} returned code {code}, but the body was empty",
     STEP_DOMAIN_TIMEOUT: "{domain} did not answer within {seconds} s",
-    STEP_DOMAIN_NO_CONNECTION:
-      "could not connect to {domain}: check that the domain record leads to this server",
+    STEP_DOMAIN_NO_CONNECTION: "no connection to {domain} — check the domain record",
     SYSTEM_ERROR: "{text}",
 
     // --- why a stream cannot simply be carried across ---
@@ -492,33 +482,27 @@ export const en: Catalogue = {
 
     // --- what to say about the choice of encoder ---
     NOTICE_PROBE_UNCALIBRATED:
-      "The complexity probe ran on something other than an NVIDIA card, and the quality setting it uses was calibrated for one. The ladder came out, but its top rung rests on a number taken with a different ruler: if you know this material, check it against what you know, and run a full measurement for anything that matters.",
+      "The complexity probe did not run on NVIDIA — the top rung may be off. For an important film, run a full measurement.",
     NOTICE_PROBE_FAILED:
-      "The material could not be measured, so the top rung comes from the old constant. A constant knows nothing about the material: on animation it asks for three times what is needed, and on dense action it understates. The rungs are worth going over by hand.",
-    NOTICE_MEASUREMENT_BORROWED:
-      "These rungs come from the measurement of {from}, not from a measurement of this file. For the next episode of the same season that is usually right — it is the same source. If the material differs (a different upscale, a different frame rate), measure it separately.",
-    NOTICE_MEASUREMENT_PARTIAL:
-      "{measured} points of {total} were measured; the rest would not encode. The ladder is built from what there is, but where points are missing the optimum may have gone unfound.",
-    NOTICE_VARIANTS_REUSED:
-      "{count} variants were already on the server and were not made again. The application asked the server what is there rather than its own note about a previous run: a note outlives the thing it describes.",
+      "Measuring failed — the top rung comes from a constant. Better adjust the rungs.",
+    NOTICE_MEASUREMENT_BORROWED: "Rungs taken from the measurement of {from}.",
+    NOTICE_MEASUREMENT_PARTIAL: "Points measured: {measured} of {total}.",
+    NOTICE_VARIANTS_REUSED: "Ready variants on the server: {count} — not rebuilt.",
     NOTICE_REENCODED_FOR_KEYFRAMES:
-      "This rung could have been carried across without re-encoding — its quality needs no change. But segments can only be cut at a keyframe, and this source's keyframes sit differently from the other rungs': the boundaries would stop lining up, and a viewer changing quality would see it stall. So the rung is re-encoded after all — hours instead of minutes.",
-    WARN_LIMIT_FOLLOWS_THE_ADDRESS:
-      "A limit is put on an address, and an address is not a person. If this viewer's address changes, the limit stays on the old one and lands on whoever takes it next; and they come back to the full set under their new one.",
-    WARN_ADDRESS_SHARED:
-      "{count} viewers are watching from this address right now. That is ordinary for a household or an office: the limit reaches all of them, not only the one who is struggling.",
+      "The rung was re-encoded so its keyframes line up with the others.",
+    WARN_LIMIT_FOLLOWS_THE_ADDRESS: "The limit is put on an address, not on a person.",
+    WARN_ADDRESS_SHARED: "{count} viewers are on this address — the limit reaches all of them.",
     WARN_CAP_BELOW_LIGHTEST:
-      "The cap is below the lightest rung there is ({lightest_bps} bit/s). The viewer gets that rung anyway — an empty description would leave them with no video at all. If it is still too much, a lighter rung has to be built rather than chosen.",
+      "The cap is below the lightest rung ({lightest_bps} bit/s) — the viewer gets that rung.",
     LIMITS_ROLLBACK_UNSUCCESSFUL:
-      "The change did not go through, and putting the previous limits back failed (or the serving did not answer after they went back) — the serving may not be working. Check the server's condition in the diagnostics section before anything else.",
+      "Putting the previous limits back failed — the serving may not be working. Check Diagnostics.",
     LIMITS_ROLLBACK_NOT_STARTED:
-      "The change did not go through, and the previous limits were not put back: the end of this change's previous command on the server was not confirmed, and putting back over it could mix the two. The serving is most likely working. Wait a minute, then reload the list. If the change got as far as replacing the rules file, its new rules may have stayed in the file and would then come into force with the next change.",
+      "The previous limits were not put back: the end of the previous command was not confirmed. Reload the list in a minute. If the change got as far as replacing the file, the new rules may have stayed.",
     NOTICE_NO_HARDWARE_FOUND:
-      "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
-    NOTICE_SOFTWARE_AS_ASKED:
-      "The processor is encoding, as you asked. It will take several times longer than with hardware acceleration.",
+      "No acceleration — the processor encodes. Quality will not suffer, but it takes several times longer.",
+    NOTICE_SOFTWARE_AS_ASKED: "The processor encodes, as you asked.",
     NOTICE_HARDWARE_FAILED:
-      "Acceleration through {encoder|encoder} did not work — the processor will do the encoding. Quality will not suffer, but it will take several times longer.",
+      "Acceleration via {encoder|encoder} failed — the processor encodes. Quality will not suffer; it takes longer.",
 
     // --- transfer ---
     UPLOAD_FILE_UNREADABLE: "The file was not found, or cannot be read.",
@@ -530,13 +514,12 @@ export const en: Catalogue = {
       "A build of the set “{slug}” is already running on this server. Wait for it to finish.",
     UPLOAD_NAME_RESERVED: "That name belongs to an internal serving entry — choose another.",
     DOMAIN_ADD_RECORD:
-      "Create a {record} record for “{name}” with the value {value} at your domain registrar. The change takes a few minutes to spread; the check can be run again.",
-    DOMAIN_FIX_RECORD:
-      "The {record} record for “{name}” currently leads to {to}. Change it to {value} — most often this is a record left over from the domain’s previous life.",
+      "Add a {record} record for “{name}” with the value {value} at your registrar.",
+    DOMAIN_FIX_RECORD: "The {record} record for “{name}” leads to {to} — change it to {value}.",
     DOMAIN_REMOVE_RECORD:
-      "The {record} record for “{name}” leads to {to}, and IPv6 is to be turned off. Remove it: otherwise the domain goes on promising an address that will stop answering, and some viewers will try it first.",
+      "Remove the {record} record for “{name}” (leads to {to}): IPv6 will be off.",
     DOMAIN_SERVER_HAS_NO_IPV6:
-      "The server has no IPv6 address of its own, and the AAAA record for “{name}” leads to {to}. Wherever it leads, it is not this machine — remove it.",
+      "The server has no IPv6, but the AAAA record for “{name}” leads to {to} — remove it.",
     CHANGE_LOOKS_ONLY: "only looks; changes nothing",
     CHANGE_INSTALLS_PACKAGES: "installs {count|plural:package}: {names}",
     CHANGE_CREATES_SWAP_FILE: "creates a {megabytes} MB swap file",
@@ -554,15 +537,13 @@ export const en: Catalogue = {
       "It stopped at the step \u201c{step|deployStep}\u201d. Steps completed: {done}.",
     DEPLOY_STOPPED_AFTER: "Steps completed: {done}.",
     NOTICE_CANCELLED_AFTER_PUBLISH:
-      "The stop arrived while \u201c{name}\u201d was already entering serving. It is on the server and being served \u2014 if it does not belong there, delete it in the library.",
-    NOTICE_NOT_FILED_UNDER_MEDIUM:
-      "“{name}” is uploaded and being served, but it could not be filed under the medium chosen for it — it is in the “not recognised” group, where it can be assigned by hand.",
-    NOTICE_LEFTOVER_PENDING:
-      "The partly uploaded “{name}” is still on the server: the server could not be reached. The application will remove it by itself — at the next start or the next upload to this server.",
+      "“{name}” was already published. If not needed, delete it in the library.",
+    NOTICE_NOT_FILED_UNDER_MEDIUM: "“{name}” is uploaded but sits in Unrecognized.",
+    NOTICE_LEFTOVER_PENDING: "The partial “{name}” will be removed from the server later.",
     NOTICE_LEFTOVER_REMOVED:
       "The partly uploaded “{name}” left by the cancellation has been removed from the server.",
     LADDER_NOT_ENOUGH_SPACE:
-      "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
+      "Will not fit: ~{needed|bytes} needed, {free|bytes} free, {short_by|bytes} short. Rungs: {rungs} — not all need building.",
     OBJECTION_RUNG_ABOVE_SOURCE:
       "Rung {index}: above the source — those bits add nothing but weight",
     OBJECTION_BUFSIZE_TOO_LARGE:
@@ -572,40 +553,32 @@ export const en: Catalogue = {
     OBJECTION_OUT_OF_ORDER: "Rung {index}: the rungs are not in descending order",
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
-      "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
-    NOTICE_CHECK_POINT_RUNNING:
-      "The measurement was borrowed from another film and is being checked: one cell of the grid is measured on this film and compared with the donor. No set can be built from it until that lands — under a minute, and its progress is in the task list.",
+      "Build not queued: the rungs have objections. The rest of the queue carries on.",
+    NOTICE_CHECK_POINT_RUNNING: "Checking the borrowed measurement — under a minute.",
     STAGE_CHECKING_LOAN: "Checking the borrowed measurement",
     CHECK_POINT_NOT_COMPARABLE:
-      "The loan could not be checked: at {bitrate} Mbit/s and {height}p only {used} chunks of {asked} would measure. A chunk fails where the file is damaged or half-downloaded, and the ones left describe whatever survived — flattering the wreckage in proportion to how much is gone. That cannot be compared with the donor, so the loan has been taken back. Check the file is whole.",
+      "Loan withdrawn: at {bitrate} Mbit/s, {height}p only {used} of {asked} chunks measured. Check the file.",
     CHECK_POINT_APART:
-      "On the {bitrate} Mbit/s rung at {height}p the donor scores {donor} VMAF and this film {borrower} — {apart} hundredths apart. The threshold is 100 hundredths, and it is not invented: four episodes of one season disagreed by at most 56, while alien material stood at least 218 away. The same cell measured three times running gave the same number, so this is not the measurement wobbling.",
+      "At {bitrate} Mbit/s, {height}p: donor {donor} VMAF, this one {borrower} — {apart} hundredths apart, threshold 100.",
     NOTICE_CHECK_POINT_HELD:
-      "The loan was checked by measurement: on the {bitrate} Mbit/s rung at {height}p this film differed from the donor by {apart} hundredths of a VMAF point, against a threshold of 100.",
+      "Loan confirmed: {bitrate} Mbit/s, {height}p — {apart} hundredths of VMAF apart, threshold 100.",
     NOTICE_MEASUREMENT_THIN:
-      "Points measured on less than the whole sample: {points}. One of them ({bitrate} Mbit/s, {height}p) landed {used} chunks of {asked}. A chunk fails where the file is damaged or half-downloaded, and the ones left describe whatever survived — flattering the wreckage in proportion to how much is gone. Worth checking the file is whole before building from this.",
+      "Incomplete points: {points}. E.g. {bitrate} Mbit/s, {height}p: {used} of {asked} chunks. Check the file.",
     NOTICE_MATERIAL_APART:
-      "How unlike the film this measurement came from this one is: the middle of the weight differs by {median}%, the heavy scenes by {p90}%, the peak against the middle by {ratio}%. There is deliberately no threshold — nobody has measured what these numbers mean, and an invented threshold in a check is worse than no check because it looks like knowledge. Measured on five episodes of one release: four agreed on the top rung to within 0.56 VMAF, and the fifth was 3.19 behind with all eight fields equal — it is simply another encode. If these numbers are large and you know your material, measure this episode yourself.",
+      "Apart from the donor: median {median}%, heavy scenes {p90}%, peak to median {ratio}%. No threshold — if large, measure it yourself.",
     NOTICE_VARIANTS_STRANDED:
-      "{count} variant(s) are still on the server but outside this set ({names}). Their files and segments are intact, but the set no longer names them — viewers will not get those qualities, and the disk is still holding them. If that was not the intention, build the set with them; if it was, remove them from the server so they stop taking up room.",
-    LEND_FRAME_DIFFERS:
-      "A different frame size. A measurement is tied to heights, and the heights are tied to the source's frame.",
-    LEND_FPS_DIFFERS:
-      "A different frame rate. At the same bits per second each frame gets a different share, and the point where quality falls away sits elsewhere.",
-    LEND_NATIVE_HEIGHT_DIFFERS:
-      "The material's real height differs: one is upscaled and the other is not (or they were upscaled from different heights). The height above which no more detail appears is not the same for both.",
-    LEND_CODEC_DIFFERS:
-      "The sources are in different codecs. The codec decides how much picture a bit buys, which is the very question a measurement answers. This used to compare only whether the source was HEVC, so AV1 and VP9 passed as H.264.",
-    LEND_PIXEL_FORMAT_DIFFERS:
-      "A different pixel format: 10-bit holds a gradient where 8-bit bands. At one bitrate that is a different picture.",
-    LEND_COLOUR_TRANSFER_DIFFERS:
-      "Different transfer curves (SDR against HDR). HDR spends its bits elsewhere, and a measurement of one says nothing about the other.",
-    LEND_TOO_SHORT:
-      "The film is too short: the measurement runs on the donor's chunks, and the last of them begins after this file ends. There would be nothing there to measure.",
+      "Rungs left outside the set on the server: {count} ({names}). Viewers do not get them; they take space.",
+    LEND_FRAME_DIFFERS: "A different frame size.",
+    LEND_FPS_DIFFERS: "A different frame rate.",
+    LEND_NATIVE_HEIGHT_DIFFERS: "A different native height (upscale).",
+    LEND_CODEC_DIFFERS: "Different source codecs.",
+    LEND_PIXEL_FORMAT_DIFFERS: "A different pixel format (8/10 bit).",
+    LEND_COLOUR_TRANSFER_DIFFERS: "Different transfer curves (SDR/HDR).",
+    LEND_TOO_SHORT: "The film is shorter than the donor's measured chunks.",
     LEND_MATERIAL_NOT_KNOWN:
-      "One of the two measurements does not record what material it was made on: it is older than these columns. Vouching for what nobody looked at will not do — measure again.",
+      "It is not recorded what material that measurement was made on — measure again.",
     LADDER_NO_ROOM_HERE:
-      "This machine has no room for one variant: {needed} bytes are needed, {free} are free, {short_by} short. Writing to {at}. Variants are made one at a time and removed as soon as they are sent, so one is all that is needed — and there is nowhere to put even that. Free some space, or choose another folder in the settings.",
+      "No room for a variant: {needed} bytes needed, {free} free, {short_by} short. Folder: {at}. Free space or change the folder in settings.",
     LADDER_SPACE_UNKNOWN:
       "How much room the set would take could not be worked out, so the build is going ahead without that check.",
     NOT_ENOUGH_SPACE:
@@ -613,8 +586,7 @@ export const en: Catalogue = {
     NAME_WILL_BE_REPLACED: "The file “{name}” is already being served — it will be replaced.",
     CDN_KEEPS_OLD_COPY:
       "The CDN will keep the previous copy for a while, and viewers will get the old one.",
-    VIEWERS_ACTIVE_UPLOAD:
-      "The server is serving data right now — {connections} connections are open. An upload will push what they are watching out of its memory and playback will stall.",
+    VIEWERS_ACTIVE_UPLOAD: "Open connections: {connections}. The upload may stall playback.",
 
     // The state of the server (FR-070). Every reading carries the figures it rests on.
     HEALTH_NOT_ESTABLISHED: "Could not be established.",
@@ -647,28 +619,24 @@ export const en: Catalogue = {
     HEALTH_DISK: "{free_mb} MB free of {total_mb} on the disk.",
     HEALTH_NETWORK_TUNED: "The network is tuned: {congestion}.",
     HEALTH_NETWORK_UNTUNED:
-      "The network is not set the way it was measured: {congestion}/{qdisc} instead of {wanted_congestion}/{wanted_qdisc}. The serving works, only slower.",
+      "Network: {congestion}/{qdisc} instead of {wanted_congestion}/{wanted_qdisc} — slower.",
     HEALTH_READAHEAD_OK: "The disk's readahead is {kb} KB.",
-    HEALTH_READAHEAD_SMALL:
-      "The disk's readahead is {kb} KB instead of {wanted_kb}. Measured, that is the difference between 17 and 40–60 MB/s.",
-    HEALTH_NO_AUTO_RESTART:
-      "The serving does not come back on its own: after a crash it will lie there until somebody notices.",
+    HEALTH_READAHEAD_SMALL: "Disk readahead {kb} KB instead of {wanted_kb}.",
+    HEALTH_NO_AUTO_RESTART: "The serving does not restart itself after a crash.",
     HEALTH_AUTO_RESTART: "The serving comes back on its own: {mode}.",
 
     // Why the picture stops (FR-072). The conclusion is sometimes wrong, and has to be arguable.
     STALLS_TOO_SHORT: "Too short a stretch — {seconds} s. There is nothing to judge by.",
-    STALLS_KEEPING_UP:
-      "The viewer is keeping up: {ratio}× of real time received, link {mbit_s} Mbit/s. The gaps between their requests are a full buffer, not a stall.",
+    STALLS_KEEPING_UP: "The viewer keeps up: {ratio}× real time, link {mbit_s} Mbit/s.",
     STALLS_SERVER_LINK:
       "The server's own link is the limit: {out_mbit_s} Mbit/s going out of {capacity_mbit_s} possible.",
-    STALLS_DISK:
-      "{disk_read_mb_s} MB/s is being read off the disk, and {ratio}× of real time received. The viewers are spread along the timeline and their pieces do not fit in memory.",
+    STALLS_DISK: "The disk is the limit: {disk_read_mb_s} MB/s read, {ratio}× real time received.",
     STALLS_FILE_PEAKS:
-      "The viewer's {mbit_s} Mbit/s carries the average bitrate of {average_mbit} but not the ten-second peak of {peak_10s_mbit}. It is the file that hangs the player; a re-encode with the peaks capped is the cure.",
+      "The file's peaks: link {mbit_s} Mbit/s, average {average_mbit}, 10 s peak {peak_10s_mbit}.",
     STALLS_THE_PLAYER:
-      "Not the viewer's link. While anything was arriving it arrived at {in_download_mbit_s} Mbit/s, which would keep up with a film needing {average_mbit}. The shortfall built up in the gaps, when the viewer was asking for nothing: a player stopped, a decoder that could not keep pace, or somebody pressing pause. Over the clock they got {mbit_s} Mbit/s, a ratio of {ratio}. Player restarts: {restarts}, segments skipped: {skipped}.",
+      "The player, not the link: {in_download_mbit_s} Mbit/s against {average_mbit} needed; by the clock {mbit_s} Mbit/s, ratio {ratio}. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
-      "The viewer's link is short: {ratio}× of real time received at {mbit_s} Mbit/s (inside the downloads — {in_download_mbit_s}). Segments skipped: {skipped}, player restarts: {restarts}.",
+      "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}). Skipped: {skipped}, restarts: {restarts}.",
   },
 
   plurals: {
@@ -684,6 +652,7 @@ export const en: Catalogue = {
   ui: {
     common: {
       dismiss: "Dismiss",
+      more: "Details",
       cancel: "Cancel",
       close: "Close",
       refresh: "Refresh",
@@ -789,28 +758,18 @@ export const en: Catalogue = {
       // the number it is about: a bare "a step down" is true of every rung but the top and
       // explains none of them.
       reasons: {
-        probed_anchor:
-          "The top of the ladder: at {mbps} Mbit/s the material stops asking for more, and further bits go into what nobody can see.",
-        capped_by_source:
-          "The top was cut to {mbps} Mbit/s — that is all there is in the source. There is nothing above it to encode.",
-        capped_by_upscale:
-          "The top was cut to {mbps} Mbit/s: above it the picture is upscaled, and the extra bits go into stretched pixels.",
-        step_down: "A step down from the one above: {mbps} Mbit/s, {times} times less.",
-        fallback_constant:
-          "The material could not be measured, so {mbps} Mbit/s comes from the old constant. The constant knows nothing about this material.",
-        lowered_for_density:
-          "The height was lowered to {height}: at {mbps} Mbit/s and the full frame there would be too few bits per pixel, and the picture would break into squares.",
-        full_resolution:
-          "The frame was left whole — {width}×{height}: at {mbps} Mbit/s the density holds.",
-        single_rung_only:
-          "The material is too light for a ladder: one rung, {mbps} Mbit/s. A second would differ from the first by less than anyone can see.",
-        measured_optimum:
-          "The height {height} was chosen by the measurement, not by the formula: at {mbps} Mbit/s it scored the best VMAF of those tried.",
-        borrowed_measurement: "The measurement behind this rung was taken on another file.",
-        filled_a_gap:
-          "This rung is here to break the fall: the step from the one above to the next one down was too big, and a player cannot make that jump. Its {mbps} Mbit/s is a real measured point, but it was picked for the ladder rather than for the picture.",
-        edited_by_hand:
-          "The bitrate — {mbps} Mbit/s — was typed in by hand. The frame and the ceiling have been reworked to match it, but nobody has measured how it actually looks yet.",
+        probed_anchor: "Top: above {mbps} Mbit/s nobody sees a difference.",
+        capped_by_source: "Cut to {mbps} Mbit/s — all the source has.",
+        capped_by_upscale: "Cut to {mbps} Mbit/s — above it is upscale.",
+        step_down: "Step down: {mbps} Mbit/s, {times} times less.",
+        fallback_constant: "Not measured: {mbps} Mbit/s from a constant.",
+        lowered_for_density: "Height {height}: at {mbps} Mbit/s a full frame breaks up.",
+        full_resolution: "Full frame {width}×{height} — {mbps} Mbit/s is enough.",
+        single_rung_only: "One rung, {mbps} Mbit/s — a second would look the same.",
+        measured_optimum: "Height {height} — best measured VMAF at {mbps} Mbit/s.",
+        borrowed_measurement: "Measured on another file.",
+        filled_a_gap: "{mbps} Mbit/s — fills a step that was too big.",
+        edited_by_hand: "{mbps} Mbit/s typed in by hand, not measured.",
       },
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",
@@ -819,8 +778,7 @@ export const en: Catalogue = {
       measuredColumnVmaf: "VMAF",
       measuredColumnActual: "Came out at",
       measuredChosen: "taken into the ladder",
-      droppedAbove:
-        "Dropped as excessive: {list}. Past the quality target those bits are paid for by every viewer and seen by none.",
+      droppedAbove: "Dropped as excess: {list}.",
 
       build: "Build the set",
       buildBlocked: "Cannot be built: the rungs are not measured",
@@ -836,46 +794,36 @@ export const en: Catalogue = {
     serverState: {
       title: "The server’s state",
       asking: "Looking at what this server is…",
-      clean: "The server is bare: no serving is deployed on it.",
+      clean: "Not deployed.",
       deployIt: "Set it up",
-      unfinished:
-        "The setup did not finish: a deployment was interrupted. Running it again does not redo what is done.",
+      unfinished: "Deployment not finished.",
       finishIt: "Finish it",
-      versions: (server: number, app: number) =>
-        `Server side: version ${server}. This application deploys ${app}.`,
-      tooNew:
-        "The server side is newer than this application understands. Reading only for now: writing files where a newer layout does not keep them is how a working server is quietly broken.",
+      versions: (server: number, app: number) => `Server version: ${server}, app version: ${app}.`,
+      tooNew: "The server side is newer than the app — read only.",
       updateIt: "Update the server side",
-      foreign:
-        "This server already has somebody else’s serving on it. The application changes nothing here.",
-      unreachable: "The server did not answer. The last thing known is shown.",
+      foreign: "Someone else's setup — the app leaves it alone.",
+      unreachable: "The server did not answer. Showing the last known state.",
     },
     deploy: {
       title: "Set the server up",
       willChange: "What will be done",
       agreeAndStart: "Agreed — set it up",
-      running: "Setting it up. The screen may be closed; the work carries on.",
-      finished: "The server is set up and serving video over its domain.",
-      machine: (memoryMb: number, disk: string) =>
-        `${memoryMb} MB of memory, system disk ${disk}. On a machine with little memory installing packages is killed without a swap file — one will be made.`,
+      running: "Deploying. You can close this screen.",
+      finished: "The server is deployed.",
+      machine: (memoryMb: number, disk: string) => `Memory ${memoryMb} MB, disk ${disk}.`,
 
       ipv6Question: "What should happen to IPv6 on this server?",
-      ipv6NotChosen:
-        "Choose one of the two options below — neither is assumed by default, because each decides the fate of viewers on an IPv6 connection differently.",
-      ipv6Keep: "Keep it",
-      ipv6KeepMeans:
-        "The protection will cover IPv6 as fully as IPv4. The domain must then have an AAAA record pointing at this server’s IPv6 address — otherwise viewers whose connection prefers IPv6 go nowhere, and the complaint arrives not as “the server is broken” but as “it doesn’t open for me”.",
-      ipv6Disable: "Turn it off",
-      ipv6DisableMeans:
-        "The serving will not answer over IPv6 at all. The domain must then have no AAAA record: left there, it goes on promising an address that has gone quiet.",
+      ipv6NotChosen: "Choose one.",
+      ipv6Keep: "Keep IPv6",
+      ipv6KeepMeans: "Needs an AAAA record for the server's IPv6.",
+      ipv6Disable: "Disable IPv6",
+      ipv6DisableMeans: "Remove the domain's AAAA record.",
 
       domainTitle: "The domain record",
       domainAsking: "Asking the servers that hold the zone…",
       domainOk: "The domain points at this server.",
-      domainNotPointed:
-        "The domain is not attached to the server. Create a record at your registrar.",
-      domainSpreadsSlowly:
-        "The change takes a few minutes to spread. Once the record is created, ask again.",
+      domainNotPointed: "The domain does not lead here. Add an A record at your registrar.",
+      domainSpreadsSlowly: "A record takes a few minutes to spread.",
       domainAskAgain: "Ask again",
 
       stepApplied: "done",
@@ -885,10 +833,10 @@ export const en: Catalogue = {
       stepNotHere: "cannot be established here",
 
       foreignCaddyfile:
-        "This server already has somebody else’s serving configuration — /etc/caddy/Caddyfile. This application did not write it: either it was edited by hand, or somebody’s serving lived here. Without your agreement the deployment will stop at the configuration step and leave the file alone.",
+        "The server has someone else's Caddyfile. Without consent, deployment stops.",
       replaceCaddyfile: "Replace it (a copy is kept)",
       replaceCaddyfileMeans:
-        "Before the first change the file is copied to /etc/vrcast/backup/<time>/Caddyfile. “Put it back as it was” restores it only if this deployment runs to the end. If it breaks off, the application will not bring this file back — not even after deploying again: it has to be put back by hand from the copy of the run that broke off, /etc/vrcast/backup/<its start time>/Caddyfile.",
+        'Copy: /etc/vrcast/backup/<time>/Caddyfile. "Put it back" restores it only if the deployment finishes; otherwise restore it by hand from the copy.',
     },
 
     deploySteps: {
@@ -911,27 +859,23 @@ export const en: Catalogue = {
 
     forget: {
       title: "Remove my data",
-      means:
-        "Everything the application keeps about you: settings, server profiles, the library cache, the place tables and the secrets in the system store. The videos on your server are not touched.",
+      means: "Settings, server profiles, cache and secrets. Videos on the server stay.",
       dataDir: "Directory",
       servers: "Server profiles",
       secrets: "Secrets in the system store",
       none: "none",
       lockedOut: (names: string) =>
-        `These will become unreachable for good: ${names}. Password logins are off on them, and the key exists only here.`,
-      lockedOutAdvice:
-        "Save the key to a file before removing, or the way back to such a server is your hosting provider's console and a reinstall.",
+        `Will become unreachable for good: ${names} — the key exists only here.`,
+      lockedOutAdvice: "Save the key to a file before removing.",
       agree: "I understand this cannot be undone",
       remove: "Remove everything",
       removing: "Removing…",
-      done: "Removed. The application can be uninstalled — nothing of yours is left behind.",
+      done: "Removed. The application can be uninstalled.",
       secretsLeft: (names: string) =>
         `The system store would not give up these secrets: ${names}. They will have to be cleared by hand.`,
-      dirLeft: "The data directory could not be removed — something may be holding a file in it.",
-      tasksRunning:
-        "Stop the tasks first: while any is going — a deployment, an upgrade, an upload, a preparation, a measurement — the data cannot be removed. Wait for them to finish or cancel them on the tasks screen.",
-      changed:
-        "The list changed while you were looking at it: check it again and confirm again. The earlier agreement has been withdrawn.",
+      dirLeft: "The data folder could not be removed — a file is in use.",
+      tasksRunning: "Stop the tasks first.",
+      changed: "The list changed — the agreement has been withdrawn, check again.",
       reading: "Reading the list again…",
     },
     update: {
@@ -940,26 +884,22 @@ export const en: Catalogue = {
       check: "Check for updates",
       checking: "Checking…",
       upToDate: "Nothing newer.",
-      notConfigured:
-        "This build carries no update settings, so there is nowhere to look. Builds from source are like this; released copies update.",
-      unpackaged:
-        "This is a build from the source tree, not an installed copy: there is nothing here to update.",
+      notConfigured: "Updates are not set up in this build.",
+      unpackaged: "A build from source — nothing to update.",
       available: (version: string) => `Version ${version} is out.`,
       published: "Published",
       notes: "What is in it",
       install: "Update",
       installing: "Installing…",
-      warnWindows:
-        "The installer stops the application the moment it starts. Starting it again is up to you.",
+      warnWindows: "The installer closes the app — start it again afterwards.",
       warnPackage:
-        "The system will ask for an administrator password: the package is installed as root. The application carries on running — the new version begins at the next start.",
-      warnAppImage:
-        "The application will rewrite its own file and carry on running as before. The new version begins at the next start.",
+        "The system will ask for the administrator password. The new version starts next launch.",
+      warnAppImage: "The new version starts next launch.",
       // Neutral, because the particulars differ: being stopped, an administrator password,
       // a rewritten file — each is named by the warning right above the checkbox. One
       // wording covering all three would be true on exactly one platform.
-      agree: "I understand a new version will be installed",
-      doneRestartLater: "The update is installed. The new version begins at the next start.",
+      agree: "Install the new version",
+      doneRestartLater: "Update installed. The new version starts next launch.",
     },
     appearance: {
       title: "Appearance",
@@ -969,31 +909,21 @@ export const en: Catalogue = {
       closeTitle: "The close button",
       closeToTray: "Minimise to the notification area",
       closeHides:
-        "The window goes to the notification area and the work carries on: tasks keep running, and the icon shows the application is there. To leave altogether, use Quit on the menu of that icon.",
-      closeExits:
-        "The window closes and the application quits: there is nowhere to minimise to, because this desktop has no notification area. A hidden window would mean an application still running with nothing on screen to say so.",
+        "The window goes to the tray; tasks carry on. To quit, use Quit in the icon's menu.",
+      closeExits: "The window closes and the app quits: this desktop has no tray.",
       closeUnknown: "Whether there is anywhere to minimise to could not be determined.",
       workDir: "Working files",
-      workDirMeans:
-        "While a variant is being made it sits on a disk whole — one and a half to two gigabytes at a time. Beside the source film by default: the disk a film is on certainly fits a film. Change it if you keep a separate disk for scratch work.",
       workDirDefault: "Beside the source file",
       workDirPick: "Choose a folder",
       workDirReset: "Back to the default",
-      workDirLeft:
-        "The old folder still holds {files} file(s), {mb} MB in all. The application will not look there again — remove them yourself if they are not wanted.",
+      workDirLeft: "{files} files ({mb} MB) were left in the old folder — remove them yourself.",
 
       mascot: "Mascot",
       mascotOn: "Show the mascot",
-      mascotMeans:
-        "It shows the same things the task list does: work, success, failure and a viewer in trouble. Turned off, it is not loaded at all rather than merely hidden.",
       animations: "Motion",
       animationsOn: "Smooth transitions",
-      animationsMeans:
-        "Transitions between sections and the mascot's movement. Turned off here or by the system's \u00abreduce motion\u00bb setting \u2014 what the system has turned off cannot be turned back on here.",
 
       heavyTasks: "Concurrent heavy tasks",
-      heavyTasksMeans:
-        "Limits how many conversions, uploads, quality-ladder builds and deployments run at once. More runs the total faster but slows each one down and loads the disk and network harder; fewer means they queue up but stay out of each other's way.",
 
       mascotIdle: "The mascot is resting",
       mascotWorking: "The mascot is busy working",
@@ -1015,8 +945,6 @@ export const en: Catalogue = {
       ratingTrouble: "trouble",
       ratingUnknown: "not established",
       rawTitle: "What was actually read",
-      rawHint:
-        "The judgement above was made out of these figures. They are shown so it can be argued with: it is sometimes wrong.",
       readingServing: "The serving",
       readingDelivery: "Delivery over HTTPS",
       readingFirewall: "Firewall",
@@ -1036,29 +964,23 @@ export const en: Catalogue = {
       logsUnreadable: (n: number) => `Lines that yielded nothing: ${n}`,
       logsCodes: "Answers",
       logsRangesOk: "Ranges are being served — 206 dominates, as it should.",
-      logsRangesBad:
-        "Whole files are served more often than ranges. Watching works, seeking does not.",
+      logsRangesBad: "Files are sent whole — seeking does not work.",
       logsTopPaths: "Asked for most often",
       logsTopAddresses: "Asked most often",
       logsFailures: "Failures",
       logsNoFailures: "No failures.",
       logsLong: "Long requests",
-      logsLongNormal:
-        "A long request is normally fine: it is a long range fetch. Only the ones that delivered next to nothing are marked.",
-      logsCapped:
-        "Not everything is shown: this stretch holds more lines than could be brought across. Ask for a shorter one.",
+      logsLongNormal: "Only long and nearly empty ones are flagged.",
+      logsCapped: "Not everything is shown — pick a shorter period.",
 
       stallsTitle: "Why the picture stops",
       stallsNoViewers: "Nobody was watching over this stretch.",
       stallsSetAside: "Not viewers",
       stallsOurOwnCheck: "the server's own address — these are our own checks",
-      stallsTooLittle: (n: number) =>
-        `segments taken: ${n} — a cache filling itself, or somebody who has just arrived`,
+      stallsTooLittle: (n: number) => `segments: ${n} — a cache, or just arrived`,
       stallsRatio: "Content received against real time",
       stallsLink: "The viewer's link",
       stallsInDownload: "inside the downloads",
-      stallsInDownloadHint:
-        "The second figure is always the higher: it is the speed inside the downloads, without the pauses between them. The viewer's link is the first.",
       stallsSkipped: "Segments skipped",
       stallsRestarts: "Player restarts",
       stallsWatching: "Watching",
@@ -1072,8 +994,6 @@ export const en: Catalogue = {
 
       bitrateTitle: "The file's bitrate peaks",
       bitratePick: "Choose a file",
-      bitrateHint:
-        "The file is read here and no server is touched. It can be asked before an upload too — which is when it helps most.",
       bitrateAverage: "Average",
       bitrateMedian: "Median",
       bitratePeak1: "One-second peak",
@@ -1082,49 +1002,40 @@ export const en: Catalogue = {
       bitrateWorst: "Where it is heaviest",
       bitratePeakOverAverage: (times: number) =>
         `The ten-second peak is ${times} times the average.`,
-      bitrateAdvice:
-        "It is this peak that hangs a player whose link is below it. A re-encode with the peaks capped is the cure.",
-      bitrateEven:
-        "The file is even: its peaks are close to its average, and there is nothing to re-encode.",
+      bitrateAdvice: "Fixed by re-encoding with a peak cap.",
+      bitrateEven: "The file is even — no need to re-encode.",
     },
     upgrade: {
       title: "Update the server side",
-      fromTo: (from: number, to: number) =>
-        `The server is at version ${from}; this application deploys ${to}.`,
+      fromTo: (from: number, to: number) => `Version ${from} → ${to}.`,
       willChange: "What will change",
       nothingToDo: "Everything is already in place — nothing to change.",
       willKeep: "What will be copied aside first",
-      keepsVideosAndCatalogue:
-        "The videos and the catalogue are neither copied nor touched: they are your work, not our configuration. A rollback that restored the catalogue would undo everything uploaded since.",
+      keepsVideosAndCatalogue: "Videos and the catalogue are not touched.",
       agreeAndUpgrade: "Agreed — update",
       rollBack: "Put it back as it was",
       cancel: "Cancel",
       rollBackTitle: "Restore the settings from the copy?",
-      rollBackReturns:
-        "What comes back: the settings files from the copy taken before the last deployment or upgrade — the ones that were on the server before it. The serving and SSH re-read them without a restart.",
+      rollBackReturns: "The settings files come back from the copy made before the last run.",
       rollBackKeeps:
-        "What does not: files that did not exist before the run — 99-vrcast-ipv6.conf, for example — stay as they are; the server’s live state — sysctl values, ufw’s rules and state, the swap in use, the loaded BBR module, a running fail2ban; the quality-limit rules — the caps you set are kept. The videos, the catalogue and the login keys are not touched.",
+        "Not put back: new files (such as 99-vrcast-ipv6.conf), live state (sysctl, ufw, swap, BBR, fail2ban) and quality limits. Videos, the catalogue and keys are not touched.",
       rollBackConfirm: "Understood — put it back",
       rollBackDone: "The settings were restored from the copy.",
     },
     limits: {
       title: "Capping quality",
-      explain:
-        "A player takes the best it is shown and will not be talked out of it. The only way to bring a viewer down to a rung they can hold is to stop showing them the ones they cannot.",
       pickMedia: "Which medium",
       cap: "Cap, Mbit/s",
-      willGet: "This viewer would be given:",
+      willGet: "The viewer will get:",
       apply: "Cap it",
       confirm: "Understood — cap it",
       cancel: "Cancel",
-      noLadder: "This medium has no quality set — there is nothing to shorten",
+      noLadder: "This medium has no quality set.",
       previewing: "Working out what the viewer would be left with…",
       applying: "Capping…",
 
       listTitle: "Limits in force",
       listEmpty: "Nothing is capped.",
-      listFromServer:
-        "Read from the server rather than from a note here: a note goes stale the hour somebody edits the server by hand.",
       columnWho: "Address",
       columnMedia: "Medium",
       columnCap: "Cap",
@@ -1134,21 +1045,17 @@ export const en: Catalogue = {
     },
 
     viewers: {
-      placesMissing:
-        "The tables of places have not been downloaded, so no country or city is shown for a viewer.",
-      placesStale:
-        "The tables of places are from {month}; a newer set is out, so places may be off.",
+      placesMissing: "No place tables — country and city are not shown.",
+      placesStale: "The place tables from {month} are out of date.",
       placesFetch: "Download",
       placesFetching: "Downloading…",
       placesFailed: "The download did not go through — try again later.",
-      explain:
-        "Who is pulling from your server right now. The list keeps itself up to date while this screen is open.",
-      noServer: "Choose a server first — there is nobody to watch yet.",
+      noServer: "No server selected.",
       starting: "Starting to watch…",
       nobody: "Nobody is watching at the moment.",
       notKnown: "not determined",
       watchingUnknown: "what they are watching is not known yet",
-      speedNotYet: "A speed appears once there is enough to work one out from.",
+      speedNotYet: "Not measured yet.",
       needs: "needs",
       fine: "fine",
       columnAddress: "Address",
@@ -1159,22 +1066,18 @@ export const en: Catalogue = {
       columnState: "State",
       problems: {
         slowLink: "not enough link",
-        slowLinkHint:
-          "Less is arriving than the quality they are getting needs. The player will not step down by itself — the quality has to be capped by hand.",
+        slowLinkHint: "The link is too slow for this quality — cap the quality.",
         retransmits: "a lossy link",
-        retransmitsHint:
-          "A noticeable share of what is sent has to be sent again. Usually the viewer's connection rather than the server's.",
+        retransmitsHint: "Poor connection on the viewer's side.",
         stalls: "the pulling has stopped",
-        stallsHint:
-          "The connection is open but nothing is moving. If it lasts, the viewer's film has cut out.",
+        stallsHint: "No data flowing. If it lasts, the viewing has dropped.",
       },
       watchingNow: "watching now",
       reconnecting: "The connection to the server was lost — reconnecting…",
       reconnectingTry: "Attempt {n}.",
-      staleAge: "The list below is the last one received, {age} ago. It may be different by now.",
+      staleAge: "List from {age} ago — it may have changed.",
       staleNever: "No list has come from the server yet.",
-      stopped:
-        "Watching has stopped: the server will not let us in, and trying again will not help — its key has changed or the login is refused. Check the server in the Servers section.",
+      stopped: "Watching stopped: cannot sign in to the server. Check the server.",
       restart: "Start again",
       ageSeconds: "{n} s",
       ageMinutes: "{n} min",
@@ -1213,44 +1116,33 @@ export const en: Catalogue = {
       stepData: "Details",
       stepFingerprint: "Fingerprint",
       stepTest: "Check",
-      importFound: "Settings from the old way of working were found nearby",
-      importExplain:
-        "— the address, domain, user and key path can be filled in from it. The file is only read, never changed.",
-      importNeedsPassphrase:
-        " The key's passphrase will have to be entered: it is not in the file.",
+      importFound: "Earlier settings found:",
+      importNeedsPassphrase: " Enter the key's passphrase yourself.",
       importApply: "Fill in",
       fieldName: "Name",
-      fieldNamePlaceholder: "How to tell this server from the others",
+      fieldNamePlaceholder: "My server",
       fieldHost: "Address",
       fieldHostPlaceholder: "IP address or name",
       fieldPort: "Port",
       fieldDomain: "Serving domain",
-      fieldDomainHint:
-        "Viewer links are handed out on it. You can paste straight from the address bar — the extra parts are removed for you.",
       fieldUser: "User",
       fieldAuth: "Sign-in",
       authKey: "By key",
       authPassword: "By password",
       authManagedKey: "With the key made while deploying",
-      authManagedKeyNote:
-        "Deploying made this server its own key and turned password sign-in off; the key is kept in the system’s password store. To sign in another way, choose it and enter the password or the key’s passphrase.",
+      authManagedKeyNote: "Password sign-in is off on the server.",
       pickKey: "Browse\u2026",
       fieldKeyPath: "Path to the private key",
       fieldPassphrase: "Key passphrase",
       fieldPassword: "Password",
-      secretHint:
-        "Kept in the system password store, not in the application's files. It is never handed back to the application.",
       optional: "Optional",
       fieldVideoDir: "Video directory on the server",
-      fieldVideoDirPlaceholder: "leave empty for the default",
+      fieldVideoDirPlaceholder: "default",
       fieldCdn: "CDN address",
-      fieldCdnPlaceholder: "empty = links only through the server itself",
+      fieldCdnPlaceholder: "none",
       checking: "Checking…",
       next: "Next",
-      fingerprintLead:
-        "The server introduced itself with this fingerprint. Compare it with the one your hosting provider's control panel shows, then confirm it.",
-      fingerprintWhy:
-        "Until it is confirmed the application will send the server neither password nor key. That way an impersonating server gets none of your credentials, even if it manages to answer at the right address.",
+      fingerprintLead: "Compare the fingerprint with your hosting panel.",
       abandon: "Give up",
       fingerprintOk: "The fingerprint is right",
       testAgain: "Check again",
@@ -1362,12 +1254,11 @@ export const en: Catalogue = {
     library: {
       heading: "Library",
       reading: "Reading the library…",
-      noActiveServer:
-        "No active server is chosen. The library lives on a server — one has to be added first.",
+      noActiveServer: "No server selected.",
       goToServers: "Go to servers",
       newMedia: "New medium",
       serverLine: "Server:",
-      empty: "Nothing on the server yet. Create a medium and upload files into it.",
+      empty: "Empty so far.",
       mediaFacts: "{n} {n|plural:file} · {bytes|bytes}",
       hasLadder: " · quality ladder",
       missingOnServer: " · {n} not found on the server",
@@ -1381,8 +1272,7 @@ export const en: Catalogue = {
       diskVideos: "video takes up {bytes|bytes}",
       diskLabel: "Disk space used on the server",
       staleTitle: "The server is out of reach right now",
-      staleHint:
-        "This is the last the application managed to learn. The files on the server have not gone anywhere — it is the connection that is not answering. Actions that change the library cannot be carried out until it comes back.",
+      staleHint: "Showing the last known state. Changes wait for the connection.",
       staleRetry: "Try again",
       linkDead: "the link does not work",
       linkDeadTitle: "The file is not on the server",
@@ -1397,17 +1287,13 @@ export const en: Catalogue = {
       bitrate: "Average bitrate",
       video: "Video",
       audio: "Audio",
-      faststartWarning:
-        "The header is not at the start of the file — a viewer will only begin watching once they have downloaded the whole thing. This file is worth preparing again.",
-      missingWarning:
-        "The file is not on the server: it was deleted or renamed outside the application. The link to it does not work.",
+      faststartWarning: "Plays only after a full download — prepare it again.",
+      missingWarning: "Not on the server — the link does not work.",
       deleteFile: "Delete the file",
       unrecognizedTitle: "Not recognised",
       unrecognizedCount: "{n} {n|plural:file} · {bytes|bytes}",
-      unrecognizedNote:
-        "These files are on the server but belong to no medium. They take up room and are served over direct links. Assign them to a medium — or delete them.",
-      suggestionNote:
-        "Some of these look related by name. A suggestion only — nothing is grouped, and nothing will be until you assign the files yourself:",
+      unrecognizedNote: "Files outside any medium. Assign them or delete them.",
+      suggestionNote: "These look related (nothing merged):",
       suggestionGroup: "— {n} files, {why}",
       groupReason: {
         SAME_DIRECTORY: "in one directory",
@@ -1420,20 +1306,17 @@ export const en: Catalogue = {
       fieldTitle: "Title",
       fieldSlugOptional: "Short name (optional)",
       fieldSlugPlaceholder: "made from the title",
-      slugHint: "It goes into file names and links: Latin letters, digits, hyphens, underscores.",
+      slugHint: "Latin letters, digits, - and _.",
       creating: "Creating…",
       create: "Create",
       renameHeading: "Rename “{title}”",
-      titleHint: "Only you see it. It leaves files and links alone.",
       fieldSlug: "Short name",
-      slugChangeWarning:
-        "The files on the server will be renamed and every link handed out before will stop working. If you have already given them to viewers, you will have to give them out again.",
+      slugChangeWarning: "Links already handed out will stop working.",
       renaming: "Renaming…",
       rename: "Rename",
       renameAnyway: "Rename anyway",
       deleteHeading: "Delete “{what}”?",
       deleteLabel: "Delete {what}",
-      deleteIrreversible: "There will be no undoing it.",
       deleteNo: "Do not delete",
       deleting: "Deleting…",
       deleteYes: "Delete",
@@ -1443,19 +1326,16 @@ export const en: Catalogue = {
       heading: "Servers",
       reading: "Reading the server list…",
       add: "Add a server",
-      empty:
-        "No servers yet. Add the first one — the application will learn its fingerprint, ask you to confirm it, and check the connection step by step.",
+      empty: "No servers yet.",
       activeBadge: "active",
       makeActive: "Make active",
       domain: "Domain",
       videoDir: "Video directory",
       cdn: "CDN",
-      fingerprintUnconfirmed:
-        "The server's fingerprint is not confirmed — connecting is not possible. The application does not send credentials to a server it does not recognise.",
+      fingerprintUnconfirmed: "Fingerprint not confirmed — cannot connect.",
       testing: "Checking…",
       test: "Check the connection",
-      confirmRemoval:
-        "Delete this profile? The password or key for this server will be forgotten, and its local media library records will be lost too.",
+      confirmRemoval: "Remove the profile and its saved password?",
       removeYes: "Yes, delete",
       remove: "Delete",
       steps: {
@@ -1467,14 +1347,12 @@ export const en: Catalogue = {
       stepStatus: { ok: "passed", failed: "failed", skipped: "not checked" },
       edit: "Edit",
       editHeading: "Edit the server “{name}”",
-      editSecretHint:
-        "Leave this empty to keep the stored password or key as it is — it is never handed back from the store.",
+      editSecretHint: "Leave empty to keep the current one.",
       leaveMadeKeyForFileHint:
-        "The key made while deploying will be deleted from the system store. Enter the passphrase of your key file — or leave the field empty if the file has none.",
+        "The deployment key will be removed. Enter the key's passphrase, if it has one.",
       leaveMadeKeyForPasswordHint:
-        "The key made while deploying will be deleted from the system store — enter the server’s password. Without it the change is not saved.",
-      editAddressChanged:
-        "The address or port changed — the server has to be recognised again before connecting to it.",
+        "The deployment key will be removed. Enter the server's password.",
+      editAddressChanged: "The address changed — confirm the fingerprint again.",
       save: "Save",
       saving: "Saving…",
     },
@@ -1488,13 +1366,14 @@ export const en: Catalogue = {
         failed: "failed",
         cancelled: "cancelled",
       },
+      notes: "Notes: {n}",
       batchStop: "Stop the whole batch",
       batchIs: "Batch: {films} video(s), {left} task(s) left.",
       batchStopped: "Stopped {n} task(s)",
       counts: "Running: {running}. Waiting: {queued}.",
       heading: "Tasks",
       reading: "Reading the task list…",
-      empty: "No tasks yet. They will appear when you start preparing or uploading video.",
+      empty: "No tasks.",
       speed: "{mbit} Mbit/s",
       etaHours: "~{h} h {m} min left",
       etaMinutes: "~{m} min left",
@@ -1514,26 +1393,22 @@ export const en: Catalogue = {
         diagnose: "diagnostics",
       },
       queueHeading: "In the queue",
-      queueExplain:
-        "Tasks will run in this order. Reordering leaves a task that has already started alone — it would have to be interrupted, losing the work done.",
       moveUp: "Move up the queue",
       moveDown: "Move down the queue",
-      closeLosing: "Closing the application now would lose some of the work",
-      closeSafe: "The application can be closed: unfinished work will continue at the next start",
+      closeLosing: "Closing now will lose some work",
+      closeSafe: "Safe to close — work resumes on next start",
       leaveQuestion: "Leave the application?",
-      leaveUnknown:
-        "What would become of the tasks could not be established. Preparing a file is lost on leaving; an upload carries on from where it got to.",
+      leaveUnknown: "What will happen to the tasks is unknown.",
       leaveConfirm: "Leave",
       leaveCancel: "Stay",
     },
 
     notifications: {
       completed: "Task finished",
-      hiddenTitle: "The window is hidden; the application is still working",
-      hiddenBody:
-        'There is an icon in the notification area: "Show window" on it brings this back. On Windows 11 new icons start out in the overflow (the arrow on the taskbar). To leave for good use "Leave" in the same menu; anything running will say what becomes of it first.',
+      hiddenTitle: "The app is running in the tray",
+      hiddenBody: 'Tray icon → "Show the window". On Windows 11 it may be under the ^ arrow.',
       failed: "Task failed",
-      lookInTasks: "The details are in the Tasks section.",
+      lookInTasks: "Details are in Tasks.",
       done: {
         upload: "The file was uploaded and put into service.",
         convert: "The file is prepared and ready to upload.",

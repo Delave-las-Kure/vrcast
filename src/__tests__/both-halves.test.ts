@@ -135,11 +135,31 @@ it("the scan reaches the screens it is about", () => {
       "removed this list is what says so, and it must be updated deliberately",
   ).toEqual([
     "features/library/LibraryScreen.tsx",
-    "features/library/dialogs/MediaDialogs.tsx",
-    "features/shared/ErrorNotice.tsx",
-    "features/tasks/TasksPanel.tsx",
     "features/tasks/notifications.tsx",
     "features/upload/PreflightWarnings.tsx",
     "features/upload/UploadScreen.tsx",
+  ]);
+});
+
+/**
+ * T674: the banner, a failed task's row and a refusal in a dialog all show an error through
+ * one component — one line, and the advice, particulars and cause folded under "Details".
+ * Folded is not dropped: the hint is still rendered, only closed.
+ */
+it("the folded error keeps the advice, the particulars and the cause", () => {
+  const known = new Map(screens());
+  const folded = known.get("features/shared/ErrorNotice.tsx") ?? "";
+  expect(folded).toContain("renderErrorFolded(");
+  for (const part of ["hint", "particulars", "error.cause"]) {
+    expect(folded, `ErrorFolded no longer shows ${part}`).toContain(`{${part} && `);
+  }
+  const users = [...known]
+    .filter(([, text]) => text.includes("<ErrorFolded "))
+    .map(([path]) => path)
+    .sort();
+  expect(users).toEqual([
+    "features/library/dialogs/MediaDialogs.tsx",
+    "features/shared/ErrorNotice.tsx",
+    "features/tasks/TasksPanel.tsx",
   ]);
 });

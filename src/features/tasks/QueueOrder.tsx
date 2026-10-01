@@ -40,7 +40,6 @@ export function QueueOrder({
   return (
     <section className="queue">
       <h2>{t.ui.tasks.queueHeading}</h2>
-      <p className="muted">{t.ui.tasks.queueExplain}</p>
       <ol className="queue__list">
         {queued.map((task, i) => (
           <li key={task.id} className="queue__item">
