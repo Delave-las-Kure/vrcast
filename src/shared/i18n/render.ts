@@ -119,6 +119,30 @@ export function renderError(
   };
 }
 
+/**
+ * An error the way a screen shows it (T674): one line, and the rest folded under "Details".
+ *
+ * - `line` — what happened, one short sentence. The code's own message, except for a refused
+ *   input, where the code says only "the data does not fit" and the first particular says
+ *   which field and why — that particular *is* the answer there.
+ * - `hint` — what to do, from the code (FR-105), shown folded.
+ * - `particulars` — everything else the core named, in order, as one paragraph, folded.
+ */
+export function renderErrorFolded(
+  error: AppError,
+  catalogue: Catalogue,
+  lang: Lang,
+): { line: string; hint: string; particulars: string } {
+  const wording = catalogue.errors[error.code];
+  const said = (error.details ?? []).map((d) => renderDetail(d, catalogue, lang));
+  const fieldFirst = error.code === "INVALID_INPUT" && said.length > 0;
+  return {
+    line: fieldFirst ? said[0] : wording?.message || said[0] || error.code,
+    hint: wording?.hint ?? "",
+    particulars: (fieldFirst ? said.slice(1) : said).join(" "),
+  };
+}
+
 /** A stage name beside a running task. */
 export function renderStage(stage: DetailCode | null, catalogue: Catalogue, lang: Lang): string {
   if (!stage) return "";

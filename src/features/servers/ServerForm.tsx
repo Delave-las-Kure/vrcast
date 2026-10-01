@@ -25,8 +25,8 @@ export interface ServerFormProps {
   onFieldChange: <K extends keyof ServerInput>(key: K, value: ServerInput[K]) => void;
   secret: string;
   onSecretChange: (secret: string) => void;
-  /** Differs between creating (secret required in practice) and editing (blank = keep). */
-  secretHint: string;
+  /** Differs between creating (none) and editing (blank = keep). */
+  secretHint: string | null;
   busy: boolean;
   submitLabel: string;
   busyLabel: string;
@@ -115,21 +115,15 @@ export function ServerForm({
         </label>
       </div>
 
-      {/* The explanation sits beside the field and NOT inside the label:
-          inside, it becomes part of the field's name and a screen reader
-          reads the whole thing aloud on every visit. */}
-      <div className="field">
-        <label>
-          <span>{w.fieldDomain}</span>
-          <input
-            value={input.domain}
-            onChange={(e) => onFieldChange("domain", e.target.value)}
-            placeholder="stream.example.com"
-            required
-          />
-        </label>
-        <small className="muted">{w.fieldDomainHint}</small>
-      </div>
+      <label>
+        <span>{w.fieldDomain}</span>
+        <input
+          value={input.domain}
+          onChange={(e) => onFieldChange("domain", e.target.value)}
+          placeholder="stream.example.com"
+          required
+        />
+      </label>
 
       <div className="form__row">
         <label className="form__grow">
@@ -200,7 +194,9 @@ export function ServerForm({
               autoComplete="off"
             />
           </label>
-          <small className="muted">{secretHint}</small>
+          {/* Beside the field, not inside the label: inside, it would become part of the
+              field's name. Only where it changes what happens (editing, leaving the made key). */}
+          {secretHint && <small className="muted">{secretHint}</small>}
         </div>
       )}
 

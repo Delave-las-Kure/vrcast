@@ -111,10 +111,6 @@ export function StallsPanel({ stalls }: { stalls: Stalls }) {
         </ul>
       )}
 
-      {stalls.watchers.some((w) => w.in_download_mbit_s !== null) && (
-        <p className="diag-hint">{words.stallsInDownloadHint}</p>
-      )}
-
       {stalls.set_aside.length > 0 && (
         <>
           <h4>{words.stallsSetAside}</h4>

@@ -188,7 +188,6 @@ export function ViewersScreen() {
   return (
     <section className="screen">
       <h1>{t.ui.sections.viewers}</h1>
-      <p className="hint">{words.explain}</p>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 

@@ -24,6 +24,7 @@ import { DomainCheck } from "./DomainCheck";
 import { Ipv6Choice } from "./Ipv6Choice";
 import { StepList } from "./StepList";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { More } from "../shared/More";
 import { useServers } from "../servers/store";
 import { useT } from "../../shared/i18n";
 import { ipc, onDeployProgress, onTaskDone } from "../../shared/ipc";
@@ -123,7 +124,6 @@ export function DeployScreen({ serverId }: { serverId: string }) {
     },
     [serverId],
   );
-
 
   // T590 — every piece of local state reset here in one place, keyed only on `serverId`.
   // `/deploy` renders this component with no `key` (see DeployPage.tsx), so switching
@@ -260,8 +260,6 @@ export function DeployScreen({ serverId }: { serverId: string }) {
       {running === null && preview && (
         <>
           <h3>{words.willChange}</h3>
-          {/* About the machine, because two steps depend on it: a small one gets a swap file,
-              and a person has a right to know such a file will appear on their server. */}
           <p>{words.machine(preview.memory_mb, preview.disk)}</p>
           <StepList steps={preview.steps} />
           {/* T611 — somebody else's Caddyfile on a first deployment. Said before the button,
@@ -277,7 +275,9 @@ export function DeployScreen({ serverId }: { serverId: string }) {
                 />{" "}
                 {words.replaceCaddyfile}
               </label>
-              <p>{words.replaceCaddyfileMeans}</p>
+              <More>
+                <p>{words.replaceCaddyfileMeans}</p>
+              </More>
             </div>
           )}
           <button type="button" onClick={start} disabled={!readyToStart || starting}>

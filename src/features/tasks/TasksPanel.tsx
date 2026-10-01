@@ -16,8 +16,8 @@ import type { AppError, Task, TaskKind, TaskState } from "../../shared/contract"
 import type { TaskOnClose } from "../../shared/contract";
 import { ipc, onTaskDone, onTaskProgress, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
-import { fill, renderDetail, renderError, renderStage } from "../../shared/i18n/render";
-import { ErrorNotice } from "../shared/ErrorNotice";
+import { fill, renderDetail, renderStage } from "../../shared/i18n/render";
+import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
 import { CloseConsequences } from "./CloseConsequences";
 import { QueueOrder } from "./QueueOrder";
 
@@ -29,22 +29,16 @@ import { QueueOrder } from "./QueueOrder";
  * and another way on the library screen is what stops people trusting either.
  */
 /**
- * A failed task's error: what happened, and what to do about it.
+ * A failed task's error: one line, and what to do folded under "Details" (T674).
  *
- * Separate from `ErrorNotice` on purpose rather than reused: that one is a dismissible
- * banner for the screen as a whole, with its own role and close button. This one sits inside
- * a row of a list and must not announce itself as an alert — thirty failed rows would speak
- * thirty times. What the two share is `renderError`, which is where the wording is decided,
- * so they cannot drift about what a code means.
+ * Not `ErrorNotice` itself: that one is a dismissible banner with `role="alert"`, and this sits
+ * inside a row of a list — thirty failed rows must not speak thirty times. The line and the
+ * fold are the same component, so the two cannot drift about what a code means.
  */
 function TaskError({ error }: { error: AppError }) {
-  const t = useT();
-  const { lang } = useLang();
-  const { message, hint } = renderError(error, t, lang);
   return (
     <div className="task__error">
-      <p className="task__error-message">{message}</p>
-      {hint && <p className="task__error-hint">{hint}</p>}
+      <ErrorFolded error={error} lineClassName="task__error-message" />
     </div>
   );
 }
@@ -298,27 +292,24 @@ export function TasksPanel() {
                 {formatEta(task.eta_s, t, lang) && <span>{formatEta(task.eta_s, t, lang)}</span>}
               </div>
 
-              {/* **What went wrong and what to do about it — both** (T519). This used to take
-                  only `.message` and drop `.hint`, and the hint is the half that says what to
-                  do: `renderError`'s own comment says so, and `ErrorNotice` has always shown
-                  both. So the one place a person meets a failed task was the one place the
-                  advice was thrown away. */}
+              {/* One line, the advice folded (T519, T674). */}
               {task.error && <TaskError error={task.error} />}
 
               {/* What the task worked out and is not a failure (T416): variants taken from
-                  a previous run rather than made, a measurement that stopped short of the
-                  grid, the graphics card that refused and sent the work to the processor.
-                  All three used to end in a log line — which is to say nowhere. Beside the
-                  failure rather than in place of it: a build can have both, and the notice
-                  is what says how much of the work is still standing. */}
+                  a previous run, a measurement that stopped short of the grid, the graphics
+                  card that refused. Folded (T674): they explain, and an explanation is one
+                  click away rather than in the way. */}
               {task.notices.length > 0 && (
-                <ul className="task__notices" data-testid="task-notices">
-                  {task.notices.map((notice, i) => (
-                    <li key={i} role="note">
-                      {renderDetail(notice, t, lang)}
-                    </li>
-                  ))}
-                </ul>
+                <details className="task__notices-fold">
+                  <summary>{fill(t.ui.tasks.notes, { n: task.notices.length }, t, lang)}</summary>
+                  <ul className="task__notices" data-testid="task-notices">
+                    {task.notices.map((notice, i) => (
+                      <li key={i} role="note">
+                        {renderDetail(notice, t, lang)}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               )}
 
               {/* What the task produced, for a person to go and look at (T519(3)). Only

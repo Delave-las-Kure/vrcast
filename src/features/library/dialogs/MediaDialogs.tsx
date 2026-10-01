@@ -14,22 +14,16 @@
 import { useState } from "react";
 import type { AppError, MediaView } from "../../../shared/contract";
 import { useLang, useT } from "../../../shared/i18n";
-import { fill, renderError } from "../../../shared/i18n/render";
+import { fill } from "../../../shared/i18n/render";
+import { ErrorFolded } from "../../shared/ErrorNotice";
 
 /**
- * A refusal inside a dialog: what happened, and what to do about it.
- *
- * Both halves (T519). Two dialogs took only `.message` — a rename refused because the short
- * name is taken said so and not what a free one looks like, which is the whole of the advice.
+ * A refusal inside a dialog: one line, what to do folded under "Details" (T519, T674).
  */
 function DialogError({ error }: { error: AppError }) {
-  const t = useT();
-  const { lang } = useLang();
-  const { message, hint } = renderError(error, t, lang);
   return (
     <div className="dialog__error">
-      <p className="dialog__error-message">{message}</p>
-      {hint && <p className="dialog__error-hint">{hint}</p>}
+      <ErrorFolded error={error} lineClassName="dialog__error-message" />
     </div>
   );
 }
@@ -145,13 +139,10 @@ export function RenameMediaDialog({
       <h3>{fill(l.renameHeading, { title: media.title }, t, lang)}</h3>
       {error && <DialogError error={error} />}
 
-      <div className="field">
-        <label>
-          <span>{l.fieldTitle}</span>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-        </label>
-        <small className="muted">{l.titleHint}</small>
-      </div>
+      <label>
+        <span>{l.fieldTitle}</span>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+      </label>
 
       <label>
         <span>{l.fieldSlug}</span>
@@ -217,7 +208,6 @@ export function ConfirmDeleteDialog({
     <div className="dialog" role="alertdialog" aria-label={fill(l.deleteLabel, { what }, t, lang)}>
       <h3>{fill(l.deleteHeading, { what }, t, lang)}</h3>
       <p className="dialog__warning">{consequences}</p>
-      <p className="muted">{l.deleteIrreversible}</p>
       {error && <DialogError error={error} />}
 
       <div className="form__actions">
