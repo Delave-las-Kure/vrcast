@@ -208,7 +208,6 @@ export function ConfirmDeleteDialog({
     <div className="dialog" role="alertdialog" aria-label={fill(l.deleteLabel, { what }, t, lang)}>
       <h3>{fill(l.deleteHeading, { what }, t, lang)}</h3>
       <p className="dialog__warning">{consequences}</p>
-      <p className="muted">{l.deleteIrreversible}</p>
       {error && <DialogError error={error} />}
 
       <div className="form__actions">

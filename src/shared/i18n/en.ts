@@ -369,7 +369,7 @@ export const en: Catalogue = {
     DELETE_FILES_FAILED: "Could not delete the files on the server.",
     MANIFEST_MALFORMED: "The library catalogue on the server is corrupt and cannot be read.",
     CONFIRM_DELETE:
-      "Delete “{what}”? {files} {files|plural:file} will be removed, freeing {bytes|bytes}.",
+      "{files} {files|plural:file} ({bytes|bytes}) will be deleted. This cannot be undone.",
     VIEWERS_ACTIVE_DELETE: "Open connections: {connections}. Deleting may cut playback.",
     MEDIA_BUSY_BUILDING:
       "The quality set “{slug}” is being built on the server right now — deletion will wait until the build finishes.",
@@ -1317,7 +1317,6 @@ export const en: Catalogue = {
       renameAnyway: "Rename anyway",
       deleteHeading: "Delete “{what}”?",
       deleteLabel: "Delete {what}",
-      deleteIrreversible: "There will be no undoing it.",
       deleteNo: "Do not delete",
       deleting: "Deleting…",
       deleteYes: "Delete",

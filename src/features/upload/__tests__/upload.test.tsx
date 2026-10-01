@@ -214,10 +214,7 @@ describe("T573 — a pack of files bound to one medium", () => {
       ...EMPTY_LIBRARY,
       media: [mediaView({ id: "m1", title: "Сериал" })],
     });
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -254,10 +251,7 @@ describe("T573 — a pack of files bound to one medium", () => {
 
   it("creates a new medium inline and uses it for every file", async () => {
     mockMediaCreate.mockResolvedValue("new-media-1");
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -275,9 +269,7 @@ describe("T573 — a pack of files bound to one medium", () => {
     });
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    await waitFor(() =>
-      expect(mockMediaCreate).toHaveBeenCalledWith("s1", "Новый сериал", null),
-    );
+    await waitFor(() => expect(mockMediaCreate).toHaveBeenCalledWith("s1", "Новый сериал", null));
     await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(2));
     expect(mockUploadStart).toHaveBeenCalledWith(
       expect.objectContaining({ media_id: "new-media-1" }),
@@ -301,9 +293,7 @@ describe("T573 — a pack of files bound to one medium", () => {
     });
     fireEvent.click(screen.getByText(ru.ui.upload.start));
 
-    await waitFor(() =>
-      expect(mockMediaCreate).toHaveBeenCalledWith("s1", "Один фильм", null),
-    );
+    await waitFor(() => expect(mockMediaCreate).toHaveBeenCalledWith("s1", "Один фильм", null));
     await waitFor(() => expect(mockUploadStart).toHaveBeenCalledTimes(1));
     expect(mockUploadStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -318,10 +308,7 @@ describe("T573 — a pack of files bound to one medium", () => {
 
 describe("T576 — a pack of files can answer a liftable refusal mid-run", () => {
   it("a liftable refusal mid-pack shows PreflightWarnings, not a batch summary yet", async () => {
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     mockUploadStart.mockRejectedValueOnce({
       code: "VIEWERS_ACTIVE",
       details: [],
@@ -344,10 +331,7 @@ describe("T576 — a pack of files can answer a liftable refusal mid-run", () =>
   });
 
   it("agreeing retries the same file with confirmed:true and carries it through the rest", async () => {
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     mockUploadStart.mockRejectedValueOnce({ code: "VIEWERS_ACTIVE", details: [] } as AppError);
     mockUploadStart.mockResolvedValue("t-2");
     renderIn(
@@ -381,10 +365,7 @@ describe("T576 — a pack of files can answer a liftable refusal mid-run", () =>
   });
 
   it("declining sends the current file to failures and lets the rest of the pack try", async () => {
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     mockUploadStart.mockRejectedValueOnce({ code: "VIEWERS_ACTIVE", details: [] } as AppError);
     mockUploadStart.mockResolvedValueOnce("t-2");
     renderIn(
@@ -414,10 +395,7 @@ describe("T576 — a pack of files can answer a liftable refusal mid-run", () =>
   });
 
   it("a non-liftable refusal (REMOTE_DISK_FULL) in a pack never pauses for PreflightWarnings", async () => {
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     mockUploadStart.mockRejectedValueOnce({
       code: "REMOTE_DISK_FULL",
       details: [
@@ -451,10 +429,7 @@ describe("T576 — a pack of files can answer a liftable refusal mid-run", () =>
 describe("T577 — a batch that creates its medium inline can end up orphaning it", () => {
   /** Choose two files, ask for a brand-new medium, and fill in its title. */
   async function chooseFilesForANewMedium(title: string) {
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -545,10 +520,7 @@ describe("T577 — a batch that creates its medium inline can end up orphaning i
       ...EMPTY_LIBRARY,
       media: [mediaView({ id: "m1", title: "Существующий сериал" })],
     });
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
     renderIn(
       <MemoryRouter>
@@ -595,7 +567,7 @@ describe("T577 — a batch that creates its medium inline can end up orphaning i
       expect(mockMediaDelete).toHaveBeenNthCalledWith(1, "s1", "new-media-4", false),
     );
     // The refusal's own numbers are what is shown — not a blind "are you sure?".
-    expect(await screen.findByText(/Будет снято 0/)).toBeInTheDocument();
+    expect(await screen.findByText(/Удалится 0/)).toBeInTheDocument();
 
     mockMediaDelete.mockResolvedValueOnce("new-media-4");
     fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
@@ -646,10 +618,7 @@ describe("T582 — a stale orphan-delete response is ignored after a new file pi
     // Same starting point as T577's own delete flow: a pack that orphaned its medium.
     mockMediaCreate.mockResolvedValue("new-media-race");
     mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -688,9 +657,7 @@ describe("T582 — a stale orphan-delete response is ignored after a new file pi
     // Only now does the stale request come back, asking for confirmation.
     rejectDelete({
       code: "CONFIRMATION_REQUIRED",
-      details: [
-        { key: "CONFIRM_DELETE", params: { what: "Гоночный сериал", files: 0, bytes: 0 } },
-      ],
+      details: [{ key: "CONFIRM_DELETE", params: { what: "Гоночный сериал", files: 0, bytes: 0 } }],
     } as AppError);
 
     // The confirm dialog must never appear — the request it would answer is stale.
@@ -706,10 +673,7 @@ describe("T586 — askDeleteOrphan is guarded by its own busy flag", () => {
   it("disables the delete button while its request is in flight, and a second click sends no second mediaDelete", async () => {
     mockMediaCreate.mockResolvedValue("new-media-t586");
     mockUploadStart.mockRejectedValue({ code: "REMOTE_DISK_FULL", details: [] } as AppError);
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -749,9 +713,7 @@ describe("T586 — askDeleteOrphan is guarded by its own busy flag", () => {
 
     rejectDelete({
       code: "CONFIRMATION_REQUIRED",
-      details: [
-        { key: "CONFIRM_DELETE", params: { what: "T586 сериал", files: 0, bytes: 0 } },
-      ],
+      details: [{ key: "CONFIRM_DELETE", params: { what: "T586 сериал", files: 0, bytes: 0 } }],
     } as AppError);
 
     // Once the one request it owns has settled, the button is usable again — the flag
@@ -786,10 +748,7 @@ describe("T580 — UploadScreen pick() accumulates and drops files", () => {
   });
 
   it("dropping one file removes it from the list and from what gets sent", async () => {
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -813,10 +772,7 @@ describe("T580 — UploadScreen pick() accumulates and drops files", () => {
   });
 
   it("dropping down to one file fills the served name in from it", async () => {
-    mockOpen.mockResolvedValue([
-      "F:\\видео\\Сериал\\s01e01.mp4",
-      "F:\\видео\\Сериал\\s01e02.mp4",
-    ]);
+    mockOpen.mockResolvedValue(["F:\\видео\\Сериал\\s01e01.mp4", "F:\\видео\\Сериал\\s01e02.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -852,7 +808,10 @@ describe("T585 — dropFile is blocked while a batch is running", () => {
 
     let resolveFirst: (id: string) => void = () => {};
     mockUploadStart.mockImplementationOnce(
-      () => new Promise((resolve) => { resolveFirst = resolve; }),
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
     );
     mockUploadStart.mockResolvedValue("task-2");
 
@@ -1099,9 +1058,7 @@ describe("T654 — one file into a new medium, confirmed after a warning", () =>
 
     mockMediaDelete.mockRejectedValueOnce({
       code: "CONFIRMATION_REQUIRED",
-      details: [
-        { key: "CONFIRM_DELETE", params: { what: "Удаляемый фильм", files: 0, bytes: 0 } },
-      ],
+      details: [{ key: "CONFIRM_DELETE", params: { what: "Удаляемый фильм", files: 0, bytes: 0 } }],
     } as AppError);
     fireEvent.click(await screen.findByText(ru.ui.upload.orphanedMediaDelete));
     await waitFor(() => expect(mockMediaDelete).toHaveBeenCalledWith("s1", "m-new", false));
@@ -1135,9 +1092,7 @@ describe("T654 — one file into a new medium, confirmed after a warning", () =>
 describe("T656 — the suggested name follows the only file left", () => {
   /** Add one.mp4, then two.mp4 — two separate picks. */
   async function pickTwoOneAtATime() {
-    mockOpen
-      .mockResolvedValueOnce(["F:/qa/one.mp4"])
-      .mockResolvedValueOnce(["F:/qa/two.mp4"]);
+    mockOpen.mockResolvedValueOnce(["F:/qa/one.mp4"]).mockResolvedValueOnce(["F:/qa/two.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />
@@ -1169,9 +1124,7 @@ describe("T656 — the suggested name follows the only file left", () => {
   });
 
   it("a name the person typed is kept when the files change", async () => {
-    mockOpen
-      .mockResolvedValueOnce(["F:/qa/one.mp4"])
-      .mockResolvedValueOnce(["F:/qa/two.mp4"]);
+    mockOpen.mockResolvedValueOnce(["F:/qa/one.mp4"]).mockResolvedValueOnce(["F:/qa/two.mp4"]);
     renderIn(
       <MemoryRouter>
         <UploadScreen />

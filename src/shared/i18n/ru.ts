@@ -365,8 +365,7 @@ export const ruCore: CatalogueCore = {
     RENAME_FAILED: "Не удалось переименовать «{old}» в «{new}».",
     DELETE_FILES_FAILED: "Не удалось удалить файлы на сервере.",
     MANIFEST_MALFORMED: "Опись библиотеки на сервере испорчена и не читается.",
-    CONFIRM_DELETE:
-      "Удалить «{what}»? Будет снято {files} {files|plural:file}, освободится {bytes|bytes}.",
+    CONFIRM_DELETE: "Удалится {files} {files|plural:file} ({bytes|bytes}). Отменить нельзя.",
     VIEWERS_ACTIVE_DELETE: "Открыто соединений: {connections}. Удаление может оборвать просмотр.",
     MEDIA_BUSY_BUILDING:
       "Набор качеств «{slug}» сейчас собирается на сервере — удаление подождёт, пока сборка закончится.",
@@ -1306,7 +1305,6 @@ const ui = {
     renameAnyway: "Всё равно переименовать",
     deleteHeading: "Удалить «{what}»?",
     deleteLabel: "Удалить {what}",
-    deleteIrreversible: "Отменить это будет нельзя.",
     deleteNo: "Не удалять",
     deleting: "Удаляем…",
     deleteYes: "Удалить",
