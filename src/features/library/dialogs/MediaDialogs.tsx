@@ -139,13 +139,10 @@ export function RenameMediaDialog({
       <h3>{fill(l.renameHeading, { title: media.title }, t, lang)}</h3>
       {error && <DialogError error={error} />}
 
-      <div className="field">
-        <label>
-          <span>{l.fieldTitle}</span>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
-        </label>
-        <small className="muted">{l.titleHint}</small>
-      </div>
+      <label>
+        <span>{l.fieldTitle}</span>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+      </label>
 
       <label>
         <span>{l.fieldSlug}</span>

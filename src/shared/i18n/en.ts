@@ -1339,12 +1339,11 @@ export const en: Catalogue = {
     library: {
       heading: "Library",
       reading: "Reading the library…",
-      noActiveServer:
-        "No active server is chosen. The library lives on a server — one has to be added first.",
+      noActiveServer: "No server selected.",
       goToServers: "Go to servers",
       newMedia: "New medium",
       serverLine: "Server:",
-      empty: "Nothing on the server yet. Create a medium and upload files into it.",
+      empty: "Empty so far.",
       mediaFacts: "{n} {n|plural:file} · {bytes|bytes}",
       hasLadder: " · quality ladder",
       missingOnServer: " · {n} not found on the server",
@@ -1358,8 +1357,7 @@ export const en: Catalogue = {
       diskVideos: "video takes up {bytes|bytes}",
       diskLabel: "Disk space used on the server",
       staleTitle: "The server is out of reach right now",
-      staleHint:
-        "This is the last the application managed to learn. The files on the server have not gone anywhere — it is the connection that is not answering. Actions that change the library cannot be carried out until it comes back.",
+      staleHint: "Showing the last known state. Changes wait for the connection.",
       staleRetry: "Try again",
       linkDead: "the link does not work",
       linkDeadTitle: "The file is not on the server",
@@ -1374,17 +1372,13 @@ export const en: Catalogue = {
       bitrate: "Average bitrate",
       video: "Video",
       audio: "Audio",
-      faststartWarning:
-        "The header is not at the start of the file — a viewer will only begin watching once they have downloaded the whole thing. This file is worth preparing again.",
-      missingWarning:
-        "The file is not on the server: it was deleted or renamed outside the application. The link to it does not work.",
+      faststartWarning: "Plays only after a full download — prepare it again.",
+      missingWarning: "Not on the server — the link does not work.",
       deleteFile: "Delete the file",
       unrecognizedTitle: "Not recognised",
       unrecognizedCount: "{n} {n|plural:file} · {bytes|bytes}",
-      unrecognizedNote:
-        "These files are on the server but belong to no medium. They take up room and are served over direct links. Assign them to a medium — or delete them.",
-      suggestionNote:
-        "Some of these look related by name. A suggestion only — nothing is grouped, and nothing will be until you assign the files yourself:",
+      unrecognizedNote: "Files outside any medium. Assign them or delete them.",
+      suggestionNote: "These look related (nothing merged):",
       suggestionGroup: "— {n} files, {why}",
       groupReason: {
         SAME_DIRECTORY: "in one directory",
@@ -1397,14 +1391,12 @@ export const en: Catalogue = {
       fieldTitle: "Title",
       fieldSlugOptional: "Short name (optional)",
       fieldSlugPlaceholder: "made from the title",
-      slugHint: "It goes into file names and links: Latin letters, digits, hyphens, underscores.",
+      slugHint: "Latin letters, digits, - and _.",
       creating: "Creating…",
       create: "Create",
       renameHeading: "Rename “{title}”",
-      titleHint: "Only you see it. It leaves files and links alone.",
       fieldSlug: "Short name",
-      slugChangeWarning:
-        "The files on the server will be renamed and every link handed out before will stop working. If you have already given them to viewers, you will have to give them out again.",
+      slugChangeWarning: "Links already handed out will stop working.",
       renaming: "Renaming…",
       rename: "Rename",
       renameAnyway: "Rename anyway",
