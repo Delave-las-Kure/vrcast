@@ -370,18 +370,16 @@ export const en: Catalogue = {
     MANIFEST_MALFORMED: "The library catalogue on the server is corrupt and cannot be read.",
     CONFIRM_DELETE:
       "Delete “{what}”? {files} {files|plural:file} will be removed, freeing {bytes|bytes}.",
-    VIEWERS_ACTIVE_DELETE:
-      "The server is serving data right now — {connections} connections are open. Deleting may cut someone's viewing short.",
+    VIEWERS_ACTIVE_DELETE: "Open connections: {connections}. Deleting may cut playback.",
     MEDIA_BUSY_BUILDING:
       "The quality set “{slug}” is being built on the server right now — deletion will wait until the build finishes.",
     MEDIA_BUSY_UPLOADING:
       "The file “{name}” is being uploaded to the server right now — deletion will wait until the upload finishes.",
 
     // --- preparing files ---
-    FFMPEG_SELF_BROKEN:
-      "The bundled FFmpeg does not work — there is nothing to prepare files with. Reinstall the application: an antivirus may have removed part of it.",
+    FFMPEG_SELF_BROKEN: "The bundled FFmpeg does not work. Reinstall the application.",
     FFMPEG_NO_X264:
-      "The bundled FFmpeg was built without the software H.264 encoder. On a machine without a suitable graphics card there would be nothing to prepare files with.",
+      "The bundled FFmpeg has no software H.264 — without a graphics card there is nothing to encode with.",
     PROBE_NO_VIDEO: "There is no video in this file — perhaps the wrong file was chosen.",
     PROBE_UNREADABLE: "The file could not be parsed: it is damaged, or it is not video.",
     CONVERT_NO_OUT_PATH: "Where to put the prepared file was not specified.",
@@ -392,9 +390,9 @@ export const en: Catalogue = {
     CONVERT_OUT_BUSY:
       "Another preparation is already writing this file: {out_path}. Wait for it to end, or choose another place.",
     CONVERT_REPLACE_FAILED:
-      "The new file is ready and checked, but it could not replace the old one ({out_path}) — perhaps the old one is open in another program. The new one was left here: {kept_at}",
+      "Could not replace {out_path} (open elsewhere?). The new file: {kept_at}",
     VALIDATE_STALLED:
-      "The playback check hung: the decoder did not move a single frame in {seconds} s and was stopped. Whether the file plays is unknown, and it is not offered for upload. File: {out_path}",
+      "The playback check stalled for {seconds} s and was stopped. File: {out_path}",
     CONVERT_VALIDATE_NO_FFMPEG:
       "There is nothing to check playback with: the bundled FFmpeg does not work.",
     CONVERT_NO_ENCODER:
@@ -404,11 +402,9 @@ export const en: Catalogue = {
     PLAN_NO_SUCH_TRACK:
       "There is no audio track {number} in the file — there are {available} in all.",
     PLAN_HEIGHT_ZERO: "The frame height cannot be zero.",
-    PLAN_HEIGHT_ABOVE_SOURCE:
-      "You are asking for {asked} lines where the source has {source}. The picture can be stretched, but no detail will appear from it — only the file and the time will grow.",
+    PLAN_HEIGHT_ABOVE_SOURCE: "Height {asked} is above the source ({source}).",
     PLAN_BITRATE_ZERO: "The target bitrate cannot be zero.",
-    PLAN_BITRATE_ABOVE_SOURCE:
-      "You are asking for {asked_kbps} kbit/s from a source at {source_kbps} kbit/s. Encoding above the source is pointless: detail that is not there will not be added, and space and bandwidth go to waste.",
+    PLAN_BITRATE_ABOVE_SOURCE: "{asked_kbps} kbit/s is above the source ({source_kbps} kbit/s).",
 
     // --- how a long task can end badly ---
     CONVERT_VALIDATION_FAILED: "{problems} The file was left where it is: {out_path}",
@@ -486,17 +482,14 @@ export const en: Catalogue = {
 
     // --- what to say about the choice of encoder ---
     NOTICE_PROBE_UNCALIBRATED:
-      "The complexity probe ran on something other than an NVIDIA card, and the quality setting it uses was calibrated for one. The ladder came out, but its top rung rests on a number taken with a different ruler: if you know this material, check it against what you know, and run a full measurement for anything that matters.",
+      "The complexity probe did not run on NVIDIA — the top rung may be off. For an important film, run a full measurement.",
     NOTICE_PROBE_FAILED:
-      "The material could not be measured, so the top rung comes from the old constant. A constant knows nothing about the material: on animation it asks for three times what is needed, and on dense action it understates. The rungs are worth going over by hand.",
-    NOTICE_MEASUREMENT_BORROWED:
-      "These rungs come from the measurement of {from}, not from a measurement of this file. For the next episode of the same season that is usually right — it is the same source. If the material differs (a different upscale, a different frame rate), measure it separately.",
-    NOTICE_MEASUREMENT_PARTIAL:
-      "{measured} points of {total} were measured; the rest would not encode. The ladder is built from what there is, but where points are missing the optimum may have gone unfound.",
-    NOTICE_VARIANTS_REUSED:
-      "{count} variants were already on the server and were not made again. The application asked the server what is there rather than its own note about a previous run: a note outlives the thing it describes.",
+      "Measuring failed — the top rung comes from a constant. Better adjust the rungs.",
+    NOTICE_MEASUREMENT_BORROWED: "Rungs taken from the measurement of {from}.",
+    NOTICE_MEASUREMENT_PARTIAL: "Points measured: {measured} of {total}.",
+    NOTICE_VARIANTS_REUSED: "Ready variants on the server: {count} — not rebuilt.",
     NOTICE_REENCODED_FOR_KEYFRAMES:
-      "This rung could have been carried across without re-encoding — its quality needs no change. But segments can only be cut at a keyframe, and this source's keyframes sit differently from the other rungs': the boundaries would stop lining up, and a viewer changing quality would see it stall. So the rung is re-encoded after all — hours instead of minutes.",
+      "The rung was re-encoded so its keyframes line up with the others.",
     WARN_LIMIT_FOLLOWS_THE_ADDRESS: "The limit is put on an address, not on a person.",
     WARN_ADDRESS_SHARED: "{count} viewers are on this address — the limit reaches all of them.",
     WARN_CAP_BELOW_LIGHTEST:
@@ -506,11 +499,10 @@ export const en: Catalogue = {
     LIMITS_ROLLBACK_NOT_STARTED:
       "The previous limits were not put back: the end of the previous command was not confirmed. Reload the list in a minute. If the change got as far as replacing the file, the new rules may have stayed.",
     NOTICE_NO_HARDWARE_FOUND:
-      "No hardware acceleration was found on this machine — the processor will do the encoding. Quality will not suffer, but it will take several times longer: reckon on an hour where a graphics card would take ten minutes.",
-    NOTICE_SOFTWARE_AS_ASKED:
-      "The processor is encoding, as you asked. It will take several times longer than with hardware acceleration.",
+      "No acceleration — the processor encodes. Quality will not suffer, but it takes several times longer.",
+    NOTICE_SOFTWARE_AS_ASKED: "The processor encodes, as you asked.",
     NOTICE_HARDWARE_FAILED:
-      "Acceleration through {encoder|encoder} did not work — the processor will do the encoding. Quality will not suffer, but it will take several times longer.",
+      "Acceleration via {encoder|encoder} failed — the processor encodes. Quality will not suffer; it takes longer.",
 
     // --- transfer ---
     UPLOAD_FILE_UNREADABLE: "The file was not found, or cannot be read.",
@@ -545,15 +537,13 @@ export const en: Catalogue = {
       "It stopped at the step \u201c{step|deployStep}\u201d. Steps completed: {done}.",
     DEPLOY_STOPPED_AFTER: "Steps completed: {done}.",
     NOTICE_CANCELLED_AFTER_PUBLISH:
-      "The stop arrived while \u201c{name}\u201d was already entering serving. It is on the server and being served \u2014 if it does not belong there, delete it in the library.",
-    NOTICE_NOT_FILED_UNDER_MEDIUM:
-      "“{name}” is uploaded and being served, but it could not be filed under the medium chosen for it — it is in the “not recognised” group, where it can be assigned by hand.",
-    NOTICE_LEFTOVER_PENDING:
-      "The partly uploaded “{name}” is still on the server: the server could not be reached. The application will remove it by itself — at the next start or the next upload to this server.",
+      "“{name}” was already published. If not needed, delete it in the library.",
+    NOTICE_NOT_FILED_UNDER_MEDIUM: "“{name}” is uploaded but sits in Unrecognized.",
+    NOTICE_LEFTOVER_PENDING: "The partial “{name}” will be removed from the server later.",
     NOTICE_LEFTOVER_REMOVED:
       "The partly uploaded “{name}” left by the cancellation has been removed from the server.",
     LADDER_NOT_ENOUGH_SPACE:
-      "The set will not fit: about {needed|bytes} are needed and {free|bytes} are free, {short_by|bytes} short. The set has {rungs} rungs, and you need not build them all.",
+      "Will not fit: ~{needed|bytes} needed, {free|bytes} free, {short_by|bytes} short. Rungs: {rungs} — not all need building.",
     OBJECTION_RUNG_ABOVE_SOURCE:
       "Rung {index}: above the source — those bits add nothing but weight",
     OBJECTION_BUFSIZE_TOO_LARGE:
@@ -563,40 +553,32 @@ export const en: Catalogue = {
     OBJECTION_OUT_OF_ORDER: "Rung {index}: the rungs are not in descending order",
     OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
-      "The build was not started: the ladder that came out has objections against it, listed above. The rest of the queue carries on — this one needs a person.",
-    NOTICE_CHECK_POINT_RUNNING:
-      "The measurement was borrowed from another film and is being checked: one cell of the grid is measured on this film and compared with the donor. No set can be built from it until that lands — under a minute, and its progress is in the task list.",
+      "Build not queued: the rungs have objections. The rest of the queue carries on.",
+    NOTICE_CHECK_POINT_RUNNING: "Checking the borrowed measurement — under a minute.",
     STAGE_CHECKING_LOAN: "Checking the borrowed measurement",
     CHECK_POINT_NOT_COMPARABLE:
-      "The loan could not be checked: at {bitrate} Mbit/s and {height}p only {used} chunks of {asked} would measure. A chunk fails where the file is damaged or half-downloaded, and the ones left describe whatever survived — flattering the wreckage in proportion to how much is gone. That cannot be compared with the donor, so the loan has been taken back. Check the file is whole.",
+      "Loan withdrawn: at {bitrate} Mbit/s, {height}p only {used} of {asked} chunks measured. Check the file.",
     CHECK_POINT_APART:
-      "On the {bitrate} Mbit/s rung at {height}p the donor scores {donor} VMAF and this film {borrower} — {apart} hundredths apart. The threshold is 100 hundredths, and it is not invented: four episodes of one season disagreed by at most 56, while alien material stood at least 218 away. The same cell measured three times running gave the same number, so this is not the measurement wobbling.",
+      "At {bitrate} Mbit/s, {height}p: donor {donor} VMAF, this one {borrower} — {apart} hundredths apart, threshold 100.",
     NOTICE_CHECK_POINT_HELD:
-      "The loan was checked by measurement: on the {bitrate} Mbit/s rung at {height}p this film differed from the donor by {apart} hundredths of a VMAF point, against a threshold of 100.",
+      "Loan confirmed: {bitrate} Mbit/s, {height}p — {apart} hundredths of VMAF apart, threshold 100.",
     NOTICE_MEASUREMENT_THIN:
-      "Points measured on less than the whole sample: {points}. One of them ({bitrate} Mbit/s, {height}p) landed {used} chunks of {asked}. A chunk fails where the file is damaged or half-downloaded, and the ones left describe whatever survived — flattering the wreckage in proportion to how much is gone. Worth checking the file is whole before building from this.",
+      "Incomplete points: {points}. E.g. {bitrate} Mbit/s, {height}p: {used} of {asked} chunks. Check the file.",
     NOTICE_MATERIAL_APART:
-      "How unlike the film this measurement came from this one is: the middle of the weight differs by {median}%, the heavy scenes by {p90}%, the peak against the middle by {ratio}%. There is deliberately no threshold — nobody has measured what these numbers mean, and an invented threshold in a check is worse than no check because it looks like knowledge. Measured on five episodes of one release: four agreed on the top rung to within 0.56 VMAF, and the fifth was 3.19 behind with all eight fields equal — it is simply another encode. If these numbers are large and you know your material, measure this episode yourself.",
+      "Apart from the donor: median {median}%, heavy scenes {p90}%, peak to median {ratio}%. No threshold — if large, measure it yourself.",
     NOTICE_VARIANTS_STRANDED:
-      "{count} variant(s) are still on the server but outside this set ({names}). Their files and segments are intact, but the set no longer names them — viewers will not get those qualities, and the disk is still holding them. If that was not the intention, build the set with them; if it was, remove them from the server so they stop taking up room.",
-    LEND_FRAME_DIFFERS:
-      "A different frame size. A measurement is tied to heights, and the heights are tied to the source's frame.",
-    LEND_FPS_DIFFERS:
-      "A different frame rate. At the same bits per second each frame gets a different share, and the point where quality falls away sits elsewhere.",
-    LEND_NATIVE_HEIGHT_DIFFERS:
-      "The material's real height differs: one is upscaled and the other is not (or they were upscaled from different heights). The height above which no more detail appears is not the same for both.",
-    LEND_CODEC_DIFFERS:
-      "The sources are in different codecs. The codec decides how much picture a bit buys, which is the very question a measurement answers. This used to compare only whether the source was HEVC, so AV1 and VP9 passed as H.264.",
-    LEND_PIXEL_FORMAT_DIFFERS:
-      "A different pixel format: 10-bit holds a gradient where 8-bit bands. At one bitrate that is a different picture.",
-    LEND_COLOUR_TRANSFER_DIFFERS:
-      "Different transfer curves (SDR against HDR). HDR spends its bits elsewhere, and a measurement of one says nothing about the other.",
-    LEND_TOO_SHORT:
-      "The film is too short: the measurement runs on the donor's chunks, and the last of them begins after this file ends. There would be nothing there to measure.",
+      "Rungs left outside the set on the server: {count} ({names}). Viewers do not get them; they take space.",
+    LEND_FRAME_DIFFERS: "A different frame size.",
+    LEND_FPS_DIFFERS: "A different frame rate.",
+    LEND_NATIVE_HEIGHT_DIFFERS: "A different native height (upscale).",
+    LEND_CODEC_DIFFERS: "Different source codecs.",
+    LEND_PIXEL_FORMAT_DIFFERS: "A different pixel format (8/10 bit).",
+    LEND_COLOUR_TRANSFER_DIFFERS: "Different transfer curves (SDR/HDR).",
+    LEND_TOO_SHORT: "The film is shorter than the donor's measured chunks.",
     LEND_MATERIAL_NOT_KNOWN:
-      "One of the two measurements does not record what material it was made on: it is older than these columns. Vouching for what nobody looked at will not do — measure again.",
+      "It is not recorded what material that measurement was made on — measure again.",
     LADDER_NO_ROOM_HERE:
-      "This machine has no room for one variant: {needed} bytes are needed, {free} are free, {short_by} short. Writing to {at}. Variants are made one at a time and removed as soon as they are sent, so one is all that is needed — and there is nowhere to put even that. Free some space, or choose another folder in the settings.",
+      "No room for a variant: {needed} bytes needed, {free} free, {short_by} short. Folder: {at}. Free space or change the folder in settings.",
     LADDER_SPACE_UNKNOWN:
       "How much room the set would take could not be worked out, so the build is going ahead without that check.",
     NOT_ENOUGH_SPACE:
@@ -604,8 +586,7 @@ export const en: Catalogue = {
     NAME_WILL_BE_REPLACED: "The file “{name}” is already being served — it will be replaced.",
     CDN_KEEPS_OLD_COPY:
       "The CDN will keep the previous copy for a while, and viewers will get the old one.",
-    VIEWERS_ACTIVE_UPLOAD:
-      "The server is serving data right now — {connections} connections are open. An upload will push what they are watching out of its memory and playback will stall.",
+    VIEWERS_ACTIVE_UPLOAD: "Open connections: {connections}. The upload may stall playback.",
 
     // The state of the server (FR-070). Every reading carries the figures it rests on.
     HEALTH_NOT_ESTABLISHED: "Could not be established.",
