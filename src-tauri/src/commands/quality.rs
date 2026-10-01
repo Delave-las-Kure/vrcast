@@ -63,6 +63,17 @@ pub struct ThenBuild {
     pub slug: String,
     #[serde(default)]
     pub audio_track: usize,
+    /// Build although somebody is watching something on the server (T571), as
+    /// `BuildRequest.confirmed`. The video pipeline (T672) sets it for a medium it made itself
+    /// a moment ago: nobody can be watching a set that does not exist yet, and the guard
+    /// counts every connection to the server, not connections to this medium. A batch leaves
+    /// it false, as before.
+    #[serde(default)]
+    pub confirmed: bool,
+    /// Build although the checker objects to the ladder that came out (T439). Set only when a
+    /// person has seen the objections and pressed «build anyway» (T672).
+    #[serde(default)]
+    pub accept_objections: bool,
 }
 
 fn h264() -> String {
@@ -313,7 +324,9 @@ pub mod api {
         // The verdict the plan already carries, rather than one worked out again here. What
         // stops the chain has to be the same judgement a person would have been shown, and two
         // computations of it are two chances to disagree.
-        if !crate::domain::ladder::may_build_unasked(&plan.verdict.objections) {
+        if !onward.accept_objections
+            && !crate::domain::ladder::may_build_unasked(&plan.verdict.objections)
+        {
             for objection in &plan.verdict.objections {
                 ctx.add_notice(objection.detail());
             }
@@ -333,14 +346,15 @@ pub mod api {
                 // The same batch as the measurement that started it. A build outside its
                 // batch would go on encoding for hours after somebody pressed stop.
                 batch: measured.batch.clone(),
-                // Not confirmed (T571): a batch chain runs unattended, with nobody at the
-                // screen to answer "build anyway?" — so it gets the same protection an
-                // unattended run is owed, exactly like every other quick refusal this
-                // chain already stops on (`may_build_unasked` above, `LadderCheckPending`
-                // in `ladder_build` itself). A rebuild that would wash a real viewer's
-                // quality out from under them is not something to do silently just because
-                // nobody was watching the screen it would have warned on.
-                confirmed: false,
+                // Not confirmed (T571) unless the caller says so: a batch chain runs unattended,
+                // with nobody at the screen to answer "build anyway?" — so it gets the same
+                // protection an unattended run is owed, exactly like every other quick refusal
+                // this chain already stops on (`may_build_unasked` above, `LadderCheckPending`
+                // in `ladder_build` itself). A rebuild that would wash a real viewer's quality
+                // out from under them is not something to do silently just because nobody was
+                // watching the screen it would have warned on. The video pipeline (T672) says
+                // so only for a medium it made itself, which nobody can be watching yet.
+                confirmed: onward.confirmed,
             },
         )
         .await?;

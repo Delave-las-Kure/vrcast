@@ -1,0 +1,532 @@
+//! T672 — the rules of a video in work, checked without a film, a server or a running task.
+
+use std::sync::Arc;
+
+use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
+use vrcast_studio_lib::domain::ladder::{Quality, Rung};
+use vrcast_studio_lib::domain::source::{AudioTrack, SourceFile};
+use vrcast_studio_lib::domain::video::{
+    self, after_restart, allowed, Act, AfterRestart, VideoAction, VideoStage, VideoState,
+};
+use vrcast_studio_lib::domain::wording::DetailCode;
+use vrcast_studio_lib::store::db::Db;
+use vrcast_studio_lib::store::videos::{self, VideoRow};
+
+// ---------- the stage a task's own code belongs to ----------
+
+#[test]
+fn every_stage_code_the_pipeline_runs_through_lands_on_its_stage() {
+    // The mapping T672 names, one line each — the screen's whole bar stands on it.
+    let expected = [
+        (DetailCode::StagePreparingMeasurement, VideoStage::Measuring),
+        (DetailCode::StageMeasuringQuality, VideoStage::Measuring),
+        (DetailCode::StageCheckingLoan, VideoStage::Measuring),
+        (DetailCode::StageBuildingLadder, VideoStage::Encoding),
+        (DetailCode::StageConverting, VideoStage::Encoding),
+        (DetailCode::StageValidating, VideoStage::Encoding),
+        (DetailCode::StageSendingVariant, VideoStage::Uploading),
+        (DetailCode::StageCuttingSegments, VideoStage::Cutting),
+        (DetailCode::StageVerifyingLadder, VideoStage::Verifying),
+    ];
+    for (code, stage) in expected {
+        assert_eq!(video::stage_of(code), Some(stage), "{code:?}");
+    }
+}
+
+#[test]
+fn codes_that_say_nothing_about_where_the_video_is_move_nothing() {
+    // The end of a task and a stop still being confirmed are not stages: taking them for one
+    // would put a finished build back at «planned» or a cutting at nowhere.
+    for code in [
+        DetailCode::StageDone,
+        DetailCode::StageStopUnconfirmed,
+        DetailCode::StageChecksum,
+        DetailCode::StageDeploying,
+    ] {
+        assert_eq!(video::stage_of(code), None, "{code:?}");
+    }
+}
+
+#[test]
+fn the_stages_go_in_the_order_the_bar_draws_them() {
+    use VideoStage::*;
+    let order = [
+        Planned, Measuring, Encoding, Uploading, Cutting, Verifying, Done,
+    ];
+    for pair in order.windows(2) {
+        assert!(
+            pair[0] < pair[1],
+            "{:?} is not before {:?}",
+            pair[0],
+            pair[1]
+        );
+    }
+    assert_eq!(VideoStage::ALL, &order);
+}
+
+#[test]
+fn the_rung_in_hand_is_read_back_out_of_the_builds_own_share() {
+    // The build reports done/(n+1) as it takes up each rung.
+    let n = 3;
+    for done in 0..n {
+        let share = done as f64 / (n as f64 + 1.0);
+        assert_eq!(video::rung_at(share, n), done as u32 + 1);
+    }
+    // Never past the last, never for a set of nothing.
+    assert_eq!(video::rung_at(1.0, n), 3);
+    assert_eq!(video::rung_at(0.5, 0), 0);
+}
+
+// ---------- what a state allows ----------
+
+#[test]
+fn only_a_going_video_is_paused_and_only_a_paused_one_continued() {
+    for state in VideoState::ALL {
+        assert_eq!(
+            allowed(Act::Pause, *state, VideoStage::Encoding, true),
+            *state == VideoState::Working,
+            "pause in {state:?}"
+        );
+        assert_eq!(
+            allowed(Act::Resume, *state, VideoStage::Encoding, true),
+            *state == VideoState::Paused,
+            "resume in {state:?}"
+        );
+    }
+}
+
+#[test]
+fn retry_is_offered_after_a_problem_or_a_stop_and_nowhere_else() {
+    for state in VideoState::ALL {
+        let want = matches!(state, VideoState::Problem | VideoState::Cancelled);
+        assert_eq!(
+            allowed(Act::Retry, *state, VideoStage::Uploading, true),
+            want,
+            "{state:?}"
+        );
+    }
+}
+
+#[test]
+fn a_video_is_not_taken_off_the_list_while_its_work_is_alive() {
+    // Removing it would leave a build running for something nobody can see any more.
+    assert!(!allowed(
+        Act::Remove,
+        VideoState::Working,
+        VideoStage::Encoding,
+        true
+    ));
+    assert!(!allowed(
+        Act::Remove,
+        VideoState::Cancelling,
+        VideoStage::Cutting,
+        true
+    ));
+    for state in [
+        VideoState::Ready,
+        VideoState::Paused,
+        VideoState::Problem,
+        VideoState::Cancelled,
+        VideoState::Done,
+        VideoState::Planning,
+    ] {
+        assert!(
+            allowed(Act::Remove, state, VideoStage::Encoding, true),
+            "{state:?}"
+        );
+    }
+}
+
+#[test]
+fn the_audio_track_is_fixed_once_anything_is_encoded() {
+    // A variant already on the server would be recognised as done with the old track in it.
+    assert!(allowed(
+        Act::SetAudio,
+        VideoState::Ready,
+        VideoStage::Planned,
+        false
+    ));
+    assert!(allowed(
+        Act::SetAudio,
+        VideoState::Problem,
+        VideoStage::Measuring,
+        true
+    ));
+    assert!(!allowed(
+        Act::SetAudio,
+        VideoState::Problem,
+        VideoStage::Encoding,
+        true
+    ));
+    assert!(!allowed(
+        Act::SetAudio,
+        VideoState::Working,
+        VideoStage::Measuring,
+        true
+    ));
+}
+
+#[test]
+fn the_name_is_fixed_once_the_medium_exists() {
+    assert!(allowed(
+        Act::SetName,
+        VideoState::Problem,
+        VideoStage::Planned,
+        false
+    ));
+    assert!(!allowed(
+        Act::SetName,
+        VideoState::Problem,
+        VideoStage::Planned,
+        true
+    ));
+    assert!(!allowed(
+        Act::SetName,
+        VideoState::Working,
+        VideoStage::Planned,
+        false
+    ));
+}
+
+#[test]
+fn rungs_are_never_edited_under_a_running_build() {
+    assert!(!allowed(
+        Act::SetRungs,
+        VideoState::Working,
+        VideoStage::Encoding,
+        true
+    ));
+    assert!(!allowed(
+        Act::SetRungs,
+        VideoState::Paused,
+        VideoStage::Encoding,
+        true
+    ));
+    assert!(allowed(
+        Act::SetRungs,
+        VideoState::Ready,
+        VideoStage::Planned,
+        false
+    ));
+    assert!(allowed(
+        Act::SetRungs,
+        VideoState::Problem,
+        VideoStage::Encoding,
+        true
+    ));
+}
+
+#[test]
+fn start_is_for_a_video_waiting_for_it_only() {
+    for state in VideoState::ALL {
+        let want = matches!(state, VideoState::Ready | VideoState::Planning);
+        assert_eq!(
+            allowed(Act::Start, *state, VideoStage::Planned, false),
+            want,
+            "{state:?}"
+        );
+    }
+}
+
+// ---------- after a restart ----------
+
+#[test]
+fn after_a_restart_a_going_video_carries_on_and_a_paused_one_waits() {
+    // The owner's decision of 2026-10-01: unfinished videos carry on by themselves from their
+    // stage — except those a person paused, which stay paused.
+    assert_eq!(after_restart(VideoState::Working), AfterRestart::CarryOn);
+    assert_eq!(after_restart(VideoState::Paused), AfterRestart::Leave);
+    assert_eq!(after_restart(VideoState::Planning), AfterRestart::PlanAgain);
+    assert_eq!(
+        after_restart(VideoState::Cancelling),
+        AfterRestart::NowCancelled
+    );
+    for state in [
+        VideoState::Ready,
+        VideoState::Problem,
+        VideoState::Cancelled,
+        VideoState::Done,
+    ] {
+        assert_eq!(after_restart(state), AfterRestart::Leave, "{state:?}");
+    }
+}
+
+// ---------- what a problem offers ----------
+
+#[test]
+fn a_taken_name_offers_a_choice_and_not_a_retry() {
+    // Pressing retry would only meet the same name again.
+    let actions = video::actions_for(&AppError::new(ErrorCode::SlugTaken));
+    assert_eq!(actions, vec![VideoAction::Replace, VideoAction::Rename]);
+}
+
+#[test]
+fn viewers_on_the_server_and_objections_offer_build_anyway() {
+    assert!(video::actions_for(&AppError::new(ErrorCode::FileInUse))
+        .contains(&VideoAction::BuildAnyway));
+    let objection = video::actions_for(&AppError::new(ErrorCode::LadderObjection));
+    assert!(objection.contains(&VideoAction::BuildAnyway));
+    assert!(objection.contains(&VideoAction::EditRungs));
+}
+
+#[test]
+fn everything_else_is_retried_from_where_it_stopped() {
+    for code in [
+        ErrorCode::SshUnreachable,
+        ErrorCode::RemoteDiskFull,
+        ErrorCode::LocalDiskFull,
+        ErrorCode::LadderIncomplete,
+        ErrorCode::DecodeValidationFailed,
+        ErrorCode::Internal,
+    ] {
+        assert!(
+            video::actions_for(&AppError::new(code)).contains(&VideoAction::Retry),
+            "{code:?}"
+        );
+    }
+}
+
+// ---------- names, tracks and time ----------
+
+#[test]
+fn a_file_is_offered_under_its_own_name() {
+    assert_eq!(
+        video::title_of("C:/films/Blue Eye S01E03.mkv"),
+        "Blue Eye S01E03"
+    );
+    assert_eq!(video::title_of("/v/a.b.c.mp4"), "a.b.c");
+}
+
+#[test]
+fn a_name_with_nothing_usable_in_it_still_gets_a_short_name() {
+    // Refusing a film for its name would stop it before its plan.
+    let slug = video::slug_for("……", "v_0123ABCDEF");
+    assert!(slug.starts_with("video-"), "{slug}");
+    vrcast_studio_lib::domain::media::validate_slug(&slug).expect("a made-up name must be valid");
+    assert_eq!(video::slug_for("Синий глаз", "x"), "siniy-glaz");
+}
+
+fn source(duration_s: f64) -> SourceFile {
+    SourceFile {
+        path: String::from("/f.mp4"),
+        size_bytes: 1,
+        duration_s,
+        width: 1920,
+        height: 1080,
+        fps: 24,
+        bitrate_bps: 20_000_000,
+        peak_bps: None,
+        video_codec: String::from("h264"),
+        pix_fmt: String::from("yuv420p"),
+        color_transfer: None,
+        audio_tracks: vec![
+            AudioTrack {
+                index: 0,
+                codec: String::from("aac"),
+                profile: None,
+                channels: 2,
+                bitrate_bps: None,
+                language: None,
+                title: None,
+                is_default: false,
+            },
+            AudioTrack {
+                index: 1,
+                codec: String::from("aac"),
+                profile: None,
+                channels: 2,
+                bitrate_bps: None,
+                language: None,
+                title: None,
+                is_default: true,
+            },
+        ],
+    }
+}
+
+fn rung(bitrate_bps: u64, width: u32, height: u32) -> Rung {
+    Rung {
+        index: 0,
+        bitrate_bps,
+        maxrate_bps: bitrate_bps,
+        bufsize_bps: bitrate_bps,
+        width,
+        height,
+        level: String::from("4.1"),
+        reasons: Vec::new(),
+        quality: Quality::MeasuredHere { vmaf_x100: 9500 },
+    }
+}
+
+#[test]
+fn the_track_marked_default_is_the_one_offered() {
+    assert_eq!(video::default_audio(&source(60.0)), 1);
+}
+
+#[test]
+fn encoding_time_counts_the_pixels_made_and_skips_a_rung_carried_across() {
+    let film = source(100.0);
+    let speed = 1920.0 * 1080.0 * 24.0; // real time at 1080p24
+    let one = video::encode_seconds(&[rung(8_000_000, 1920, 1080)], &film, speed).unwrap();
+    // 100 s of film at real time, plus the decode check after it.
+    assert_eq!(one, (100.0 * (1.0 + video::VALIDATE_SHARE)).round() as u64);
+    // A rung that *is* the source is copied, and costs nothing here.
+    let copy = rung(20_000_000, 1920, 1080);
+    assert!(video::is_copy(&copy, &film));
+    assert_eq!(video::encode_seconds(&[copy], &film, speed), Some(0));
+    // No length, no number — a made-up one would look like an estimate.
+    assert_eq!(
+        video::encode_seconds(&[rung(8_000_000, 1920, 1080)], &source(0.0), speed),
+        None
+    );
+}
+
+#[test]
+fn this_machines_speed_is_the_middle_of_what_it_did() {
+    assert_eq!(video::middle_speed(vec![]), None);
+    assert_eq!(video::middle_speed(vec![3.0, 1.0, 100.0]), Some(3.0));
+    assert_eq!(video::middle_speed(vec![f64::NAN, -1.0]), None);
+}
+
+#[test]
+fn time_left_is_said_only_once_there_is_something_to_go_by() {
+    assert_eq!(video::eta_s(1.0, 0.0, 0.5), None, "too soon");
+    assert_eq!(video::eta_s(10.0, 0.2, 0.2), None, "nothing moved");
+    assert_eq!(video::eta_s(10.0, 0.0, 0.5), Some(10));
+}
+
+// ---------- the store ----------
+
+fn db() -> Arc<Db> {
+    Arc::new(Db::open_in_memory().unwrap())
+}
+
+fn with_server(db: &Db) -> String {
+    let id = String::from("s1");
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO server_profiles
+                (id, name, host, port, username, auth_kind, secret_ref, domain, video_dir,
+                 is_active, created_at)
+             VALUES ('s1', 'S', '127.0.0.1', 22, 'root', 'password', 'ref', 'x.example',
+                     '/v', 1, '2026-01-01T00:00:00Z')",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    id
+}
+
+#[test]
+fn a_video_is_kept_whole_and_comes_back_the_same() {
+    let db = db();
+    let server = with_server(&db);
+    let mut row = VideoRow::new("v1", &server, "C:/f.mp4", "F", "f");
+    row.audio_track = 2;
+    row.stage = VideoStage::Cutting;
+    row.state = VideoState::Paused;
+    row.paused_by_person = true;
+    row.measured = true;
+    row.own_medium = true;
+    row.media_id = Some(String::from("m_1"));
+    row.task_id = Some(String::from("t_1"));
+    row.plan_json = Some(String::from("{}"));
+    videos::save(&db, &row).unwrap();
+
+    let back = videos::get(&db, "v1").unwrap().unwrap();
+    assert_eq!(back.stage, VideoStage::Cutting);
+    assert_eq!(back.state, VideoState::Paused);
+    assert!(back.paused_by_person && back.measured && back.own_medium);
+    assert_eq!(back.audio_track, 2);
+    assert_eq!(back.media_id.as_deref(), Some("m_1"));
+    assert_eq!(back.task_id.as_deref(), Some("t_1"));
+}
+
+#[test]
+fn the_list_keeps_the_order_videos_were_added_in() {
+    let db = db();
+    let server = with_server(&db);
+    for id in ["b", "a", "c"] {
+        videos::save(&db, &VideoRow::new(id, &server, id, id, id)).unwrap();
+    }
+    let ids: Vec<String> = videos::list(&db)
+        .unwrap()
+        .into_iter()
+        .map(|v| v.id)
+        .collect();
+    assert_eq!(ids, vec!["b", "a", "c"]);
+}
+
+#[test]
+fn removing_a_video_removes_only_the_row() {
+    let db = db();
+    let server = with_server(&db);
+    videos::save(&db, &VideoRow::new("v1", &server, "p", "t", "s")).unwrap();
+    assert!(videos::remove(&db, "v1").unwrap());
+    assert!(videos::get(&db, "v1").unwrap().is_none());
+    assert!(
+        !videos::remove(&db, "v1").unwrap(),
+        "removing twice is not an error"
+    );
+}
+
+#[test]
+fn a_video_goes_with_its_server() {
+    let db = db();
+    let server = with_server(&db);
+    videos::save(&db, &VideoRow::new("v1", &server, "p", "t", "s")).unwrap();
+    db.with_conn(|c| {
+        c.execute("DELETE FROM server_profiles WHERE id = 's1'", [])?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(videos::list(&db).unwrap().is_empty());
+}
+
+#[test]
+fn the_database_refuses_a_stage_it_does_not_know() {
+    let db = db();
+    with_server(&db);
+    let refused = db.with_conn(|c| {
+        Ok(c.execute(
+            "INSERT INTO videos (id, server_id, source_path, title, slug, stage, created_at,
+                                 updated_at)
+             VALUES ('x', 's1', 'p', 't', 's', 'teleporting', 'n', 'n')",
+            [],
+        ))
+    });
+    assert!(matches!(refused, Ok(Err(_))), "{refused:?}");
+}
+
+#[test]
+fn every_stage_and_state_is_one_the_database_takes() {
+    let db = db();
+    let server = with_server(&db);
+    for (i, stage) in VideoStage::ALL.iter().enumerate() {
+        for (j, state) in VideoState::ALL.iter().enumerate() {
+            let mut row = VideoRow::new(&format!("v{i}-{j}"), &server, "p", "t", "s");
+            row.stage = *stage;
+            row.state = *state;
+            videos::save(&db, &row).unwrap_or_else(|e| panic!("{stage:?}/{state:?}: {e}"));
+        }
+    }
+}
+
+#[test]
+fn an_encoders_speed_is_remembered_per_encoder() {
+    let db = db();
+    assert_eq!(videos::encode_speed(&db, "libx264").unwrap(), None);
+    for s in [10.0, 30.0, 20.0] {
+        videos::record_encode_speed(&db, "libx264", s).unwrap();
+    }
+    videos::record_encode_speed(&db, "h264_nvenc", 999.0).unwrap();
+    // Nonsense is not written.
+    videos::record_encode_speed(&db, "libx264", f64::INFINITY).unwrap();
+    videos::record_encode_speed(&db, "libx264", 0.0).unwrap();
+    assert_eq!(videos::encode_speed(&db, "libx264").unwrap(), Some(20.0));
+    assert_eq!(
+        videos::encode_speed(&db, "h264_nvenc").unwrap(),
+        Some(999.0)
+    );
+}

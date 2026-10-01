@@ -310,6 +310,18 @@ impl TaskContext {
         self.report_full(progress, None, speed_bps, eta_s, false);
     }
 
+    /// The same, under a stage of its own (T672): a variant on its way to the server says how
+    /// fast it is going, as an upload does, without losing the stage that says what it is.
+    pub fn report_stage_transfer(
+        &self,
+        progress: f64,
+        stage: DetailCode,
+        speed_bps: Option<i64>,
+        eta_s: Option<i64>,
+    ) {
+        self.report_full(progress, Some(stage), speed_bps, eta_s, false);
+    }
+
     /// Say something that is not progress and is not a failure.
     ///
     /// **Why the context and not the return value.** A task returns `Ok(())` or an error,
@@ -445,6 +457,12 @@ impl TaskContext {
     /// Read the resume position left by the previous run.
     pub fn resume_token(&self) -> Result<Option<String>> {
         Ok(store::get(&self.db, &self.id)?.and_then(|r| r.resume_token))
+    }
+
+    /// The database, for a task that keeps a fact of its own beside its progress — how fast
+    /// the encoder ran (T672). Not for the task's own record: that is the engine's.
+    pub(crate) fn db(&self) -> &Db {
+        &self.db
     }
 }
 
@@ -1175,6 +1193,18 @@ impl TaskEngine {
             task.can_resume = self.could_carry_on(&task);
             task
         }))
+    }
+
+    /// Whether this task's work is held by this run — queued, running or paused (T672).
+    ///
+    /// After a restart a task of the previous run is a row and nothing more: no work behind
+    /// it, nothing to pause, carry on or wait for. A video in work asks this to tell its own
+    /// task from such a row before deciding to start the stage again.
+    pub fn is_alive(&self, id: &str) -> bool {
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(id)
     }
 
     /// Whether "carry on" would do anything for this task (T515).

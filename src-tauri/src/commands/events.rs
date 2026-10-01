@@ -43,6 +43,8 @@ pub mod names {
     /// time — the fact is remembered in its settings. The interface words it, in whatever
     /// language is in use, exactly as it does for `TASK_NOTIFY`.
     pub const APP_HIDDEN: &str = "app:hidden-to-tray";
+    /// A video in work changed (T672): the whole `VideoView`, every time.
+    pub const VIDEO_UPDATE: &str = "video:update";
 }
 
 /// Start forwarding task events to the interface.
@@ -185,6 +187,7 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                         AppEvent::ServerState { .. } => names::SERVER_STATE,
                         AppEvent::ViewersUpdate(_) => names::VIEWERS_UPDATE,
                         AppEvent::DeployProgress { .. } => names::DEPLOY_PROGRESS,
+                        AppEvent::VideoUpdate(_) => names::VIDEO_UPDATE,
                     };
                     if let Err(e) = app.emit(name, &event) {
                         tracing::debug!(error = %e, "event not delivered to the interface");

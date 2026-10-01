@@ -144,7 +144,7 @@ pub struct RecomputeRungRequest {
 /// ladder is unsound — a rung above the source, a buffer that will let peaks through, a
 /// hole a viewer would fall through. `not_buildable` says nobody has measured it. A ladder
 /// can be perfectly sound and still be a guess.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LadderVerdict {
     pub objections: Vec<Objection>,
     pub not_buildable: Option<NotBuildable>,
@@ -481,12 +481,22 @@ pub mod api {
             Err(_) => crate::domain::hls_master::Provenance::Formula,
         };
 
-        let master_url = crate::domain::links::for_path(
-            &profile.domain,
-            None,
-            &format!("{}/master.m3u8", request.slug),
-        )
-        .origin;
+        let master_url = match &state.verify_origin {
+            Some(origin) => format!(
+                "{}/{}/{}/master.m3u8",
+                origin.trim_end_matches('/'),
+                crate::domain::links::VIDEOS_PREFIX,
+                request.slug
+            ),
+            None => {
+                crate::domain::links::for_path(
+                    &profile.domain,
+                    None,
+                    &format!("{}/master.m3u8", request.slug),
+                )
+                .origin
+            }
+        };
         // Somewhere local for a variant while it is being made. Beside the source unless the
         // person has said otherwise — `domain::work_dir` holds the whole argument, including
         // why it no longer goes where the comment that stood here said it should.
@@ -840,7 +850,9 @@ fn refusal_text(refusal: ladder::Refusal) -> String {
     }
 }
 
-async fn pick_encoder(prefer_hardware: bool) -> Result<(encoders::Encoder, Vec<Detail>)> {
+pub(crate) async fn pick_encoder(
+    prefer_hardware: bool,
+) -> Result<(encoders::Encoder, Vec<Detail>)> {
     let info = ffmpeg::probe_self()
         .await
         .map_err(|e| AppError::new(ErrorCode::FfmpegBroken).with_cause(e))?;

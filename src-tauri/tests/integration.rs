@@ -196,6 +196,11 @@ mod process_tree;
 #[path = "integration/upload_live.rs"]
 mod upload_live;
 
+/// T672 — one video the whole way from a plan to a link, and carried on after the
+/// application is killed (a pause pressed stays a pause).
+#[path = "integration/video_pipeline.rs"]
+mod video_pipeline;
+
 #[path = "integration/upload_finish_network_cut.rs"]
 mod upload_finish_network_cut;
 

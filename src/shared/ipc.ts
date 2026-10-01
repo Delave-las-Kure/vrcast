@@ -74,6 +74,10 @@ import {
   type UpdateStanding,
   type Found,
   type WhatWent,
+  type VideoView,
+  type VideoAdded,
+  type VideoStarted,
+  type VideoUpdateEvent,
 } from "./contract";
 
 /**
@@ -408,6 +412,34 @@ export const ipc = {
   convertStart: (request: ConvertStart) => call<string>("convert_start", { request }),
   /** Check that a prepared file plays (FR-027). */
   convertValidate: (path: string) => call<Validation>("convert_validate", { path }),
+
+  // --- videos in work (T672) ---
+  /** Add files; each gets a plan and waits for «Start». Each file on its own: a refusal
+   *  names its file and reason, the rest are added. */
+  videoAdd: (serverId: string, paths: string[]) =>
+    call<VideoAdded>("video_add", { serverId, paths }),
+  /** Every video, in the order added — after a restart too. */
+  videoList: () => call<VideoView[]>("video_list"),
+  /** Choose the audio track (from zero). Before encoding only. */
+  videoSetAudio: (id: string, track: number) => call<VideoView>("video_set_audio", { id, track }),
+  /** Change the title and short name. Before the medium exists only. */
+  videoSetName: (id: string, title: string, slug: string | null) =>
+    call<VideoView>("video_set_name", { id, title, slug }),
+  /** Set the rungs by hand (measured or borrowed ones), or `null` to go back to the plan's. */
+  videoSetRungs: (id: string, rungs: Rung[] | null) =>
+    call<VideoView>("video_set_rungs", { id, rungs }),
+  /** «Start» — each video on its own; one still planning starts when its plan is ready. */
+  videoStart: (ids: string[]) => call<VideoStarted[]>("video_start", { ids }),
+  videoPause: (id: string) => call<VideoView>("video_pause", { id }),
+  videoResume: (id: string) => call<VideoView>("video_resume", { id }),
+  videoCancel: (id: string) => call<VideoView>("video_cancel", { id }),
+  /** Carry on from the stage it stopped at. `confirmed` — «build anyway» (viewers on the
+   *  server, objections to the ladder); false for a plain «retry». */
+  videoRetry: (id: string, confirmed: boolean) => call<VideoView>("video_retry", { id, confirmed }),
+  /** The short name is taken: build into the medium that has it. */
+  videoReplace: (id: string) => call<VideoView>("video_replace", { id }),
+  /** Off the list only; nothing on the server is touched. */
+  videoRemove: (id: string) => call<void>("video_remove", { id }),
 };
 
 // ---------- events ----------
@@ -509,4 +541,17 @@ export function onServerState(
   return tauriListen<ServerStateEvent>(EVENTS.serverState, (ev) =>
     handler(ev.payload.server_id, ev.payload.state),
   );
+}
+
+/**
+ * A video in work changed (T672): its stage, state, progress, problem or link. The whole
+ * video arrives every time — a card opened mid-build need not piece itself together.
+ */
+export function onVideoUpdate(handler: (video: VideoView) => void): Promise<UnlistenFn> {
+  return tauriListen<VideoUpdateEvent>(EVENTS.videoUpdate, (ev) => {
+    // The tag says which event this is; the rest is the video as `videoList` gives it.
+    const video: VideoView = { ...ev.payload };
+    delete (video as Partial<VideoUpdateEvent>).event;
+    handler(video);
+  });
 }

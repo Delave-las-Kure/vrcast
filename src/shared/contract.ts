@@ -77,6 +77,9 @@ export type ErrorCode =
   | "TASK_NOT_FOUND"
   | "TASK_BAD_TRANSITION"
   | "TASK_NOT_PAUSABLE"
+  // videos in work (T672)
+  | "VIDEO_NOT_FOUND"
+  | "VIDEO_NOT_NOW"
   // removing everything (FR-114, T643)
   | "FORGET_TASKS_RUNNING"
   | "FORGET_IN_PROGRESS"
@@ -363,7 +366,9 @@ export type DetailCode =
   | "STALLS_DISK"
   | "STALLS_FILE_PEAKS"
   | "STALLS_VIEWER_LINK"
-  | "STALLS_THE_PLAYER";
+  | "STALLS_THE_PLAYER"
+  // Videos in work (T672).
+  | "VIDEO_ALREADY_LISTED";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {
@@ -1443,6 +1448,8 @@ export const EVENTS = {
   appQuitRequested: "app:quit-requested",
   /** The window was hidden into the tray for the first time (T399). */
   appHiddenToTray: "app:hidden-to-tray",
+  /** A video in work changed (T672): the whole `VideoView`, every time. */
+  videoUpdate: "video:update",
 } as const;
 
 export interface TaskProgressEvent {
@@ -1640,4 +1647,136 @@ export interface Validation {
   problems: string[];
   /** The muxer's complaints, deliberately not held against the file. */
   ignored: string[];
+}
+
+// ---------- videos in work (T672) ----------
+//
+// One video goes the whole way in one place: a plan, «Start», measuring, encoding the rungs,
+// sending, cutting, checking, links — and carries on after a restart from the stage it was at.
+// The screen asks `video_list` once and then listens to `video:update`, which carries the whole
+// video every time.
+
+/** Where a video is on its way, in order. Inside the build encoding and sending alternate
+ *  per rung; `progress.rung` says which. */
+export type VideoStage =
+  "planned" | "measuring" | "encoding" | "uploading" | "cutting" | "verifying" | "done";
+
+/** What is happening to it now. `paused` survives a restart as a pause; `working` carries on
+ *  by itself after one. `cancelling` — stop pressed, the server's cutting still being
+ *  confirmed stopped. */
+export type VideoState =
+  "planning" | "ready" | "working" | "paused" | "problem" | "cancelling" | "cancelled" | "done";
+
+/** What a problem offers to press. `retry` → `videoRetry(id, false)`; `build_anyway` →
+ *  `videoRetry(id, true)`; `edit_rungs` → the rung editor, then `videoSetRungs` and
+ *  `videoRetry`; `replace` → `videoReplace(id)`; `rename` → `videoSetName`, then `videoRetry`. */
+export type VideoProblemAction = "retry" | "build_anyway" | "edit_rungs" | "replace" | "rename";
+
+/** Where a plan's rungs come from. `formula` — a preview; the measurement after «Start»
+ *  decides the real ones. */
+export type VideoPlanSource = "measured" | "borrowed" | "formula" | "edited";
+
+/** Whether there is room, with the numbers. `unknown` is not a refusal. */
+export type VideoSpaceCheck =
+  | { state: "fits"; needed_bytes: number; free_bytes: number }
+  | { state: "short"; needed_bytes: number; free_bytes: number; short_by: number }
+  | { state: "unknown" };
+
+/** The plan shown before «Start». */
+export interface VideoPlan {
+  /** Heaviest first. */
+  rungs: Rung[];
+  from: VideoPlanSource;
+  /** Whether «Start» begins with measuring. */
+  needs_measuring: boolean;
+  /** Roughly how long measuring takes, in seconds. 0 when not needed. */
+  measure_s: number;
+  /** Roughly how long encoding takes, in seconds. Null when the film's length is unknown. */
+  encode_s: number | null;
+  /** `this_machine` — from this machine's own encodes; `model` — a rough model. */
+  encode_estimate: "this_machine" | "model";
+  /** The encoder, as FFmpeg names it. */
+  encoder: string;
+  /** What the set takes on the server, in bytes. */
+  server_bytes: number;
+  /** What one rung takes here while it is made, in bytes. */
+  local_bytes: number;
+  server_space: VideoSpaceCheck;
+  local_space: VideoSpaceCheck;
+  /** Whether the short name is already a medium's. Null — the library could not be read. */
+  name_taken: boolean | null;
+  /** What the checker says about these rungs. */
+  objections: Detail[];
+  notices: Detail[];
+}
+
+/** What it stopped on, and what can be pressed. */
+export interface VideoProblem {
+  error: AppError;
+  actions: VideoProblemAction[];
+}
+
+/** How far the current stage has got. */
+export interface VideoProgress {
+  /** `queued` while the stage's task waits for its turn. */
+  task_state: TaskState;
+  /** 0..1 within the stage (within the rung for encoding and sending). */
+  progress: number;
+  /** Bytes a second while a rung is being sent. */
+  speed_bps: number | null;
+  /** Seconds left in the stage, when it can be said. */
+  eta_s: number | null;
+  /** Which rung the build is at, from one. Null before the build. */
+  rung: number | null;
+  rungs: number;
+}
+
+/** One video. Also the payload of `video:update` (with `event: "video_update"`). */
+export interface VideoView {
+  id: string;
+  server_id: string;
+  source_path: string;
+  title: string;
+  slug: string;
+  /** From zero, as `SourceFile.audio_tracks[].index`. */
+  audio_track: number;
+  stage: VideoStage;
+  state: VideoState;
+  paused_by_person: boolean;
+  /** «Start» was pressed while the plan was still being made. */
+  start_requested: boolean;
+  source: SourceFile | null;
+  plan: VideoPlan | null;
+  /** Present while `working`, `paused` or `cancelling`. */
+  progress: VideoProgress | null;
+  task_id: string | null;
+  media_id: string | null;
+  problem: VideoProblem | null;
+  /** The link to the set, once `done`. */
+  link: Links | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VideoUpdateEvent extends VideoView {
+  event: "video_update";
+}
+
+/** A file `video_add` would not take, and why. */
+export interface VideoRefusal {
+  path: string;
+  error: AppError;
+}
+
+/** What `video_add` did, file by file. */
+export interface VideoAdded {
+  added: VideoView[];
+  refused: VideoRefusal[];
+}
+
+/** What `video_start` did about one video. `error` null — started (or starts when its plan
+ *  is ready). */
+export interface VideoStarted {
+  id: string;
+  error: AppError | null;
 }
