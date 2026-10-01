@@ -296,7 +296,7 @@ async fn the_pair_ladder_build_runs_on_success_notifies_library_changed_and_clea
     // holding.
     let conn = connect(&server).await;
     let attached =
-        vrcast_studio_lib::commands::ladder::attach_built_set(&conn, VIDEO_DIR, "t578ladder")
+        vrcast_studio_lib::commands::ladder::attach_built_set(&conn, VIDEO_DIR, "t578ladder", &[])
             .await
             .expect("the set was not attached to any medium");
     assert_eq!(

@@ -134,6 +134,9 @@ pub struct BuildJob<'a> {
 pub struct Built {
     pub master_path: String,
     pub variants: Vec<String>,
+    /// Every rung's prepared file, by the name it was made or found under (T678) — what the
+    /// catalogue records under the medium as the set's own.
+    pub files: Vec<String>,
     /// How many variants were prepared here, as against found already done.
     pub prepared: usize,
     pub reused: usize,
@@ -320,6 +323,7 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     Ok(Built {
         master_path,
         variants: work.iter().map(|w| w.sub.clone()).collect(),
+        files: work.iter().map(|w| w.file.clone()).collect(),
         prepared,
         reused,
         verdict,

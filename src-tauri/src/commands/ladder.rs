@@ -575,9 +575,10 @@ pub mod api {
                     // medium at all — a build run before its medium was created, or a
                     // slug T528 has not finished tidying up — and a result that pointed
                     // at nothing would be worse than none.
-                    if outcome.is_ok() {
+                    if let Ok(built) = &outcome {
                         if let Some(media_id) =
-                            attach_built_set(&conn, &profile.video_dir, &request.slug).await
+                            attach_built_set(&conn, &profile.video_dir, &request.slug, &built.files)
+                                .await
                         {
                             ctx.set_result(crate::tasks::store::TaskResult { media_id });
                         }
@@ -692,10 +693,16 @@ pub mod api {
 /// matching medium, an unreadable catalogue, a write that lost the race with another writer.
 /// A build that already succeeded on the server must not be reported as failed over a
 /// bookkeeping step nobody asked to see the result of.
+///
+/// **And the set's prepared rung files with it** (T678, the owner's decision of 2026-10-02):
+/// `set_files` — the build's own names for them — are recorded under the medium as the set's
+/// (`Media::set_files`), in the same write, so that deleting the medium removes them with the
+/// set. A file the medium has as its own single file stays one (`domain::set_files`).
 pub async fn attach_built_set(
     conn: &crate::ssh::Connection,
     video_dir: &str,
     slug: &str,
+    set_files: &[String],
 ) -> Option<String> {
     let manifest = match crate::server::manifest_io::read(conn, video_dir).await {
         Ok(m) => m,
@@ -710,7 +717,8 @@ pub async fn attach_built_set(
     let media_id = manifest.find_by_slug(slug)?.id.clone();
 
     let ladder_path = format!("{slug}/master.m3u8");
-    if let Some(next) = manifest.with_file_under(&media_id, &ladder_path, true) {
+    if let Some(mut next) = manifest.with_file_under(&media_id, &ladder_path, true) {
+        crate::domain::set_files::record_built(&mut next, slug, set_files);
         if let Err(e) =
             crate::server::manifest_io::write(conn, video_dir, &next, manifest.generation).await
         {

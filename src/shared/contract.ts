@@ -169,6 +169,7 @@ export type DetailCode =
   | "MANIFEST_MALFORMED"
   | "CONFIRM_DELETE"
   | "VIEWERS_ACTIVE_DELETE"
+  | "CONFIRM_DELETE_SET_FILES"
   | "MEDIA_BUSY_BUILDING"
   | "MEDIA_BUSY_UPLOADING"
 
@@ -535,6 +536,10 @@ export interface MediaView {
   slug: string;
   files: FileView[];
   ladders: LadderSetView[];
+  /** T678 — the prepared rung files of the medium's set (`{slug}_{N}.mp4` beside `{slug}/`):
+   *  the set's own, not handed out one by one; they go when the medium goes. Absent from a
+   *  cache written before T678. */
+  set_files?: FileView[];
   total_bytes: number;
   created_at: string;
   /** T677 — a video on the «Video» screen building this medium's set: `building`, or

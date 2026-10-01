@@ -142,6 +142,8 @@ detail_codes! {
     ConfirmDelete => "CONFIRM_DELETE",
     /// `connections` — how many are open right now. What a deletion would do to them.
     ViewersActiveDelete => "VIEWERS_ACTIVE_DELETE",
+    /// `count`, `names` — the set's prepared rung files that go with the medium (T678).
+    ConfirmDeleteSetFiles => "CONFIRM_DELETE_SET_FILES",
     /// `slug` — the medium's own short name. `media_delete` refused because a
     /// `ladder_build` is actively writing into it right now (T596).
     MediaBusyBuilding => "MEDIA_BUSY_BUILDING",

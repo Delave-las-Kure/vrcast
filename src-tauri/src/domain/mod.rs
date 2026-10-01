@@ -41,6 +41,7 @@ pub mod remote_name;
 pub mod scene_cut;
 pub mod server_profile;
 pub mod server_state;
+pub mod set_files;
 pub mod slow_master;
 pub mod source;
 pub mod stalls;

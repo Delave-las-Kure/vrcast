@@ -323,6 +323,35 @@ describe("the library", () => {
 });
 
 describe("a medium's built quality sets (T529)", () => {
+  it("shows the set's rung files with the medium, not as unrecognised (T678)", async () => {
+    mockLibraryList.mockResolvedValue(
+      view({
+        media: [
+          media({
+            ladders: [ladderSet()],
+            set_files: [file({ path: "nazvanie-filma_9.mp4" })],
+          }),
+        ],
+      }),
+    );
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+
+    const list = await screen.findByTestId("set-files-m1");
+    expect(list).toHaveTextContent(ru.ui.library.setFilesHeading);
+    expect(list).toHaveTextContent("nazvanie-filma_9.mp4");
+    // The set's own: no delete of their own — they go with the medium.
+    expect(within(list).queryByText(ru.ui.library.deleteFile)).toBeNull();
+  });
+
+  it("shows no rung files where the core sent none, as a cache from before T678", async () => {
+    mockLibraryList.mockResolvedValue(view({ media: [media({ ladders: [ladderSet()] })] }));
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+    await screen.findByTestId("ladder-sets-m1");
+    expect(screen.queryByTestId("set-files-m1")).toBeNull();
+  });
+
   it("shows every parameter known about a set, and offers to copy its link", async () => {
     mockLibraryList.mockResolvedValue(view({ media: [media({ ladders: [ladderSet()] })] }));
     draw();
@@ -475,6 +504,28 @@ describe("what was not recognised", () => {
 });
 
 describe("deleting", () => {
+  it("names the set's rung files among what a medium's deletion takes (T678)", async () => {
+    mockMediaDelete.mockRejectedValueOnce({
+      code: "CONFIRMATION_REQUIRED",
+      details: [
+        { key: "CONFIRM_DELETE", params: { what: "Название фильма", files: 4, bytes: 1000 } },
+        {
+          key: "CONFIRM_DELETE_SET_FILES",
+          params: { count: 2, names: "nazvanie-filma_4.mp4, nazvanie-filma_9.mp4" },
+        },
+      ],
+    } satisfies AppError);
+    draw();
+
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
+
+    const said = await screen.findByText(/Удалится 4 файла/);
+    expect(said.textContent).toContain(
+      "Среди них файлы ступеней набора: nazvanie-filma_4.mp4, nazvanie-filma_9.mp4.",
+    );
+  });
+
   it("names the consequences and asks before doing anything", async () => {
     // Deleting a medium takes its files with it, and that is the whole of the question.
     // Asked afterwards it would be a report, and a report about a deletion is of no use.

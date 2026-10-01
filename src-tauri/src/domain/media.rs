@@ -31,6 +31,18 @@ pub struct Media {
     /// The quality-ladder descriptions, relative to the video directory.
     #[serde(default)]
     pub ladders: Vec<String>,
+    /// The prepared rung files of the medium's quality set, top-level names beside its
+    /// `{slug}/` (`film_22.mp4`, `film_9v.mp4`) — T678, the owner's decision of 2026-10-02.
+    ///
+    /// **Not `files`**: those are what a person hands out one by one; these are what the set
+    /// was cut from, never linked to on their own, and they go with the set — deleting the
+    /// medium removes them. Recorded by a successful build.
+    ///
+    /// **Left out of the JSON when empty**, so a medium without a set is written exactly as
+    /// before. A copy of the application from before T678 keeps the field untouched in its
+    /// `extra` and does not act on it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_files: Vec<String>,
     #[serde(default)]
     pub created_at: String,
     /// The fields this application does not know.
@@ -61,14 +73,19 @@ impl Media {
             slug: slug.into(),
             files: Vec::new(),
             ladders: Vec::new(),
+            set_files: Vec::new(),
             created_at: created_at.into(),
             extra: std::collections::HashMap::new(),
         }
     }
 
-    /// Every path the medium accounts for: both the files and the ladder descriptions.
+    /// Every path the medium accounts for: the files, the ladder descriptions and the set's
+    /// rung files (T678) — everything deleting the medium removes.
     pub fn all_paths(&self) -> impl Iterator<Item = &String> {
-        self.files.iter().chain(self.ladders.iter())
+        self.files
+            .iter()
+            .chain(self.ladders.iter())
+            .chain(self.set_files.iter())
     }
 }
 
@@ -89,6 +106,10 @@ pub struct RenamePlan {
     pub files: Vec<String>,
     /// The medium's `ladders` after the rename.
     pub ladders: Vec<String>,
+    /// The medium's `set_files` after the rename (T678). They move with the short name like
+    /// every other entry named after it; the set's own `.prepared` is not rewritten (the
+    /// owner's decision of 2026-10-02).
+    pub set_files: Vec<String>,
 }
 
 impl RenamePlan {
@@ -130,10 +151,12 @@ pub fn rename_plan(media: &Media, old_slug: &str, new_slug: &str) -> RenamePlan 
 
     let files: Vec<String> = media.files.iter().map(|p| rename_top(p)).collect();
     let ladders: Vec<String> = media.ladders.iter().map(|p| rename_top(p)).collect();
+    let set_files: Vec<String> = media.set_files.iter().map(|p| rename_top(p)).collect();
     RenamePlan {
         renames,
         files,
         ladders,
+        set_files,
     }
 }
 

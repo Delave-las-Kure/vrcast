@@ -27,6 +27,10 @@ mod server_inventory;
 #[path = "contract/library.rs"]
 mod library;
 
+/// T678 — a set's prepared rung files are its medium's: recorded, shown, deleted, named.
+#[path = "contract/set_files.rs"]
+mod set_files;
+
 /// T651 — a library refresh is joined, kept and said only when it changed something.
 #[path = "contract/library_refresh.rs"]
 mod library_refresh;
