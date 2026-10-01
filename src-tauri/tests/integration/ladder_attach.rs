@@ -280,8 +280,12 @@ async fn a_set_built_before_t678_has_its_rung_files_found_by_its_master_and_dele
         .all(|f| f.exists_on_server && f.size_bytes == 5000));
     let loose: Vec<&str> = view.unrecognized.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(loose, vec!["backrooms_7.mp4"], "{loose:?}");
-    // Reading changed nothing on the server.
-    assert!(!catalogue_text(&server).contains("set_files"));
+    // T679: the first read recorded them in the catalogue — and only them.
+    let parsed: serde_json::Value = serde_json::from_str(&catalogue_text(&server)).unwrap();
+    assert_eq!(
+        parsed["media"][0]["set_files"],
+        serde_json::json!(["backrooms_1.mp4", "backrooms_2.mp4", "backrooms_3.mp4"])
+    );
 
     // The confirmation names them and counts them.
     let asked = library::media_delete(&state, &server_id, &media_id, false)
@@ -410,4 +414,131 @@ async fn renaming_a_medium_moves_an_older_set_s_rung_files_and_records_them() {
         parsed["media"][0]["set_files"],
         serde_json::json!(["rooms_1.mp4"])
     );
+}
+
+// ---------- T679: an older set's rung files are recorded at the first read ----------
+
+/// The catalogue's generation as it lies on the server.
+fn generation_on_server(server: &TestServer) -> u64 {
+    let parsed: serde_json::Value = serde_json::from_str(&catalogue_text(server)).unwrap();
+    parsed["generation"].as_u64().expect("no generation")
+}
+
+#[tokio::test]
+async fn an_older_set_s_rung_files_are_recorded_once_at_the_first_read_and_deleted_by_the_record() {
+    use vrcast_studio_lib::commands::AppEvent;
+
+    let (server, state, server_id) = setup().await;
+    let media_id = library::media_create(&state, &server_id, "Задние комнаты", Some("backrooms"))
+        .await
+        .expect("the medium was not created");
+    hls_fixture::lay_out_ladder(&server, "backrooms").expect("the quality set was not laid out");
+    server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && for f in backrooms_1.mp4 backrooms_2.mp4 backrooms_3.mp4 \
+             backrooms_7.mp4; do head -c 5000 /dev/urandom > \"$f\"; done"
+        ))
+        .unwrap();
+    let conn = connect(&server).await;
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+        .await
+        .expect("the set was not attached");
+    conn.close().await;
+    assert!(!catalogue_text(&server).contains("set_files"));
+    let before = generation_on_server(&server);
+
+    // The first read records them, as one write of the catalogue, and says so.
+    let mut rx = state.subscribe();
+    let view = library::library_list(&state, &server_id, true)
+        .await
+        .expect("the library would not read");
+    let m = view.media.iter().find(|m| m.id == media_id).unwrap();
+    assert_eq!(m.set_files.len(), 3, "{m:?}");
+    let parsed: serde_json::Value = serde_json::from_str(&catalogue_text(&server)).unwrap();
+    assert_eq!(
+        parsed["media"][0]["set_files"],
+        serde_json::json!(["backrooms_1.mp4", "backrooms_2.mp4", "backrooms_3.mp4"]),
+        "the first read did not record the older set's rung files"
+    );
+    assert_eq!(generation_on_server(&server), before + 1);
+    let mut said = false;
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(&ev, AppEvent::LibraryChanged { server_id: s } if *s == server_id) {
+            said = true;
+        }
+    }
+    assert!(said, "the write was not announced as library:changed");
+    // No staged catalogue left behind in the person's library.
+    let left = server
+        .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -A1"))
+        .unwrap();
+    assert!(!left.contains(".tmp"), "{left}");
+
+    // The second read writes nothing: the catalogue already records them.
+    let again = library::library_list(&state, &server_id, true)
+        .await
+        .expect("the library would not read again");
+    assert_eq!(
+        again
+            .media
+            .iter()
+            .find(|m| m.id == media_id)
+            .unwrap()
+            .set_files
+            .len(),
+        3
+    );
+    assert_eq!(
+        generation_on_server(&server),
+        before + 1,
+        "the second read wrote the catalogue again"
+    );
+
+    // The set no longer says which rungs it serves — the older matching finds nothing now.
+    // Deleting the medium takes the rung files all the same: by the record.
+    server
+        .exec_inside(&format!(
+            "printf '#EXTM3U\n' > '{VIDEO_DIR}/backrooms/master.m3u8'"
+        ))
+        .unwrap();
+    library::media_delete(&state, &server_id, &media_id, true)
+        .await
+        .expect("the medium was not deleted");
+    let left = server
+        .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -1"))
+        .unwrap();
+    let left: Vec<&str> = left.lines().map(str::trim).collect();
+    for gone in [
+        "backrooms",
+        "backrooms_1.mp4",
+        "backrooms_2.mp4",
+        "backrooms_3.mp4",
+    ] {
+        assert!(
+            !left.contains(&gone),
+            "{gone} outlived its medium: {left:?}"
+        );
+    }
+    assert!(left.contains(&"backrooms_7.mp4"), "{left:?}");
+}
+
+#[tokio::test]
+async fn a_read_on_a_server_without_the_application_s_catalogue_writes_none() {
+    // A server with serving but no `library.json`: a read creates no catalogue.
+    let (server, state, server_id) = setup().await;
+    hls_fixture::lay_out_ladder(&server, "backrooms").expect("the quality set was not laid out");
+    server
+        .exec_inside(&format!(
+            "rm -f '{VIDEO_DIR}/library.json' && head -c 5000 /dev/urandom > '{VIDEO_DIR}/backrooms_1.mp4'"
+        ))
+        .unwrap();
+    library::library_list(&state, &server_id, true)
+        .await
+        .expect("the library would not read");
+    let there = server
+        .exec_inside(&format!(
+            "test -e '{VIDEO_DIR}/library.json' && echo yes || echo no"
+        ))
+        .unwrap();
+    assert_eq!(there.trim(), "no", "a read created the catalogue");
 }
