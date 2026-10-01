@@ -790,8 +790,8 @@ async fn a_task_from_the_previous_run_is_raised_and_carries_on() {
 
 #[tokio::test]
 async fn a_raised_task_does_not_wait_for_its_own_place_in_the_lane() {
-    // It already counts as running, and, counting itself, would never see a free place in a
-    // lane that holds one.
+    // It used to count as running while it waited and, counting itself, would never see a
+    // free place in a lane that holds one. Since T650 it waits as queued and is not counted.
     let db = Arc::new(Db::open_in_memory().unwrap());
     let mut rec = store::TaskRecord::new("t-alone", TaskKind::Convert, None);
     rec.state = TaskState::Running;

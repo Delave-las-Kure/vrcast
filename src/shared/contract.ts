@@ -297,6 +297,9 @@ export type DetailCode =
   // A stop that arrived while the file was already entering serving (T503).
   | "NOTICE_CANCELLED_AFTER_PUBLISH"
   | "NOTICE_NOT_FILED_UNDER_MEDIUM"
+  // A cancelled upload's part-file: still to be removed, and removed later (T653).
+  | "NOTICE_LEFTOVER_PENDING"
+  | "NOTICE_LEFTOVER_REMOVED"
   | "NOT_ENOUGH_SPACE"
   | "LADDER_NOT_ENOUGH_SPACE"
   | "CHAIN_STOPPED_BY_OBJECTION"

@@ -244,7 +244,7 @@ pub mod api {
             };
 
             let request = UploadRequest {
-                server_id,
+                server_id: server_id.clone(),
                 local_path,
                 remote_name: token.remote_name.clone(),
                 media_id: token.media_id.clone(),
@@ -260,11 +260,24 @@ pub mod api {
             let name = token.remote_name.clone();
             let total = token.source_size;
 
-            let result = state
-                .tasks
-                .resubmit_paused(&task.id, move |ctx| async move {
+            // T653: dropping it without carrying it on is an action of its own — the
+            // part-file the previous run left on the server is removed, or the duty to is
+            // kept (`abandon_leftover`). The transfer is never started for the sake of it.
+            let leftover = Leftover {
+                db: state.db.clone(),
+                secrets: state.secrets.clone(),
+                server_id,
+                remote_temp: token.remote_temp.clone(),
+                name: token.remote_name.clone(),
+            };
+
+            let result = state.tasks.resubmit_paused_with_undo(
+                &task.id,
+                move |ctx| async move {
                     run_upload(db, secrets, events, ctx, request, name, total).await
-                });
+                },
+                move |ctx| abandon_leftover(ctx, leftover),
+            );
 
             match result {
                 Ok(()) => restored += 1,
@@ -280,7 +293,291 @@ pub mod api {
                 "uploads from the previous run are waiting to carry on"
             );
         }
+
+        // T653: part-files owed from earlier cancellations are removed now, while nothing
+        // else is happening — without holding up the start.
+        clear_leftovers_in_background(state);
         Ok(restored)
+    }
+
+    /// How long tidying up after a cancelled upload waits for its server (T653).
+    ///
+    /// Short on purpose: the person has already been told the upload is being stopped, and
+    /// the task does not end until this has returned. An unreachable server is not waited out
+    /// — the duty is kept and done later.
+    const LEFTOVER_REACH: Duration = Duration::from_secs(30);
+
+    /// Where a raised upload's part-file lies, for removing it if the upload is dropped.
+    struct Leftover {
+        db: std::sync::Arc<crate::store::db::Db>,
+        secrets: std::sync::Arc<dyn crate::store::secrets::SecretStore>,
+        server_id: String,
+        remote_temp: String,
+        name: String,
+    }
+
+    /// An upload raised after a restart is dropped without being carried on (T653, FR-038).
+    ///
+    /// **The part-file is removed, or the duty to remove it is kept and shown.** Before this,
+    /// the only thing that ever removed a part-file was the transfer on its way out after a
+    /// cancellation — and a raised upload dropped before carrying on never started the
+    /// transfer, so its part-file stayed on the server for good (QA-24A №4). Unreachable
+    /// server: the task ends cancelled with [`DetailCode::NoticeLeftoverPending`], which is at
+    /// once what the person reads and the record the duty is done from later
+    /// ([`clear_leftovers`]).
+    async fn abandon_leftover(ctx: crate::tasks::engine::TaskContext, leftover: Leftover) {
+        let Leftover {
+            db,
+            secrets,
+            server_id,
+            remote_temp,
+            name,
+        } = leftover;
+        // Another unfinished upload to the same name writes the same part-file now: it is
+        // that one's, and removing it would throw its work away.
+        if another_upload_writes(&db, &ctx.id, &server_id, &name) {
+            return;
+        }
+        let profile = match profiles::get(&db, &server_id) {
+            Ok(Some(p)) => p,
+            // The profile was removed: there is nowhere to reach, and nothing to keep a duty
+            // about.
+            _ => return,
+        };
+        match tokio::time::timeout(
+            LEFTOVER_REACH,
+            gate::open(secrets.as_ref(), &profile, Intent::Change),
+        )
+        .await
+        {
+            Ok(Ok(opened)) => {
+                remove_or_keep_duty(&ctx, &opened.conn, &remote_temp, &name).await;
+                opened.conn.close().await;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "a dropped upload's part-file could not be reached");
+                keep_leftover_duty(&ctx, &name);
+            }
+            Err(_) => {
+                tracing::warn!("a dropped upload's server did not answer in time");
+                keep_leftover_duty(&ctx, &name);
+            }
+        }
+    }
+
+    /// Remove a cancelled upload's part-file on a connection in hand; keep the duty if the
+    /// server would not (T653).
+    async fn remove_or_keep_duty(
+        ctx: &crate::tasks::engine::TaskContext,
+        conn: &crate::ssh::Connection,
+        remote_temp: &str,
+        name: &str,
+    ) {
+        if let Err(e) = upload::remove_staged(conn, remote_temp).await {
+            tracing::warn!(file = remote_temp, error = %e, "the part-file would not delete — kept for later");
+            keep_leftover_duty(ctx, name);
+        }
+    }
+
+    /// Say on the task that its part-file is still on the server and will be removed later.
+    fn keep_leftover_duty(ctx: &crate::tasks::engine::TaskContext, name: &str) {
+        ctx.add_notice(Detail::new(DetailCode::NoticeLeftoverPending).with("name", name));
+    }
+
+    /// Whether an unfinished upload other than `except` writes to `name` on this server.
+    ///
+    /// A database that cannot be read answers "yes": not removing a part-file is the error
+    /// that can be put right later.
+    fn another_upload_writes(
+        db: &crate::store::db::Db,
+        except: &str,
+        server_id: &str,
+        name: &str,
+    ) -> bool {
+        match crate::tasks::store::list(db) {
+            Ok(tasks) => tasks.iter().any(|t| {
+                t.id != except
+                    && t.kind == TaskKind::Upload
+                    && !t.state.is_final()
+                    && t.server_id.as_deref() == Some(server_id)
+                    && t.resume_token
+                        .as_deref()
+                        .and_then(ResumeToken::parse)
+                        .is_some_and(|tok| tok.remote_name == name)
+            }),
+            Err(_) => true,
+        }
+    }
+
+    /// What is owed on one server: part-files of cancelled uploads still to remove (T653).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum LeftoverStep {
+        /// Remove this part-file, then say so on the task.
+        Remove {
+            task_id: String,
+            remote_temp: String,
+            name: String,
+        },
+        /// Another unfinished upload writes to the same name now: the file is its, the duty
+        /// lapses and the notice goes.
+        Lapse { task_id: String },
+    }
+
+    /// The duties owed on `server_id`, worked out from the task list (T653).
+    ///
+    /// A cancelled upload carrying [`DetailCode::NoticeLeftoverPending`] owes one. Pure: the
+    /// list is handed in, so the rule is checked without a server.
+    pub fn leftover_steps(
+        tasks: &[crate::tasks::store::TaskRecord],
+        server_id: &str,
+    ) -> Vec<LeftoverStep> {
+        let writing = |except: &str, name: &str| {
+            tasks.iter().any(|t| {
+                t.id != except
+                    && t.kind == TaskKind::Upload
+                    && !t.state.is_final()
+                    && t.server_id.as_deref() == Some(server_id)
+                    && t.resume_token
+                        .as_deref()
+                        .and_then(ResumeToken::parse)
+                        .is_some_and(|tok| tok.remote_name == name)
+            })
+        };
+        tasks
+            .iter()
+            .filter(|t| {
+                t.kind == TaskKind::Upload
+                    && t.server_id.as_deref() == Some(server_id)
+                    && t.notices
+                        .iter()
+                        .any(|n| n.key == DetailCode::NoticeLeftoverPending)
+            })
+            .filter_map(|t| {
+                let token = t.resume_token.as_deref().and_then(ResumeToken::parse)?;
+                Some(if writing(&t.id, &token.remote_name) {
+                    LeftoverStep::Lapse {
+                        task_id: t.id.clone(),
+                    }
+                } else {
+                    LeftoverStep::Remove {
+                        task_id: t.id.clone(),
+                        remote_temp: token.remote_temp,
+                        name: token.remote_name,
+                    }
+                })
+            })
+            .collect()
+    }
+
+    /// A task's notices once its duty is settled: the pending notice goes, and
+    /// "removed later" takes its place when the file was removed (T653).
+    pub fn settled_notices(notices: &[Detail], removed: Option<&str>) -> Vec<Detail> {
+        let mut out: Vec<Detail> = notices
+            .iter()
+            .filter(|n| n.key != DetailCode::NoticeLeftoverPending)
+            .cloned()
+            .collect();
+        if let Some(name) = removed {
+            out.push(Detail::new(DetailCode::NoticeLeftoverRemoved).with("name", name));
+        }
+        out
+    }
+
+    /// Do what is owed on this server over a connection in hand (T653).
+    ///
+    /// Called by every upload once it is connected, and at start-up for each server that is
+    /// owed something. A removal that fails again leaves the duty where it was.
+    async fn clear_leftovers(
+        db: &crate::store::db::Db,
+        conn: &crate::ssh::Connection,
+        server_id: &str,
+    ) {
+        let tasks = match crate::tasks::store::carrying_notice(
+            db,
+            TaskKind::Upload,
+            DetailCode::NoticeLeftoverPending,
+        )
+        .and_then(|owed| {
+            if owed.is_empty() {
+                Ok(owed)
+            } else {
+                crate::tasks::store::list(db)
+            }
+        }) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!(error = %e, "what is owed on the server could not be read");
+                return;
+            }
+        };
+        for step in leftover_steps(&tasks, server_id) {
+            let (task_id, removed) = match step {
+                LeftoverStep::Lapse { task_id } => (task_id, None),
+                LeftoverStep::Remove {
+                    task_id,
+                    remote_temp,
+                    name,
+                } => match upload::remove_staged(conn, &remote_temp).await {
+                    Ok(()) => (task_id, Some(name)),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "an owed part-file would not delete yet");
+                        continue;
+                    }
+                },
+            };
+            let Some(task) = tasks.iter().find(|t| t.id == task_id) else {
+                continue;
+            };
+            let notices = settled_notices(&task.notices, removed.as_deref());
+            if let Err(e) = crate::tasks::store::replace_notices(db, &task_id, &notices) {
+                tracing::warn!(error = %e, "a settled duty was not written down");
+            }
+        }
+    }
+
+    /// At start-up, reach each server something is owed on and settle it (T653).
+    ///
+    /// In the background: an unreachable server must not hold the application up. Outside a
+    /// runtime (a test assembling the state by hand) it does nothing; the next upload to the
+    /// server will do it.
+    fn clear_leftovers_in_background(state: &AppState) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let owed = match crate::tasks::store::carrying_notice(
+            &state.db,
+            TaskKind::Upload,
+            DetailCode::NoticeLeftoverPending,
+        ) {
+            Ok(owed) => owed,
+            Err(_) => return,
+        };
+        let mut servers: Vec<String> = owed.into_iter().filter_map(|t| t.server_id).collect();
+        servers.sort();
+        servers.dedup();
+        for server_id in servers {
+            let db = state.db.clone();
+            let secrets = state.secrets.clone();
+            runtime.spawn(async move {
+                let Ok(Some(profile)) = profiles::get(&db, &server_id) else {
+                    return;
+                };
+                match tokio::time::timeout(
+                    LEFTOVER_REACH,
+                    gate::open(secrets.as_ref(), &profile, Intent::Change),
+                )
+                .await
+                {
+                    Ok(Ok(opened)) => {
+                        clear_leftovers(&db, &opened.conn, &server_id).await;
+                        opened.conn.close().await;
+                    }
+                    _ => tracing::info!(
+                        "a server owed a part-file removal is out of reach; it is kept for later"
+                    ),
+                }
+            });
+        }
     }
 
     /// Whether an unfinished upload under this name to this server already exists.
@@ -497,7 +794,14 @@ pub mod api {
                     // server, and the connection this arm is retrying is the one that failed
                     // — so a fresh one is opened to tidy up, exactly as after a break.
                     if wait_before_retry(&ctx, &mut delay).await == Waited::Cancelled {
-                        sweep_after_cancelling(secrets.as_ref(), &profile, &plan).await;
+                        sweep_after_cancelling(
+                            &ctx,
+                            secrets.as_ref(),
+                            &profile,
+                            &plan,
+                            &clean_name,
+                        )
+                        .await;
                         return Ok(());
                     }
                     continue;
@@ -521,6 +825,10 @@ pub mod api {
                 return Err(AppError::new(ErrorCode::Internal).with_cause(e));
             }
 
+            // T653: whatever earlier cancellations still owe on this server is done now, on a
+            // connection that exists anyway — "at the next opportunity".
+            clear_leftovers(&db, &conn, &request.server_id).await;
+
             match upload::transfer_once(&conn, &ctx, &plan, &mut estimate).await {
                 Ok(sent) => {
                     let outcome = finish(
@@ -543,7 +851,7 @@ pub mod api {
                     return outcome;
                 }
                 Err(UploadError::Cancelled) => {
-                    upload::cleanup(&conn, &plan.remote_temp).await;
+                    remove_or_keep_duty(&ctx, &conn, &plan.remote_temp, &clean_name).await;
                     conn.close().await;
                     return Ok(());
                 }
@@ -560,7 +868,14 @@ pub mod api {
                     // been closed a line above — so there was nothing left to clean up with,
                     // and nothing anywhere sweeps abandoned staging files later.
                     if wait_before_retry(&ctx, &mut delay).await == Waited::Cancelled {
-                        sweep_after_cancelling(secrets.as_ref(), &profile, &plan).await;
+                        sweep_after_cancelling(
+                            &ctx,
+                            secrets.as_ref(),
+                            &profile,
+                            &plan,
+                            &clean_name,
+                        )
+                        .await;
                         return Ok(());
                     }
                 }
@@ -952,7 +1267,7 @@ pub mod api {
                 return Err(too_many_finish_breaks());
             }
             if wait_before_retry(ctx, &mut delay).await == Waited::Cancelled {
-                return cancel_during_finish(secrets, profile, plan).await;
+                return cancel_during_finish(ctx, secrets, profile, plan).await;
             }
 
             match gate::open(secrets, profile, Intent::Change).await {
@@ -1009,15 +1324,24 @@ pub mod api {
     /// a failure to check or to clean up must not turn an honoured cancellation into a
     /// reported failure.
     async fn cancel_during_finish(
+        ctx: &crate::tasks::engine::TaskContext,
         secrets: &dyn crate::store::secrets::SecretStore,
         profile: &crate::domain::server_profile::ServerProfile,
         plan: &UploadPlan,
     ) -> std::result::Result<FinishOutcome, AppError> {
-        match gate::open(secrets, profile, Intent::Change).await {
-            Ok(opened) => match locate(&opened.conn, plan).await {
+        // What a person calls this file: the last part of its serving path.
+        let name = plan
+            .remote_final
+            .rsplit('/')
+            .next()
+            .unwrap_or(&plan.remote_final);
+        match tokio::time::timeout(LEFTOVER_REACH, gate::open(secrets, profile, Intent::Change))
+            .await
+        {
+            Ok(Ok(opened)) => match locate(&opened.conn, plan).await {
                 Ok(Progress::Published) => Ok(FinishOutcome::Published(opened.conn, true)),
                 Ok(Progress::Staged) | Ok(Progress::Gone) => {
-                    upload::cleanup(&opened.conn, &plan.remote_temp).await;
+                    remove_or_keep_duty(ctx, &opened.conn, &plan.remote_temp, name).await;
                     opened.conn.close().await;
                     Ok(FinishOutcome::Cancelled)
                 }
@@ -1027,15 +1351,21 @@ pub mod api {
                         "could not learn what is on the server while honouring a cancellation"
                     );
                     opened.conn.close().await;
+                    // T653: removing the staged file later is safe either way — if the file
+                    // was published, the staged one is already gone.
+                    keep_leftover_duty(ctx, name);
                     Ok(FinishOutcome::Cancelled)
                 }
             },
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "a cancelled transfer's leftovers could not be checked or removed after \
-                     the checksum-or-publish phase broke off"
-                );
+            other => {
+                if let Ok(Err(e)) = other {
+                    tracing::warn!(
+                        error = %e,
+                        "a cancelled transfer's leftovers could not be checked or removed after \
+                         the checksum-or-publish phase broke off — kept for later"
+                    );
+                }
+                keep_leftover_duty(ctx, name);
                 Ok(FinishOutcome::Cancelled)
             }
         }
@@ -1076,22 +1406,34 @@ pub mod api {
     /// deliberately holds no connection: waiting out a doubling backoff with one open would
     /// take a channel from the server for minutes, and there are eight (R-04).
     ///
-    /// **Failing to clean up is not reported, and that is the same rule `upload::cleanup`
-    /// states**: the cancellation has already happened, the person asked for it and got it,
-    /// and turning "we could not tidy up afterwards" into a failure would tell them their stop
-    /// did not work. It is logged, which is where somebody looking for a stray file will look.
+    /// **Failing to clean up is not reported as a failure, and that is the same rule
+    /// `upload::cleanup` states**: the cancellation has already happened, the person asked for
+    /// it and got it, and turning "we could not tidy up afterwards" into a failure would tell
+    /// them their stop did not work. But it is not forgotten either (T653): the duty is kept
+    /// on the task as [`DetailCode::NoticeLeftoverPending`] and done at the next opportunity.
     async fn sweep_after_cancelling(
+        ctx: &crate::tasks::engine::TaskContext,
         secrets: &dyn crate::store::secrets::SecretStore,
         profile: &crate::domain::server_profile::ServerProfile,
         plan: &UploadPlan,
+        name: &str,
     ) {
-        match gate::open(secrets, profile, Intent::Change).await {
-            Ok(opened) => {
-                upload::cleanup(&opened.conn, &plan.remote_temp).await;
+        match tokio::time::timeout(LEFTOVER_REACH, gate::open(secrets, profile, Intent::Change))
+            .await
+        {
+            Ok(Ok(opened)) => {
+                remove_or_keep_duty(ctx, &opened.conn, &plan.remote_temp, name).await;
                 opened.conn.close().await;
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "a cancelled transfer's leftovers could not be removed")
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "a cancelled transfer's leftovers could not be removed — kept for later");
+                keep_leftover_duty(ctx, name);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "a cancelled transfer's server did not answer in time — kept for later"
+                );
+                keep_leftover_duty(ctx, name);
             }
         }
     }

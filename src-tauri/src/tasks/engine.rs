@@ -133,9 +133,13 @@ struct LiveTask {
     kind: TaskKind,
     state: TaskState,
     cancel: CancellationToken,
-    /// Raised while the task is paused.
+    /// Raised while the task may not do its work: paused by a person, or waiting for its
+    /// place in the lane (T650). Lowered only by [`TaskEngine::try_claim_lane`], under the
+    /// same lock that makes it running.
     paused: Arc<Mutex<bool>>,
     resume: Arc<Notify>,
+    /// Wakes the task's placer: the task has become `Queued` and wants a place (T650).
+    place: Arc<Notify>,
     throttle: Arc<ProgressThrottle>,
     /// What the running task has said so far.
     ///
@@ -145,6 +149,28 @@ struct LiveTask {
     notices: Arc<Mutex<Vec<Detail>>>,
     /// The place in the queue: lower runs sooner (FR-083).
     position: i64,
+    /// The progress last reported, for the event a change of state sends (T652): a pause
+    /// or a carry-on is announced with the bar where it stands, not at zero.
+    progress: Arc<Mutex<f64>>,
+}
+
+/// The living map, shared by the engine and every task's context.
+type LiveMap = Arc<Mutex<HashMap<String, LiveTask>>>;
+
+/// What to do when a task raised after a restart is dropped before its work ran (T653).
+type Undo =
+    Box<dyn FnOnce(TaskContext) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
+/// What [`TaskEngine::start`] needs to put a task among the living, besides its work.
+struct Starting {
+    id: String,
+    kind: TaskKind,
+    /// `Queued` for a new task, `Paused` for one raised after a restart.
+    initial: TaskState,
+    position: i64,
+    /// Where the bar stands — what a change of state is announced with (T652).
+    progress: f64,
+    undo: Option<Undo>,
 }
 
 /// What a running task sees.
@@ -174,6 +200,12 @@ pub struct TaskContext {
     last_stage: Arc<Mutex<Option<DetailCode>>>,
     /// What the task has to say that is not a failure — see `add_notice`.
     notices: Arc<Mutex<Vec<Detail>>>,
+    /// The last progress reported — see [`LiveTask::progress`].
+    progress: Arc<Mutex<f64>>,
+    /// The engine's living map, where the task's state is kept (T652). A progress report
+    /// takes the state from here, under the lock every change of state is made under, so an
+    /// event never says `Running` about a task already paused. `None` for a detached context.
+    live: Option<LiveMap>,
     events: broadcast::Sender<TaskEvent>,
     db: Arc<Db>,
 }
@@ -205,6 +237,8 @@ impl TaskContext {
             persist_throttle: Arc::new(ProgressThrottle::new(PROGRESS_PERSIST_INTERVAL)),
             last_stage: Arc::new(Mutex::new(None)),
             notices: Arc::new(Mutex::new(Vec::new())),
+            progress: Arc::new(Mutex::new(0.0)),
+            live: None,
             events,
             db,
         }
@@ -270,9 +304,10 @@ impl TaskContext {
         self.report_full(progress, Some(stage), None, None, false);
     }
 
-    /// Report progress along with the transfer's figures.
-    pub fn report_transfer(&self, progress: f64, speed_bps: i64, eta_s: i64) {
-        self.report_full(progress, None, Some(speed_bps), Some(eta_s), false);
+    /// Report progress along with the transfer's figures. `None` is "not known yet" and goes
+    /// out as `null` — never as a zero, which would say nothing is moving (T659).
+    pub fn report_transfer(&self, progress: f64, speed_bps: Option<i64>, eta_s: Option<i64>) {
+        self.report_full(progress, None, speed_bps, eta_s, false);
     }
 
     /// Say something that is not progress and is not a failure.
@@ -352,14 +387,31 @@ impl TaskContext {
         if !self.throttle.allow(important || changed) {
             return;
         }
-        let _ = self.events.send(TaskEvent::Progress {
+        let progress = progress.clamp(0.0, 1.0);
+        *self.progress.lock().unwrap_or_else(|e| e.into_inner()) = progress;
+        let event = |state| TaskEvent::Progress {
             id: self.id.clone(),
-            state: TaskState::Running,
-            progress: progress.clamp(0.0, 1.0),
+            state,
+            progress,
             stage,
             speed_bps,
             eta_s,
-        });
+        };
+        // **A report of bytes is not a change of state** (T652, QA-24A №3). The state the
+        // event carries is the one the engine holds right now, read and sent under the lock
+        // every change of state is made under — so the events go out in the order the
+        // changes happened. A window that was already being written when "pause" was pressed
+        // finishes and reports its bytes as `Paused`, not `Running`.
+        let Some(live) = &self.live else {
+            let _ = self.events.send(event(TaskState::Running));
+            return;
+        };
+        let live = live.lock().unwrap_or_else(|e| e.into_inner());
+        // A task no longer among the living has ended, and its `Done` has gone out: a late
+        // report must not come after it.
+        if let Some(t) = live.get(&self.id) {
+            let _ = self.events.send(event(t.state));
+        }
     }
 
     /// Remember the progress so that it survives the application closing.
@@ -398,11 +450,14 @@ impl TaskContext {
 
 /// How an attempt to take a place in a lane ended.
 enum ClaimOutcome {
-    /// The place was taken; the task is now running.
+    /// The place was taken; the task is now running and its work may move.
     Started,
-    /// The lane is full — wait and try again.
+    /// The lane is full, or somebody stands ahead — wait and try again.
     Busy,
-    /// The task is no longer among the living (cancelled or finished) — do not start it.
+    /// The task is not waiting for a place: it is running, or paused and waiting for a
+    /// person. Nothing to do until it becomes `Queued` again.
+    NotWaiting,
+    /// The task is no longer among the living (cancelled or finished).
     Gone,
 }
 
@@ -668,10 +723,14 @@ impl TaskEngine {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         store::upsert(&self.db, &record)?;
         self.start(
-            id.clone(),
-            kind,
-            TaskState::Queued,
-            record.queue_order,
+            Starting {
+                id: id.clone(),
+                kind,
+                initial: TaskState::Queued,
+                position: record.queue_order,
+                progress: 0.0,
+                undo: None,
+            },
             work,
         );
         drop(closed);
@@ -690,6 +749,42 @@ impl TaskEngine {
     /// transfer that runs for hours unbidden at start-up will not do — a person may have
     /// closed the application precisely to stop it.
     pub fn resubmit_paused<F, Fut>(&self, id: &str, work: F) -> Result<()>
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
+    {
+        self.raise(id, work, None)
+    }
+
+    /// The same, with what to do if the task is dropped before its work ever ran (T653).
+    ///
+    /// **Tidying up after a task from the previous run is an action of its own, not a side
+    /// effect of its work.** A raised upload may have left a part-file on the server, and the
+    /// only thing that ever removed one was the transfer itself, on its way out after a
+    /// cancellation. A task cancelled before its work was called — which is exactly a person
+    /// deciding, after a restart, not to carry on — never went that way, and the part-file
+    /// stayed on the server for good (QA-24A №4, FR-038).
+    ///
+    /// `undo` runs in place of the work, when a cancellation arrives while the task is still
+    /// waiting for a person or for its place; the task is written down as cancelled once it
+    /// has returned, as with the work (principle III). Once the work has begun, undoing is
+    /// the work's own business, and `undo` is not called.
+    pub fn resubmit_paused_with_undo<F, Fut, U, UFut>(
+        &self,
+        id: &str,
+        work: F,
+        undo: U,
+    ) -> Result<()>
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
+        U: FnOnce(TaskContext) -> UFut + Send + 'static,
+        UFut: Future<Output = ()> + Send + 'static,
+    {
+        self.raise(id, work, Some(Box::new(move |ctx| Box::pin(undo(ctx)))))
+    }
+
+    fn raise<F, Fut>(&self, id: &str, work: F, undo: Option<Undo>) -> Result<()>
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
@@ -720,26 +815,51 @@ impl TaskEngine {
 
         store::save_state(&self.db, id, TaskState::Paused, None)?;
         self.start(
-            id.to_owned(),
-            record.kind,
-            TaskState::Paused,
-            record.queue_order,
+            Starting {
+                id: id.to_owned(),
+                kind: record.kind,
+                initial: TaskState::Paused,
+                position: record.queue_order,
+                progress: record.progress,
+                undo,
+            },
             work,
         );
         Ok(())
     }
 
     /// The part both ways of submitting share: create the live task and start its work.
-    fn start<F, Fut>(&self, id: String, kind: TaskKind, initial: TaskState, position: i64, work: F)
+    ///
+    /// **One way into the lane, for every task and every time** (T650). A new task, a task
+    /// raised after a restart and carried on, and a task paused mid-work and carried on all
+    /// go the same road: they become `Queued`, and the task's *placer* — a loop living as long
+    /// as the task — takes a place for them through [`TaskEngine::try_claim_lane`], which is
+    /// the only thing that makes a task `Running` and lowers the flag its work waits on.
+    /// Carrying on used to set `Running` directly, so a carried-on task either took no place
+    /// at all (two transfers at once under a limit of one) or counted as running while it
+    /// waited for one — and two such tasks each saw the other and waited for ever (QA-24A №1).
+    fn start<F, Fut>(&self, starting: Starting, work: F)
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<(), AppError>> + Send + 'static,
     {
+        let Starting {
+            id,
+            kind,
+            initial,
+            position,
+            progress,
+            undo,
+        } = starting;
         let cancel = CancellationToken::new();
-        let paused = Arc::new(Mutex::new(initial == TaskState::Paused));
+        // Raised for everyone at the start: a queued task has no place yet, a raised one is
+        // waiting for a person. Only a place in the lane lowers it.
+        let paused = Arc::new(Mutex::new(true));
         let resume = Arc::new(Notify::new());
+        let place = Arc::new(Notify::new());
         let throttle = Arc::new(ProgressThrottle::default());
         let notices: Arc<Mutex<Vec<Detail>>> = Arc::new(Mutex::new(Vec::new()));
+        let progress = Arc::new(Mutex::new(progress));
 
         {
             let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
@@ -751,9 +871,11 @@ impl TaskEngine {
                     cancel: cancel.clone(),
                     paused: paused.clone(),
                     resume: resume.clone(),
+                    place: place.clone(),
                     throttle: throttle.clone(),
                     notices: notices.clone(),
                     position,
+                    progress: progress.clone(),
                 },
             );
         }
@@ -767,6 +889,8 @@ impl TaskEngine {
             persist_throttle: Arc::new(ProgressThrottle::new(PROGRESS_PERSIST_INTERVAL)),
             last_stage: Arc::new(Mutex::new(None)),
             notices,
+            progress,
+            live: Some(self.live.clone()),
             events: self.events.clone(),
             db: self.db.clone(),
         };
@@ -775,15 +899,22 @@ impl TaskEngine {
         let task_id = id.clone();
         let paused_flag = ctx.paused.clone();
         let resume_signal = ctx.resume.clone();
-        tokio::spawn(async move {
-            // A task raised after a restart waits for a person and **takes up no lane**:
-            // otherwise it would hold a place while doing nothing, and a second one like it
-            // could not start. Carrying on a transfer that runs for hours unbidden at
-            // start-up will not do either — the application may have been closed precisely
-            // to stop it.
+        let placer = self.clone().placer(id, place);
+        let run = async move {
+            // Waiting for the first place — or, for a task raised after a restart, for a
+            // person and then a place. Such a task **takes up no lane** while it waits:
+            // otherwise it would hold a place while doing nothing. Cancelling works here too:
+            // a task standing in the queue can be dropped without waiting for it to start —
+            // and one raised after a restart is tidied up after (`undo`, T653).
+            let dropped = |ctx: TaskContext| async move {
+                if let Some(undo) = undo {
+                    undo(ctx).await;
+                }
+            };
             loop {
                 let resumed = resume_signal.notified();
                 if cancel.is_cancelled() {
+                    dropped(ctx).await;
                     engine.finish(&task_id, TaskState::Cancelled, None);
                     return;
                 }
@@ -793,25 +924,10 @@ impl TaskEngine {
                 tokio::select! {
                     _ = resumed => {}
                     _ = cancel.cancelled() => {
+                        dropped(ctx).await;
                         engine.finish(&task_id, TaskState::Cancelled, None);
                         return;
                     }
-                }
-            }
-
-            // Waiting for room in the lane. Cancelling works here too: a task standing in
-            // the queue can be dropped without waiting for it to start.
-            loop {
-                if cancel.is_cancelled() {
-                    engine.finish(&task_id, TaskState::Cancelled, None);
-                    return;
-                }
-                match engine.try_claim_lane(&task_id) {
-                    ClaimOutcome::Started => break,
-                    ClaimOutcome::Busy => {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    }
-                    ClaimOutcome::Gone => return,
                 }
             }
 
@@ -828,7 +944,33 @@ impl TaskEngine {
                 Ok(()) => engine.finish(&task_id, TaskState::Completed, None),
                 Err(e) => engine.finish(&task_id, TaskState::Failed, Some(e)),
             }
+        };
+        tokio::spawn(async move {
+            // The placer never ends by itself; it goes when the task does.
+            tokio::select! {
+                _ = run => {}
+                _ = placer => {}
+            }
         });
+    }
+
+    /// The loop that takes a place in the lane whenever the task stands `Queued` (T650).
+    ///
+    /// It lives beside the task's work for the task's whole life, so a task paused and
+    /// carried on in the middle of its work finds its place exactly as a new one does. Asleep
+    /// while the task is running or paused; woken by [`TaskEngine::resume`] through `place`
+    /// (a permit is kept, so a wake that comes before the sleep is not lost).
+    async fn placer(self, id: String, place: Arc<Notify>) {
+        loop {
+            match self.try_claim_lane(&id) {
+                ClaimOutcome::Busy => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                ClaimOutcome::Started | ClaimOutcome::NotWaiting => place.notified().await,
+                // The task's own work is what ends the task; the placer only stops trying.
+                ClaimOutcome::Gone => std::future::pending::<()>().await,
+            }
+        }
     }
 
     /// Reorder the tasks in the queue (FR-083).
@@ -967,32 +1109,54 @@ impl TaskEngine {
 
         *t.paused.lock().unwrap_or_else(|e| e.into_inner()) = true;
         t.state = TaskState::Paused;
-        drop(live);
+        // Under the lock, for the same reason as in `resume`: the order the states reach the
+        // database is the order they happened in.
         self.persist_state(id, TaskState::Paused, None);
+        self.announce(id, t);
+        drop(live);
         Ok(())
     }
 
     /// Carry on a paused task.
+    ///
+    /// **Carrying on asks for a place; it does not take one** (T650). The task becomes
+    /// `Queued` and its placer is woken; it becomes `Running`, and its work moves, only when
+    /// [`TaskEngine::try_claim_lane`] finds room in its lane and nobody standing ahead of it.
+    /// A task already waiting or already running is left as it is — pressing twice is not an
+    /// error (constitution, principle V). So is one already being stopped: it is on its way
+    /// out, tidying up after itself (T653), and must not be given a place for that.
     pub fn resume(&self, id: &str) -> Result<()> {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let t = live
             .get_mut(id)
             .ok_or_else(|| TaskError::NotFound(id.to_owned()))?;
-
-        if !t.state.can_transition_to(TaskState::Running) {
-            return Err(TaskError::BadTransition {
-                id: id.to_owned(),
-                from: t.state.as_str(),
-                to: TaskState::Running.as_str(),
-            });
+        if t.cancel.is_cancelled() {
+            return Ok(());
         }
 
-        *t.paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        t.state = TaskState::Running;
-        t.throttle.reset();
-        t.resume.notify_waiters();
+        match t.state {
+            TaskState::Queued | TaskState::Running => return Ok(()),
+            TaskState::Paused => {}
+            other => {
+                return Err(TaskError::BadTransition {
+                    id: id.to_owned(),
+                    from: other.as_str(),
+                    to: TaskState::Queued.as_str(),
+                })
+            }
+        }
+
+        t.state = TaskState::Queued;
+        // One permit, kept if the placer is not asleep yet.
+        t.place.notify_one();
+        // Written before the lock is let go: the placer may take the place the moment it is,
+        // and its `Running` must not be overwritten by this `Queued` arriving late.
+        self.persist_state(id, TaskState::Queued, None);
+        self.announce(id, t);
         drop(live);
-        self.persist_state(id, TaskState::Running, None);
+        // With room in the lane the answer to "carry on" is already `Running` — the same
+        // atomic claim the placer makes, only sooner; without room the placer keeps trying.
+        let _ = self.try_claim_lane(id);
         Ok(())
     }
 
@@ -1037,20 +1201,24 @@ impl TaskEngine {
     /// Checking for room and changing the state are inseparable on purpose: two tasks that
     /// wake at the same moment would otherwise both see one free place — and both would
     /// start, two preparations in a lane meant for one.
+    ///
+    /// **The only way into `Running`** (T650): only a task standing `Queued` is placed —
+    /// whether it was just submitted or carried on after a pause or a restart — and only
+    /// here is the flag its work waits on lowered. So a task never counts as running while it
+    /// waits, and never works without a place.
     fn try_claim_lane(&self, id: &str) -> ClaimOutcome {
         let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
         let Some(t) = live.get(id) else {
             return ClaimOutcome::Gone;
         };
+        if t.state != TaskState::Queued {
+            return ClaimOutcome::NotWaiting;
+        }
         let lane = t.kind.lane();
-        // We do not count ourselves. A task raised after a restart and carried on by a
-        // person already counts as running — and, counting itself, would never see a free
-        // place in its own lane.
+        let position = t.position;
         let used = live
-            .iter()
-            .filter(|(other_id, x)| {
-                other_id.as_str() != id && x.state.occupies_lane() && x.kind.lane() == lane
-            })
+            .values()
+            .filter(|x| x.state.occupies_lane() && x.kind.lane() == lane)
             .count();
         if used >= self.limits().for_lane(lane) {
             return ClaimOutcome::Busy;
@@ -1058,35 +1226,28 @@ impl TaskEngine {
 
         // The queue is honoured: the place goes to the task standing first in the lane.
         // Without this check the order would be "whoever grabbed the lock first", and
-        // reordering (FR-083) would give nothing — there would be nothing to reorder.
-        //
-        // Only those standing in the queue are compared. A paused task is not waiting for
-        // the lane, it is waiting for a person, and has no claim to hold the queue; one
-        // carried on by a person goes at once — they have just said it is the one they want.
-        if t.state == TaskState::Queued {
-            let position = t.position;
-            let someone_is_ahead = live.values().any(|x| {
-                x.state == TaskState::Queued && x.kind.lane() == lane && x.position < position
-            });
-            if someone_is_ahead {
-                return ClaimOutcome::Busy;
-            }
+        // reordering (FR-083) would give nothing — there would be nothing to reorder. A task
+        // carried on keeps the place it was given when it was first submitted.
+        let someone_is_ahead = live.iter().any(|(other, x)| {
+            other.as_str() != id
+                && x.state == TaskState::Queued
+                && x.kind.lane() == lane
+                && x.position < position
+        });
+        if someone_is_ahead {
+            return ClaimOutcome::Busy;
         }
 
         let Some(t) = live.get_mut(id) else {
             return ClaimOutcome::Gone;
         };
-        if !t.state.can_transition_to(TaskState::Running) {
-            tracing::warn!(
-                id,
-                from = t.state.as_str(),
-                "the task cannot become running"
-            );
-            return ClaimOutcome::Gone;
-        }
         t.state = TaskState::Running;
-        drop(live);
+        t.throttle.reset();
+        *t.paused.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        t.resume.notify_waiters();
         self.persist_state(id, TaskState::Running, None);
+        self.announce(id, t);
+        drop(live);
         ClaimOutcome::Started
     }
 
@@ -1117,6 +1278,25 @@ impl TaskEngine {
             state,
             error,
             notices,
+        });
+    }
+
+    /// Tell the interface a task changed state (T652).
+    ///
+    /// Called by every change of state the engine makes short of the end — paused, waiting
+    /// for its turn, running — with the living map's lock held (the borrowed `LiveTask` is the
+    /// proof), the same lock a progress report sends under. So the interface learns the state
+    /// from the engine's own transition, in the order the transitions happened, and a report
+    /// of bytes that was already on its way can no longer overtake a pause.
+    fn announce(&self, id: &str, t: &LiveTask) {
+        let _ = self.events.send(TaskEvent::Progress {
+            id: id.to_owned(),
+            state: t.state,
+            progress: *t.progress.lock().unwrap_or_else(|e| e.into_inner()),
+            // Nothing is said about the stage; the speed and time left are unknown from here.
+            stage: None,
+            speed_bps: None,
+            eta_s: None,
         });
     }
 

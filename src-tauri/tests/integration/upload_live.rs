@@ -181,12 +181,19 @@ async fn the_transfer_carries_on_from_where_it_got_to_rather_than_starting_over(
         .await
         .expect("the upload would not submit");
 
-    // The progress messages are gathered until the task ends.
+    // The progress messages are gathered until the task ends. Only the transfer's own
+    // reports count: since T652 the engine announces the task becoming `Running` itself,
+    // with the bar where it stood when the task was queued — zero — before the transfer has
+    // looked at what is on the server. A transfer reports only after a window has gone, so
+    // its reports are never zero; and the speed cannot tell them apart, since T659 sends an
+    // unknown speed as unknown.
     let collector = tokio::spawn(async move {
         let mut first_progress: Option<f64> = None;
         while let Ok(event) = events.recv().await {
             match event {
-                TaskEvent::Progress { progress, .. } if first_progress.is_none() => {
+                TaskEvent::Progress { progress, .. }
+                    if first_progress.is_none() && progress > 0.0 =>
+                {
                     first_progress = Some(progress);
                 }
                 TaskEvent::Done { .. } => break,
@@ -927,5 +934,118 @@ async fn the_medium_chosen_at_the_upload_is_what_the_file_ends_up_under() {
         on_server.contains("film_31.mp4"),
         "the catalogue on the server does not mention the file, so another machine would not \
          see the tie either (FR-019)"
+    );
+}
+
+/// T653, QA-24A №4: part of a file sent, the application killed, started again, and the
+/// upload dropped **without carrying it on**. The part-file must go from the server — before,
+/// the transfer that alone removed it was never started, and it stayed for good.
+#[tokio::test]
+async fn a_raised_upload_dropped_without_carrying_on_leaves_no_part_file() {
+    let subject = prepare_restart().await;
+    start_and_kill(&subject);
+    assert!(
+        subject
+            .server
+            .exec_inside(&format!("test -s '{STAGING_DIR}/film_22.mp4.part'"))
+            .is_ok(),
+        "the first run left no part-file to check the removal of"
+    );
+
+    let state = start_again(&subject);
+    let task = the_only_task(&state);
+    assert_eq!(
+        upload::restore_uploads(&state).expect("restoring failed"),
+        1
+    );
+
+    state
+        .tasks
+        .cancel(&task.id)
+        .expect("the task would not drop");
+    assert_eq!(
+        wait_done(&state, &task.id, Duration::from_secs(60)).await,
+        TaskState::Cancelled
+    );
+
+    assert!(
+        subject
+            .server
+            .exec_inside(&format!("test -e '{STAGING_DIR}/film_22.mp4.part'"))
+            .is_err(),
+        "the dropped upload's part-file is still on the server"
+    );
+    let record = state.tasks.get(&task.id).unwrap().unwrap();
+    assert!(
+        record.notices.is_empty(),
+        "the removal went through and a duty is still shown: {:?}",
+        record.notices
+    );
+    let _ = std::fs::remove_dir_all(&subject.db_dir);
+}
+
+/// T653: a duty kept because the server was out of reach is done at the next opportunity —
+/// the next upload to that server — and the task then says the file was removed.
+#[tokio::test]
+async fn a_part_file_owed_from_an_earlier_cancellation_is_removed_by_the_next_upload() {
+    use vrcast_studio_lib::commands::error::DetailCode;
+    use vrcast_studio_lib::domain::transfer::ResumeToken;
+    use vrcast_studio_lib::domain::wording::Detail;
+    use vrcast_studio_lib::tasks::state::TaskKind;
+    use vrcast_studio_lib::tasks::store::{self, TaskRecord};
+
+    let (server, state, id) = setup().await;
+
+    // What an earlier cancellation left: a part-file, and a cancelled task owing its removal.
+    server
+        .exec_inside(&format!(
+            "mkdir -p '{STAGING_DIR}' && head -c 4096 /dev/urandom > '{STAGING_DIR}/owed.mp4.part'"
+        ))
+        .expect("the owed part-file would not be made");
+    let mut owed = TaskRecord::new("owed-task", TaskKind::Upload, Some(id.clone()));
+    owed.state = TaskState::Cancelled;
+    owed.resume_token = Some(
+        ResumeToken {
+            remote_temp: format!("{STAGING_DIR}/owed.mp4.part"),
+            remote_name: String::from("owed.mp4"),
+            local_path: None,
+            media_id: None,
+            limit_bps: None,
+            source_size: 1_000_000,
+            source_modified: None,
+        }
+        .to_json(),
+    );
+    owed.notices = vec![Detail::new(DetailCode::NoticeLeftoverPending).with("name", "owed.mp4")];
+    store::upsert(&state.db, &owed).unwrap();
+
+    let local = make_local_file("film_40.mp4", FILE_SIZE);
+    let task = upload::upload_start(&state, request(&id, &local, "film_40.mp4"))
+        .await
+        .expect("the upload would not submit");
+    assert_eq!(
+        wait_done(&state, &task, Duration::from_secs(120)).await,
+        TaskState::Completed
+    );
+
+    assert!(
+        server
+            .exec_inside(&format!("test -e '{STAGING_DIR}/owed.mp4.part'"))
+            .is_err(),
+        "the owed part-file was not removed at the next opportunity"
+    );
+    let keys: Vec<DetailCode> = state
+        .tasks
+        .get("owed-task")
+        .unwrap()
+        .unwrap()
+        .notices
+        .iter()
+        .map(|n| n.key)
+        .collect();
+    assert_eq!(
+        keys,
+        vec![DetailCode::NoticeLeftoverRemoved],
+        "the task does not say the file was removed"
     );
 }
