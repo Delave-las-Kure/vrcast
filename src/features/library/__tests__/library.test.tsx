@@ -159,6 +159,13 @@ beforeEach(() => {
 });
 
 describe("the library", () => {
+  it("sends «Add video» to the Video screen with its file dialog to open (T673)", async () => {
+    draw();
+    const link = await screen.findByRole("link", { name: ru.ui.video.add });
+    // `MemoryRouter` renders the address as given; the Video screen reads `add=1`.
+    expect(link.getAttribute("href")).toBe("/video?add=1");
+  });
+
   it("says the server is out of reach rather than showing nothing", async () => {
     useServers.setState({ profiles: [], loading: false, error: null });
     mockServersList.mockResolvedValue([]);

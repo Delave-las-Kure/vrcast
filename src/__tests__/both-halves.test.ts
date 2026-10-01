@@ -40,15 +40,6 @@ const MESSAGE_IS_THE_WHOLE_ANSWER: Array<[string, string]> = [
       "advice about a fault would misdescribe a question as a problem.",
   ],
   [
-    "features/upload/UploadScreen.tsx",
-    "T577's `askDeleteOrphan` takes the exact same CONFIRMATION_REQUIRED refusal `mediaDelete` " +
-      "sends for any medium — here for one this screen just found orphaned — and turns it into " +
-      "the `consequences` line of the same `ConfirmDeleteDialog` `LibraryScreen` uses. Same " +
-      "shape, same reason: it is the question, not a fault, and its answer is the dialog's own " +
-      "two buttons rather than a hint. The file's other `renderError` calls (batch failures) " +
-      "already destructure both halves and are unaffected by this excuse.",
-  ],
-  [
     "features/tasks/notifications.tsx",
     "The body of a system notification, which the platform gives two lines and truncates. It " +
       "exists to say a long task ended badly while the window was out of sight; the advice " +
@@ -133,12 +124,7 @@ it("the scan reaches the screens it is about", () => {
     renderers.map(([path]) => path).sort(),
     "the files that render an error are not the ones expected; if a screen was added or " +
       "removed this list is what says so, and it must be updated deliberately",
-  ).toEqual([
-    "features/library/LibraryScreen.tsx",
-    "features/tasks/notifications.tsx",
-    "features/upload/PreflightWarnings.tsx",
-    "features/upload/UploadScreen.tsx",
-  ]);
+  ).toEqual(["features/library/LibraryScreen.tsx", "features/tasks/notifications.tsx"]);
 });
 
 /**
@@ -161,5 +147,7 @@ it("the folded error keeps the advice, the particulars and the cause", () => {
     "features/library/dialogs/MediaDialogs.tsx",
     "features/shared/ErrorNotice.tsx",
     "features/tasks/TasksPanel.tsx",
+    "features/video/VideoCard.tsx",
+    "features/video/VideoScreen.tsx",
   ]);
 });

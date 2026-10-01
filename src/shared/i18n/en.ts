@@ -673,101 +673,14 @@ export const en: Catalogue = {
       theme: { light: "Light", dark: "Dark", system: "Follow the system" },
     },
 
-    batch: {
-      title: "Batch",
-      explain:
-        "Put in as many videos as you like — a whole season. Each is measured, and its set of qualities is built straight from that measurement. You can close the window: which rungs to build is decided inside the application, not on this screen.",
-      pick: "Choose videos",
-      drop: "remove",
-      dropOne: "Remove {film} from the batch",
-      count: "{n} video(s) in the batch",
-      start: "Start the batch",
-      starting: "Starting…",
-      started: "{n} video(s) started. The rest is on the Tasks tab.",
-      noServer: "Choose a server first: there is nowhere to build a set.",
-      refused: "{n} video(s) were not started. The others were.",
-      retryThese: "Retry these",
-      forgetThese: "Clear this list",
-    },
-
     ladder: {
       columnBuild: "Build",
       buildThisRung: "Build the {mbps} Mbit/s rung",
-      handedFrom: "The file from the preparation: {path}",
-      pickAnother: "Choose another",
-      explain:
-        "A quality set is several versions of one film. A viewer's player takes whichever their connection can hold.",
-      pickFile: "Choose a source",
-      working: "Working out the rungs — looking at what this material is…",
-      noServer:
-        "No server is chosen, so there is nowhere to build the set. Pick one under Servers.",
-      measuring: "Measuring the source…",
-      sourceIs: "Source: {width}×{height}, {fps} frames a second, {bitrate}",
-      peakIs: "Peak: {peak} — a viewer's connection has to hold this, not the average",
-
-      fromMeasured: "The rungs were chosen by measuring this material",
-      fromBorrowed: "The rungs come from a measurement of another file",
-      fromFormula: "The rungs come from the formula — a guess, not a measurement",
-      formulaExplain:
-        "The formula knows nothing about the material: on animation it asks for three times what is needed, on dense action it understates. Until it has been measured, the set cannot be built.",
-
-      borrowTitle: "Another file's measurement",
-      borrowExplain:
-        "This file has no measurement. The next episode of a season is usually answered by the first one's: the same source, the same upscale, the same encoder settings. The core refuses by itself when the material is not the same, and says which part of it differs.",
-      borrowNothingToTake: "There are no measurements to take yet.",
-      borrowDonorFacts: "{width}×{height}, {fps} fps, anchor {anchor} Mbit/s",
-      borrowTake: "take this one",
-      borrowFromFilm: "Take the measurement of {film}",
-      borrowedFromFile: "The rungs stand on the measurement of {film}, not of this file.",
-      forgetBorrowed: "Forget the borrowed one and measure this file",
-      forgetMeasured: "Forget it and measure again",
-      measureTitle: "Measuring quality",
-      measureExplain:
-        "The application encodes three short chunks — a light one, a middling one and a heavy one — at several qualities, and looks at what actually comes out.",
-      measureTakes: "About {minutes} min: {points} points",
-      measureTakesResume: "About {minutes} min: {points} points left of {total}",
-      measureStandsOn: "What this estimate stands on",
-      measureChunks:
-        "Measured on three pieces of the film, at minute {starts}. Not consecutive and not from the start: the opening is usually easier than what follows.",
-      measureAnchor:
-        "The top of the grid is {mbps} Mbit/s: that is what the complexity probe asked for on this material.",
-      measureNothingLeft: "The whole grid is measured — there is nothing left to run.",
-      estimateFromThisMachine:
-        "Estimated from your own earlier measurements: {points} points at {seconds} s each — {times} times the modelled speed.",
-      estimateNotAsked:
-        "Your earlier measurements could not be read, so this estimate comes from the model. That is not the same as having none: there may be some, and then this figure is off.",
-      estimateFromModel:
-        "Estimated from a measurement on the developer's machine — yours may differ. It corrects itself after your very first measured point.",
-      measureStart: "Measure",
-      measureRunning: "Measuring — you can close this: the work is not lost",
-
-      setName: "What the set is called on the server",
-      attachToExisting: "Attach to an existing medium",
-      attachToNewSet: "New set",
-      attachSlug: "The set will be attached to the medium “{slug}” on the server.",
-      attachChooseServer: "Choose a server first — there is nothing to attach to yet.",
       rungs: "Rungs",
       columnBitrate: "Bitrate",
       columnSize: "Frame",
       columnQuality: "Quality",
       columnWhy: "Why",
-
-      // T522 — fields the core already accepts (`LadderRequest` in
-      // `src-tauri/src/commands/ladder.rs`) but the screen never filled in: a collapsible
-      // "Advanced" block, following the pattern in `ServerForm.tsx`.
-      advanced: "Advanced",
-      nativeHeight: "The material's real height, if it was stretched",
-      nativeHeightPlaceholder: "e.g. 1080",
-      declaredLayout: "What kind of picture",
-      declaredLayoutUnknown: "Not stated",
-      declaredLayoutFlat: "Ordinary",
-      declaredLayoutSideBySide: "Side by side (SBS)",
-      declaredLayoutOverUnder: "One above the other (OU)",
-
-      // Why a rung looks the way it does (T418). The keys are the core's `Reason` variants,
-      // and `every_reason_a_rung_can_give_has_words` holds them to it. Each wording carries
-      // the number it is about: a bare "a step down" is true of every rung but the top and
-      // explains none of them.
       reasons: {
         probed_anchor: "Top: above {mbps} Mbit/s nobody sees a difference.",
         capped_by_source: "Cut to {mbps} Mbit/s — all the source has.",
@@ -785,20 +698,6 @@ export const en: Catalogue = {
       notMeasured: "not measured",
       vmafIs: "VMAF {value}",
       vmafBorrowed: "VMAF {value}, from another file",
-      measuredTitle: "What was measured ({points} points)",
-      measuredColumnVmaf: "VMAF",
-      measuredColumnActual: "Came out at",
-      measuredChosen: "taken into the ladder",
-      droppedAbove: "Dropped as excess: {list}.",
-
-      build: "Build the set",
-      buildBlocked: "Cannot be built: the rungs are not measured",
-      buildBlockedEmpty: "Nothing to build: there are no rungs",
-      building: "Building — this takes a while",
-      // T571, T574 — the same FILE_IN_USE refusal as renaming (renameAnyway, T545): a
-      // fixed wording with no numbers of its own, and the only thing left to decide is
-      // whether to go on despite the active viewers.
-      buildAnyway: "Build anyway",
       objections: "Objections",
     },
 
@@ -1097,10 +996,7 @@ export const en: Catalogue = {
     sections: {
       servers: "Servers",
       library: "Library",
-      convert: "Preparation",
-      upload: "Upload",
-      batch: "Batch",
-      ladder: "Quality",
+      video: "Video",
       viewers: "Viewers",
       limits: "Limits",
       diagnostics: "Diagnostics",
@@ -1114,7 +1010,6 @@ export const en: Catalogue = {
     },
 
     sidebar: {
-      step: "{n}. {name}",
       sections: "Sections",
       version: "version {version}",
       aboutTitle: "About and licence",
@@ -1162,104 +1057,67 @@ export const en: Catalogue = {
       stepSkipped: "not checked: we stopped earlier",
     },
 
-    upload: {
-      heading: "Upload",
-      noServers: "Add a server in the Servers section first — there is nowhere to upload to yet.",
-      noActive: "Choose an active server in the Servers section.",
-      notReady:
-        "The fingerprint of the server “{name}” is not confirmed. Until it is, the application will not connect to it.",
-      lead: "The file will go to the server “{name}”. Uploading happens in the background — this screen can be closed and the task followed in the Tasks section.",
-      fieldFile: "File",
-      pickFile: "Choose a file…",
-      pickTitle: "Choose the prepared file",
+    // T673 — the "Video" screen: one place from a file to a link. Short labels only.
+    video: {
+      heading: "Video",
+      add: "Add video",
+      startAll: "Start all",
       pickFilter: "Video",
-      fieldName: "Name in service",
-      nameHint: "Viewers see the file under this name, and the link is built from it.",
-      fieldMedia: "Assign to a medium",
-      mediaNone: "do not assign — it will land in “not recognised”",
-      mediaNew: "New medium…",
-      newMediaLabel: "Title of the new medium",
-      newMediaPlaceholder: "Title",
-      multipleNamesHint:
-        "Names in service will be taken from the file names — no line-by-line editing.",
-      dropFile: "Remove",
-      dropOneFile: "Remove {name} from the list",
-      fieldLimit: "Cap the speed",
-      limitNone: "no cap",
-      limit10: "10 Mbit/s",
-      limit25: "25 Mbit/s",
-      limit50: "50 Mbit/s",
-      limit100: "100 Mbit/s",
-      limitHintLead: "Useful if you need to watch something while uploading:",
-      limitHintUnlimited: "with no cap the upload takes the whole connection",
-      limitHintCapped: "no faster than {bytes|bytes} per second",
-      started: "The upload has begun.",
-      startedHint:
-        "Follow it in the Tasks section. If the application is closed, it continues from where it got to at the next start.",
-      startedBatchAll: "{n} {n|plural:file} queued.",
-      startedBatchPartial: "{ok} of {total} {total|plural:file} queued.",
-      orphanedMediaWarning: "A new medium “{title}” was created, but no file made it into it.",
-      orphanedMediaDelete: "Delete the empty medium",
-      checking: "Checking…",
-      start: "Start the upload",
-    },
-
-    validation: {
-      ok: "The file plays all the way through — it can be uploaded.",
-      failed:
-        "The file failed the playback check. It must not be uploaded: it will fall apart for a viewer in the same place it fell apart here.",
-      decoderSaid: "What the decoder said:",
-      ignoredSummary: "Timestamp complaints: {n} — they do not affect playback",
-    },
-
-    preflight: {
-      uploadAnyway: "Upload anyway",
-      understood: "Understood",
-    },
-
-    convert: {
-      heading: "Preparation",
+      noServer: "No server selected.",
+      goToServers: "Go to servers",
+      empty: "Nothing yet.",
+      refusedDrop: "Hide refusals",
+      planning: "Working out the plan…",
+      startsAfterPlan: "Starts once planned",
+      rungLine: "{height}p · {mbps} Mbit/s",
+      onServer: "On the server ≈ {bytes|bytes}",
+      aboutMinutes: "≈ {n} min",
+      shortServer: "{bytes|bytes} short on the server",
+      shortLocal: "{bytes|bytes} short on this computer",
+      nameTaken: "The name “{slug}” is taken",
+      objections: "Objections to the rungs: {n}",
+      audio: "Audio",
       trackFallback: "Track {n}",
       mono: "mono",
       stereo: "stereo",
-      channels: "{n} channels",
-      trackDefault: " (main)",
+      channels: "{n} ch.",
+      trackDefault: " (default)",
       trackLine: "{base}, {channels}{main}",
-      pickSourceTitle: "Choose the source video",
-      pickSourceFilter: "Video",
-      pickOutputTitle: "Where to put the prepared file",
-      fieldSource: "Source",
-      pickFile: "Choose a file…",
-      sourceFacts: "{width}×{height}, {fps} fps, {duration}, {size}, {codec}",
-      fieldTrack: "Audio track",
-      noTracks: "The file has no audio track at all — check that this is the right file.",
-      fieldOutput: "Where to put it",
-      pick: "Choose…",
-      lossless:
-        "There will be no re-encoding — the file is carried across as it is, without loss and in minutes.",
-      lossy:
-        "The file has to be re-encoded. That is hours where carrying it across would take minutes.",
-      videoLine: "Video:",
-      audioLine: "Audio:",
-      copyAsIs: "carry across as it is",
-      reencodeBecause: "re-encode — {reason}",
-      started: "Preparation has begun.",
-      startedHint:
-        "Follow it in the Tasks section. At the end the file is checked for playback: one that fails the check is not offered for upload.",
-      computing: "Working it out…",
-      start: "Prepare",
-      nextTitle: "The file is ready. What next",
-      nextHint:
-        "The usual way is to cut it into qualities: the viewer's player then takes whichever one their connection carries. Sending it as one file is simpler, but then every viewer gets the same weight.",
-      nextLadder: "Cut into qualities",
-      nextUpload: "Send as one file",
-      nextFailed:
-        "The preparation failed, so there is nothing to go on with. The task says what happened.",
-      replaceTitle: "Replace the finished file?",
-      replaceYes: "Replace",
-      replaceNo: "Keep it as it is",
-      nextCancelled:
-        "The preparation was cancelled — no file was made, and the unfinished one was removed. To get the file, start the preparation again.",
+      title: "Title",
+      editTitle: "Change title",
+      saveTitle: "Save",
+      start: "Start",
+      rungs: "Rungs",
+      remove: "Remove",
+      pause: "Pause",
+      resume: "Resume",
+      cancel: "Cancel",
+      stopping: "Stopping…",
+      cancelled: "Cancelled",
+      paused: "Paused",
+      queued: "Queued",
+      retry: "Retry",
+      buildAnyway: "Build anyway",
+      replace: "Replace",
+      stagesLabel: "Stages",
+      stages: {
+        measuring: "Measure",
+        encoding: "Encode",
+        uploading: "Upload",
+        cutting: "Cut",
+        verifying: "Check",
+        done: "Done",
+      },
+      rungOf: "rung {k} of {n}",
+      speed: "{bytes|bytes}/s",
+      left: "{time} left",
+      copy: "Copy",
+      copyCdn: "Copy via CDN",
+      copied: "Copied",
+      copyFailed: "Could not copy",
+      editorTitle: "Rungs: {title}",
+      resetRungs: "Back to the plan",
+      saveRungs: "Save",
     },
 
     library: {

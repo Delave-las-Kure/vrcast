@@ -1488,3 +1488,145 @@ button.danger:disabled {
   white-space: nowrap;
   border: 0;
 }
+
+/* ---------- videos in work (T673) ---------- */
+
+.video-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.video {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.video__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.video__title {
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.video__file {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.video__plan p,
+.video__facts {
+  margin: 0;
+}
+
+.video__rung-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.video__facts {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.video__warn {
+  color: var(--warning);
+}
+
+.video__audio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video__stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.video__stage--ahead {
+  color: var(--text-muted);
+}
+
+.video__stage--passed {
+  color: var(--success);
+}
+
+.video__stage--current {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.video--problem .video__stage--current {
+  color: var(--danger);
+}
+
+.video__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.video__problem {
+  font-size: 13px;
+}
+
+.video__problem-line {
+  margin: 0;
+  color: var(--danger);
+}
+
+.video__refused ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.video__link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video__link a {
+  overflow-wrap: anywhere;
+}
+
+.video__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video__rungs {
+  max-width: none;
+}
+
+/* The library's «Add video» sits in a row of buttons, not under a paragraph. */
+.library__add {
+  margin-top: 0;
+}

@@ -164,27 +164,24 @@ describe("the shell", () => {
     // heading, and a search across the page would find two matches.
     const nav = await screen.findByRole("navigation", { name: ru.ui.sidebar.sections });
     for (const label of Object.values(ru.ui.sections)) {
-      // Not an exact match any more: the three that are one job done in order carry their
-      // number in front of the name.
-      expect(within(nav).getByText(label, { exact: false })).toBeInTheDocument();
+      expect(within(nav).getByText(label)).toBeInTheDocument();
     }
   });
 
-  it("numbers the three steps of one job in the order the work happens", async () => {
-    // Preparation, then cutting into qualities, then sending. The menu used to list sending
-    // before cutting, so somebody following it down the page was led the wrong way round.
+  it("has one section for the whole job of a video and no numbered steps (T673)", async () => {
+    // Preparation, qualities, batch and upload were four sections a person carried each
+    // video through by hand. The owner, 2026-10-01: one place, from the file to the link.
     renderIn(<App />);
     const nav = await screen.findByRole("navigation", { name: ru.ui.sidebar.sections });
-    const numbered = within(nav)
+    const labels = within(nav)
       .getAllByRole("link")
-      .map((link) => link.textContent?.trim() ?? "")
-      .filter((text) => /^\d\./.test(text));
+      .map((link) => link.textContent?.trim() ?? "");
 
-    expect(numbered).toEqual([
-      `1. ${ru.ui.sections.convert}`,
-      `2. ${ru.ui.sections.ladder}`,
-      `3. ${ru.ui.sections.upload}`,
-    ]);
+    expect(labels).toContain(ru.ui.sections.video);
+    expect(labels.filter((text) => /^\d\./.test(text))).toEqual([]);
+    for (const gone of ["Подготовка", "Качества", "Пакет", "Заливка"]) {
+      expect(labels).not.toContain(gone);
+    }
   });
 
   it("shows the application version when the core returned one", async () => {

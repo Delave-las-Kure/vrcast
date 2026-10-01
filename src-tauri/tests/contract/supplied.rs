@@ -40,7 +40,27 @@ fn frontend(rel: &str) -> PathBuf {
 /// **This list is the point of the check, and it must shrink.** An entry says "the core can
 /// take this, deliberately nobody sends it yet, because —". An entry with no reason is a
 /// screen somebody forgot to finish, which is what this is here to find.
-const NOT_SENT_YET: &[(&str, &str, &str)] = &[];
+///
+/// T673 (owner, 2026-10-01): the preparation, qualities, batch and upload screens were taken
+/// out in favour of the «Video» pipeline, and with them the only screens that filled these
+/// requests by hand. The commands stay in the core — the pipeline builds the same requests
+/// itself (`commands::video::ladder_request`, its own `BuildRequest`) — so each entry below
+/// is closed by deleting the field or the command once nothing in the core needs it, or by
+/// a screen that offers the choice again.
+const VIDEO_PIPELINE: &str = "manual path removed by the owner's decision of 2026-10-01; \
+     the entry is through the «Video» pipeline (T672/T673), which fills this field itself";
+
+const NOT_SENT_YET: &[(&str, &str, &str)] = &[
+    ("BuildRequest", "prefer_hardware", VIDEO_PIPELINE),
+    ("LadderRequest", "declared_layout", VIDEO_PIPELINE),
+    ("LadderRequest", "measured_peak_bps", VIDEO_PIPELINE),
+    ("LadderRequest", "prefer_hardware", VIDEO_PIPELINE),
+    ("MeasureRequest", "prefer_hardware", VIDEO_PIPELINE),
+    ("MeasureRequest", "then_build", VIDEO_PIPELINE),
+    ("UploadRequest", "local_path", VIDEO_PIPELINE),
+    ("UploadRequest", "remote_name", VIDEO_PIPELINE),
+    ("UploadRequest", "limit_bps", VIDEO_PIPELINE),
+];
 
 /// Wrapper parameters that may be left out, each with the reason and what closes it.
 ///
