@@ -431,3 +431,147 @@ mod streaming {
         assert_eq!(into.total, 0);
     }
 }
+
+// ---------- T670(4): a long pause lets go of what it holds ----------
+
+mod holding {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+    use vrcast_studio_lib::store::db::Db;
+    use vrcast_studio_lib::tasks::engine::{TaskContext, TaskEngine};
+    use vrcast_studio_lib::tasks::ladder_build::{stream_blocks_holding, StreamError, SEND_BLOCK};
+    use vrcast_studio_lib::tasks::state::TaskKind;
+
+    /// Run `body` inside a real task, so that pause and resume are the engine's own.
+    async fn in_task<F, Fut>(body: F) -> (TaskEngine, String, mpsc::UnboundedReceiver<String>)
+    where
+        F: FnOnce(TaskContext, mpsc::UnboundedSender<String>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let engine = TaskEngine::new(Arc::new(Db::open_in_memory().unwrap()));
+        let (said, heard) = mpsc::unbounded_channel();
+        let id = engine
+            .submit(TaskKind::BuildLadder, None, move |ctx| async move {
+                body(ctx, said).await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while engine.get(&id).unwrap().unwrap().state
+            != vrcast_studio_lib::tasks::state::TaskState::Running
+        {
+            assert!(std::time::Instant::now() < deadline, "the task never ran");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        (engine, id, heard)
+    }
+
+    #[tokio::test]
+    async fn a_pause_longer_than_the_hold_gives_up_with_how_far_it_got() {
+        let (engine, id, mut heard) = in_task(|ctx, said| async move {
+            // Paused before the copy reaches its first block — what the person does mid-send.
+            while !ctx.is_paused() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let size = 8 * SEND_BLOCK as u64;
+            let mut from = &vec![7u8; size as usize][..];
+            let mut into = Vec::new();
+            let already = 3 * SEND_BLOCK as u64;
+            let outcome = stream_blocks_holding(
+                &mut from,
+                &mut into,
+                already,
+                size,
+                &ctx,
+                Some(Duration::from_millis(200)),
+            )
+            .await;
+            let _ = said.send(format!("{outcome:?}|{}", into.len()));
+        })
+        .await;
+        engine.pause(&id).unwrap();
+
+        let answer = tokio::time::timeout(Duration::from_secs(10), heard.recv())
+            .await
+            .expect("a long pause held on for ever")
+            .unwrap();
+        assert_eq!(
+            answer,
+            format!(
+                "{:?}|0",
+                Err::<u64, StreamError>(StreamError::PausedTooLong {
+                    sent: 3 * SEND_BLOCK as u64
+                })
+            ),
+            "it did not say where it stopped, counting from the start of the file"
+        );
+        engine.cancel(&id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_pause_let_go_of_within_the_hold_carries_on_in_the_same_copy() {
+        let (engine, id, mut heard) = in_task(|ctx, said| async move {
+            while !ctx.is_paused() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let _ = said.send(String::from("paused"));
+            let size = 4 * SEND_BLOCK as u64;
+            let mut from = &vec![7u8; size as usize][..];
+            let mut into = Vec::new();
+            let outcome = stream_blocks_holding(
+                &mut from,
+                &mut into,
+                0,
+                size,
+                &ctx,
+                Some(Duration::from_secs(30)),
+            )
+            .await;
+            let _ = said.send(format!("{outcome:?}|{}", into.len()));
+        })
+        .await;
+        engine.pause(&id).unwrap();
+        assert_eq!(heard.recv().await.unwrap(), "paused");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        engine.resume(&id).unwrap();
+
+        let size = 4 * SEND_BLOCK;
+        let answer = tokio::time::timeout(Duration::from_secs(10), heard.recv())
+            .await
+            .expect("the copy did not carry on")
+            .unwrap();
+        assert_eq!(answer, format!("Ok({size})|{size}"));
+    }
+
+    #[tokio::test]
+    async fn without_a_hold_a_pause_is_waited_out_as_before() {
+        // `stream_blocks` (T660) keeps its old behaviour: no limit, so a pause longer than any
+        // hold still ends in the same copy rather than in `PausedTooLong`.
+        let (engine, id, mut heard) = in_task(|ctx, said| async move {
+            while !ctx.is_paused() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let _ = said.send(String::from("paused"));
+            let size = 2 * SEND_BLOCK as u64;
+            let mut from = &vec![7u8; size as usize][..];
+            let mut into = Vec::new();
+            let outcome = vrcast_studio_lib::tasks::ladder_build::stream_blocks(
+                &mut from, &mut into, size, &ctx,
+            )
+            .await;
+            let _ = said.send(format!("{outcome:?}"));
+        })
+        .await;
+        engine.pause(&id).unwrap();
+        assert_eq!(heard.recv().await.unwrap(), "paused");
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        engine.resume(&id).unwrap();
+        let answer = tokio::time::timeout(Duration::from_secs(10), heard.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(answer, format!("Ok({})", 2 * SEND_BLOCK));
+    }
+}

@@ -202,6 +202,11 @@ mod upload_finish_network_cut;
 #[path = "integration/write_master.rs"]
 mod write_master;
 
+/// T670(4) — a long pause while a ladder variant is sent closes the SFTP session; carrying
+/// on writes on from where it stopped.
+#[path = "integration/ladder_send_pause.rs"]
+mod ladder_send_pause;
+
 /// T578 — `upload_start` and `ladder_build` notify `library:changed` after writing the
 /// manifest, matching the five mutating commands in `library.rs`.
 #[path = "integration/library_changed_notify.rs"]
