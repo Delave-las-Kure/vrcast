@@ -837,46 +837,36 @@ export const en: Catalogue = {
     serverState: {
       title: "The server’s state",
       asking: "Looking at what this server is…",
-      clean: "The server is bare: no serving is deployed on it.",
+      clean: "Not deployed.",
       deployIt: "Set it up",
-      unfinished:
-        "The setup did not finish: a deployment was interrupted. Running it again does not redo what is done.",
+      unfinished: "Deployment not finished.",
       finishIt: "Finish it",
-      versions: (server: number, app: number) =>
-        `Server side: version ${server}. This application deploys ${app}.`,
-      tooNew:
-        "The server side is newer than this application understands. Reading only for now: writing files where a newer layout does not keep them is how a working server is quietly broken.",
+      versions: (server: number, app: number) => `Server version: ${server}, app version: ${app}.`,
+      tooNew: "The server side is newer than the app — read only.",
       updateIt: "Update the server side",
-      foreign:
-        "This server already has somebody else’s serving on it. The application changes nothing here.",
-      unreachable: "The server did not answer. The last thing known is shown.",
+      foreign: "Someone else's setup — the app leaves it alone.",
+      unreachable: "The server did not answer. Showing the last known state.",
     },
     deploy: {
       title: "Set the server up",
       willChange: "What will be done",
       agreeAndStart: "Agreed — set it up",
-      running: "Setting it up. The screen may be closed; the work carries on.",
-      finished: "The server is set up and serving video over its domain.",
-      machine: (memoryMb: number, disk: string) =>
-        `${memoryMb} MB of memory, system disk ${disk}. On a machine with little memory installing packages is killed without a swap file — one will be made.`,
+      running: "Deploying. You can close this screen.",
+      finished: "The server is deployed.",
+      machine: (memoryMb: number, disk: string) => `Memory ${memoryMb} MB, disk ${disk}.`,
 
       ipv6Question: "What should happen to IPv6 on this server?",
-      ipv6NotChosen:
-        "Choose one of the two options below — neither is assumed by default, because each decides the fate of viewers on an IPv6 connection differently.",
-      ipv6Keep: "Keep it",
-      ipv6KeepMeans:
-        "The protection will cover IPv6 as fully as IPv4. The domain must then have an AAAA record pointing at this server’s IPv6 address — otherwise viewers whose connection prefers IPv6 go nowhere, and the complaint arrives not as “the server is broken” but as “it doesn’t open for me”.",
-      ipv6Disable: "Turn it off",
-      ipv6DisableMeans:
-        "The serving will not answer over IPv6 at all. The domain must then have no AAAA record: left there, it goes on promising an address that has gone quiet.",
+      ipv6NotChosen: "Choose one.",
+      ipv6Keep: "Keep IPv6",
+      ipv6KeepMeans: "Needs an AAAA record for the server's IPv6.",
+      ipv6Disable: "Disable IPv6",
+      ipv6DisableMeans: "Remove the domain's AAAA record.",
 
       domainTitle: "The domain record",
       domainAsking: "Asking the servers that hold the zone…",
       domainOk: "The domain points at this server.",
-      domainNotPointed:
-        "The domain is not attached to the server. Create a record at your registrar.",
-      domainSpreadsSlowly:
-        "The change takes a few minutes to spread. Once the record is created, ask again.",
+      domainNotPointed: "The domain does not lead here. Add an A record at your registrar.",
+      domainSpreadsSlowly: "A record takes a few minutes to spread.",
       domainAskAgain: "Ask again",
 
       stepApplied: "done",
@@ -886,10 +876,10 @@ export const en: Catalogue = {
       stepNotHere: "cannot be established here",
 
       foreignCaddyfile:
-        "This server already has somebody else’s serving configuration — /etc/caddy/Caddyfile. This application did not write it: either it was edited by hand, or somebody’s serving lived here. Without your agreement the deployment will stop at the configuration step and leave the file alone.",
+        "The server has someone else's Caddyfile. Without consent, deployment stops.",
       replaceCaddyfile: "Replace it (a copy is kept)",
       replaceCaddyfileMeans:
-        "Before the first change the file is copied to /etc/vrcast/backup/<time>/Caddyfile. “Put it back as it was” restores it only if this deployment runs to the end. If it breaks off, the application will not bring this file back — not even after deploying again: it has to be put back by hand from the copy of the run that broke off, /etc/vrcast/backup/<its start time>/Caddyfile.",
+        'Copy: /etc/vrcast/backup/<time>/Caddyfile. "Put it back" restores it only if the deployment finishes; otherwise restore it by hand from the copy.',
     },
 
     deploySteps: {
@@ -1090,21 +1080,18 @@ export const en: Catalogue = {
     },
     upgrade: {
       title: "Update the server side",
-      fromTo: (from: number, to: number) =>
-        `The server is at version ${from}; this application deploys ${to}.`,
+      fromTo: (from: number, to: number) => `Version ${from} → ${to}.`,
       willChange: "What will change",
       nothingToDo: "Everything is already in place — nothing to change.",
       willKeep: "What will be copied aside first",
-      keepsVideosAndCatalogue:
-        "The videos and the catalogue are neither copied nor touched: they are your work, not our configuration. A rollback that restored the catalogue would undo everything uploaded since.",
+      keepsVideosAndCatalogue: "Videos and the catalogue are not touched.",
       agreeAndUpgrade: "Agreed — update",
       rollBack: "Put it back as it was",
       cancel: "Cancel",
       rollBackTitle: "Restore the settings from the copy?",
-      rollBackReturns:
-        "What comes back: the settings files from the copy taken before the last deployment or upgrade — the ones that were on the server before it. The serving and SSH re-read them without a restart.",
+      rollBackReturns: "The settings files come back from the copy made before the last run.",
       rollBackKeeps:
-        "What does not: files that did not exist before the run — 99-vrcast-ipv6.conf, for example — stay as they are; the server’s live state — sysctl values, ufw’s rules and state, the swap in use, the loaded BBR module, a running fail2ban; the quality-limit rules — the caps you set are kept. The videos, the catalogue and the login keys are not touched.",
+        "Not put back: new files (such as 99-vrcast-ipv6.conf), live state (sysctl, ufw, swap, BBR, fail2ban) and quality limits. Videos, the catalogue and keys are not touched.",
       rollBackConfirm: "Understood — put it back",
       rollBackDone: "The settings were restored from the copy.",
     },
@@ -1214,44 +1201,33 @@ export const en: Catalogue = {
       stepData: "Details",
       stepFingerprint: "Fingerprint",
       stepTest: "Check",
-      importFound: "Settings from the old way of working were found nearby",
-      importExplain:
-        "— the address, domain, user and key path can be filled in from it. The file is only read, never changed.",
-      importNeedsPassphrase:
-        " The key's passphrase will have to be entered: it is not in the file.",
+      importFound: "Earlier settings found:",
+      importNeedsPassphrase: " Enter the key's passphrase yourself.",
       importApply: "Fill in",
       fieldName: "Name",
-      fieldNamePlaceholder: "How to tell this server from the others",
+      fieldNamePlaceholder: "My server",
       fieldHost: "Address",
       fieldHostPlaceholder: "IP address or name",
       fieldPort: "Port",
       fieldDomain: "Serving domain",
-      fieldDomainHint:
-        "Viewer links are handed out on it. You can paste straight from the address bar — the extra parts are removed for you.",
       fieldUser: "User",
       fieldAuth: "Sign-in",
       authKey: "By key",
       authPassword: "By password",
       authManagedKey: "With the key made while deploying",
-      authManagedKeyNote:
-        "Deploying made this server its own key and turned password sign-in off; the key is kept in the system’s password store. To sign in another way, choose it and enter the password or the key’s passphrase.",
+      authManagedKeyNote: "Password sign-in is off on the server.",
       pickKey: "Browse\u2026",
       fieldKeyPath: "Path to the private key",
       fieldPassphrase: "Key passphrase",
       fieldPassword: "Password",
-      secretHint:
-        "Kept in the system password store, not in the application's files. It is never handed back to the application.",
       optional: "Optional",
       fieldVideoDir: "Video directory on the server",
-      fieldVideoDirPlaceholder: "leave empty for the default",
+      fieldVideoDirPlaceholder: "default",
       fieldCdn: "CDN address",
-      fieldCdnPlaceholder: "empty = links only through the server itself",
+      fieldCdnPlaceholder: "none",
       checking: "Checking…",
       next: "Next",
-      fingerprintLead:
-        "The server introduced itself with this fingerprint. Compare it with the one your hosting provider's control panel shows, then confirm it.",
-      fingerprintWhy:
-        "Until it is confirmed the application will send the server neither password nor key. That way an impersonating server gets none of your credentials, even if it manages to answer at the right address.",
+      fingerprintLead: "Compare the fingerprint with your hosting panel.",
       abandon: "Give up",
       fingerprintOk: "The fingerprint is right",
       testAgain: "Check again",
@@ -1444,19 +1420,16 @@ export const en: Catalogue = {
       heading: "Servers",
       reading: "Reading the server list…",
       add: "Add a server",
-      empty:
-        "No servers yet. Add the first one — the application will learn its fingerprint, ask you to confirm it, and check the connection step by step.",
+      empty: "No servers yet.",
       activeBadge: "active",
       makeActive: "Make active",
       domain: "Domain",
       videoDir: "Video directory",
       cdn: "CDN",
-      fingerprintUnconfirmed:
-        "The server's fingerprint is not confirmed — connecting is not possible. The application does not send credentials to a server it does not recognise.",
+      fingerprintUnconfirmed: "Fingerprint not confirmed — cannot connect.",
       testing: "Checking…",
       test: "Check the connection",
-      confirmRemoval:
-        "Delete this profile? The password or key for this server will be forgotten, and its local media library records will be lost too.",
+      confirmRemoval: "Remove the profile and its saved password?",
       removeYes: "Yes, delete",
       remove: "Delete",
       steps: {
@@ -1468,14 +1441,12 @@ export const en: Catalogue = {
       stepStatus: { ok: "passed", failed: "failed", skipped: "not checked" },
       edit: "Edit",
       editHeading: "Edit the server “{name}”",
-      editSecretHint:
-        "Leave this empty to keep the stored password or key as it is — it is never handed back from the store.",
+      editSecretHint: "Leave empty to keep the current one.",
       leaveMadeKeyForFileHint:
-        "The key made while deploying will be deleted from the system store. Enter the passphrase of your key file — or leave the field empty if the file has none.",
+        "The deployment key will be removed. Enter the key's passphrase, if it has one.",
       leaveMadeKeyForPasswordHint:
-        "The key made while deploying will be deleted from the system store — enter the server’s password. Without it the change is not saved.",
-      editAddressChanged:
-        "The address or port changed — the server has to be recognised again before connecting to it.",
+        "The deployment key will be removed. Enter the server's password.",
+      editAddressChanged: "The address changed — confirm the fingerprint again.",
       save: "Save",
       saving: "Saving…",
     },

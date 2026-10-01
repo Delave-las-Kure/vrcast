@@ -412,16 +412,19 @@ button:focus-visible {
 
 /* An error's advice, particulars and technical cause, folded under "Details" (T674): the line
    says what happened, and the rest is there for whoever asks. */
+.more,
 .error-more {
   margin-top: 4px;
   font-size: 13px;
 }
 
+.more summary,
 .error-more summary {
   cursor: pointer;
   color: var(--text-muted);
 }
 
+.more p,
 .error-more p {
   margin: 4px 0 0;
 }

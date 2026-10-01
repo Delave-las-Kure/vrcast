@@ -178,7 +178,6 @@ export function EditServerDialog({
           <p>{s.editAddressChanged}</p>
           <p>{w.fingerprintLead}</p>
           <code className="fingerprint">{fingerprint}</code>
-          <p className="muted">{w.fingerprintWhy}</p>
           <div className="form__actions">
             <button type="button" onClick={() => void confirmFingerprint()} disabled={busy}>
               {busy ? w.checking : w.fingerprintOk}
