@@ -1,7 +1,7 @@
 /**
  * T027 — the application shell: sections, appearance, the stream of events.
  *
- * The task, server, library, preparation and upload sections work. The rest say
+ * The task, server, library, video and viewer sections work. The rest say
  * honestly which phase they arrive in and what to use until then — a blank screen with
  * no explanation looks broken.
  */
@@ -12,10 +12,7 @@ import { LibraryScreen } from "../features/library/LibraryScreen";
 import { VideoScreen } from "../features/video/VideoScreen";
 import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
-import { ConvertScreen } from "../features/convert/ConvertScreen";
 import { DeployPage } from "../features/deploy/DeployPage";
-import { LadderPage } from "../features/ladder/LadderScreen";
-import { BatchScreen } from "../features/batch/BatchScreen";
 import { useActiveServer, useServers } from "../features/servers/store";
 import { LimitsList } from "../features/viewers/LimitsList";
 import { Appearance } from "../features/settings/Appearance";
@@ -23,7 +20,6 @@ import { DiagPage } from "../features/diag/DiagPage";
 import { ViewersScreen } from "../features/viewers/ViewersScreen";
 import { TasksPanel } from "../features/tasks/TasksPanel";
 import { LeaveConfirm } from "../features/tasks/LeaveConfirm";
-import { UploadScreen } from "../features/upload/UploadScreen";
 import { ipc } from "../shared/ipc";
 import { LanguageProvider, useT } from "../shared/i18n";
 import { useTaskNotifications, useTrayNotice } from "../features/tasks/notifications";
@@ -146,11 +142,7 @@ function AppShell() {
           <Route path="/servers" element={<ServerList />} />
           <Route path="/library" element={<LibraryScreen />} />
           <Route path="/video" element={<VideoScreen />} />
-          <Route path="/convert" element={<ConvertScreen />} />
-          <Route path="/upload" element={<UploadScreen />} />
           <Route path="/about" element={<About />} />
-          <Route path="/ladder" element={<LadderPage />} />
-          <Route path="/batch" element={<BatchScreen />} />
           <Route path="/viewers" element={<ViewersScreen />} />
           <Route path="/deploy" element={<DeployPage />} />
           <Route

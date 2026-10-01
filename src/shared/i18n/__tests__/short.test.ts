@@ -20,8 +20,6 @@ const HINT_LIMIT = 110;
 
 /** Legal texts are not ours to shorten (T674: «не трогать лицензию и „О программе“»). */
 const LEGAL = "the licence and About are legal texts, left as they are (T674)";
-/** Screens T673 takes out of the menu in favour of «Видео»: not cleaned, only kept green. */
-const LEAVING = "a screen T673 takes out of the menu (Подготовка/Качества/Пакет/Заливка)";
 /** Shown folded under «Подробнее», and what it says is a consequence a person is owed. */
 const FOLDED = "folded under «Подробнее»: what a dangerous step will and will not do";
 
@@ -35,25 +33,6 @@ const EXCEPTIONS: Record<string, string> = {
 
   "ui.deploy.replaceCaddyfileMeans": FOLDED,
   "ui.upgrade.rollBackKeeps": FOLDED,
-
-  "ui.batch.explain": LEAVING,
-  "ui.ladder.explain": LEAVING,
-  "ui.ladder.formulaExplain": LEAVING,
-  "ui.ladder.borrowExplain": LEAVING,
-  "ui.ladder.measureExplain": LEAVING,
-  "ui.ladder.measureChunks": LEAVING,
-  "ui.ladder.measureAnchor": LEAVING,
-  "ui.ladder.estimateFromThisMachine": LEAVING,
-  "ui.ladder.estimateNotAsked": LEAVING,
-  "ui.ladder.estimateFromModel": LEAVING,
-  "ui.upload.notReady": LEAVING,
-  "ui.upload.lead": LEAVING,
-  "ui.upload.startedHint": LEAVING,
-  "ui.validation.failed": LEAVING,
-  "ui.convert.lossless": LEAVING,
-  "ui.convert.startedHint": LEAVING,
-  "ui.convert.nextHint": LEAVING,
-  "ui.convert.nextCancelled": LEAVING,
 };
 
 const CATALOGUES: Array<[Lang, Catalogue]> = [

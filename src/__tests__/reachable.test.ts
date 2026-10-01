@@ -38,19 +38,7 @@ const DOORS = ["main.tsx"];
  * deliberately not connected yet, because —". An entry with no reason is a file somebody
  * forgot, which is exactly what this is here to find.
  */
-const NOT_MOUNTED_YET: Array<[string, string]> = [
-  [
-    "features/convert/ValidationResult.tsx",
-    "Found by this guard on its first run, 2026-09-05, together with the command it displays: " +
-      "`convertValidate` is wrapped in ipc.ts and called by no screen either. FR-027 is met " +
-      "without them — the preparation task validates on its own and fails the task on a bad " +
-      "verdict, so a file that did not pass is never offered. What is missing is the ability " +
-      "to check a file the application did not make: one copied from elsewhere, or produced " +
-      "by the owner's own scripts, which this project deliberately keeps as a fallback path. " +
-      "That is a screen somebody has to decide on, not a wire to reconnect. Closed by that " +
-      "decision, or by deleting all three pieces.",
-  ],
-];
+const NOT_MOUNTED_YET: Array<[string, string]> = [];
 
 const RAW = import.meta.glob("../**/*.{ts,tsx}", {
   query: "?raw",

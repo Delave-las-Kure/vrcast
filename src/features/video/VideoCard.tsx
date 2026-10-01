@@ -20,6 +20,7 @@ import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
 import { formatDuration } from "../../shared/i18n/format";
 import { fill, renderDetail } from "../../shared/i18n/render";
 import { ErrorFolded } from "../shared/ErrorNotice";
+import { basename } from "../shared/names";
 import {
   STAGES,
   canCancel,
@@ -99,7 +100,7 @@ export function VideoCard({
   };
 
   const planShown = showsPlan(video);
-  const fileName = video.source_path.split(/[\\/]/).pop() ?? video.source_path;
+  const fileName = basename(video.source_path);
   const tracks = video.source?.audio_tracks ?? [];
   const problemActions = video.state === "problem" ? (video.problem?.actions ?? []) : [];
   // «Rename» puts the name field up and its own «Retry» beside it; the field is the action.

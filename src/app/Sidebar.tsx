@@ -10,19 +10,15 @@ import { Mascot } from "../features/mascot/Mascot";
  * The label is a key rather than a word: the sidebar is the one place every language
  * has to agree on, and a hard-coded word here would be the first thing to go stale.
  *
- * **`step` numbers the three that are one job done in order** — prepare the file, cut it
- * into qualities, send it. They used to be listed with sending before cutting, which is
- * neither the order they happen in nor the order they were built in, and a person following
- * the menu down the page was being led the wrong way round.
+ * **One section for the whole job of a video** (T673, owner 2026-10-01). Preparation,
+ * qualities, batch and upload used to be four sections, numbered as steps, and a person
+ * carried each video from one to the next by hand. «Video» takes a file to a link in one
+ * place, so there are no steps left to number.
  */
 export const SECTIONS = [
   { path: "/servers", key: "servers", ready: true },
   { path: "/library", key: "library", ready: true },
   { path: "/video", key: "video", ready: true },
-  { path: "/convert", key: "convert", ready: true, step: 1 },
-  { path: "/ladder", key: "ladder", ready: true, step: 2 },
-  { path: "/batch", key: "batch", ready: true },
-  { path: "/upload", key: "upload", ready: true, step: 3 },
   { path: "/viewers", key: "viewers", ready: true },
   { path: "/limits", key: "limits", ready: true },
   { path: "/diagnostics", key: "diagnostics", ready: true },
@@ -57,11 +53,7 @@ export function Sidebar({ version }: { version: string | null }) {
                 `sidebar__link${isActive ? " sidebar__link--active" : ""}`
               }
             >
-              <span>
-                {"step" in s
-                  ? fill(t.ui.sidebar.step, { n: s.step, name: t.ui.sections[s.key] }, t, lang)
-                  : t.ui.sections[s.key]}
-              </span>
+              <span>{t.ui.sections[s.key]}</span>
               {/* A section that does not exist yet is marked honestly rather than
                   being left to look finished. */}
               {!s.ready && (
