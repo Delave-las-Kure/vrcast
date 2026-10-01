@@ -46,6 +46,7 @@ pub mod source;
 pub mod stalls;
 pub mod swap;
 pub mod transfer;
+pub mod video;
 pub mod viewers;
 pub mod wording;
 pub mod work_dir;

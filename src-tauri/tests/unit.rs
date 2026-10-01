@@ -250,3 +250,7 @@ mod rename_plan;
 /// log is written to a file.
 #[path = "unit/startup_failure.rs"]
 mod startup_failure;
+
+/// T672 — a video in work: its stages, what a state allows, after a restart, the store.
+#[path = "unit/video.rs"]
+mod video;
