@@ -292,6 +292,15 @@ export const en: Catalogue = {
       message: "An internal error in the application",
       hint: "Please report it, with the logs from Diagnostics.",
     },
+    // --- videos in work (T672) ---
+    VIDEO_NOT_FOUND: {
+      message: "The video is not on the list",
+      hint: "It was removed from the list. Refresh the screen.",
+    },
+    VIDEO_NOT_NOW: {
+      message: "This cannot be done right now",
+      hint: "The video is in another state. Refresh the screen.",
+    },
   },
 
   details: {
@@ -637,6 +646,8 @@ export const en: Catalogue = {
       "The player, not the link: {in_download_mbit_s} Mbit/s against {average_mbit} needed; by the clock {mbit_s} Mbit/s, ratio {ratio}. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
       "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}). Skipped: {skipped}, restarts: {restarts}.",
+    // --- videos in work (T672) ---
+    VIDEO_ALREADY_LISTED: "This video is already on the list",
   },
 
   plurals: {

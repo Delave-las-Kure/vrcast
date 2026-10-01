@@ -25,6 +25,7 @@ pub mod settings;
 pub mod tray;
 pub mod update;
 pub mod upload;
+pub mod video;
 pub mod viewers;
 
 use crate::domain::wording::Detail;
@@ -68,6 +69,11 @@ pub enum AppEvent {
     /// Sent rather than waited to be asked for: the list changes every few seconds, and
     /// asking for it that often is what SC-009 exists to prevent.
     ViewersUpdate(crate::server::viewers::ViewersUpdate),
+    /// A video in work changed: its stage, its state, its progress, its problem (T672).
+    ///
+    /// The whole video goes out each time, as with `DeployProgress`: a screen opened in the
+    /// middle of a build must not have to piece a card together from a stream of changes.
+    VideoUpdate(Box<video::VideoView>),
 }
 
 /// The application's shared state. Everything the commands need lives here.
@@ -108,6 +114,16 @@ pub struct AppState {
     /// The ladder screen's plan questions still in flight (T670(2)): a question about
     /// another file stops their complexity probes. Shared between clones, like `geo_fetch`.
     pub plan_probes: ladder::PlanProbes,
+    /// The videos in work, as this run holds them beside what is stored (T672).
+    pub videos: video::VideoHub,
+    /// Where a finished set is asked for instead of `https://{domain}` (T672).
+    ///
+    /// **Only the integration tests set this**, and only because a container has no domain
+    /// and no certificate: without it a build through the real command can never reach its
+    /// last check there, and the whole way to «done» could not be walked anywhere but on a
+    /// live server. `None` in the application, always — the check then asks the address a
+    /// viewer would use, which is the whole point of it.
+    pub verify_origin: Option<String>,
 }
 
 impl AppState {
@@ -209,6 +225,8 @@ impl AppState {
             )),
             geo_fetch: Arc::new(tokio::sync::Mutex::new(())),
             plan_probes: ladder::PlanProbes::default(),
+            videos: video::VideoHub::default(),
+            verify_origin: None,
         })
     }
 

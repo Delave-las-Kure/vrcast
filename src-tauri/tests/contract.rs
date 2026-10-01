@@ -71,3 +71,8 @@ mod viewers;
 
 #[path = "contract/supplied.rs"]
 mod supplied;
+
+/// T672 — the commands of a video in work: each file on its own, the plan, the states, a
+/// problem with its actions, the event, and a restart.
+#[path = "contract/video.rs"]
+mod video;

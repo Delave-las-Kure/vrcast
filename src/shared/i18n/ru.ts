@@ -290,6 +290,15 @@ export const ruCore: CatalogueCore = {
       message: "Внутренняя ошибка приложения",
       hint: "Сообщите об ошибке и приложите журналы из «Диагностики».",
     },
+    // --- видео в работе (T672) ---
+    VIDEO_NOT_FOUND: {
+      message: "Видео нет в списке",
+      hint: "Его убрали из списка. Обновите экран.",
+    },
+    VIDEO_NOT_NOW: {
+      message: "Сейчас это сделать нельзя",
+      hint: "Видео в другом состоянии. Обновите экран.",
+    },
   },
 
   details: {
@@ -624,6 +633,7 @@ export const ruCore: CatalogueCore = {
       "Дело в плеере, не в канале: {in_download_mbit_s} Мбит/с при нужных {average_mbit}; по часам {mbit_s} Мбит/с, доля {ratio}. Перезапусков: {restarts}, пропусков: {skipped}.",
     STALLS_VIEWER_LINK:
       "Не хватает канала зрителя: {ratio}× при {mbit_s} Мбит/с (в закачках {in_download_mbit_s}). Пропусков: {skipped}, перезапусков: {restarts}.",
+    VIDEO_ALREADY_LISTED: "Это видео уже в списке",
   },
 
   plurals: {

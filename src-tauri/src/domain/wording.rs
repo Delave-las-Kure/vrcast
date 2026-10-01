@@ -546,6 +546,10 @@ detail_codes! {
     /// `ratio`, `mbit_s`, `in_download_mbit_s`, `skipped`, `restarts`.
     StallsViewerLink => "STALLS_VIEWER_LINK",
     StallsThePlayer => "STALLS_THE_PLAYER",
+
+    // --- videos in work (T672) ---
+    /// This file is already on the list of videos for this server, and not finished.
+    VideoAlreadyListed => "VIDEO_ALREADY_LISTED",
 }
 
 impl TryFrom<String> for DetailCode {

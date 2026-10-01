@@ -17,3 +17,4 @@ pub mod profiles;
 pub mod redact;
 pub mod secrets;
 pub mod settings;
+pub mod videos;

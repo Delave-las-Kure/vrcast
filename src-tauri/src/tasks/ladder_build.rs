@@ -546,12 +546,29 @@ async fn prepare_and_send(
         encoder: job.encoder,
         out_path: &out_path.to_string_lossy(),
     };
+    let started = std::time::Instant::now();
     let said = crate::media::convert::run(&convert, ctx)
         .await
         .map_err(|e| match e {
             crate::media::convert::ConvertError::Cancelled => BuildError::Cancelled,
             other => BuildError::Prepare(other.to_string()),
         })?;
+    // **What this machine really does, for the next plan's time** (T672). Only a real encode
+    // counts — a rung carried across untouched says nothing about the encoder — and a lost
+    // write costs nothing but a rougher estimate next time.
+    if !variant.lossless {
+        let took = started.elapsed().as_secs_f64();
+        if took > 1.0 {
+            let pixels = crate::domain::video::pixels_of(&variant.rung, job.source);
+            if let Err(e) = crate::store::videos::record_encode_speed(
+                ctx.db(),
+                job.encoder.ffmpeg_name(),
+                pixels / took,
+            ) {
+                tracing::debug!(error = %e, "the encoder's speed was not written down");
+            }
+        }
+    }
 
     // ⚠ **Nothing unchecked reaches viewers** (constitution, principle II; FR-027). Between
     // the encode and the send there used to be nothing at all: `media::validate` was called
@@ -827,9 +844,16 @@ where
 
     let mut block = vec![0u8; SEND_BLOCK];
     let mut sent: u64 = already;
+    // How fast it is going (T672), worked out the way an upload's is: over the last few
+    // seconds, and forgotten across a pause rather than averaged through it.
+    let mut pace = crate::domain::progress_estimate::ProgressEstimate::default();
+    pace.record(std::time::Instant::now(), sent);
     loop {
         if ctx.is_cancelled() {
             return Err(StreamError::Cancelled);
+        }
+        if ctx.is_paused() {
+            pace.reset();
         }
         match hold_limit {
             Some(limit) if ctx.is_paused() => {
@@ -855,9 +879,16 @@ where
             .map_err(StreamError::Write)?;
         sent += n as u64;
         if total > 0 {
-            ctx.report(
+            pace.record(std::time::Instant::now(), sent);
+            let speed = pace.speed_bps().map(|s| s.min(i64::MAX as u64) as i64);
+            let eta = pace
+                .eta(total.saturating_sub(sent))
+                .map(|d| d.as_secs().min(i64::MAX as u64) as i64);
+            ctx.report_stage_transfer(
                 (sent as f64 / total as f64).clamp(0.0, 1.0),
                 DetailCode::StageSendingVariant,
+                speed,
+                eta,
             );
         }
     }
