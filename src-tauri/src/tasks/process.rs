@@ -28,6 +28,11 @@ use tokio::process::{Child, Command};
 /// that runs for hours and must die on command; putting these through it would mean a job
 /// object and a process group for something that lives for eighty milliseconds.
 ///
+/// ⚠ **Not for anything heavy** (T661). A child started here has no job object and no
+/// `kill_on_drop`, and a real Windows probe watched one outlive the application that started
+/// it (QA-24B-02). Encoding a piece of a film, or reading every packet of one, goes through
+/// [`run_to_end`] instead — the same one-call shape, with the managed guarantees.
+///
 /// **What it is for is the flag.** A released build on Windows has no console of its own,
 /// so a child started without `CREATE_NO_WINDOW` is handed a brand new console window by
 /// the system — which appears and vanishes. Seven places used to start programs directly
@@ -67,6 +72,143 @@ pub enum ProcessError {
 }
 
 pub type Result<T> = std::result::Result<T, ProcessError>;
+
+/// How long a program run through [`run_to_end`] may go without writing a byte to its
+/// standard output before it is taken for hung (T661).
+///
+/// **A limit on silence, not on length**, for the same reason as the playback check's: a
+/// full read of a two-hour film's packets takes as long as it takes, and a total would be
+/// wrong for some film. What a hung reader has that a slow one does not is an output that
+/// has stopped moving. The programs run this way are asked to speak as they go —
+/// `-progress pipe:1` for an encode, the packet list itself for `ffprobe`.
+pub const SILENCE_LIMIT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// What a program run to its end left behind.
+#[derive(Debug)]
+pub struct Finished {
+    pub status: std::process::ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// How a run to the end did not get there.
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    #[error(transparent)]
+    Process(#[from] ProcessError),
+
+    /// Asked to stop; the whole tree was killed and waited for before this came back.
+    #[error("cancelled")]
+    Cancelled,
+
+    #[error("{program} said nothing for {seconds} s and was stopped")]
+    Stalled { program: String, seconds: u64 },
+}
+
+/// Run a program to its end **under the same guarantees as the long work** (T661).
+///
+/// The replacement for `quiet(..).output()` wherever the program is heavy: an encode of a
+/// probe piece, a read of every packet in a film. Those used to run as plain children —
+/// no job object, no process group, not even `kill_on_drop` — and a real Windows probe
+/// (QA-24B-02) watched one outlive the application that started it. Through
+/// [`ManagedProcess`] it dies with the application however the application dies, and is
+/// written into the account for the start-up sweep.
+///
+/// `cancel`, when given, stops the whole tree and waits for it. `silence` is the longest the
+/// program may go without writing to stdout — see [`SILENCE_LIMIT`]. Dropping the returned
+/// future mid-way also ends the program: the handle's drop closes the job.
+pub async fn run_to_end(
+    program: &str,
+    args: &[String],
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+    silence: std::time::Duration,
+) -> std::result::Result<Finished, RunError> {
+    use tokio::io::AsyncReadExt;
+
+    const POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+    let mut child = ManagedProcess::spawn(program, args)?;
+    let (stdout, stderr) = child.take_output();
+
+    // Read apart from stdout: a full stderr pipe would stop the program dead.
+    let errors = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        if let Some(mut err) = stderr {
+            let _ = err.read_to_end(&mut bytes).await;
+        }
+        bytes
+    });
+
+    let stalled = |program: &str| RunError::Stalled {
+        program: program.to_owned(),
+        seconds: silence.as_secs(),
+    };
+    let cancelled = || cancel.is_some_and(|c| c.is_cancelled());
+
+    let mut out = Vec::new();
+    let mut heard_at = std::time::Instant::now();
+    if let Some(mut stdout) = stdout {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let read = tokio::select! {
+                got = stdout.read(&mut buf) => Some(got),
+                _ = tokio::time::sleep(POLL) => None,
+            };
+            match read {
+                Some(Ok(0)) | Some(Err(_)) => break,
+                Some(Ok(n)) => {
+                    out.extend_from_slice(&buf[..n]);
+                    heard_at = std::time::Instant::now();
+                }
+                None => {}
+            }
+            if cancelled() {
+                let _ = child.kill_tree().await;
+                errors.abort();
+                return Err(RunError::Cancelled);
+            }
+            if heard_at.elapsed() >= silence {
+                let _ = child.kill_tree().await;
+                errors.abort();
+                return Err(stalled(program));
+            }
+        }
+    }
+
+    // Its output is closed; the end is waited for with the same two ways out, so a program
+    // that closed stdout and then hung cannot hold this for ever either.
+    let waited_from = std::time::Instant::now();
+    let status = loop {
+        match tokio::time::timeout(POLL, child.wait()).await {
+            Ok(Ok(status)) => break status,
+            Ok(Err(e)) => {
+                errors.abort();
+                return Err(RunError::Process(ProcessError::Spawn {
+                    program: program.to_owned(),
+                    reason: e.to_string(),
+                }));
+            }
+            Err(_) => {
+                if cancelled() {
+                    let _ = child.kill_tree().await;
+                    errors.abort();
+                    return Err(RunError::Cancelled);
+                }
+                if waited_from.elapsed() >= silence {
+                    let _ = child.kill_tree().await;
+                    errors.abort();
+                    return Err(stalled(program));
+                }
+            }
+        }
+    };
+    let stderr = errors.await.unwrap_or_default();
+    Ok(Finished {
+        status,
+        stdout: out,
+        stderr,
+    })
+}
 
 /// Where a started program's number gets written down, so a crash can be found and swept up
 /// at the next start (T504) — normally. `Explicit` is the one exception: see

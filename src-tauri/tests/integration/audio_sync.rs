@@ -135,6 +135,7 @@ async fn conversion_keeps_the_sound_where_it_was() {
             height: None,
             out_path: out.to_string_lossy().into_owned(),
             prefer_hardware: false,
+            confirmed: false,
         },
     )
     .await

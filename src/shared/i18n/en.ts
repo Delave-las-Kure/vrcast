@@ -389,6 +389,14 @@ export const en: Catalogue = {
     CONVERT_NO_OUT_PATH: "Where to put the prepared file was not specified.",
     CONVERT_OUT_OVERWRITES_SOURCE:
       "The prepared file cannot be written over the source — the source would be lost for good.",
+    CONVERT_OUT_EXISTS:
+      "A finished file is already there: {out_path}. Replace it? The old one stays in place until the new one is ready and checked.",
+    CONVERT_OUT_BUSY:
+      "Another preparation is already writing this file: {out_path}. Wait for it to end, or choose another place.",
+    CONVERT_REPLACE_FAILED:
+      "The new file is ready and checked, but it could not replace the old one ({out_path}) — perhaps the old one is open in another program. The new one was left here: {kept_at}",
+    VALIDATE_STALLED:
+      "The playback check hung: the decoder did not move a single frame in {seconds} s and was stopped. Whether the file plays is unknown, and it is not offered for upload. File: {out_path}",
     CONVERT_VALIDATE_NO_FFMPEG:
       "There is nothing to check playback with: the bundled FFmpeg does not work.",
     CONVERT_NO_ENCODER:
@@ -421,7 +429,9 @@ export const en: Catalogue = {
     STAGE_VALIDATING: "checking playback",
     STAGE_CHECKSUM: "comparing checksums",
     STAGE_MEASURING_QUALITY: "measuring quality on the material itself",
+    STAGE_PREPARING_MEASUREMENT: "preparing the measurement: reading the film and trial-encoding",
     STAGE_BUILDING_LADDER: "preparing the variants",
+    STAGE_SENDING_VARIANT: "sending a variant to the server",
     STAGE_CUTTING_SEGMENTS: "cutting into segments — on the server",
     STAGE_VERIFYING_LADDER: "checking that every variant is served",
     STAGE_STOP_UNCONFIRMED: "stopping on the server — not confirmed yet, trying again",
@@ -695,6 +705,9 @@ export const en: Catalogue = {
       starting: "Starting…",
       started: "{n} video(s) started. The rest is on the Tasks tab.",
       noServer: "Choose a server first: there is nowhere to build a set.",
+      refused: "{n} video(s) were not started. The others were.",
+      retryThese: "Retry these",
+      forgetThese: "Clear this list",
     },
 
     ladder: {
@@ -1105,6 +1118,8 @@ export const en: Catalogue = {
       confirm: "Understood — cap it",
       cancel: "Cancel",
       noLadder: "This medium has no quality set — there is nothing to shorten",
+      previewing: "Working out what the viewer would be left with…",
+      applying: "Capping…",
 
       listTitle: "Limits in force",
       listEmpty: "Nothing is capped.",
@@ -1154,6 +1169,15 @@ export const en: Catalogue = {
           "The connection is open but nothing is moving. If it lasts, the viewer's film has cut out.",
       },
       watchingNow: "watching now",
+      reconnecting: "The connection to the server was lost — reconnecting…",
+      reconnectingTry: "Attempt {n}.",
+      staleAge: "The list below is the last one received, {age} ago. It may be different by now.",
+      staleNever: "No list has come from the server yet.",
+      stopped:
+        "Watching has stopped: the server will not let us in, and trying again will not help — its key has changed or the login is refused. Check the server in the Servers section.",
+      restart: "Start again",
+      ageSeconds: "{n} s",
+      ageMinutes: "{n} min",
     },
 
     sections: {
@@ -1328,6 +1352,11 @@ export const en: Catalogue = {
       nextUpload: "Send as one file",
       nextFailed:
         "The preparation failed, so there is nothing to go on with. The task says what happened.",
+      replaceTitle: "Replace the finished file?",
+      replaceYes: "Replace",
+      replaceNo: "Keep it as it is",
+      nextCancelled:
+        "The preparation was cancelled — no file was made, and the unfinished one was removed. To get the file, start the preparation again.",
     },
 
     library: {

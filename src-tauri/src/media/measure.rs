@@ -46,31 +46,67 @@ const WORST_KEPT: usize = 5;
 /// the unit `-maxrate` is expressed in. A shorter window would find spikes that no buffer
 /// ever notices.
 pub async fn measure(path: &Path) -> Result<Measured, ffmpeg::FfmpegError> {
-    let ffprobe = ffmpeg::locate("ffprobe")?;
-    let output = crate::tasks::process::quiet(ffprobe)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "packet=pts_time,dts_time,size",
-            "-of",
-            "csv=p=0",
-        ])
-        .arg(path)
-        .output()
-        .await
-        .map_err(|e| ffmpeg::FfmpegError::NotRunnable(e.to_string()))?;
-
-    if !output.status.success() {
-        return Err(ffmpeg::FfmpegError::Unexpected(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
-    }
-    let result = from_packets(&String::from_utf8_lossy(&output.stdout));
+    let csv = read_packets(path, None).await.map_err(|e| match e {
+        PacketsError::Ffmpeg(e) => e,
+        PacketsError::Cancelled => ffmpeg::FfmpegError::Unexpected(String::from("cancelled")),
+    })?;
+    let result = from_packets(&csv);
     require_a_track(result.seconds)?;
     Ok(result)
+}
+
+/// Why reading a film's packets did not give an answer.
+#[derive(Debug, thiserror::Error)]
+pub enum PacketsError {
+    #[error(transparent)]
+    Ffmpeg(#[from] ffmpeg::FfmpegError),
+    /// Asked to stop; `ffprobe` was killed and waited for.
+    #[error("cancelled")]
+    Cancelled,
+}
+
+/// Every video packet's time and size, as `ffprobe` lists them (T661).
+///
+/// **A read of the whole film**, so it runs as a managed process: it dies with the
+/// application, it stops when `cancel` says so, and it is stopped if it goes
+/// [`crate::tasks::process::SILENCE_LIMIT`] without listing a packet. It used to run as a
+/// plain child through `quiet(..).output()`, which a real Windows probe watched outlive the
+/// application (QA-24B-02).
+async fn read_packets(
+    path: &Path,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<String, PacketsError> {
+    use crate::tasks::process::{run_to_end, RunError, SILENCE_LIMIT};
+
+    let ffprobe = ffmpeg::locate("ffprobe")?;
+    let args: Vec<String> = [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "packet=pts_time,dts_time,size",
+        "-of",
+        "csv=p=0",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .chain(std::iter::once(path.to_string_lossy().into_owned()))
+    .collect();
+
+    let output = run_to_end(&ffprobe.to_string_lossy(), &args, cancel, SILENCE_LIMIT)
+        .await
+        .map_err(|e| match e {
+            RunError::Cancelled => PacketsError::Cancelled,
+            other => PacketsError::Ffmpeg(ffmpeg::FfmpegError::NotRunnable(other.to_string())),
+        })?;
+
+    if !output.status.success() {
+        return Err(PacketsError::Ffmpeg(ffmpeg::FfmpegError::Unexpected(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// The check shared by [`measure`] and [`peaks_of`]: zero seconds counted means no packet
@@ -149,31 +185,20 @@ pub fn from_packets(csv: &str) -> Measured {
 /// The same ffprobe call as [`measure`], read differently: the chunk picker wants the whole
 /// series, not the worst few moments of it.
 pub async fn seconds_of(path: &Path) -> Result<Vec<u64>, ffmpeg::FfmpegError> {
-    let ffprobe = ffmpeg::locate("ffprobe")?;
-    let output = crate::tasks::process::quiet(ffprobe)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "packet=pts_time,dts_time,size",
-            "-of",
-            "csv=p=0",
-        ])
-        .arg(path)
-        .output()
-        .await
-        .map_err(|e| ffmpeg::FfmpegError::NotRunnable(e.to_string()))?;
+    seconds_of_until(path, None).await.map_err(|e| match e {
+        PacketsError::Ffmpeg(e) => e,
+        PacketsError::Cancelled => ffmpeg::FfmpegError::Unexpected(String::from("cancelled")),
+    })
+}
 
-    if !output.status.success() {
-        return Err(ffmpeg::FfmpegError::Unexpected(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
-    }
-    Ok(seconds_from_packets(&String::from_utf8_lossy(
-        &output.stdout,
-    )))
+/// The same, stopping when `cancel` says so (T661) — for the preparation of a measurement,
+/// which now runs inside its task.
+pub async fn seconds_of_until(
+    path: &Path,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<Vec<u64>, PacketsError> {
+    let csv = read_packets(path, cancel).await?;
+    Ok(seconds_from_packets(&csv))
 }
 
 /// What each second of the film weighed, from the first to the last, with silent seconds

@@ -207,7 +207,11 @@ pub mod api {
         state: &super::super::AppState,
         request: MeasureRequest,
     ) -> Result<String> {
-        let (run, encoder, _) = prepare(&request).await?;
+        // Only what refuses in a moment is asked here (T661). Reading the whole film and
+        // encoding three pieces of it used to happen here too, before the task existed:
+        // minutes with nothing in the task list and nothing to stop.
+        let quick = refuse_early(&request).await?;
+        let encoder = quick.encoder.clone();
         let source = request.path.clone();
         let db = state.db.clone();
         // What the chain needs, taken here rather than inside: `AppState` is a handful of
@@ -225,6 +229,11 @@ pub mod api {
                 None,
                 batch,
                 move |ctx| async move {
+                    // A stage of its own, so the minutes of reading and probing are seen
+                    // for what they are, and a cancel reaches them (T661).
+                    ctx.report_important(0.0, DetailCode::StagePreparingMeasurement);
+                    let cancel = ctx.cancel_token();
+                    let (run, _) = read_the_film(&for_build, quick, Some(&cancel)).await?;
                     let job = MeasureJob {
                         source: Path::new(&source),
                         run: &run,
@@ -616,6 +625,23 @@ async fn held(
 /// Refusals happen here rather than inside the task: learning half an hour in that this
 /// build cannot measure quality would waste the half hour.
 async fn prepare(request: &MeasureRequest) -> Result<(Run, encoders::Encoder, Vec<Detail>)> {
+    let quick = refuse_early(request).await?;
+    let (run, notices) = read_the_film(request, quick.clone(), None).await?;
+    Ok((run, quick.encoder, notices))
+}
+
+/// What can be refused in a moment, before any task exists (T661).
+#[derive(Clone)]
+struct Quick {
+    source: crate::domain::source::SourceFile,
+    source_key: String,
+    encoder: encoders::Encoder,
+    notices: Vec<Detail>,
+}
+
+/// The quick half of [`prepare`]: whether this build can measure at all, whether the file is
+/// a film, and which encoder will do it. Seconds, not minutes.
+async fn refuse_early(request: &MeasureRequest) -> Result<Quick> {
     let path = Path::new(&request.path);
     if !ffmpeg::probe_self()
         .await
@@ -628,16 +654,50 @@ async fn prepare(request: &MeasureRequest) -> Result<(Run, encoders::Encoder, Ve
     let source = super::api::source_probe(&request.path).await?;
     let source_key = measurements::key_for(path)
         .map_err(|e| AppError::new(ErrorCode::InvalidInput).with_cause(e))?;
+    let (encoder, notices) = pick_encoder(request.prefer_hardware).await?;
+    Ok(Quick {
+        source,
+        source_key,
+        encoder,
+        notices,
+    })
+}
+
+/// The heavy half of [`prepare`]: every packet of the film read, and three pieces of it
+/// encoded (T661).
+///
+/// **Inside the measurement's task when there is one.** It used to run in the command,
+/// before the task existed — minutes on a long film with nothing in the task list, no way to
+/// stop it, and encoders that outlived the application (QA-24B-02). `cancel` stops it between
+/// and within its steps; its processes are managed ones either way.
+async fn read_the_film(
+    request: &MeasureRequest,
+    quick: Quick,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(Run, Vec<Detail>)> {
+    let path = Path::new(&request.path);
+    let Quick {
+        source,
+        source_key,
+        encoder,
+        notices,
+    } = quick;
 
     // Where the light, middling and heavy chunks fall. The packets are read rather than
     // guessed at: positions are a guess about where a film is hard, weight is a reading.
-    let seconds = measure::seconds_of(path)
+    let seconds = measure::seconds_of_until(path, cancel)
         .await
-        .map_err(|e| AppError::new(ErrorCode::FfmpegBroken).with_cause(e))?;
+        .map_err(|e| match e {
+            measure::PacketsError::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+            measure::PacketsError::Ffmpeg(e) => {
+                AppError::new(ErrorCode::FfmpegBroken).with_cause(e)
+            }
+        })?;
     let chunk_starts = reference_chunks(&seconds, CHUNK_S);
 
-    let (encoder, notices) = pick_encoder(request.prefer_hardware).await?;
-    let probed = probe_complexity::probe(path, source.duration_s, &encoder).await;
+    let probed = probe_complexity::probe_until(path, source.duration_s, &encoder, cancel)
+        .await
+        .map_err(|_| AppError::new(ErrorCode::TaskCancelled))?;
     let anchor_mbps = probed
         .measured_bps
         .map(|bps| (bps / 1_000_000).max(1))
@@ -682,7 +742,6 @@ async fn prepare(request: &MeasureRequest) -> Result<(Run, encoders::Encoder, Ve
             // numbers already in hand.
             shape: crate::domain::chunks::shape_of(&seconds),
         },
-        encoder,
         notices,
     ))
 }

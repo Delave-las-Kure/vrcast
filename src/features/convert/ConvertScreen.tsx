@@ -28,7 +28,7 @@ import { ipc, onTaskDone, toAppError } from "../../shared/ipc";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
 import { formatBytes, formatDuration } from "../../shared/i18n/format";
-import { fill, renderDetail } from "../../shared/i18n/render";
+import { fill, renderDetail, renderDetails } from "../../shared/i18n/render";
 
 /** Name a track the way a person can choose between two of them. */
 function trackLabel(track: SourceFile["audio_tracks"][number], t: Catalogue, lang: Lang): string {
@@ -66,12 +66,16 @@ export function ConvertScreen() {
   // Not read off `outPath` when the task ends: the field stays editable afterwards, and a
   // link that offered the next step on a path nobody made would be worse than no link.
   const [finishedPath, setFinishedPath] = useState<string | null>(null);
-  const [done, setDone] = useState<"ok" | "failed" | null>(null);
+  const [done, setDone] = useState<"ok" | "failed" | "cancelled" | null>(null);
 
   const [preview, setPreview] = useState<ConvertPreview | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [busy, setBusy] = useState(false);
   const [startedTask, setStartedTask] = useState<string | null>(null);
+  // T662 — the core's "a finished file is already there" refusal, held so the person can
+  // answer it. The request is kept with it: a "yes" is to replacing *that* file, and a
+  // path changed meanwhile must be asked about afresh rather than confirmed by an old answer.
+  const [replace, setReplace] = useState<{ error: AppError; request: ConvertStart } | null>(null);
   const t = useT();
   const { lang } = useLang();
   const c = t.ui.convert;
@@ -127,7 +131,17 @@ export function ConvertScreen() {
     let live = true;
     const unlisten = onTaskDone((event) => {
       if (!live || event.id !== startedTask) return;
-      setDone(event.error ? "failed" : "ok");
+      // By the task's final state, not by whether an error came with it (T667, QA-24B-08):
+      // a cancelled task ends with no error at all, and was shown as "the file is ready"
+      // with an offer to upload a file the cancellation had just deleted. Only a completed
+      // task has made anything.
+      setDone(
+        event.state === "completed" && !event.error
+          ? "ok"
+          : event.state === "cancelled"
+            ? "cancelled"
+            : "failed",
+      );
     });
     return () => {
       live = false;
@@ -180,24 +194,34 @@ export function ConvertScreen() {
     if (typeof chosen === "string") setOutPath(chosen);
   };
 
-  const start = async () => {
+  const start = async (confirmed = false) => {
     if (!request) return;
+    const asked: ConvertStart =
+      confirmed && replace ? { ...replace.request, confirmed: true } : request;
     setBusy(true);
     setError(null);
+    setReplace(null);
     try {
-      setStartedTask(await ipc.convertStart(request));
+      setStartedTask(await ipc.convertStart(asked));
       // Held from here on: the field below stays editable, and the offer of a next step
       // has to name the file that was actually ordered.
-      setFinishedPath(request.out_path);
+      setFinishedPath(asked.out_path);
       setDone(null);
     } catch (e) {
-      setError(toAppError(e));
+      const err = toAppError(e);
+      // T662 — a finished result is already there. Asked, not refused: replacing it may be
+      // exactly what the person wants, and the old one stays until the new one is checked.
+      if (!confirmed && err.code === "CONFIRMATION_REQUIRED") setReplace({ error: err, request });
+      else setError(err);
     } finally {
       setBusy(false);
     }
   };
 
-  const ready = request !== null && outPath.trim() !== "" && preview !== null;
+  // T662 — while a preparation into this very file has not ended, a second one is not
+  // offered. The core refuses it too (`CONVERT_OUT_BUSY`); the button just does not ask.
+  const writingHere = startedTask !== null && done === null && finishedPath === outPath;
+  const ready = request !== null && outPath.trim() !== "" && preview !== null && !writingHere;
 
   return (
     <div className="panel">
@@ -343,11 +367,38 @@ export function ConvertScreen() {
         </div>
       )}
 
+      {done === "cancelled" && (
+        <div className="notice" role="status" data-testid="what-next-cancelled">
+          <div className="notice__body">
+            <strong className="notice__message">{c.nextCancelled}</strong>
+          </div>
+        </div>
+      )}
+
       <div className="form__actions">
         <button className="button--primary" disabled={!ready || busy} onClick={() => void start()}>
           {busy ? c.computing : c.start}
         </button>
       </div>
+
+      {/*
+        T662 — "a finished file is already there". Shown only while the request it answers
+        is still the one on screen: a different track or a different file is a different
+        question, and an answer given to the old one must not carry over.
+      */}
+      {replace && replace.request === request && (
+        <div className="dialog" role="alertdialog" aria-label={c.replaceTitle}>
+          <p>{renderDetails(replace.error.details, t, lang)}</p>
+          <div className="form__actions">
+            <button className="button--primary" disabled={busy} onClick={() => void start(true)}>
+              {c.replaceYes}
+            </button>
+            <button disabled={busy} onClick={() => setReplace(null)}>
+              {c.replaceNo}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

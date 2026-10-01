@@ -34,6 +34,13 @@
  * (see `ConfirmDeleteDialog`'s own doc-comment). `batchSummary` names it and offers
  * deleting it right there, through the same unconfirmed-then-confirmed dialog
  * `LibraryScreen` already uses for every other deletion.
+ *
+ * T654 — a single file into a new medium: the medium is created once, then kept selected
+ * as an existing one. A warning keeps the request it refused, and "upload anyway" sends
+ * that request again, confirmed — before, it ran the whole send again, created the same
+ * medium a second time and was refused `SLUG_TAKEN` without reaching the upload. If the
+ * file never goes in (the warning declined), the empty medium is named and offered for
+ * deletion the same way as T577's, not removed behind the person's back.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -76,6 +83,28 @@ interface NewMedium {
   title: string;
 }
 
+/**
+ * T654 — a medium this screen created, kept on offer in the medium list as an existing one
+ * from then on. The list itself was read once when the screen opened, so without this the
+ * select stayed on "new medium" and the next send — the confirmation after a warning, or a
+ * second press after declining it — asked the core to create the same medium again and was
+ * refused `SLUG_TAKEN`. Tagged with its server: the list belongs to one.
+ */
+interface CreatedMedium extends NewMedium {
+  serverId: string;
+}
+
+/**
+ * T654 — a single file's refusal before starting, together with the request it refused,
+ * exactly as sent (the medium already resolved). The confirmation sends that same request
+ * again, `confirmed` — it does not rebuild it, and above all it does not create the medium
+ * a second time. Anything on the form that would change the request clears the warning.
+ */
+interface SinglePreflight {
+  error: AppError;
+  request: UploadRequest;
+}
+
 /** What came of queuing a pack of files: how many made it, and what stopped the rest. */
 interface BatchSummary {
   ok: number;
@@ -112,6 +141,14 @@ export function UploadScreen() {
 
   const [localPaths, setLocalPaths] = useState<string[]>([]);
   const [remoteName, setRemoteName] = useState("");
+  /**
+   * T656 — whether the served name is the person's own rather than the one suggested from
+   * the file. Only a suggestion follows the file: before, the name was filled in only while
+   * the field was empty, so add one.mp4, add two.mp4, remove one.mp4 sent two.mp4 under the
+   * name one.mp4 — and could ask to replace the wrong file on the server. Emptying the field
+   * hands it back to the suggestion.
+   */
+  const [nameEdited, setNameEdited] = useState(false);
   const [mediaId, setMediaId] = useState<string>("");
   const [newMediaTitle, setNewMediaTitle] = useState("");
   const [limitBps, setLimitBps] = useState<number | null>(null);
@@ -120,7 +157,18 @@ export function UploadScreen() {
   const [error, setError] = useState<AppError | null>(null);
   /** A refusal before starting: shown by `PreflightWarnings`, not by the error notice.
    *  Only ever raised for a single file — a pack of files does not go through this. */
-  const [preflight, setPreflight] = useState<AppError | null>(null);
+  const [preflight, setPreflight] = useState<SinglePreflight | null>(null);
+  /** T654 — media this screen created; see `CreatedMedium`. */
+  const [createdMedia, setCreatedMedia] = useState<CreatedMedium[]>([]);
+  /**
+   * T654 — a medium created here for a single file into which no file has been started yet:
+   * the send that made it was refused (a warning declined or left, not enough room, an
+   * error). It is on the server, empty. Named and offered for deletion exactly as T577 does
+   * for a pack — the owner's call there: say so plainly and offer the deletion, never roll
+   * it back silently. It stays selected, so pressing "Upload" again puts the file into it
+   * rather than making another. Shown only while no warning is on screen.
+   */
+  const [emptyCreated, setEmptyCreated] = useState<CreatedMedium | null>(null);
   const [busy, setBusy] = useState(false);
   const [startedTask, setStartedTask] = useState<string | null>(null);
   const [batchSummary, setBatchSummary] = useState<BatchSummary | null>(null);
@@ -197,9 +245,27 @@ export function UploadScreen() {
     };
   }, [active]);
 
-  const media = useMemo(() => library?.media ?? [], [library]);
+  // T654 — with what this screen made since the list was read, as existing media.
+  const media = useMemo(() => {
+    const read = library?.media ?? [];
+    const known = new Set(read.map((m) => m.id));
+    const made = createdMedia
+      .filter((m) => m.serverId === active?.id && !known.has(m.id))
+      .map((m) => ({ id: m.id, title: m.title }));
+    return [...read.map((m) => ({ id: m.id, title: m.title })), ...made];
+  }, [library, createdMedia, active?.id]);
 
   const [params] = useSearchParams();
+
+  /**
+   * T656 — the served name suggested for what is chosen now: the file's own name when there
+   * is exactly one; nothing otherwise (several files each go under their own name). A name
+   * the person typed is left alone.
+   */
+  const suggestName = (paths: string[]) => {
+    if (nameEdited) return;
+    setRemoteName(paths.length === 1 ? basename(paths[0]) : "");
+  };
 
   /**
    * Take files, however they arrived — chosen here or handed over by the preparation
@@ -208,7 +274,7 @@ export function UploadScreen() {
    * One function for both, so the two cannot come to differ: filling the name in from
    * the file name is the sort of thing that gets done on one path and forgotten on the
    * other. With more than one file the served name stops meaning anything — each file
-   * keeps its own, from its own name — so the field is left alone.
+   * keeps its own, from its own name.
    *
    * T580 — accumulates rather than replaces, the same as `BatchScreen.pick()`: a
    * person picking a season two folders at a time must not have the first folder's
@@ -219,7 +285,7 @@ export function UploadScreen() {
     uploadGenRef.current += 1;
     const merged = [...new Set([...localPaths, ...newPaths])];
     setLocalPaths(merged);
-    if (merged.length === 1 && !remoteName) setRemoteName(basename(merged[0]));
+    suggestName(merged);
     setPreflight(null);
     setStartedTask(null);
     setBatchSummary(null);
@@ -230,14 +296,14 @@ export function UploadScreen() {
   /**
    * T580 — drop one file from an already-chosen list, the same pattern as
    * `BatchScreen`'s own remove button. If this brings the list back down to exactly
-   * one file, the served name is filled in from it — same as choosing a single file
-   * from the start — rather than being left blank as if nothing had ever been chosen.
+   * one file, the served name is suggested from it — same as choosing a single file
+   * from the start — unless the person has typed a name of their own (T656).
    */
   const dropFile = (path: string) => {
     uploadGenRef.current += 1;
     const next = localPaths.filter((p) => p !== path);
     setLocalPaths(next);
-    if (next.length === 1 && !remoteName) setRemoteName(basename(next[0]));
+    suggestName(next);
     setPreflight(null);
     setStartedTask(null);
     setBatchSummary(null);
@@ -323,6 +389,8 @@ export function UploadScreen() {
     // at it from this screen. Named here rather than left for the library to notice.
     const orphanedByThisRun = newMedia && ok === 0 ? newMedia : null;
     setBatchSummary({ ok, total: paths.length, failures, orphanedMedia: orphanedByThisRun });
+    // T654 — something went into it: no longer an empty medium of this screen's making.
+    if (ok > 0) setEmptyCreated((prev) => (prev && prev.id === resolvedMediaId ? null : prev));
     setBusy(false);
   };
 
@@ -334,8 +402,13 @@ export function UploadScreen() {
     let resolvedMediaId: string | null = mediaId === "" ? null : mediaId;
     // T577 — remembered so a batch that ends with nothing queued can name exactly
     // this medium in its summary. `null` for an existing medium: only one THIS run
-    // made can be orphaned by it, never one that was already on the server.
-    let newMedia: NewMedium | null = null;
+    // made can be orphaned by it, never one that was already on the server — or one this
+    // screen made a moment ago and nothing has gone into yet (T654: a second press after a
+    // declined warning goes into it, and it is still just as empty if this send fails too).
+    let newMedia: NewMedium | null =
+      emptyCreated && emptyCreated.serverId === active.id && emptyCreated.id === resolvedMediaId
+        ? { id: emptyCreated.id, title: emptyCreated.title }
+        : null;
     if (usingNewMedia) {
       try {
         resolvedMediaId = await ipc.mediaCreate(active.id, newMediaTitle.trim(), null);
@@ -347,7 +420,15 @@ export function UploadScreen() {
         setBusy(false);
         return;
       }
+      // T654 — from here on it is an existing medium, and the form says so: whatever is
+      // sent next (a confirmation, a second press, the next file) goes into it rather than
+      // asking for it to be made again under the same name.
+      const made = { ...newMedia, serverId: active.id };
+      setCreatedMedia((prev) => [...prev.filter((m) => m.id !== made.id), made]);
+      setMediaId(made.id);
     }
+    // Empty until a file is started into it; `sendOne`/`runBatch` clear it when one is.
+    if (newMedia) setEmptyCreated({ ...newMedia, serverId: active.id });
 
     if (localPaths.length === 1) {
       const request: UploadRequest = {
@@ -358,21 +439,7 @@ export function UploadScreen() {
         limit_bps: limitBps,
         confirmed,
       };
-
-      try {
-        const taskId = await ipc.uploadStart(request);
-        setStartedTask(taskId);
-        setBatchSummary(null);
-        setPreflight(null);
-      } catch (e) {
-        const err = toAppError(e);
-        // A refusal that can be argued with and one that cannot are shown differently
-        // — but both here, beside the button, rather than somewhere else.
-        if (canConfirm(err) || err.code === "REMOTE_DISK_FULL") setPreflight(err);
-        else setError(err);
-      } finally {
-        setBusy(false);
-      }
+      await sendOne(request);
       return;
     }
 
@@ -392,6 +459,40 @@ export function UploadScreen() {
   };
 
   /**
+   * T654 — send one file's request, as prepared. Both the first try and the confirmation
+   * after a warning come here; the confirmation passes the very request that was refused,
+   * now `confirmed`, so nothing before it — creating the medium above all — runs twice.
+   */
+  const sendOne = async (request: UploadRequest) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const taskId = await ipc.uploadStart(request);
+      setStartedTask(taskId);
+      setBatchSummary(null);
+      setPreflight(null);
+      // The file is on its way into it: no longer an empty medium to warn about.
+      setEmptyCreated((prev) => (prev && prev.id === request.media_id ? null : prev));
+    } catch (e) {
+      const err = toAppError(e);
+      // A refusal that can be argued with and one that cannot are shown differently
+      // — but both here, beside the button, rather than somewhere else.
+      if (canConfirm(err) || err.code === "REMOTE_DISK_FULL") {
+        setPreflight({ error: err, request });
+      } else setError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** T654 — forget a medium this screen made and then deleted. */
+  const forgetCreated = (id: string) => {
+    setCreatedMedia((prev) => prev.filter((m) => m.id !== id));
+    setEmptyCreated((prev) => (prev && prev.id === id ? null : prev));
+    setMediaId((prev) => (prev === id ? "" : prev));
+  };
+
+  /**
    * T577 — ask what deleting the orphaned medium would cost, the same two-call shape
    * `LibraryScreen.askBeforeDelete` uses: an unconfirmed `mediaDelete` is refused with
    * `CONFIRMATION_REQUIRED`, carrying the numbers (here always zero files, but the
@@ -408,6 +509,7 @@ export function UploadScreen() {
       // The core agreed without confirmation. That should not happen — but if it has,
       // the summary must stop naming a medium that is no longer there.
       setBatchSummary((prev) => (prev ? { ...prev, orphanedMedia: null } : prev));
+      forgetCreated(media.id);
     } catch (e) {
       if (gen !== uploadGenRef.current) return;
       const err = toAppError(e);
@@ -428,6 +530,8 @@ export function UploadScreen() {
     setBusy(true);
     try {
       await ipc.mediaDelete(active.id, orphanDelete.media.id, true);
+      // Gone from the server whatever the person has done since: never offer it again.
+      forgetCreated(orphanDelete.media.id);
       if (gen !== uploadGenRef.current) return;
       setOrphanDelete(null);
       setBatchSummary((prev) => (prev ? { ...prev, orphanedMedia: null } : prev));
@@ -443,6 +547,17 @@ export function UploadScreen() {
   // does not carry a property's narrowing into a closure (the `onClick` below), but it
   // does carry a `const` local's — and this is read from three places in the JSX.
   const orphanedMedia = batchSummary?.orphanedMedia ?? null;
+  // T654 — the single-file counterpart, said on its own only when nothing else on screen
+  // is already asking about it (a warning, or the pack's summary naming the same medium).
+  const emptyNotice =
+    emptyCreated &&
+    emptyCreated.serverId === active?.id &&
+    !busy &&
+    !preflight &&
+    !batchPreflight &&
+    orphanedMedia?.id !== emptyCreated.id
+      ? { id: emptyCreated.id, title: emptyCreated.title }
+      : null;
 
   const ready =
     active !== null &&
@@ -510,6 +625,7 @@ export function UploadScreen() {
                   value={remoteName}
                   onChange={(e) => {
                     setRemoteName(e.target.value);
+                    setNameEdited(e.target.value.trim() !== "");
                     setPreflight(null);
                   }}
                   placeholder="film_22.mp4"
@@ -527,7 +643,11 @@ export function UploadScreen() {
               <select
                 id="upload-media"
                 value={mediaId}
-                onChange={(e) => setMediaId(e.target.value)}
+                onChange={(e) => {
+                  setMediaId(e.target.value);
+                  // A warning is about the request as it was; this changes it.
+                  setPreflight(null);
+                }}
               >
                 <option value="">{u.mediaNone}</option>
                 {media.map((m) => (
@@ -555,7 +675,10 @@ export function UploadScreen() {
               <select
                 id="upload-limit"
                 value={limitBps === null ? "" : String(limitBps)}
-                onChange={(e) => setLimitBps(e.target.value === "" ? null : Number(e.target.value))}
+                onChange={(e) => {
+                  setLimitBps(e.target.value === "" ? null : Number(e.target.value));
+                  setPreflight(null);
+                }}
               >
                 {LIMITS.map((limit) => (
                   <option key={limit.key} value={limit.value === null ? "" : String(limit.value)}>
@@ -575,11 +698,33 @@ export function UploadScreen() {
 
           {preflight && (
             <PreflightWarnings
-              error={preflight}
+              error={preflight.error}
               busy={busy}
-              onConfirm={() => void send(true)}
+              onConfirm={() => void sendOne({ ...preflight.request, confirmed: true })}
               onCancel={() => setPreflight(null)}
             />
+          )}
+
+          {emptyNotice && (
+            <div className="notice notice--warning" role="status">
+              <div className="notice__body">
+                <div className="notice__orphan">
+                  <p className="notice__hint">
+                    {fill(u.orphanedMediaWarning, { title: emptyNotice.title }, t, lang)}
+                  </p>
+                  <div className="notice__actions">
+                    <button
+                      type="button"
+                      className="button--danger"
+                      onClick={() => void askDeleteOrphan(emptyNotice)}
+                      disabled={busy || orphanDeleteAsking}
+                    >
+                      {u.orphanedMediaDelete}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
 
           {batchPreflight && (

@@ -14,7 +14,11 @@ import { renderIn, ru } from "../../../test-utils";
 
 const mockOpen = vi.fn<() => Promise<string[] | string | null>>();
 const started: QualityMeasureRequest[] = [];
+/** Every request the core was asked, taken or not. */
+const asked: QualityMeasureRequest[] = [];
 let refuseFrom: number | null = null;
+/** Sources the core refuses, by path — a damaged or missing file (T665). */
+const refusePaths = new Set<string>();
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: () => mockOpen() }));
 
@@ -27,6 +31,14 @@ vi.mock("../../../shared/ipc", async () => {
     ...actual,
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       qualityMeasureStart: (request: QualityMeasureRequest) => {
+        asked.push(request);
+        if (refusePaths.has(request.path)) {
+          return Promise.reject({
+            code: "DECODE_VALIDATION_FAILED",
+            details: [],
+            cause: `cannot read ${request.path}`,
+          });
+        }
         if (refuseFrom !== null && started.length >= refuseFrom) {
           return Promise.reject({ code: "INTERNAL", details: [] });
         }
@@ -47,6 +59,8 @@ const { BatchScreen } = await import("../BatchScreen");
 beforeEach(() => {
   vi.clearAllMocks();
   started.length = 0;
+  asked.length = 0;
+  refusePaths.clear();
   refuseFrom = null;
   mockOpen.mockResolvedValue([]);
 });
@@ -116,6 +130,75 @@ it("says what went in when one of them is refused", async () => {
   const said = await screen.findByTestId("batch-started");
   expect(said.textContent).toContain("2");
   expect(screen.getByRole("alert")).toBeTruthy();
+});
+
+// ---------- T665 — QA-24B-06, and the owner's decision of 2026-09-30 ----------
+
+it("one bad film does not keep the ones after it out: A and C go in, B is listed with its reason", async () => {
+  refusePaths.add("F:/films/b.mkv");
+  await put(["F:/films/a.mkv", "F:/films/b.mkv", "F:/films/c.mkv"]);
+  fireEvent.click(screen.getByTestId("batch-start"));
+
+  await waitFor(() => expect(asked).toHaveLength(3));
+  expect(started.map((r) => r.path)).toEqual(["F:/films/a.mkv", "F:/films/c.mkv"]);
+  // A and C in one batch, still — "stop the whole batch" reaches both.
+  expect(new Set(started.map((r) => r.batch?.id)).size).toBe(1);
+
+  const refused = await screen.findByTestId("batch-refused");
+  expect(refused.textContent).toContain("b");
+  const line = screen.getByTestId("batch-refused-b");
+  expect(line.textContent).toContain(ru.errors.DECODE_VALIDATION_FAILED.message);
+  // Both halves: what happened, and what to do about it.
+  expect(line.textContent).toContain(ru.errors.DECODE_VALIDATION_FAILED.hint);
+  expect(line.textContent).toContain("cannot read F:/films/b.mkv");
+  expect(screen.queryByTestId("batch-refused-a")).toBeNull();
+  expect(screen.queryByTestId("batch-refused-c")).toBeNull();
+  expect(screen.getByTestId("batch-started").textContent).toContain("2");
+});
+
+it("'retry these' sends only the refused film, into the same batch", async () => {
+  refusePaths.add("F:/films/b.mkv");
+  await put(["F:/films/a.mkv", "F:/films/b.mkv", "F:/films/c.mkv"]);
+  fireEvent.click(screen.getByTestId("batch-start"));
+  await screen.findByTestId("batch-refused");
+  const firstBatch = started[0].batch?.id;
+
+  // The film was fixed in the meantime.
+  refusePaths.clear();
+  fireEvent.click(screen.getByTestId("batch-retry"));
+
+  await waitFor(() => expect(asked).toHaveLength(4));
+  expect(asked[3].path).toBe("F:/films/b.mkv");
+  expect(asked[3].batch?.id).toBe(firstBatch);
+  // A and C were never sent twice.
+  expect(asked.filter((r) => r.path === "F:/films/a.mkv")).toHaveLength(1);
+  expect(asked.filter((r) => r.path === "F:/films/c.mkv")).toHaveLength(1);
+  await waitFor(() => expect(screen.queryByTestId("batch-refused")).toBeNull());
+});
+
+it("pressing start again after a refusal does not put the accepted films in twice", async () => {
+  // The accepted ones leave the list; there is nothing left for start to send again.
+  refusePaths.add("F:/films/b.mkv");
+  await put(["F:/films/a.mkv", "F:/films/b.mkv", "F:/films/c.mkv"]);
+  fireEvent.click(screen.getByTestId("batch-start"));
+  await screen.findByTestId("batch-refused");
+
+  expect(screen.queryByTestId("batch-files")).toBeNull();
+  expect(screen.getByTestId("batch-start")).toBeDisabled();
+});
+
+it("even when every film is refused, each is named and 'retry these' is offered", async () => {
+  refusePaths.add("F:/films/a.mkv");
+  refusePaths.add("F:/films/b.mkv");
+  await put(["F:/films/a.mkv", "F:/films/b.mkv"]);
+  fireEvent.click(screen.getByTestId("batch-start"));
+
+  await screen.findByTestId("batch-refused");
+  expect(asked).toHaveLength(2);
+  expect(screen.getByTestId("batch-refused-a")).toBeTruthy();
+  expect(screen.getByTestId("batch-refused-b")).toBeTruthy();
+  expect(screen.getByTestId("batch-retry")).toBeEnabled();
+  expect(screen.queryByTestId("batch-started")).toBeNull();
 });
 
 it("offers nothing to start while nothing is in", async () => {

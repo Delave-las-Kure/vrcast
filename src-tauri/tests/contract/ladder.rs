@@ -504,3 +504,60 @@ fn confirmed_reads_back_explicitly_both_ways() {
         );
     }
 }
+
+// ---------- T661: the complexity probe stops when asked ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_complexity_probe_stops_mid_piece() {
+    use std::time::{Duration, Instant};
+    use vrcast_studio_lib::media::{encoders::Encoder, ffmpeg, probe_complexity};
+
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("vrcast-t661p-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let film = dir.join("film.mp4");
+    let made = std::process::Command::new(&ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1920x1080:rate=30",
+            "-t",
+            "40",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&film)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(made.status.success());
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        trigger.cancel();
+    });
+    let started = Instant::now();
+    let outcome =
+        probe_complexity::probe_until(&film, 40.0, &Encoder::Software, Some(&cancel)).await;
+    let took = started.elapsed();
+
+    assert_eq!(outcome, Err(probe_complexity::Cancelled));
+    assert!(
+        took < Duration::from_secs(5),
+        "the probe took {took:?} to notice the cancel"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
