@@ -94,6 +94,9 @@ fn row_to_video(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoRow> {
 }
 
 /// Write a video whole: create it, or replace what is stored.
+///
+/// A new video is given the next number in the order of adding (`seq`) — once, here, and
+/// never again: an update leaves it as it was.
 pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
     db.with_conn(|c| {
         c.execute(
@@ -101,9 +104,10 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 (id, server_id, source_path, title, slug, audio_track, stage, state,
                  paused_by_person, start_requested, measured, own_medium, confirmed,
                  task_id, media_id, source_json, plan_json, rungs_json, problem_json,
-                 created_at, updated_at)
+                 created_at, updated_at, seq)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                     ?17, ?18, ?19, ?20, ?21)
+                     ?17, ?18, ?19, ?20, ?21,
+                     (SELECT COALESCE(MAX(seq), 0) + 1 FROM videos))
              ON CONFLICT (id) DO UPDATE SET
                 title = excluded.title,
                 slug = excluded.slug,
@@ -163,9 +167,12 @@ pub fn get(db: &Db, id: &str) -> Result<Option<VideoRow>, DbError> {
 }
 
 /// Every video, oldest first — the order they were added in.
+///
+/// By the number given at adding, not by `created_at`: two videos added within one tick of
+/// the clock have the same time, and a list ordered by it came back either way round.
 pub fn list(db: &Db) -> Result<Vec<VideoRow>, DbError> {
     db.with_conn(|c| {
-        let mut stmt = c.prepare("SELECT * FROM videos ORDER BY created_at, rowid")?;
+        let mut stmt = c.prepare("SELECT * FROM videos ORDER BY seq, rowid")?;
         let rows = stmt
             .query_map([], row_to_video)?
             .collect::<Result<Vec<_>, _>>()?;
