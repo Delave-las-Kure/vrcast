@@ -574,3 +574,148 @@ async fn a_second_preparation_into_the_same_file_is_refused_while_the_first_is_r
     state.tasks.cancel(&third).unwrap();
     wait_final(&state, &third, std::time::Duration::from_secs(60)).await;
 }
+
+// ---------- T670(3): an attempt a crashed run left behind ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_running_preparation_writes_down_where_its_attempt_goes() {
+    if !has_ffmpeg() {
+        return;
+    }
+    // Start-up finds abandoned attempts in the task journal, not on the disk — so the
+    // journal has to say where each one went before the application can die mid-encode.
+    let work = Workspace::new();
+    let src = long_clip(&work, "long.mp4");
+    let out = work.path("ready.mp4");
+    let state = state();
+
+    let task = convert::convert_start(&state, slow_request(&src, &out))
+        .await
+        .expect("the preparation did not start");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while attempts_beside(&out).is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the attempt never started writing"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let attempt = attempts_beside(&out).remove(0);
+    let noted = state.tasks.get(&task).unwrap().unwrap().resume_token;
+    state.tasks.cancel(&task).unwrap();
+    wait_final(&state, &task, std::time::Duration::from_secs(60)).await;
+
+    let noted = noted.expect("the task did not write down where its attempt goes");
+    assert_eq!(
+        std::path::Path::new(&noted),
+        std::path::Path::new(&work.path(&attempt)),
+        "what the journal names is not the file being written"
+    );
+}
+
+#[test]
+fn only_the_attempt_shape_is_an_attempt() {
+    use convert::is_attempt_name;
+    assert!(is_attempt_name("film.mp4.0a1b2c3d.vrcast-part"));
+    let made = convert::attempt_path("F:/out/film.mp4");
+    assert!(is_attempt_name(made.file_name().unwrap().to_str().unwrap()));
+    for not_one in [
+        "film.mp4",
+        "film.mp4.vrcast-part",
+        "film.mp4.0a1b2c3.vrcast-part",
+        "film.mp4.0a1b2c3dd.vrcast-part",
+        "film.mp4.0A1B2C3D.vrcast-part",
+        "film.mp4.zzzzzzzz.vrcast-part",
+        ".0a1b2c3d.vrcast-part",
+        "film.mp4.0a1b2c3d.vrcast-part.mp4",
+    ] {
+        assert!(
+            !is_attempt_name(not_one),
+            "{not_one} was taken for an attempt"
+        );
+    }
+}
+
+#[test]
+fn start_up_removes_only_the_attempts_of_preparations_nobody_is_running() {
+    use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
+    use vrcast_studio_lib::tasks::store::{save_resume_token, save_state, upsert, TaskRecord};
+
+    let work = Workspace::new();
+    let file = |name: &str, body: &[u8]| {
+        let p = work.path(name);
+        std::fs::write(&p, body).unwrap();
+        p
+    };
+    let source = file("source.mp4", b"the source");
+    let result = file("ready.mp4", b"a finished result");
+    let crashed = file("ready.mp4.0a1b2c3d.vrcast-part", b"half an encode");
+    let crashed_paused = file("other.mp4.1b2c3d4e.vrcast-part", b"half an encode");
+    let kept_by_failure = file("ready.mp4.2c3d4e5f.vrcast-part", b"failed its check");
+    let live = file("live.mp4.3d4e5f60.vrcast-part", b"still being written");
+    let stray = file("stray.mp4.4e5f6071.vrcast-part", b"nobody named it");
+
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    let task = |id: &str, kind: TaskKind, token: &str| {
+        upsert(&db, &TaskRecord::new(id, kind, None)).unwrap();
+        save_resume_token(&db, id, token).unwrap();
+    };
+    // The application died mid-encode: the row still says running, under an owner that is
+    // no longer there.
+    task("crashed", TaskKind::Convert, &crashed);
+    save_state(&db, "crashed", TaskState::Running, None).unwrap();
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE tasks SET owner_pid = 4000000000, owner_identity = 'gone' WHERE id = 'crashed'",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    // A previous start-up already moved one like it to paused; no owner was ever stamped.
+    task("crashed-paused", TaskKind::Convert, &crashed_paused);
+    save_state(&db, "crashed-paused", TaskState::Paused, None).unwrap();
+    // Finished: the attempt is kept on purpose and the task's error names it.
+    task("failed", TaskKind::Convert, &kept_by_failure);
+    save_state(&db, "failed", TaskState::Failed, None).unwrap();
+    // Running in an instance that is alive (this process): its file is being written.
+    task("live", TaskKind::Convert, &live);
+    save_state(&db, "live", TaskState::Running, None).unwrap();
+    // Abandoned, but naming a result and a source — not attempts, never touched.
+    task("names-result", TaskKind::Convert, &result);
+    task("names-source", TaskKind::Convert, &source);
+    // Another kind of task: its marker means something else entirely.
+    task(
+        "upload",
+        TaskKind::Upload,
+        &file("up.mp4.5f607182.vrcast-part", b"x"),
+    );
+
+    // Start-up, as the application assembles itself.
+    let _state = AppState::with_db(db.clone(), Arc::new(InMemorySecretStore::new())).unwrap();
+
+    let there = |p: &str| std::path::Path::new(p).exists();
+    assert!(!there(&crashed), "a crashed run's attempt was left behind");
+    assert!(
+        !there(&crashed_paused),
+        "a paused abandoned attempt was left behind"
+    );
+    assert!(
+        there(&kept_by_failure),
+        "an attempt a finished task kept was removed"
+    );
+    assert!(
+        there(&live),
+        "an attempt a live instance is writing was removed"
+    );
+    assert!(
+        there(&stray),
+        "a file no task names was removed — the disk was searched"
+    );
+    assert_eq!(std::fs::read(&result).unwrap(), b"a finished result");
+    assert_eq!(std::fs::read(&source).unwrap(), b"the source");
+    assert!(there(&work.path("up.mp4.5f607182.vrcast-part")));
+
+    // And once more changes nothing: repeating is safe.
+    assert_eq!(convert::tidy_abandoned_attempts(&db), 0);
+}

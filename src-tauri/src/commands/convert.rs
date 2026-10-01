@@ -157,6 +157,15 @@ pub mod api {
     ) -> Result<()> {
         let attempt = attempt_path(out_path);
         let attempt_str = attempt.to_string_lossy().into_owned();
+        // **Where this attempt writes, written down before a byte is** (T670(3)). The task
+        // removes its own file on cancel and on a failed encode, but not when the whole
+        // application dies mid-encode — and then nothing knew the file was there. Kept in the
+        // task's `resume_token`, the field `ladder_build` already uses as a live marker
+        // (T591); nothing reads it as a resume position for this kind. Start-up finds it
+        // there ([`tidy_abandoned_attempts`]) rather than by searching the disk.
+        if let Err(e) = ctx.save_resume_token(&attempt_str) {
+            tracing::debug!(error = %e, "where the attempt writes was not written down");
+        }
         let job = convert::ConvertJob {
             source,
             plan,
@@ -261,6 +270,73 @@ pub mod api {
             Some(dir) if !dir.as_os_str().is_empty() => dir.join(own),
             _ => std::path::PathBuf::from(own),
         }
+    }
+
+    /// Whether a file name is one [`attempt_path`] makes: `<name>.<8 hex>.vrcast-part`.
+    ///
+    /// The whole of what start-up checks before removing anything (T670(3)), and strict on
+    /// purpose: a result, a source, or a file somebody named by hand never has this shape.
+    pub fn is_attempt_name(file_name: &str) -> bool {
+        let Some(rest) = file_name.strip_suffix(".vrcast-part") else {
+            return false;
+        };
+        let Some((name, short)) = rest.rsplit_once('.') else {
+            return false;
+        };
+        !name.is_empty()
+            && short.len() == 8
+            && short
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }
+
+    /// Remove the attempt files a crashed run left behind (T670(3)). Returns how many went.
+    ///
+    /// **Only what the task journal names.** Every preparation writes down where its attempt
+    /// goes before it starts (`prepare`), and this reads exactly those paths back — nothing
+    /// is searched for on the disk. **Only tasks nobody is running any more**: unfinished in
+    /// the journal and with their owner gone ([`crate::tasks::store::unfinished_without_owner`],
+    /// the owner check start-up already trusts; another instance minimised to the tray keeps
+    /// its own). A finished task is never touched: an attempt that failed its check, or that
+    /// could not be renamed into place, is kept on purpose and the task's error names it.
+    /// **Only an attempt's own file**: the name has to be [`is_attempt_name`]'s shape and the
+    /// path a plain file; a result and a source never are. Called once at start-up, after the
+    /// sweep that stops leftover encoders — so nothing is still writing into what goes.
+    pub fn tidy_abandoned_attempts(db: &crate::store::db::Db) -> usize {
+        let abandoned = match crate::tasks::store::unfinished_without_owner(db, TaskKind::Convert) {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                tracing::error!(error = %e, "abandoned preparations could not be looked up");
+                return 0;
+            }
+        };
+        let mut removed = 0;
+        for task in abandoned {
+            let Some(token) = task.resume_token.as_deref() else {
+                continue;
+            };
+            let attempt = std::path::Path::new(token);
+            let named_as_attempt = attempt
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(is_attempt_name);
+            let plain_file = std::fs::symlink_metadata(attempt).is_ok_and(|m| m.is_file());
+            if !named_as_attempt || !plain_file {
+                continue;
+            }
+            match std::fs::remove_file(attempt) {
+                Ok(()) => {
+                    removed += 1;
+                    tracing::info!(task = %task.id, "removed an abandoned preparation's attempt");
+                }
+                Err(e) => tracing::warn!(
+                    task = %task.id,
+                    error = %e,
+                    "an abandoned preparation's attempt could not be removed"
+                ),
+            }
+        }
+        removed
     }
 
     /// The key a preparation holds its output path under (T662).

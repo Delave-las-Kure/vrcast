@@ -191,6 +191,8 @@ impl AppState {
                 );
             }
         }
+        // After the sweep above, so no leftover encoder is still writing into them (T670(3)).
+        convert::api::tidy_abandoned_attempts(&db);
 
         let (events, _) = tokio::sync::broadcast::channel(64);
         Ok(Self {
