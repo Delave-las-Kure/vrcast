@@ -40,7 +40,119 @@ pub fn sub_name(rung: &Rung) -> String {
 
 /// The prepared file's name for a rung.
 pub fn file_name(slug: &str, rung: &Rung) -> String {
-    format!("{slug}_{}.mp4", (rung.bitrate_bps / 1_000_000).max(1))
+    format!("{slug}_{}.mp4", mbit_of(rung))
+}
+
+fn mbit_of(rung: &Rung) -> u64 {
+    (rung.bitrate_bps / 1_000_000).max(1)
+}
+
+/// The names a rung's prepared file may take, in the order they are tried (T677):
+/// `{slug}_{N}.mp4`, then `{slug}_{N}v.mp4`, `{slug}_{N}v2.mp4`, `{slug}_{N}v3.mp4` …
+///
+/// **Why there is more than one.** The shell script this application replaces named a
+/// medium's single file exactly as a rung's prepared file is named — `film_9.mp4` — and a
+/// set built into that medium would write over it. The owner's decision of 2026-10-02: the
+/// medium's file is not touched and is not a reason to refuse; the rung takes the next name
+/// nobody claims. A letter after the number keeps it apart from every other rung's first
+/// name (`film_9v.mp4` is never `film_{N}.mp4` of any N) and keeps it beside its own.
+pub fn file_names(slug: &str, rung: &Rung) -> impl Iterator<Item = String> {
+    let slug = slug.to_owned();
+    let mbit = mbit_of(rung);
+    (0u32..).map(move |k| match k {
+        0 => format!("{slug}_{mbit}.mp4"),
+        1 => format!("{slug}_{mbit}v.mp4"),
+        k => format!("{slug}_{mbit}v{k}.mp4"),
+    })
+}
+
+/// The whole megabits of a prepared rung of the set `slug`, by its name — any of
+/// [`file_names`]. `None` for anything else.
+pub fn rung_mbit_of(slug: &str, name: &str) -> Option<u64> {
+    let rest = name
+        .strip_prefix(slug)?
+        .strip_prefix('_')?
+        .strip_suffix(".mp4")?;
+    let (mbit, tail) = match rest.find('v') {
+        Some(at) => (&rest[..at], Some(&rest[at + 1..])),
+        None => (rest, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if !digits(mbit) {
+        return None;
+    }
+    match tail {
+        None | Some("") => {}
+        // `v2` and on: `v1` is never made (that is plain `v`), nor `v02`.
+        Some(k) if digits(k) && !k.starts_with('0') && k != "1" => {}
+        Some(_) => return None,
+    }
+    mbit.parse().ok()
+}
+
+/// The name of the set's own record of its prepared files, inside `{slug}/` (T677).
+///
+/// Written only when a rung took a name other than its first, before anything is encoded,
+/// so carrying on after a restart and «Retry» find the rung under the same name even if the
+/// catalogue changed meanwhile. One line per rung: `v9=film_9v.mp4`. Goes with the set's
+/// directory: «Replace» and deleting the medium remove it with the rest.
+pub const PREPARED_RECORD: &str = ".prepared";
+
+/// Read [`PREPARED_RECORD`]: the rung directory and its prepared file, as written.
+pub fn parse_prepared(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|l| l.trim().split_once('='))
+        .map(|(sub, file)| (sub.trim().to_owned(), file.trim().to_owned()))
+        .filter(|(sub, file)| !sub.is_empty() && !file.is_empty())
+        .collect()
+}
+
+/// Write [`PREPARED_RECORD`] for these variants.
+pub fn prepared_text(work: &[VariantWork]) -> String {
+    work.iter()
+        .map(|w| format!("{}={}\n", w.sub, w.file))
+        .collect()
+}
+
+/// Which prepared file each rung is made into (T677), in the order of `work`.
+///
+/// - What the set's own record says, while that is still a rung's name of this set at this
+///   bitrate and no medium claims it — carrying on finds what it began.
+/// - Otherwise the first of [`file_names`] that no medium claims and no other rung of this
+///   set has taken. `whole_claimed` are claimed files that already are their rung, whole:
+///   those are taken as they are (T675 — a rebuild whose rungs a person filed under the
+///   medium) and keep their first name.
+///
+/// A claimed file is never one of the names given out otherwise: it is somebody's, and it
+/// is neither written over nor removed (T577, part b).
+pub fn choose_files(
+    slug: &str,
+    work: &[VariantWork],
+    claimed: &[&str],
+    stored: &[(String, String)],
+    whole_claimed: &[String],
+) -> Vec<String> {
+    let mut taken: Vec<String> = Vec::new();
+    for w in work {
+        let mbit = mbit_of(&w.rung);
+        let from_record = stored
+            .iter()
+            .find(|(sub, _)| sub == &w.sub)
+            .map(|(_, file)| file.clone())
+            .filter(|f| rung_mbit_of(slug, f) == Some(mbit))
+            .filter(|f| !claimed.contains(&f.as_str()) && !taken.contains(f));
+        let first = file_name(slug, &w.rung);
+        let name = from_record.unwrap_or_else(|| {
+            if whole_claimed.contains(&first) && !taken.contains(&first) {
+                return first;
+            }
+            file_names(slug, &w.rung)
+                .find(|n| !claimed.contains(&n.as_str()) && !taken.contains(n))
+                .unwrap_or(first)
+        });
+        taken.push(name);
+    }
+    taken
 }
 
 /// Whether a source's keyframes fall where every other variant's will.

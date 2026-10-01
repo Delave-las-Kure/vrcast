@@ -1388,7 +1388,7 @@ pub mod api {
                     // The medium has no set (refused otherwise), so nobody can be watching
                     // one: the build needs no «anyway» against viewers (T571) — the same
                     // footing as a medium this video made itself. Its own files are not
-                    // touched by the build (`tasks::ladder_build::refuse_claimed`).
+                    // touched by the build (`tasks::ladder_build::name_prepared_files`).
                     row.own_medium = true;
                     row
                 }

@@ -551,8 +551,8 @@ detail_codes! {
     /// This file is already on the list of videos for this server, and not finished.
     VideoAlreadyListed => "VIDEO_ALREADY_LISTED",
     /// `name`. A file named like a rung's prepared file (`{slug}_{N}.mp4`) belongs to a medium
-    /// and is not that rung: «Replace» does not remove it (T676), a build does not write over
-    /// it (T675). Nothing was removed or written.
+    /// and is not that rung: «Replace» under a taken name does not remove it (T676). A build
+    /// no longer stops on it — the rung takes the next free name (T677).
     RungFileClaimed => "RUNG_FILE_CLAIMED",
     /// `name`. A set of this medium's short name is on the server and no medium claims it —
     /// an old build, another film's (T675). It would be taken for this one's rungs, so a video

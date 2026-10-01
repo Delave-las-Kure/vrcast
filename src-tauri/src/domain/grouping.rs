@@ -127,10 +127,17 @@ fn classify(path: &str) -> Option<(String, GroupReason)> {
         }
     }
 
-    // A name of the form `<common part>_<number>.<extension>`.
+    // A name of the form `<common part>_<number>.<extension>` — or a rung's prepared file
+    // named around a medium's own one, `<common part>_<number>v[<k>].mp4` (T677): the same
+    // work at the same bitrate, so the same group.
     let stem = normalized.rsplit_once('.').map_or(normalized, |(s, _)| s);
     let (prefix, tail) = stem.rsplit_once('_')?;
-    if prefix.is_empty() || tail.is_empty() || !tail.chars().all(|c| c.is_ascii_digit()) {
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    let bitrate = match tail.split_once('v') {
+        Some((n, k)) => digits(n) && (k.is_empty() || digits(k)),
+        None => digits(tail),
+    };
+    if prefix.is_empty() || !bitrate {
         return None;
     }
     Some((prefix.to_owned(), GroupReason::BitrateVariants))

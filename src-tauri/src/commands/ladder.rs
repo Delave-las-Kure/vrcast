@@ -837,11 +837,6 @@ fn build_error(e: crate::tasks::ladder_build::BuildError) -> AppError {
         // cryptic and searchable beats "the file is broken", which is neither.
         E::VariantBroken { variant, problems } => AppError::new(ErrorCode::DecodeValidationFailed)
             .with_cause(format!("{variant}: {}", problems.join("; "))),
-        // A medium's own file under a rung's name (T675): which file, so the way on — another
-        // bitrate for that rung — can be seen.
-        E::FileClaimed(name) => AppError::new(ErrorCode::InvalidInput)
-            .with_detail(Detail::new(DetailCode::RungFileClaimed).with("name", name.clone()))
-            .with_cause(format!("{name} is claimed by a medium")),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }

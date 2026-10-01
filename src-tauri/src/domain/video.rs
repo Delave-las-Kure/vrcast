@@ -331,14 +331,12 @@ pub fn may_replace(
 }
 
 /// Whether `name`, at the top of the serving directory, is a prepared rung of the set `slug`:
-/// `{slug}_{whole megabits}.mp4` (`ladder_build::file_name`), or one still being sent
-/// (`.part`, `tasks::ladder_build::send_file`).
+/// `{slug}_{whole megabits}.mp4` (`ladder_build::file_name`), one named around a medium's
+/// file (`{slug}_{N}v.mp4`, `{slug}_{N}v2.mp4` …, T677), or one still being sent (`.part`,
+/// `tasks::ladder_build::send_file`).
 pub fn is_rung_file(slug: &str, name: &str) -> bool {
     let name = name.strip_suffix(".part").unwrap_or(name);
-    name.strip_prefix(slug)
-        .and_then(|rest| rest.strip_prefix('_'))
-        .and_then(|rest| rest.strip_suffix(".mp4"))
-        .is_some_and(|mbit| !mbit.is_empty() && mbit.chars().all(|c| c.is_ascii_digit()))
+    super::ladder_build::rung_mbit_of(slug, name).is_some()
 }
 
 /// What a set of `slug` has on the server, as «Replace» sees it (T676).

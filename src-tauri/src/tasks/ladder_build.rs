@@ -103,14 +103,7 @@ pub enum BuildError {
     #[error("the serving could not be reached: {0}")]
     Unreachable(String),
 
-    /// A rung's prepared file `{slug}_{N}.mp4` is a file a medium claims in the catalogue,
-    /// and what is on the server under that name is not this rung done (T675). It would be
-    /// written over — somebody's file, removed without being asked (T577, part b). Refused
-    /// before anything is encoded.
-    #[error("{0} belongs to a medium and is not this rung: it is not written over")]
-    FileClaimed(String),
-
-    /// The catalogue could not be read to ask the above.
+    /// The catalogue could not be read to ask which rung files a medium claims (T675).
     #[error("the catalogue could not be read: {0}")]
     Catalogue(String),
 }
@@ -157,7 +150,7 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         .await
         .unwrap_or(None);
 
-    let work = ladder_build::work_for(
+    let mut work = ladder_build::work_for(
         job.slug,
         job.rungs,
         job.source,
@@ -180,13 +173,14 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         ctx.add_notice(said);
     }
 
-    // **A file somebody owns is never written over** (T675). A medium's own single file is
-    // often named the way a rung's prepared file is — `film_9.mp4`, the shell script's
-    // convention — and a build into that medium would replace it. Asked once, before a byte
-    // is encoded: a claimed file that already is this rung, whole, is taken as it is (a
-    // rebuild of the same set whose rungs a person filed under the medium); anything else
-    // under a claimed name stops the build here, with the file untouched.
-    refuse_claimed(job, &work).await?;
+    // **A file somebody owns is never written over, and is not a reason to stop** (T675;
+    // T677, the owner's decision of 2026-10-02). A medium's own single file is often named the
+    // way a rung's prepared file is — `film_9.mp4`, the shell script's convention — and a
+    // build into that medium would replace it. Asked once, before a byte is encoded: a claimed
+    // file that already is this rung, whole, is taken as it is (a rebuild of the same set
+    // whose rungs a person filed under the medium); otherwise the rung takes the next name
+    // nobody claims (`film_9v.mp4`), and the set records it so that carrying on finds it.
+    let record = name_prepared_files(job, &mut work).await?;
 
     // **Will it fit?** Asked once, here, before a byte is encoded. A set is hours of work
     // and tens of gigabytes; running into the end of the disk halfway leaves the first
@@ -199,6 +193,9 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     // is the one that fills first: a variant is written whole before a byte of it is sent.
     if let Some(unknown) = room_here(job, &work)? {
         ctx.add_notice(unknown);
+    }
+    if record {
+        write_prepared_record(job, &work).await?;
     }
 
     let mut prepared = 0usize;
@@ -531,27 +528,86 @@ pub async fn room_for_the_set(
     }
 }
 
-/// Refuse a build that would write over a file a medium claims (T675). See [`run`].
-async fn refuse_claimed(job: &BuildJob<'_>, work: &[VariantWork]) -> Result<(), BuildError> {
+/// Give each rung the prepared file it is made into (T675, T677). See [`run`] and
+/// `domain::ladder_build::choose_files`.
+///
+/// Returns whether the set's own record of its names has to be written: a rung took a name
+/// other than its first, or a record is already there (it is kept in step).
+async fn name_prepared_files(
+    job: &BuildJob<'_>,
+    work: &mut [VariantWork],
+) -> Result<bool, BuildError> {
     let manifest = crate::server::manifest_io::read(job.conn, job.video_dir)
         .await
         .map_err(|e| BuildError::Catalogue(e.to_string()))?;
     let claimed = manifest.all_claimed_paths();
-    for variant in work {
-        if !claimed.contains(&variant.file.as_str()) {
-            continue;
-        }
-        if !variant_already_there(
-            job.conn,
-            job.video_dir,
-            &variant.file,
-            job.source.duration_s,
-        )
+
+    let record_path = prepared_record_path(job);
+    let stored_text = job
+        .conn
+        .exec(&format!(
+            "cat {} 2>/dev/null || true",
+            crate::server::shell_quote(&record_path)
+        ))
         .await?
+        .stdout;
+    let stored = ladder_build::parse_prepared(&stored_text);
+
+    // A claimed file under a rung's first name that already is that rung, whole.
+    let mut whole_claimed = Vec::new();
+    for variant in work.iter() {
+        if claimed.contains(&variant.file.as_str())
+            && variant_already_there(
+                job.conn,
+                job.video_dir,
+                &variant.file,
+                job.source.duration_s,
+            )
+            .await?
         {
-            return Err(BuildError::FileClaimed(variant.file.clone()));
+            whole_claimed.push(variant.file.clone());
         }
     }
+
+    let names = ladder_build::choose_files(job.slug, work, &claimed, &stored, &whole_claimed);
+    let mut moved = false;
+    for (variant, name) in work.iter_mut().zip(names) {
+        if variant.file != name {
+            tracing::info!(
+                rung = %variant.sub,
+                first = %variant.file,
+                name = %name,
+                "a rung's first name belongs to a medium: it is made under another"
+            );
+            variant.file = name;
+            moved = true;
+        }
+    }
+    Ok(moved || !stored.is_empty())
+}
+
+fn prepared_record_path(job: &BuildJob<'_>) -> String {
+    format!(
+        "{}/{}/{}",
+        job.video_dir.trim_end_matches('/'),
+        job.slug,
+        ladder_build::PREPARED_RECORD
+    )
+}
+
+/// Write the set's record of its prepared files (T677), staged and renamed into place.
+async fn write_prepared_record(job: &BuildJob<'_>, work: &[VariantWork]) -> Result<(), BuildError> {
+    let path = prepared_record_path(job);
+    let dir = format!("{}/{}", job.video_dir.trim_end_matches('/'), job.slug);
+    job.conn
+        .exec(&format!(
+            "mkdir -p {d} && printf '%s' {body} > {p}.part && mv -f {p}.part {p}",
+            d = crate::server::shell_quote(&dir),
+            body = crate::server::shell_quote(&ladder_build::prepared_text(work)),
+            p = crate::server::shell_quote(&path),
+        ))
+        .await?
+        .require_ok("could not write the set's record of its prepared files")?;
     Ok(())
 }
 

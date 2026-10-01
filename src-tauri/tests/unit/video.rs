@@ -728,3 +728,15 @@ fn a_directory_filed_in_the_catalogue_is_somebody_s_set_not_nobody_s() {
     // Nothing under the name: nothing to wait on.
     assert!(video::old_set_problem("film", &top(&[("other", true)]), &[]).is_none());
 }
+
+#[test]
+fn a_rung_named_around_a_medium_s_file_is_a_rung_of_its_set() {
+    // What «Replace» and the old-set check look for (T676/T677) knows the new names too.
+    for yes in ["film_9v.mp4", "film_9v2.mp4", "film_9v.mp4.part"] {
+        assert!(video::is_rung_file("film", yes), "{yes}");
+    }
+    let entries = top(&[("film_9v.mp4", false), ("film_9.mp4", false)]);
+    let old = video::old_set("film", &entries, &["film_9.mp4"]);
+    assert_eq!(old.files, vec!["film_9v.mp4"]);
+    assert_eq!(old.in_the_way, vec!["film_9.mp4"]);
+}

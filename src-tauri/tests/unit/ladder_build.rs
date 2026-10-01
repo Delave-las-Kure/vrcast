@@ -575,3 +575,119 @@ mod holding {
         assert_eq!(answer, format!("Ok({})", 2 * SEND_BLOCK));
     }
 }
+
+// ---------- a rung named around a medium's own file (T677) ----------
+
+fn two_rung_work() -> Vec<vrcast_studio_lib::domain::ladder_build::VariantWork> {
+    let src = source(1920, 1080, 24, 30_000_000, "h264");
+    work_for(
+        "film",
+        &[rung(0, 9_000_000, 1080), rung(1, 4_000_000, 720)],
+        &src,
+        0,
+        Some(1.0),
+        4,
+    )
+}
+
+#[test]
+fn a_rung_whose_name_a_medium_claims_takes_the_next_free_one_and_the_file_is_not_touched() {
+    use vrcast_studio_lib::domain::ladder_build::choose_files;
+    let work = two_rung_work();
+    // The medium's own single file is `film_9.mp4`: the 9 Mbit/s rung becomes `film_9v.mp4`,
+    // the other keeps its first name.
+    assert_eq!(
+        choose_files("film", &work, &["film_9.mp4"], &[], &[]),
+        vec!["film_9v.mp4", "film_4.mp4"]
+    );
+    // That one claimed too: `v2`, and so on. A claimed name is never given out.
+    assert_eq!(
+        choose_files(
+            "film",
+            &work,
+            &["film_9.mp4", "film_9v.mp4", "film_9v2.mp4"],
+            &[],
+            &[]
+        ),
+        vec!["film_9v3.mp4", "film_4.mp4"]
+    );
+    // Nothing claimed: every rung its first name, as always.
+    assert_eq!(
+        choose_files("film", &work, &[], &[], &[]),
+        vec!["film_9.mp4", "film_4.mp4"]
+    );
+    // A claimed file that already is this rung, whole, is taken as it is (T675).
+    assert_eq!(
+        choose_files(
+            "film",
+            &work,
+            &["film_9.mp4"],
+            &[],
+            &[String::from("film_9.mp4")]
+        ),
+        vec!["film_9.mp4", "film_4.mp4"]
+    );
+}
+
+#[test]
+fn carrying_on_finds_the_rung_under_the_name_it_was_given() {
+    use vrcast_studio_lib::domain::ladder_build::{choose_files, parse_prepared, prepared_text};
+    let mut work = two_rung_work();
+    let first = choose_files("film", &work, &["film_9.mp4"], &[], &[]);
+    for (w, f) in work.iter_mut().zip(&first) {
+        w.file = f.clone();
+    }
+    let stored = parse_prepared(&prepared_text(&work));
+    assert_eq!(
+        stored,
+        vec![
+            (String::from("v9"), String::from("film_9v.mp4")),
+            (String::from("v4"), String::from("film_4.mp4")),
+        ]
+    );
+    // After a restart the medium's file was moved elsewhere meanwhile: the rung is still
+    // found under the name it was begun under, not made again under `film_9.mp4`.
+    let again = two_rung_work();
+    assert_eq!(
+        choose_files("film", &again, &[], &stored, &[]),
+        vec!["film_9v.mp4", "film_4.mp4"]
+    );
+    // A record that names a file somebody claims now, or a name of another bitrate, is not
+    // followed.
+    assert_eq!(
+        choose_files("film", &again, &["film_9v.mp4"], &stored, &[]),
+        vec!["film_9.mp4", "film_4.mp4"]
+    );
+    let wrong = vec![(String::from("v9"), String::from("film_4v.mp4"))];
+    assert_eq!(
+        choose_files("film", &again, &[], &wrong, &[]),
+        vec!["film_9.mp4", "film_4.mp4"]
+    );
+}
+
+#[test]
+fn every_name_a_rung_may_take_is_known_as_a_rung_of_its_set_and_nothing_else_is() {
+    use vrcast_studio_lib::domain::ladder_build::{file_names, rung_mbit_of};
+    let names: Vec<String> = file_names("film", &rung(0, 9_000_000, 1080))
+        .take(4)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["film_9.mp4", "film_9v.mp4", "film_9v2.mp4", "film_9v3.mp4"]
+    );
+    for n in &names {
+        assert_eq!(rung_mbit_of("film", n), Some(9), "{n}");
+    }
+    for no in [
+        "film_9v1.mp4",
+        "film_9v02.mp4",
+        "film_9x.mp4",
+        "film_v.mp4",
+        "film_9vv.mp4",
+        "film-2_9v.mp4",
+        "film_9v.mkv",
+        "film.mp4",
+    ] {
+        assert_eq!(rung_mbit_of("film", no), None, "{no}");
+    }
+}
