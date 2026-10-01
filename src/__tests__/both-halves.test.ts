@@ -161,5 +161,7 @@ it("the folded error keeps the advice, the particulars and the cause", () => {
     "features/library/dialogs/MediaDialogs.tsx",
     "features/shared/ErrorNotice.tsx",
     "features/tasks/TasksPanel.tsx",
+    "features/video/VideoCard.tsx",
+    "features/video/VideoScreen.tsx",
   ]);
 });

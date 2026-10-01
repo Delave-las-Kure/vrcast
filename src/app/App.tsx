@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { LibraryScreen } from "../features/library/LibraryScreen";
+import { VideoScreen } from "../features/video/VideoScreen";
 import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
 import { ConvertScreen } from "../features/convert/ConvertScreen";
@@ -144,6 +145,7 @@ function AppShell() {
           <Route path="/tasks" element={<TasksPanel />} />
           <Route path="/servers" element={<ServerList />} />
           <Route path="/library" element={<LibraryScreen />} />
+          <Route path="/video" element={<VideoScreen />} />
           <Route path="/convert" element={<ConvertScreen />} />
           <Route path="/upload" element={<UploadScreen />} />
           <Route path="/about" element={<About />} />

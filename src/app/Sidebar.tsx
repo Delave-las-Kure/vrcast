@@ -18,6 +18,7 @@ import { Mascot } from "../features/mascot/Mascot";
 export const SECTIONS = [
   { path: "/servers", key: "servers", ready: true },
   { path: "/library", key: "library", ready: true },
+  { path: "/video", key: "video", ready: true },
   { path: "/convert", key: "convert", ready: true, step: 1 },
   { path: "/ladder", key: "ladder", ready: true, step: 2 },
   { path: "/batch", key: "batch", ready: true },
