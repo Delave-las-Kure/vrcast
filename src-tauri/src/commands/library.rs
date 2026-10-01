@@ -662,16 +662,42 @@ pub mod api {
     async fn build_from_server(state: &AppState, profile: &ServerProfile) -> Result<LibraryView> {
         // Looking. Allowed even on somebody else's machine — looking is how a person finds
         // out that it *is* somebody else's.
-        let conn = gate::open(state.secrets.as_ref(), profile, Intent::Read)
-            .await?
-            .conn;
+        let opened = gate::open(state.secrets.as_ref(), profile, Intent::Read).await?;
+        let may_change = gate::allowed(&opened.state, Intent::Change).is_ok();
+        let conn = opened.conn;
         let dir = &profile.video_dir;
 
-        let manifest = manifest_io::read(&conn, dir).await?;
+        let recorded = manifest_io::read_if_present(&conn, dir).await?;
+        let present = recorded.is_some();
+        let recorded = recorded.unwrap_or_else(Manifest::empty);
         let entries = listing::list(&conn, dir).await?;
-        // The sets' rung files, recorded or found by the sets' own word (T678). A view only:
-        // nothing is written by reading.
-        let manifest = set_files::adopted(&conn, dir, &manifest, &entries, None).await;
+        // The sets' rung files, recorded or found by the sets' own word (T678).
+        let manifest = set_files::adopted(&conn, dir, &recorded, &entries, None).await;
+        // **What was found is written into the catalogue once** (T679): through the one write
+        // every change takes — the generation, the sum, the catalogue's lock — so a catalogue
+        // another copy of the application changed meanwhile is refused, never overwritten.
+        // Only where this application keeps its catalogue and may change the serving, and not
+        // while a task of this application is about to write the catalogue itself (a build
+        // attaching its set, an upload filing its file): that write would lose to this one.
+        // A write that fails changes nothing about this read; the next read tries again.
+        let writers = catalogue_writers_running(state, &profile.id);
+        let written = set_files::record_found(
+            present,
+            may_change && !writers,
+            &recorded,
+            &manifest,
+            |next, base| {
+                let conn = &conn;
+                async move { manifest_io::write(conn, dir, &next, base).await }
+            },
+        )
+        .await;
+        if written == set_files::Recorded::Written {
+            // The view does not change — it already showed the files — but the catalogue
+            // did: a screen, or anything holding it, hears so. The cache is not forgotten:
+            // this very read is what it is about to keep.
+            state.notify_library_changed(&profile.id);
+        }
         let matched = reconcile::reconcile(&manifest, &entries);
 
         // Room on the disk is no reason to refuse the library: even when it cannot be
@@ -1455,5 +1481,25 @@ pub mod api {
     /// this function's `state: &AppState` at all.
     fn invalidate(state: &AppState, server_id: &str) {
         state.invalidate_library(server_id);
+    }
+
+    /// Whether a task of this application that writes the catalogue when it ends — a
+    /// quality set's build, an upload — is running on this server now (T679). A read does
+    /// not record what it found meanwhile: its write could make theirs a conflict, and theirs
+    /// is not retried. A queued or paused one is not about to write. Unknown counts as
+    /// running.
+    fn catalogue_writers_running(state: &AppState, server_id: &str) -> bool {
+        use crate::tasks::state::{TaskKind, TaskState};
+        match state.tasks.list() {
+            Ok(tasks) => tasks.iter().any(|t| {
+                matches!(t.kind, TaskKind::BuildLadder | TaskKind::Upload)
+                    && t.state == TaskState::Running
+                    && t.server_id.as_deref() == Some(server_id)
+            }),
+            Err(e) => {
+                tracing::debug!(error = %e, "the tasks were not read; nothing found is recorded");
+                true
+            }
+        }
     }
 }

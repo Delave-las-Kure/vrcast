@@ -54,3 +54,58 @@ pub async fn adopted(
     }
     set_files::adopt(manifest, &sets, &files)
 }
+
+/// What [`record_found`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recorded {
+    /// Nothing to write, or not allowed to write here.
+    Nothing,
+    /// The catalogue now records what the read attributed.
+    Written,
+    /// The write was refused or failed; the read goes on as it was, and the next read tries
+    /// again.
+    Failed,
+}
+
+/// Write into the catalogue the set files a read attributed and it does not record (T679).
+///
+/// `present` — the server keeps this application's catalogue (`library.json` is there);
+/// `may_change` — this read is one that may write (not from the cache) on a server this
+/// application may change (not somebody else's, not one it is too old for). `recorded` is
+/// the catalogue as read, `seen` the read's view of it (`adopted`).
+///
+/// `write` is handed the catalogue to write and the generation it was read at — in the
+/// application, `manifest_io::write`, the one write every change of the catalogue goes
+/// through (the generation checked, the bytes summed, the replacement under the catalogue's
+/// lock): a catalogue somebody changed meanwhile is refused, never overwritten. **Never an
+/// error**: a write that fails is said in the log and the read is answered all the same; it
+/// is not repeated here — the next ordinary read tries again.
+pub async fn record_found<F, Fut, E>(
+    present: bool,
+    may_change: bool,
+    recorded: &Manifest,
+    seen: &Manifest,
+    write: F,
+) -> Recorded
+where
+    F: FnOnce(Manifest, u64) -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+    E: std::fmt::Display,
+{
+    if !present || !may_change {
+        return Recorded::Nothing;
+    }
+    let Some(next) = set_files::to_record(recorded, seen) else {
+        return Recorded::Nothing;
+    };
+    match write(next, recorded.generation).await {
+        Ok(()) => {
+            tracing::info!("the older sets' rung files were recorded in the catalogue");
+            Recorded::Written
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "the older sets' rung files were not recorded; the next read tries again");
+            Recorded::Failed
+        }
+    }
+}

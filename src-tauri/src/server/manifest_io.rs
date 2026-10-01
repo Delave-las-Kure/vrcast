@@ -95,6 +95,16 @@ pub async fn read(conn: &Connection, video_dir: &str) -> Result<Manifest> {
     parse(raw.as_deref())
 }
 
+/// Read the catalogue, telling a missing one apart from an empty one: `None` when there
+/// is no `library.json` at all (T679 — a read may write the catalogue only where this
+/// application already keeps one).
+pub async fn read_if_present(conn: &Connection, video_dir: &str) -> Result<Option<Manifest>> {
+    match read_raw(conn, video_dir).await? {
+        Some(bytes) => parse(Some(&bytes)).map(Some),
+        None => Ok(None),
+    }
+}
+
 /// The catalogue's bytes exactly as they lie on the server, or `None` if there is no
 /// catalogue at all.
 async fn read_raw(conn: &Connection, video_dir: &str) -> Result<Option<Vec<u8>>> {
