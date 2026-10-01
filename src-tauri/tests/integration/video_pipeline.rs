@@ -1,0 +1,571 @@
+//! T672 — one video goes the whole way in one place, against a real server in a container:
+//! plan → «Start» → measuring → encoding the rungs → sending → cutting → checking → link,
+//! and carries on after the application is killed, from the stage it was at.
+//!
+//! **The check at the end reaches the container.** `ladder_build` checks the set where viewers
+//! get it, at the profile's domain over `https://`. The container has neither, so
+//! `AppState::verify_origin` points the check at the container's own plain HTTP — the one
+//! thing set here that the application never sets (the same address `seams.rs` builds by
+//! hand). Everything before the check runs exactly as it does for a person.
+//!
+//! **The application is killed for real**, as a process of its own, as `upload_live.rs`
+//! explains: destroying a runtime inside one process lets worker threads record endings a
+//! killed application never would.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use vrcast_studio_lib::commands::video::{api as video, PlanSource, VideoView};
+use vrcast_studio_lib::commands::AppState;
+use vrcast_studio_lib::domain::ladder::{Quality, Rung};
+use vrcast_studio_lib::domain::video::{VideoStage, VideoState};
+use vrcast_studio_lib::media::ffmpeg;
+use vrcast_studio_lib::store::db::Db;
+use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretStore};
+
+use super::fixture::TestServer;
+use super::upload_live::{add_profile, attach_secret};
+
+const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
+
+/// Where the check at the end looks for the set: the container's own HTTP.
+fn origin_of(server: &TestServer) -> String {
+    format!("http://{}:{}", server.host(), server.http_port)
+}
+
+fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState {
+    let mut state = AppState::with_db(
+        Arc::new(Db::open(db).expect("the database would not open")),
+        secrets,
+    )
+    .expect("the application state would not assemble");
+    state.verify_origin = Some(origin.to_owned());
+    state
+}
+
+/// A real film. `seconds` long at `size`, with sound, keyframes every second.
+fn make_film(path: &Path, size: &str, seconds: u32) {
+    let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg: run `npm run ffmpeg`");
+    let out = std::process::Command::new(ff)
+        .args(["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i"])
+        .arg(format!("testsrc2=size={size}:rate=24:duration={seconds}"))
+        .args(["-f", "lavfi", "-i"])
+        .arg(format!("sine=frequency=440:duration={seconds}"))
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-b:v",
+            "3000k",
+            "-g",
+            "24",
+            "-keyint_min",
+            "24",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+        ])
+        .arg(path)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A directory that removes itself.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(what: &str) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("vrcast-{what}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).expect("could not make a working directory");
+        Self(dir)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+async fn until(
+    state: &AppState,
+    id: &str,
+    what: &str,
+    limit: Duration,
+    ok: impl Fn(&VideoView) -> bool,
+) -> VideoView {
+    let deadline = Instant::now() + limit;
+    loop {
+        let now = video::video_get(state, id).expect("the video went missing");
+        if ok(&now) {
+            return now;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what}: never got there; the video is {:?} at {:?}, problem {:?}",
+            now.state,
+            now.stage,
+            now.problem
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Two rungs, already measured — for the restart checks, where measuring would only make
+/// the window to kill in harder to hit. The whole way with a real measurement is
+/// [`a_video_goes_the_whole_way_from_a_plan_to_a_link`].
+fn two_rungs() -> Vec<Rung> {
+    let rung = |index, bitrate_bps: u64, width, height, vmaf| Rung {
+        index,
+        bitrate_bps,
+        maxrate_bps: bitrate_bps + bitrate_bps / 10,
+        bufsize_bps: bitrate_bps + bitrate_bps / 10,
+        width,
+        height,
+        level: String::from("3.1"),
+        reasons: Vec::new(),
+        quality: Quality::MeasuredHere { vmaf_x100: vmaf },
+    };
+    vec![
+        rung(0, 2_000_000, 1280, 720, 9300),
+        rung(1, 1_000_000, 640, 360, 8900),
+    ]
+}
+
+fn the_set_is_served(server: &TestServer, slug: &str) {
+    let master = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/{slug}/master.m3u8'"))
+        .expect("master.m3u8 is not on the server");
+    assert!(master.contains("#EXT-X-STREAM-INF"), "{master}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t672-whole");
+    let db = scratch.0.join("vrcast.sqlite3");
+    let state = state_on(
+        &db,
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+    let film = scratch.0.join("Whole Way.mp4");
+    make_film(&film, "640x360", 15);
+
+    let mut events = state.subscribe();
+    let added = video::video_add(&state, &server_id, &[film.to_string_lossy().into_owned()])
+        .await
+        .expect("adding failed");
+    assert!(added.refused.is_empty(), "{:?}", added.refused);
+    let id = added.added[0].id.clone();
+
+    // ---- the plan, before «Start»: the server was asked this time ----
+    let ready = until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    assert_eq!(ready.state, VideoState::Ready, "{:?}", ready.problem);
+    let plan = ready.plan.clone().expect("no plan");
+    assert_eq!(plan.from, PlanSource::Formula);
+    assert!(plan.needs_measuring);
+    assert!(
+        matches!(
+            plan.server_space,
+            vrcast_studio_lib::commands::video::SpaceCheck::Fits { .. }
+        ),
+        "{:?}",
+        plan.server_space
+    );
+    assert_eq!(plan.name_taken, Some(false));
+
+    // ---- «Start»: measuring, then the build the measurement chains on to ----
+    let started = video::video_start(&state, std::slice::from_ref(&id));
+    assert!(started[0].error.is_none(), "{:?}", started[0].error);
+
+    let done = until(
+        &state,
+        &id,
+        "the whole way",
+        Duration::from_secs(540),
+        |v| {
+            matches!(
+                v.state,
+                VideoState::Done | VideoState::Problem | VideoState::Cancelled
+            )
+        },
+    )
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    assert_eq!(done.stage, VideoStage::Done);
+    assert!(done.media_id.is_some(), "the set belongs to no medium");
+    let link = done.link.expect("a finished video has no link");
+    assert!(
+        link.origin
+            .ends_with(&format!("/videos/{}/master.m3u8", done.slug)),
+        "{}",
+        link.origin
+    );
+    the_set_is_served(&server, &done.slug);
+    // The plan now says what was measured.
+    assert_eq!(done.plan.expect("the plan went").from, PlanSource::Measured);
+
+    // ---- every stage was shown, in order ----
+    let mut stages = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let vrcast_studio_lib::commands::AppEvent::VideoUpdate(v) = event {
+            if v.id == id && stages.last() != Some(&v.stage) {
+                stages.push(v.stage);
+            }
+        }
+    }
+    // Inside the build encoding and sending alternate rung by rung (the contract says so);
+    // apart from that the stage never goes back.
+    let order = |s: &VideoStage| match s {
+        VideoStage::Uploading => VideoStage::Encoding,
+        other => *other,
+    };
+    for pair in stages.windows(2) {
+        assert!(
+            order(&pair[0]) <= order(&pair[1]),
+            "the stage went back: {stages:?}"
+        );
+    }
+    for wanted in [
+        VideoStage::Measuring,
+        VideoStage::Encoding,
+        VideoStage::Uploading,
+        VideoStage::Cutting,
+        VideoStage::Done,
+    ] {
+        assert!(
+            stages.contains(&wanted),
+            "{wanted:?} was never shown: {stages:?}"
+        );
+    }
+
+    // ---- the same file again is a second video, and the taken name is a choice ----
+    let again = video::video_add(&state, &server_id, &[film.to_string_lossy().into_owned()])
+        .await
+        .unwrap();
+    let second = again.added[0].id.clone();
+    let ready = until(
+        &state,
+        &second,
+        "the second plan",
+        Duration::from_secs(120),
+        |v| v.state != VideoState::Planning,
+    )
+    .await;
+    assert_eq!(ready.plan.unwrap().name_taken, Some(true));
+    video::video_start(&state, std::slice::from_ref(&second));
+    let stopped = until(
+        &state,
+        &second,
+        "the taken name",
+        Duration::from_secs(120),
+        |v| v.state == VideoState::Problem,
+    )
+    .await;
+    let problem = stopped.problem.unwrap();
+    assert_eq!(
+        problem.error.code,
+        vrcast_studio_lib::commands::error::ErrorCode::SlugTaken
+    );
+    use vrcast_studio_lib::domain::video::VideoAction;
+    assert_eq!(
+        problem.actions,
+        vec![VideoAction::Replace, VideoAction::Rename]
+    );
+    // «Replace»: build into the medium that has the name; what is on the server is found
+    // done, and it is finished quickly.
+    video::video_replace(&state, &second)
+        .await
+        .expect("replace was refused");
+    let replaced = until(
+        &state,
+        &second,
+        "the replace",
+        Duration::from_secs(300),
+        |v| matches!(v.state, VideoState::Done | VideoState::Problem),
+    )
+    .await;
+    assert_eq!(replaced.state, VideoState::Done, "{:?}", replaced.problem);
+    assert_eq!(replaced.media_id, done.media_id);
+}
+
+// ---------- killed, and carried on ----------
+
+mod env_names {
+    pub const DB: &str = "VRCAST_T672_DB";
+    pub const FILM: &str = "VRCAST_T672_FILM";
+    pub const ORIGIN: &str = "VRCAST_T672_ORIGIN";
+    pub const PAUSE: &str = "VRCAST_T672_PAUSE";
+    pub const MARK: &str = "VRCAST_T672_MARK";
+}
+
+const HELPER: &str = "video_pipeline::the_first_run_of_a_video_that_gets_killed";
+
+/// The first run — the one that gets killed. Not a check on its own: started only by the
+/// two below, as a process of its own. With no conditions in the environment it does
+/// nothing.
+#[test]
+#[ignore = "half of the restart checks: started as a process of its own"]
+fn the_first_run_of_a_video_that_gets_killed() {
+    let (Ok(db), Ok(film), Ok(origin), Ok(mark)) = (
+        std::env::var(env_names::DB),
+        std::env::var(env_names::FILM),
+        std::env::var(env_names::ORIGIN),
+        std::env::var(env_names::MARK),
+    ) else {
+        return;
+    };
+    let pause = std::env::var(env_names::PAUSE).is_ok();
+    let rt = tokio::runtime::Runtime::new().expect("the runtime would not be created");
+    rt.block_on(async move {
+        let state = state_on(
+            Path::new(&db),
+            Arc::new(InMemorySecretStore::new()),
+            &origin,
+        );
+        let server_id = attach_secret(&state);
+        let added = video::video_add(&state, &server_id, &[film]).await.unwrap();
+        let id = added.added[0].id.clone();
+        until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+            v.state == VideoState::Ready
+        })
+        .await;
+        video::video_set_rungs(&state, &id, Some(two_rungs())).unwrap();
+        let started = video::video_start(&state, std::slice::from_ref(&id));
+        assert!(started[0].error.is_none(), "{:?}", started[0].error);
+
+        if pause {
+            // Paused by a person once the second rung is in hand: the first is on the
+            // server by then.
+            until(
+                &state,
+                &id,
+                "the second rung",
+                Duration::from_secs(300),
+                |v| v.progress.as_ref().and_then(|p| p.rung).unwrap_or(0) >= 2,
+            )
+            .await;
+            video::video_pause(&state, &id).unwrap();
+        }
+        std::fs::write(&mark, &id).unwrap();
+        loop {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+    });
+}
+
+struct Killable(std::process::Child);
+
+impl Drop for Killable {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// What both restart checks share: a server, a profile, a film, and a first run that has got
+/// as far as the first rung on the server — then is killed. Returns the video's id.
+struct Killed {
+    server: TestServer,
+    scratch: Scratch,
+    db: PathBuf,
+    secrets: Arc<dyn SecretStore>,
+    id: String,
+    /// What the first rung's file on the server was when the application died.
+    first_rung: String,
+}
+
+fn first_rung_file(slug: &str) -> String {
+    format!("{VIDEO_DIR}/{slug}_2.mp4")
+}
+
+fn identity(server: &TestServer, path: &str) -> Option<String> {
+    server
+        .exec_inside(&format!("stat -c '%i %y %s' '{path}'"))
+        .ok()
+        .map(|s| s.trim().to_owned())
+}
+
+async fn run_and_kill(pause: bool) -> Killed {
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t672-restart");
+    let db = scratch.0.join("vrcast.sqlite3");
+    let secrets: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+    {
+        let state = state_on(&db, secrets.clone(), &origin_of(&server));
+        add_profile(&state, &server).await;
+    }
+    // Long enough that the second rung is still being made when the first is on the server.
+    let film = scratch.0.join("carry on.mp4");
+    make_film(&film, "1280x720", 90);
+    let slug = "carry-on";
+    let mark = scratch.0.join("started");
+
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([HELPER, "--exact", "--ignored", "--test-threads=1"])
+        .env(env_names::DB, &db)
+        .env(env_names::FILM, &film)
+        .env(env_names::ORIGIN, origin_of(&server))
+        .env(env_names::MARK, &mark)
+        .envs(pause.then_some((env_names::PAUSE, "1")))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the first run did not start");
+    let mut running = Killable(child);
+
+    // The first rung whole on the server (and, when pausing, the pause pressed).
+    let deadline = Instant::now() + Duration::from_secs(400);
+    let first_rung = loop {
+        if let (Some(there), true) = (identity(&server, &first_rung_file(slug)), mark.exists()) {
+            break there;
+        }
+        if let Ok(Some(status)) = running.0.try_wait() {
+            panic!("the first run ended by itself ({status})");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the first rung never reached the server"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    // The application dies — without warning, without a record of how it ended.
+    drop(running);
+    let id = std::fs::read_to_string(&mark).unwrap();
+    Killed {
+        server,
+        scratch,
+        db,
+        secrets,
+        id,
+        first_rung,
+    }
+}
+
+fn start_again(killed: &Killed) -> AppState {
+    let state = state_on(
+        &killed.db,
+        killed.secrets.clone(),
+        &origin_of(&killed.server),
+    );
+    attach_secret(&state);
+    state
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_video_killed_mid_build_carries_on_by_itself_from_its_stage() {
+    let killed = run_and_kill(false).await;
+    let state = start_again(&killed);
+
+    let before = video::video_get(&state, &killed.id).unwrap();
+    assert_eq!(
+        before.state,
+        VideoState::Working,
+        "it was not going when killed"
+    );
+    assert!(before.stage >= VideoStage::Encoding, "{:?}", before.stage);
+    assert_ne!(
+        before.stage,
+        VideoStage::Done,
+        "it finished before it could be killed"
+    );
+
+    // What the application does at start-up — nobody presses anything.
+    assert_eq!(video::restore_videos(&state).unwrap(), 1);
+    let done = until(
+        &state,
+        &killed.id,
+        "carrying on",
+        Duration::from_secs(480),
+        |v| {
+            matches!(
+                v.state,
+                VideoState::Done | VideoState::Problem | VideoState::Cancelled
+            )
+        },
+    )
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    assert!(done.link.is_some());
+    the_set_is_served(&killed.server, &done.slug);
+    // The rung already on the server was found done, not made and sent again.
+    assert_eq!(
+        identity(&killed.server, &first_rung_file(&done.slug)).as_deref(),
+        Some(killed.first_rung.as_str()),
+        "the first rung was sent again after the restart"
+    );
+    drop(killed.scratch);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pause_a_person_pressed_is_still_a_pause_after_a_restart() {
+    let killed = run_and_kill(true).await;
+    let state = start_again(&killed);
+
+    assert_eq!(
+        video::restore_videos(&state).unwrap(),
+        0,
+        "a paused video was carried on"
+    );
+    let paused = video::video_get(&state, &killed.id).unwrap();
+    assert_eq!(paused.state, VideoState::Paused);
+    assert!(paused.paused_by_person);
+    assert!(paused.stage >= VideoStage::Encoding);
+
+    // Nothing moves while it is paused.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        video::video_get(&state, &killed.id).unwrap().state,
+        VideoState::Paused
+    );
+    assert!(
+        state
+            .tasks
+            .list()
+            .unwrap()
+            .iter()
+            .all(|t| t.state.is_final() || !state.tasks.is_alive(&t.id)),
+        "work was started for a paused video"
+    );
+
+    // «Continue» carries on from where it was.
+    video::video_resume(&state, &killed.id).expect("continue was refused");
+    let done = until(
+        &state,
+        &killed.id,
+        "continuing",
+        Duration::from_secs(480),
+        |v| {
+            matches!(
+                v.state,
+                VideoState::Done | VideoState::Problem | VideoState::Cancelled
+            )
+        },
+    )
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    the_set_is_served(&killed.server, &done.slug);
+    assert_eq!(
+        identity(&killed.server, &first_rung_file(&done.slug)).as_deref(),
+        Some(killed.first_rung.as_str()),
+        "the first rung was sent again after continuing"
+    );
+    drop(killed.scratch);
+}
