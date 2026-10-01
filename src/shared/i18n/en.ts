@@ -902,27 +902,23 @@ export const en: Catalogue = {
 
     forget: {
       title: "Remove my data",
-      means:
-        "Everything the application keeps about you: settings, server profiles, the library cache, the place tables and the secrets in the system store. The videos on your server are not touched.",
+      means: "Settings, server profiles, cache and secrets. Videos on the server stay.",
       dataDir: "Directory",
       servers: "Server profiles",
       secrets: "Secrets in the system store",
       none: "none",
       lockedOut: (names: string) =>
-        `These will become unreachable for good: ${names}. Password logins are off on them, and the key exists only here.`,
-      lockedOutAdvice:
-        "Save the key to a file before removing, or the way back to such a server is your hosting provider's console and a reinstall.",
+        `Will become unreachable for good: ${names} — the key exists only here.`,
+      lockedOutAdvice: "Save the key to a file before removing.",
       agree: "I understand this cannot be undone",
       remove: "Remove everything",
       removing: "Removing…",
-      done: "Removed. The application can be uninstalled — nothing of yours is left behind.",
+      done: "Removed. The application can be uninstalled.",
       secretsLeft: (names: string) =>
         `The system store would not give up these secrets: ${names}. They will have to be cleared by hand.`,
-      dirLeft: "The data directory could not be removed — something may be holding a file in it.",
-      tasksRunning:
-        "Stop the tasks first: while any is going — a deployment, an upgrade, an upload, a preparation, a measurement — the data cannot be removed. Wait for them to finish or cancel them on the tasks screen.",
-      changed:
-        "The list changed while you were looking at it: check it again and confirm again. The earlier agreement has been withdrawn.",
+      dirLeft: "The data folder could not be removed — a file is in use.",
+      tasksRunning: "Stop the tasks first.",
+      changed: "The list changed — the agreement has been withdrawn, check again.",
       reading: "Reading the list again…",
     },
     update: {
@@ -931,26 +927,22 @@ export const en: Catalogue = {
       check: "Check for updates",
       checking: "Checking…",
       upToDate: "Nothing newer.",
-      notConfigured:
-        "This build carries no update settings, so there is nowhere to look. Builds from source are like this; released copies update.",
-      unpackaged:
-        "This is a build from the source tree, not an installed copy: there is nothing here to update.",
+      notConfigured: "Updates are not set up in this build.",
+      unpackaged: "A build from source — nothing to update.",
       available: (version: string) => `Version ${version} is out.`,
       published: "Published",
       notes: "What is in it",
       install: "Update",
       installing: "Installing…",
-      warnWindows:
-        "The installer stops the application the moment it starts. Starting it again is up to you.",
+      warnWindows: "The installer closes the app — start it again afterwards.",
       warnPackage:
-        "The system will ask for an administrator password: the package is installed as root. The application carries on running — the new version begins at the next start.",
-      warnAppImage:
-        "The application will rewrite its own file and carry on running as before. The new version begins at the next start.",
+        "The system will ask for the administrator password. The new version starts next launch.",
+      warnAppImage: "The new version starts next launch.",
       // Neutral, because the particulars differ: being stopped, an administrator password,
       // a rewritten file — each is named by the warning right above the checkbox. One
       // wording covering all three would be true on exactly one platform.
-      agree: "I understand a new version will be installed",
-      doneRestartLater: "The update is installed. The new version begins at the next start.",
+      agree: "Install the new version",
+      doneRestartLater: "Update installed. The new version starts next launch.",
     },
     appearance: {
       title: "Appearance",
@@ -960,31 +952,21 @@ export const en: Catalogue = {
       closeTitle: "The close button",
       closeToTray: "Minimise to the notification area",
       closeHides:
-        "The window goes to the notification area and the work carries on: tasks keep running, and the icon shows the application is there. To leave altogether, use Quit on the menu of that icon.",
-      closeExits:
-        "The window closes and the application quits: there is nowhere to minimise to, because this desktop has no notification area. A hidden window would mean an application still running with nothing on screen to say so.",
+        "The window goes to the tray; tasks carry on. To quit, use Quit in the icon's menu.",
+      closeExits: "The window closes and the app quits: this desktop has no tray.",
       closeUnknown: "Whether there is anywhere to minimise to could not be determined.",
       workDir: "Working files",
-      workDirMeans:
-        "While a variant is being made it sits on a disk whole — one and a half to two gigabytes at a time. Beside the source film by default: the disk a film is on certainly fits a film. Change it if you keep a separate disk for scratch work.",
       workDirDefault: "Beside the source file",
       workDirPick: "Choose a folder",
       workDirReset: "Back to the default",
-      workDirLeft:
-        "The old folder still holds {files} file(s), {mb} MB in all. The application will not look there again — remove them yourself if they are not wanted.",
+      workDirLeft: "{files} files ({mb} MB) were left in the old folder — remove them yourself.",
 
       mascot: "Mascot",
       mascotOn: "Show the mascot",
-      mascotMeans:
-        "It shows the same things the task list does: work, success, failure and a viewer in trouble. Turned off, it is not loaded at all rather than merely hidden.",
       animations: "Motion",
       animationsOn: "Smooth transitions",
-      animationsMeans:
-        "Transitions between sections and the mascot's movement. Turned off here or by the system's \u00abreduce motion\u00bb setting \u2014 what the system has turned off cannot be turned back on here.",
 
       heavyTasks: "Concurrent heavy tasks",
-      heavyTasksMeans:
-        "Limits how many conversions, uploads, quality-ladder builds and deployments run at once. More runs the total faster but slows each one down and loads the disk and network harder; fewer means they queue up but stay out of each other's way.",
 
       mascotIdle: "The mascot is resting",
       mascotWorking: "The mascot is busy working",
@@ -1006,8 +988,6 @@ export const en: Catalogue = {
       ratingTrouble: "trouble",
       ratingUnknown: "not established",
       rawTitle: "What was actually read",
-      rawHint:
-        "The judgement above was made out of these figures. They are shown so it can be argued with: it is sometimes wrong.",
       readingServing: "The serving",
       readingDelivery: "Delivery over HTTPS",
       readingFirewall: "Firewall",
@@ -1027,29 +1007,23 @@ export const en: Catalogue = {
       logsUnreadable: (n: number) => `Lines that yielded nothing: ${n}`,
       logsCodes: "Answers",
       logsRangesOk: "Ranges are being served — 206 dominates, as it should.",
-      logsRangesBad:
-        "Whole files are served more often than ranges. Watching works, seeking does not.",
+      logsRangesBad: "Files are sent whole — seeking does not work.",
       logsTopPaths: "Asked for most often",
       logsTopAddresses: "Asked most often",
       logsFailures: "Failures",
       logsNoFailures: "No failures.",
       logsLong: "Long requests",
-      logsLongNormal:
-        "A long request is normally fine: it is a long range fetch. Only the ones that delivered next to nothing are marked.",
-      logsCapped:
-        "Not everything is shown: this stretch holds more lines than could be brought across. Ask for a shorter one.",
+      logsLongNormal: "Only long and nearly empty ones are flagged.",
+      logsCapped: "Not everything is shown — pick a shorter period.",
 
       stallsTitle: "Why the picture stops",
       stallsNoViewers: "Nobody was watching over this stretch.",
       stallsSetAside: "Not viewers",
       stallsOurOwnCheck: "the server's own address — these are our own checks",
-      stallsTooLittle: (n: number) =>
-        `segments taken: ${n} — a cache filling itself, or somebody who has just arrived`,
+      stallsTooLittle: (n: number) => `segments: ${n} — a cache, or just arrived`,
       stallsRatio: "Content received against real time",
       stallsLink: "The viewer's link",
       stallsInDownload: "inside the downloads",
-      stallsInDownloadHint:
-        "The second figure is always the higher: it is the speed inside the downloads, without the pauses between them. The viewer's link is the first.",
       stallsSkipped: "Segments skipped",
       stallsRestarts: "Player restarts",
       stallsWatching: "Watching",
@@ -1063,8 +1037,6 @@ export const en: Catalogue = {
 
       bitrateTitle: "The file's bitrate peaks",
       bitratePick: "Choose a file",
-      bitrateHint:
-        "The file is read here and no server is touched. It can be asked before an upload too — which is when it helps most.",
       bitrateAverage: "Average",
       bitrateMedian: "Median",
       bitratePeak1: "One-second peak",
@@ -1073,10 +1045,8 @@ export const en: Catalogue = {
       bitrateWorst: "Where it is heaviest",
       bitratePeakOverAverage: (times: number) =>
         `The ten-second peak is ${times} times the average.`,
-      bitrateAdvice:
-        "It is this peak that hangs a player whose link is below it. A re-encode with the peaks capped is the cure.",
-      bitrateEven:
-        "The file is even: its peaks are close to its average, and there is nothing to re-encode.",
+      bitrateAdvice: "Fixed by re-encoding with a peak cap.",
+      bitrateEven: "The file is even — no need to re-encode.",
     },
     upgrade: {
       title: "Update the server side",
@@ -1447,7 +1417,7 @@ export const en: Catalogue = {
       counts: "Running: {running}. Waiting: {queued}.",
       heading: "Tasks",
       reading: "Reading the task list…",
-      empty: "No tasks yet. They will appear when you start preparing or uploading video.",
+      empty: "No tasks.",
       speed: "{mbit} Mbit/s",
       etaHours: "~{h} h {m} min left",
       etaMinutes: "~{m} min left",
@@ -1467,26 +1437,22 @@ export const en: Catalogue = {
         diagnose: "diagnostics",
       },
       queueHeading: "In the queue",
-      queueExplain:
-        "Tasks will run in this order. Reordering leaves a task that has already started alone — it would have to be interrupted, losing the work done.",
       moveUp: "Move up the queue",
       moveDown: "Move down the queue",
-      closeLosing: "Closing the application now would lose some of the work",
-      closeSafe: "The application can be closed: unfinished work will continue at the next start",
+      closeLosing: "Closing now will lose some work",
+      closeSafe: "Safe to close — work resumes on next start",
       leaveQuestion: "Leave the application?",
-      leaveUnknown:
-        "What would become of the tasks could not be established. Preparing a file is lost on leaving; an upload carries on from where it got to.",
+      leaveUnknown: "What will happen to the tasks is unknown.",
       leaveConfirm: "Leave",
       leaveCancel: "Stay",
     },
 
     notifications: {
       completed: "Task finished",
-      hiddenTitle: "The window is hidden; the application is still working",
-      hiddenBody:
-        'There is an icon in the notification area: "Show window" on it brings this back. On Windows 11 new icons start out in the overflow (the arrow on the taskbar). To leave for good use "Leave" in the same menu; anything running will say what becomes of it first.',
+      hiddenTitle: "The app is running in the tray",
+      hiddenBody: 'Tray icon → "Show the window". On Windows 11 it may be under the ^ arrow.',
       failed: "Task failed",
-      lookInTasks: "The details are in the Tasks section.",
+      lookInTasks: "Details are in Tasks.",
       done: {
         upload: "The file was uploaded and put into service.",
         convert: "The file is prepared and ready to upload.",

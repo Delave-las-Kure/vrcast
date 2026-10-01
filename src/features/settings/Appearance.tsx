@@ -83,7 +83,6 @@ export function Appearance() {
           />
           {words.mascotOn}
         </label>
-        <p className="appearance__means">{words.mascotMeans}</p>
       </fieldset>
 
       <fieldset>
@@ -98,7 +97,6 @@ export function Appearance() {
           />
           {words.animationsOn}
         </label>
-        <p className="appearance__means">{words.animationsMeans}</p>
       </fieldset>
 
       {/* ⚠ Mounted at last (T399). This section had existed since T395, worded in both

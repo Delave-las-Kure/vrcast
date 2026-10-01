@@ -32,16 +32,13 @@ export function HeavyTasks() {
   return (
     <fieldset>
       <legend>{words.heavyTasks}</legend>
-      <p className="appearance__means">{words.heavyTasksMeans}</p>
       <label>
         <input
           type="number"
           min={1}
           value={value}
           disabled={settings === null}
-          onChange={(e) =>
-            update({ concurrent_heavy_tasks: Math.max(1, Number(e.target.value)) })
-          }
+          onChange={(e) => update({ concurrent_heavy_tasks: Math.max(1, Number(e.target.value)) })}
           data-testid="heavy-tasks-input"
         />
       </label>
