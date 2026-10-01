@@ -1,6 +1,6 @@
 /**
- * T674 — short interface (owner, 2026-10-01: «Слишком много текста бесполезного
- * описательного… Для непонимающего юзера это все полная фигня»).
+ * T674 — short interface. The owner, 2026-10-01: too much descriptive text that means nothing
+ * to somebody who does not already understand it.
  *
  * The rule: screens carry short labels; explanations live only in errors, one line plus
  * «Подробнее». This holds it in numbers rather than in attention: every `ui.*` wording in both
