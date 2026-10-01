@@ -1625,3 +1625,8 @@ button.danger:disabled {
 .video__rungs {
   max-width: none;
 }
+
+/* The library's «Add video» sits in a row of buttons, not under a paragraph. */
+.library__add {
+  margin-top: 0;
+}

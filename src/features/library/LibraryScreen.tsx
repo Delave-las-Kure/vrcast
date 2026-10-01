@@ -306,6 +306,11 @@ export function LibraryScreen() {
           <button onClick={() => setDialog({ kind: "create" })} disabled={busy}>
             {t.ui.library.newMedia}
           </button>
+          {/* T673 — a film becomes a medium by going through «Video», where the file dialog
+              opens straight away (`?add=1`). */}
+          <Link className="button-link library__add" to="/video?add=1">
+            {t.ui.video.add}
+          </Link>
         </div>
       </div>
 
