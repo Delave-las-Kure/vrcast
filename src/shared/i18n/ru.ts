@@ -634,6 +634,8 @@ export const ruCore: CatalogueCore = {
     STALLS_VIEWER_LINK:
       "Не хватает канала зрителя: {ratio}× при {mbit_s} Мбит/с (в закачках {in_download_mbit_s}). Пропусков: {skipped}, перезапусков: {restarts}.",
     VIDEO_ALREADY_LISTED: "Это видео уже в списке",
+    VIDEO_REPLACE_FILE_CLAIMED:
+      "Файл «{name}» принадлежит медиа — его не удаляем. Выберите другое имя.",
   },
 
   plurals: {
@@ -1092,6 +1094,8 @@ const ui = {
     retry: "Повторить",
     buildAnyway: "Всё равно собрать",
     replace: "Заменить",
+    replaceAsk: "Старый набор «{title}» будет удалён и собран заново",
+    replaceAnyway: "Всё равно заменить",
     stagesLabel: "Этапы",
     stages: {
       measuring: "Замер",

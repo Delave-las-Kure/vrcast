@@ -1603,36 +1603,126 @@ pub mod api {
         video_get(state, id)
     }
 
-    /// The name is taken: build into the medium that has it (its other files stay).
-    pub async fn video_replace(state: &AppState, id: &str) -> Result<VideoView> {
+    /// The name is taken: build into the medium that has it, **its old set removed first**
+    /// (T676, the owner's decision of 2026-10-01).
+    ///
+    /// **Why removed and not reused.** `ladder_build` takes a rung on the server for done
+    /// when it lasts as long as the source, within a second, and the cutting leaves alone a
+    /// variant already cut whole. Under a taken name there may be another film of the same
+    /// length — its rungs would be taken for this one's and served under its link. So the
+    /// set's directory (`{slug}/`: the cut rungs and `master.m3u8`) and its prepared rungs
+    /// (`{slug}_{N}.mp4`, `.part`) go, through the same guarded `rm` deleting a medium uses,
+    /// and the set is built again whole. The medium's other files stay (T577, part b).
+    ///
+    /// **Only here.** A video that carries on after a restart, or after «Retry», still finds
+    /// its own rungs done: nothing but this command removes anything.
+    ///
+    /// Refused, with nothing removed: `FILE_IN_USE` while the server is serving somebody and
+    /// `confirmed` is false (as T571 — the way on is «anyway», `confirmed: true`);
+    /// `MEDIA_BUSY` while a build or a sending of this name is running;
+    /// `INVALID_INPUT` + `VIDEO_REPLACE_FILE_CLAIMED` when a medium claims a file named like
+    /// one of the set's rungs (somebody's file, not ours to remove, and the build would
+    /// take it for a finished rung).
+    pub async fn video_replace(state: &AppState, id: &str, confirmed: bool) -> Result<VideoView> {
         let row = load(state, id)?;
         if !video::allowed(Act::Replace, row.state, row.stage, row.media_id.is_some()) {
             return Err(not_now(&row));
         }
-        let profile = super::super::library::api::profile_of(state, &row.server_id)?;
+        // One replace at a time for a video: a second click must not remove what the first
+        // has just begun to build.
+        if !lock(&state.videos.inner.starting).insert(id.to_owned()) {
+            return Err(not_now(&row));
+        }
+        let cleared = clear_old_set(state, &row, confirmed).await;
+        let outcome = cleared.and_then(|media_id| {
+            change(state, id, |r| {
+                if !video::allowed(Act::Replace, r.state, r.stage, r.media_id.is_some()) {
+                    return Err(not_now(r));
+                }
+                r.media_id = media_id.clone();
+                // The set this medium had is gone, so nobody can be watching it: the build
+                // that makes it again needs no «anyway» against viewers (T571), as for a
+                // medium this video made itself.
+                r.own_medium = true;
+                r.problem_json = None;
+                r.state = VideoState::Working;
+                r.start_requested = true;
+                Ok(())
+            })
+        });
+        lock(&state.videos.inner.starting).remove(id);
+        outcome?;
+        start_going(state, id);
+        video_get(state, id)
+    }
+
+    /// Remove what a set of this video's name has on the server; the medium that holds the
+    /// name, if any is left.
+    async fn clear_old_set(
+        state: &AppState,
+        row: &VideoRow,
+        confirmed: bool,
+    ) -> Result<Option<String>> {
+        use super::super::library::api as library;
+        let profile = library::profile_of(state, &row.server_id)?;
         let conn = crate::server::gate::open(
             state.secrets.as_ref(),
             &profile,
-            crate::server::gate::Intent::Read,
+            crate::server::gate::Intent::Change,
         )
         .await?
         .conn;
-        let manifest = crate::server::manifest_io::read(&conn, &profile.video_dir).await;
-        conn.close().await;
-        let media_id = manifest?.find_by_slug(&row.slug).map(|m| m.id.clone());
-        change(state, id, |r| {
-            if !video::allowed(Act::Replace, r.state, r.stage, r.media_id.is_some()) {
-                return Err(not_now(r));
+        let cleared = async {
+            let manifest = crate::server::manifest_io::read(&conn, &profile.video_dir).await?;
+            let media_id = manifest.find_by_slug(&row.slug).map(|m| m.id.clone());
+            let entries: Vec<(String, bool)> =
+                crate::server::listing::list(&conn, &profile.video_dir)
+                    .await?
+                    .into_iter()
+                    .map(|e| (e.name, e.is_dir))
+                    .collect();
+            let old = video::old_set(&row.slug, &entries, &manifest.all_claimed_paths());
+            if let Some(name) = old.in_the_way.first() {
+                return Err(AppError::new(ErrorCode::InvalidInput)
+                    .with_detail(
+                        Detail::new(DetailCode::VideoReplaceFileClaimed).with("name", name.clone()),
+                    )
+                    .with_cause(old.in_the_way.join(", ")));
             }
-            r.media_id = media_id.clone();
-            r.own_medium = false;
-            r.problem_json = None;
-            r.state = VideoState::Working;
-            r.start_requested = true;
-            Ok(())
-        })?;
-        start_going(state, id);
-        video_get(state, id)
+            if old.is_empty() {
+                return Ok(media_id);
+            }
+            // The name itself is asked about even when only loose rungs are left: a build of
+            // it writes `{slug}_{N}.mp4`, and those tops are not the slug.
+            let mut tops = old.tops(&row.slug);
+            if !tops.contains(&row.slug) {
+                tops.push(row.slug.clone());
+            }
+            if let Some(busy) =
+                library::refuse_if_busy(state, &row.server_id, &tops, ErrorCode::MediaBusy)?
+            {
+                return Err(busy);
+            }
+            if !confirmed {
+                let connections = library::active_connections(&conn).await;
+                if connections > 0 {
+                    return Err(AppError::new(ErrorCode::FileInUse)
+                        .with_cause(format!("connections={connections}")));
+                }
+            }
+            library::remove_entries(&conn, &profile.video_dir, old.tops(&row.slug).iter()).await?;
+            tracing::info!(
+                video = %row.id,
+                slug = %row.slug,
+                removed = old.tops(&row.slug).len(),
+                "the old set under a taken name was removed before building it again"
+            );
+            state.invalidate_library(&row.server_id);
+            Ok(media_id)
+        }
+        .await;
+        conn.close().await;
+        cleared
     }
 
     /// Take a video off the list. Nothing on the server is touched (T577, part b). Not while it is
@@ -1762,8 +1852,12 @@ pub mod ipc {
     }
 
     #[tauri::command]
-    pub async fn video_replace(state: State<'_, AppState>, id: String) -> Result<VideoView> {
-        api::video_replace(&state, &id).await
+    pub async fn video_replace(
+        state: State<'_, AppState>,
+        id: String,
+        confirmed: bool,
+    ) -> Result<VideoView> {
+        api::video_replace(&state, &id, confirmed).await
     }
 
     #[tauri::command]

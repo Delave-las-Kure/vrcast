@@ -575,7 +575,38 @@ describe("a problem", () => {
     await waitFor(() => expect(mockVideoRetry).toHaveBeenCalledWith("v1", false));
 
     fireEvent.click((await card("v2")).getByRole("button", { name: ru.ui.video.replace }));
-    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v2"));
+    // T676 — asked first, in one line; nothing is sent until it is answered.
+    const ask = (await card("v2")).getByRole("group", { name: ru.ui.video.replace });
+    expect(ask).toHaveTextContent("Старый набор «Фильм» будет удалён и собран заново");
+    expect(mockVideoReplace).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole("button", { name: ru.ui.video.replace }));
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v2", false));
+  });
+
+  it("asks «replace anyway» when somebody is watching, and «cancel» sends nothing", async () => {
+    mockVideoList.mockResolvedValue([problem("SLUG_TAKEN", ["replace", "rename"])]);
+    mockVideoReplace.mockImplementation(() =>
+      Promise.resolve(problem("SLUG_TAKEN", ["replace", "rename"])),
+    );
+    mockVideoReplace.mockRejectedValueOnce({ code: "FILE_IN_USE", details: [], cause: null });
+    show();
+    const c = await card();
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.replace }));
+    fireEvent.click(
+      within(c.getByRole("group", { name: ru.ui.video.replace })).getByRole("button", {
+        name: ru.ui.video.replace,
+      }),
+    );
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v1", false));
+    fireEvent.click(await c.findByRole("button", { name: ru.ui.video.replaceAnyway }));
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v1", true));
+
+    // Asked again and let go: nothing more is sent, the problem's buttons are back.
+    mockVideoReplace.mockClear();
+    fireEvent.click(await c.findByRole("button", { name: ru.ui.video.replace }));
+    fireEvent.click(c.getByRole("button", { name: ru.ui.common.cancel }));
+    expect(c.queryByRole("group", { name: ru.ui.video.replace })).toBeNull();
+    expect(mockVideoReplace).not.toHaveBeenCalled();
   });
 
   it("asks for another name and goes on with it", async () => {

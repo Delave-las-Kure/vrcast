@@ -469,3 +469,66 @@ fn a_video_waiting_for_start_is_not_paused_or_resumed_by_a_restart() {
     assert_eq!(after_restart(VideoState::Ready), AfterRestart::Leave);
     assert_eq!(after_restart(VideoState::Paused), AfterRestart::Leave);
 }
+
+// ---------- «Replace» (T676) ----------
+
+/// A video stopped on a taken name, as `next_task` leaves it: no medium of its own yet.
+fn stopped_on_a_taken_name(state: &AppState, server: &str, id: &str) {
+    let mut row = VideoRow::new(id, server, "C:/nowhere/film.mp4", "Film", "film");
+    row.stage = VideoStage::Planned;
+    row.state = VideoState::Problem;
+    row.problem_json = Some(
+        serde_json::json!({
+            "error": vrcast_studio_lib::commands::error::AppError::new(ErrorCode::SlugTaken),
+            "actions": ["replace", "rename"],
+        })
+        .to_string(),
+    );
+    rows::save(&state.db, &row).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replace_is_only_for_a_taken_name_and_asks_the_server_before_anything_changes() {
+    let state = state();
+    let server = server(&state);
+    stopped_on_a_taken_name(&state, &server, "taken");
+
+    // The server does not answer: nothing was removed, so nothing changes — the video is
+    // still stopped on its name, with the same two choices, and «Replace» can be pressed again.
+    let err = video::video_replace(&state, "taken", false)
+        .await
+        .expect_err("replace went ahead without asking the server");
+    assert_ne!(err.code, ErrorCode::VideoNotNow, "{err:?}");
+    let after = video::video_get(&state, "taken").unwrap();
+    assert_eq!(after.state, VideoState::Problem);
+    assert!(after.media_id.is_none());
+    assert_eq!(
+        after.problem.unwrap().actions,
+        vec![VideoAction::Replace, VideoAction::Rename]
+    );
+    assert!(state.tasks.list().unwrap().is_empty(), "work was started");
+
+    // Not for a video that is not stopped on its name, nor one that has its medium.
+    let mut ready = VideoRow::new("ready", &server, "C:/nowhere/a.mp4", "A", "a");
+    ready.state = VideoState::Ready;
+    rows::save(&state.db, &ready).unwrap();
+    let mut owned = VideoRow::new("owned", &server, "C:/nowhere/b.mp4", "B", "b");
+    owned.state = VideoState::Problem;
+    owned.media_id = Some(String::from("m_b"));
+    rows::save(&state.db, &owned).unwrap();
+    for id in ["ready", "owned"] {
+        for confirmed in [false, true] {
+            let err = video::video_replace(&state, id, confirmed)
+                .await
+                .expect_err("replace was taken in a state that does not allow it");
+            assert_eq!(err.code, ErrorCode::VideoNotNow, "{id}");
+        }
+    }
+    assert_eq!(
+        video::video_replace(&state, "nobody", false)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::VideoNotFound
+    );
+}

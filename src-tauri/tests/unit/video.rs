@@ -530,3 +530,74 @@ fn an_encoders_speed_is_remembered_per_encoder() {
         Some(999.0)
     );
 }
+
+// ---------- «Replace»: what of an old set goes (T676) ----------
+
+fn top(entries: &[(&str, bool)]) -> Vec<(String, bool)> {
+    entries.iter().map(|(n, d)| (n.to_string(), *d)).collect()
+}
+
+#[test]
+fn a_rung_file_is_the_slug_an_underscore_whole_megabits_and_mp4() {
+    for yes in ["film_8.mp4", "film_12.mp4", "film_8.mp4.part"] {
+        assert!(video::is_rung_file("film", yes), "{yes}");
+    }
+    for no in [
+        "film.mp4",
+        "film_.mp4",
+        "film_8a.mp4",
+        "film_8.mkv",
+        "film-2_8.mp4",
+        "films_8.mp4",
+        "other_8.mp4",
+        "film",
+    ] {
+        assert!(!video::is_rung_file("film", no), "{no}");
+    }
+}
+
+#[test]
+fn the_old_set_is_its_directory_and_its_unclaimed_rung_files() {
+    let entries = top(&[
+        ("film", true),
+        ("film_8.mp4", false),
+        ("film_4.mp4.part", false),
+        ("film_2.mp4", false),
+        // Another medium's, and the medium's own single file: not the set's.
+        ("film-2", true),
+        ("film-2_8.mp4", false),
+        ("film.mp4", false),
+        ("library.json", false),
+    ]);
+    let old = video::old_set("film", &entries, &["film.mp4", "film/master.m3u8"]);
+    assert!(old.dir);
+    assert_eq!(
+        old.files,
+        vec!["film_2.mp4", "film_4.mp4.part", "film_8.mp4"]
+    );
+    assert!(old.in_the_way.is_empty());
+    assert_eq!(
+        old.tops("film"),
+        vec!["film", "film_2.mp4", "film_4.mp4.part", "film_8.mp4"]
+    );
+    assert!(!old.is_empty());
+}
+
+#[test]
+fn a_claimed_file_with_a_rung_s_name_is_in_the_way_not_removed() {
+    // Somebody filed `film_8.mp4` under a medium by hand: it is theirs (T577, part b), and a
+    // build would take it for a finished rung.
+    let entries = top(&[("film_8.mp4", false), ("film_4.mp4", false)]);
+    let old = video::old_set("film", &entries, &["film_8.mp4"]);
+    assert_eq!(old.in_the_way, vec!["film_8.mp4"]);
+    assert_eq!(old.files, vec!["film_4.mp4"]);
+}
+
+#[test]
+fn nothing_under_the_name_is_nothing_to_remove() {
+    let old = video::old_set("film", &top(&[("other", true), ("film.mp4", false)]), &[]);
+    assert!(old.is_empty());
+    assert!(old.tops("film").is_empty());
+    // A file called like the directory is not the directory.
+    assert!(!video::old_set("film", &top(&[("film", false)]), &[]).dir);
+}

@@ -1228,7 +1228,7 @@ pub mod api {
     ///
     /// It lives in `server::active_use`: the same thing is needed before an upload (FR-037),
     /// and two copies of one count would diverge at the first edit.
-    async fn active_connections(conn: &Connection) -> usize {
+    pub(crate) async fn active_connections(conn: &Connection) -> usize {
         crate::server::active_use::serving_connections(conn).await
     }
 
@@ -1264,7 +1264,7 @@ pub mod api {
     /// the very same top. Running both checks against every top is two cheap in-memory scans
     /// with no case left unguarded, rather than a guess at which check "belongs" to which
     /// kind of path.
-    fn refuse_if_busy(
+    pub(crate) fn refuse_if_busy(
         state: &AppState,
         server_id: &str,
         tops: &[String],
@@ -1298,7 +1298,7 @@ pub mod api {
     }
 
     /// Delete catalogue entries — both files and quality-ladder directories.
-    async fn remove_entries<'a>(
+    pub(crate) async fn remove_entries<'a>(
         conn: &Connection,
         video_dir: &str,
         paths: impl Iterator<Item = &'a String>,

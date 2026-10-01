@@ -436,8 +436,10 @@ export const ipc = {
   /** Carry on from the stage it stopped at. `confirmed` — «build anyway» (viewers on the
    *  server, objections to the ladder); false for a plain «retry». */
   videoRetry: (id: string, confirmed: boolean) => call<VideoView>("video_retry", { id, confirmed }),
-  /** The short name is taken: build into the medium that has it. */
-  videoReplace: (id: string) => call<VideoView>("video_replace", { id }),
+  /** The short name is taken: remove the old set of that name and build it again whole
+   *  (T676). `confirmed` — «anyway» while somebody is watching (FILE_IN_USE). */
+  videoReplace: (id: string, confirmed: boolean) =>
+    call<VideoView>("video_replace", { id, confirmed }),
   /** Off the list only; nothing on the server is touched. */
   videoRemove: (id: string) => call<void>("video_remove", { id }),
 };

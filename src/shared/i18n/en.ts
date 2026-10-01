@@ -648,6 +648,8 @@ export const en: Catalogue = {
       "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}). Skipped: {skipped}, restarts: {restarts}.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
+    VIDEO_REPLACE_FILE_CLAIMED:
+      "The file “{name}” belongs to a medium and is not removed. Choose another name.",
   },
 
   plurals: {
@@ -1099,6 +1101,8 @@ export const en: Catalogue = {
       retry: "Retry",
       buildAnyway: "Build anyway",
       replace: "Replace",
+      replaceAsk: "The old set “{title}” will be removed and built again",
+      replaceAnyway: "Replace anyway",
       stagesLabel: "Stages",
       stages: {
         measuring: "Measure",

@@ -550,6 +550,10 @@ detail_codes! {
     // --- videos in work (T672) ---
     /// This file is already on the list of videos for this server, and not finished.
     VideoAlreadyListed => "VIDEO_ALREADY_LISTED",
+    /// `name`. «Replace» (T676) found a file named like a rung of this set that a medium
+    /// claims: it is somebody's, so it is not removed, and the build would take it for a
+    /// finished rung. Nothing was removed.
+    VideoReplaceFileClaimed => "VIDEO_REPLACE_FILE_CLAIMED",
 }
 
 impl TryFrom<String> for DetailCode {

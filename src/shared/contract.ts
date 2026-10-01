@@ -368,7 +368,8 @@ export type DetailCode =
   | "STALLS_VIEWER_LINK"
   | "STALLS_THE_PLAYER"
   // Videos in work (T672).
-  | "VIDEO_ALREADY_LISTED";
+  | "VIDEO_ALREADY_LISTED"
+  | "VIDEO_REPLACE_FILE_CLAIMED";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {
