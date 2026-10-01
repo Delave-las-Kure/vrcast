@@ -561,3 +561,137 @@ async fn a_cancelled_complexity_probe_stops_mid_piece() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------- T670(2): a question about another file stops the probe ----------
+
+#[test]
+fn a_plan_question_about_another_file_cancels_the_one_in_flight_and_the_same_file_does_not() {
+    let state = state();
+    let probes = &state.plan_probes;
+
+    let first = probes.enter("F:/films/a.mp4");
+    // The screen asks again about the same file — the peak landed, a field changed.
+    let again = probes.enter("F:/films/a.mp4");
+    assert!(
+        !first.cancel().is_cancelled(),
+        "asking again about the same file stopped the first question"
+    );
+    assert_eq!(probes.in_flight(), 2);
+
+    // Another file: the screen has moved on.
+    let other = probes.enter("F:/films/b.mp4");
+    assert!(first.cancel().is_cancelled());
+    assert!(again.cancel().is_cancelled());
+    assert!(!other.cancel().is_cancelled());
+
+    // A finished question leaves, whichever way it ended.
+    drop(first);
+    drop(again);
+    assert_eq!(probes.in_flight(), 1);
+    drop(other);
+    assert_eq!(probes.in_flight(), 0);
+
+    // And a state is its own application: another one's questions are not touched.
+    let elsewhere = super::support::state();
+    let mine = probes.enter("F:/films/a.mp4");
+    let _theirs = elsewhere.plan_probes.enter("F:/films/c.mp4");
+    assert!(!mine.cancel().is_cancelled());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn opening_another_file_stops_the_probe_of_the_one_left() {
+    use std::time::{Duration, Instant};
+
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        eprintln!(
+            "SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this check to check anything."
+        );
+        return;
+    };
+    if ffmpeg::locate("ffprobe").is_err() {
+        eprintln!("SKIPPED: no bundled ffprobe");
+        return;
+    }
+    // Long enough, and dense enough, that three ten-second pieces at the production x264
+    // preset take a good while: what is checked is that the answer comes back long before.
+    let dir = std::env::temp_dir().join(format!(
+        "vrcast-t670-plan-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let film = dir.join("left.mp4");
+    let made = std::process::Command::new(&ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1920x1080:rate=30",
+            "-t",
+            "60",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&film)
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(made.status.success());
+
+    let state = state();
+    let request = LadderRequest {
+        path: film.to_string_lossy().into_owned(),
+        codec: String::from("h264"),
+        native_height: None,
+        declared_layout: None,
+        measured_peak_bps: None,
+        prefer_hardware: false,
+    };
+    let asking = state.clone();
+    let started = Instant::now();
+    let left = tokio::spawn(async move { ladder::ladder_plan(&asking, &request).await });
+
+    // Until the question is registered and its probe has begun encoding.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while state.plan_probes.in_flight() == 0 {
+        assert!(Instant::now() < deadline, "the plan question never began");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // The screen opens another file. It need not exist: the question is registered before
+    // anything is read, and it is the registering that stops the old one.
+    let _ = ladder::ladder_plan(
+        &state,
+        &LadderRequest {
+            path: dir.join("next.mp4").to_string_lossy().into_owned(),
+            codec: String::from("h264"),
+            native_height: None,
+            declared_layout: None,
+            measured_peak_bps: None,
+            prefer_hardware: false,
+        },
+    )
+    .await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(30), left)
+        .await
+        .expect("the left file's probe did not stop")
+        .expect("the plan question panicked");
+    let took = started.elapsed();
+    let err = outcome.expect_err("the left file's plan came back as though nobody had moved on");
+    assert_eq!(err.code, ErrorCode::TaskCancelled, "{err:?}");
+    assert_eq!(
+        state.plan_probes.in_flight(),
+        0,
+        "a stopped question stayed registered"
+    );
+    eprintln!("stopped after {took:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

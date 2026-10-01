@@ -617,7 +617,49 @@ async fn send(
     ctx: &TaskContext,
 ) -> Result<(), BuildError> {
     let target = format!("{}/{}", job.video_dir.trim_end_matches('/'), name);
+    send_file(job.conn, local, &target, ctx, PAUSE_HOLD_LIMIT).await
+}
+
+/// How long a pause may keep a variant's file session open on the server (T670(4)).
+///
+/// A pause pressed mid-send used to hold the SFTP session — a channel of the connection, and
+/// an `sftp-server` process on the server — for as long as the pause lasted, which may be the
+/// night. A minute covers the pause pressed to look at something and let go; past it the
+/// session is closed, and opened again when the task carries on.
+pub const PAUSE_HOLD_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Send `local` to `target` on the server, staged as `target.part` and renamed into place
+/// (T660), letting go of the file session during a long pause (T670(4)).
+///
+/// **Carrying on writes on from where it stopped, not from the start.** The staged file is
+/// closed cleanly when the pause outlasts `hold_limit` — everything handed over is on the
+/// server — and on carrying on it is opened again *without truncating*, its size asked, and
+/// the sending goes on from that byte, the local file read from the same place. Starting the
+/// rung over would throw away gigabytes for nothing. The one exception is a staged file whose
+/// size is not what was sent (somebody touched it, or a write was lost): then nothing on the
+/// server can be trusted and the rung is sent again from zero, into a truncated file.
+///
+/// A cancel during the closed pause still removes the staged `.part`, through a session
+/// opened for that alone.
+///
+/// Public for the check against a real server, which lives in another crate (like
+/// [`write_master`]).
+pub async fn send_file(
+    conn: &Connection,
+    local: &Path,
+    target: &str,
+    ctx: &TaskContext,
+    hold_limit: std::time::Duration,
+) -> Result<(), BuildError> {
+    use russh_sftp::protocol::OpenFlags;
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
     let staged = format!("{target}.part");
+    let sftp_failed = |e: &(dyn std::error::Error + Send + Sync)| {
+        BuildError::Ssh(crate::ssh::SshError::sftp(
+            crate::store::redact::safe_display(e),
+        ))
+    };
 
     let mut source = tokio::fs::File::open(local)
         .await
@@ -629,39 +671,91 @@ async fn send(
         .len();
 
     ctx.report_important(0.0, DetailCode::StageSendingVariant);
-    let sftp = job.conn.sftp().await?;
-    let written = async {
-        use tokio::io::AsyncWriteExt;
-        let mut file = sftp.create(staged.clone()).await?;
-        let sent = stream_blocks(&mut source, &mut file, total, ctx).await;
-        if sent.is_ok() {
-            file.flush().await?;
-            file.shutdown().await?;
+    // Where the staged file stands: `None` before anything was opened, so the first opening
+    // truncates whatever a previous attempt left under the same name.
+    let mut resume_at: Option<u64> = None;
+    loop {
+        let sftp = conn.sftp().await?;
+        let written = async {
+            let (mut file, from) = match resume_at {
+                None => (sftp.create(staged.clone()).await?, 0),
+                Some(at) => {
+                    let there = sftp.metadata(staged.clone()).await?.size.unwrap_or(0);
+                    if there == at {
+                        let mut file = sftp
+                            .open_with_flags(staged.clone(), OpenFlags::WRITE)
+                            .await?;
+                        file.seek(std::io::SeekFrom::Start(at)).await?;
+                        (file, at)
+                    } else {
+                        tracing::warn!(
+                            expected = at,
+                            found = there,
+                            "the staged variant is not what was sent; sending it again whole"
+                        );
+                        (sftp.create(staged.clone()).await?, 0)
+                    }
+                }
+            };
+            source.seek(std::io::SeekFrom::Start(from)).await?;
+            let sent =
+                stream_blocks_holding(&mut source, &mut file, from, total, ctx, Some(hold_limit))
+                    .await;
+            if matches!(sent, Ok(_) | Err(StreamError::PausedTooLong { .. })) {
+                // Closed cleanly in both cases: on a long pause what was handed over has to be
+                // on the server before the session goes, or the size asked on carrying on
+                // would not be the size sent.
+                file.flush().await?;
+                file.shutdown().await?;
+            }
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(sent)
         }
-        sent.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-    }
-    .await;
-    if let Err(e) = written {
-        let _ = sftp.remove_file(staged.clone()).await;
-        if ctx.is_cancelled() {
-            return Err(BuildError::Cancelled);
+        .await;
+
+        match written {
+            Ok(Ok(_)) => break,
+            Ok(Err(StreamError::PausedTooLong { sent })) => {
+                // Let go of the session for the rest of the pause: the channel, its place in
+                // the connection's pool and the server's `sftp-server` all go with it.
+                let _ = sftp.close().await;
+                drop(sftp);
+                tracing::info!(sent, "a long pause: the variant's file session is closed");
+                ctx.wait_while_paused().await;
+                if ctx.is_cancelled() {
+                    if let Ok(again) = conn.sftp().await {
+                        let _ = again.remove_file(staged.clone()).await;
+                    }
+                    return Err(BuildError::Cancelled);
+                }
+                resume_at = Some(sent);
+            }
+            Ok(Err(e)) => {
+                let _ = sftp.remove_file(staged.clone()).await;
+                if ctx.is_cancelled() {
+                    return Err(BuildError::Cancelled);
+                }
+                return Err(sftp_failed(&e));
+            }
+            Err(e) => {
+                let _ = sftp.remove_file(staged.clone()).await;
+                if ctx.is_cancelled() {
+                    return Err(BuildError::Cancelled);
+                }
+                return Err(sftp_failed(&*e));
+            }
         }
-        return Err(BuildError::Ssh(crate::ssh::SshError::sftp(
-            crate::store::redact::safe_display(&*e),
-        )));
     }
 
     // Renamed into place only once it is all there: a reader sees either no file or the
     // whole one, never a growing one. That is also what lets `already_there` trust a file
     // it finds.
-    job.conn
-        .exec(&format!(
-            "mv {} {}",
-            crate::server::shell_quote(&staged),
-            crate::server::shell_quote(&target)
-        ))
-        .await?
-        .require_ok("could not put the variant in place")?;
+    conn.exec(&format!(
+        "mv {} {}",
+        crate::server::shell_quote(&staged),
+        crate::server::shell_quote(target)
+    ))
+    .await?
+    .require_ok("could not put the variant in place")?;
     Ok(())
 }
 
@@ -680,6 +774,10 @@ pub enum StreamError {
     Write(std::io::Error),
     #[error("the sending was cancelled")]
     Cancelled,
+    /// A pause outlasted the hold limit (T670(4)): `sent` bytes went across in all, counting
+    /// from the start of the file, and the caller is to let go of the session.
+    #[error("paused for longer than the session is held, after {sent} bytes")]
+    PausedTooLong { sent: u64 },
 }
 
 /// Copy `from` into `into` one [`SEND_BLOCK`] at a time (T660).
@@ -701,15 +799,49 @@ where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
+    stream_blocks_holding(from, into, 0, total, ctx, None).await
+}
+
+/// The same, starting `already` bytes into the file, and giving up a pause that lasts
+/// longer than `hold_limit` (T670(4)).
+///
+/// `already` only counts: the reader and the writer are expected to stand at that byte
+/// already. With a `hold_limit`, a pause that is still on when the limit runs out ends the
+/// copy with [`StreamError::PausedTooLong`] carrying the bytes sent so far (from the start of
+/// the file), so the caller can close what it holds and pick up from there later. A pause let
+/// go of, or a cancel, before the limit is answered here as before. Returns the bytes sent
+/// in all, counting from the start of the file.
+pub async fn stream_blocks_holding<R, W>(
+    from: &mut R,
+    into: &mut W,
+    already: u64,
+    total: u64,
+    ctx: &TaskContext,
+    hold_limit: Option<std::time::Duration>,
+) -> Result<u64, StreamError>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut block = vec![0u8; SEND_BLOCK];
-    let mut sent: u64 = 0;
+    let mut sent: u64 = already;
     loop {
         if ctx.is_cancelled() {
             return Err(StreamError::Cancelled);
         }
-        ctx.wait_while_paused().await;
+        match hold_limit {
+            Some(limit) if ctx.is_paused() => {
+                if tokio::time::timeout(limit, ctx.wait_while_paused())
+                    .await
+                    .is_err()
+                {
+                    return Err(StreamError::PausedTooLong { sent });
+                }
+            }
+            _ => ctx.wait_while_paused().await,
+        }
         if ctx.is_cancelled() {
             return Err(StreamError::Cancelled);
         }

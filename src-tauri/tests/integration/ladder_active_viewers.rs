@@ -31,6 +31,16 @@
 //! it well before the unreachable verify step ever runs, so its presence on the server is
 //! proof the confirmation guard let the build through — proof that does not depend on
 //! network reachability this fixture cannot provide.
+//!
+//! **Why the first build is then cancelled and waited out** (T671). Since T591
+//! `ladder_build` refuses a second build of a slug while one is still alive
+//! (`running_build_for`, `BUILD_ALREADY_RUNNING`) — rightly. The first build here never
+//! finishes by itself (the verify above), so a confirmed rebuild issued while it is still
+//! alive is refused for that reason, not for the one under test. The stand therefore
+//! cancels the first build once its `master.m3u8` is on the server and waits until the
+//! engine has written a final state for it — only then is the guard asked anything. A
+//! `domain` pointing at the container would not get it to `Completed` instead: the link is
+//! always `https://`, and the container serves plain HTTP on 80 only.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -45,6 +55,7 @@ use vrcast_studio_lib::domain::server_profile::AuthKind;
 use vrcast_studio_lib::media::ffmpeg;
 use vrcast_studio_lib::store::db::Db;
 use vrcast_studio_lib::store::secrets::InMemorySecretStore;
+use vrcast_studio_lib::tasks::state::TaskState;
 
 use super::fixture::{key_path, TestServer, KEY_PASSPHRASE};
 use super::library_ops::confirm_fingerprint;
@@ -191,6 +202,69 @@ async fn wait_for_master(server: &TestServer, slug: &str, limit: Duration) {
     }
 }
 
+/// Which file `master.m3u8` currently is: its inode and its modification time to the
+/// nanosecond. `write_master` puts a staged copy in place with `mv`, so a rewrite always
+/// changes the inode — a rebuild that really wrote the master is told apart from the old
+/// one still lying there, which a bare `test -e` cannot do.
+fn master_identity(server: &TestServer, slug: &str) -> Option<String> {
+    server
+        .exec_inside(&format!("stat -c '%i %y' '{VIDEO_DIR}/{slug}/master.m3u8'"))
+        .ok()
+        .map(|s| s.trim().to_owned())
+}
+
+/// Wait until `master.m3u8` for this slug is a different file from `before`.
+async fn wait_for_master_rewritten(server: &TestServer, slug: &str, before: &str, limit: Duration) {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(now) = master_identity(server, slug) {
+            if now != before {
+                return;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "master.m3u8 for '{slug}' was never rewritten in the time allowed"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Cancel a build and wait until the engine has written a final state for it (T671).
+///
+/// Cancelled is what is expected; Failed is accepted too, because the build may already
+/// have reached its unreachable verify and failed on it before the cancel landed — either
+/// way it is no longer alive, which is all `running_build_for` asks. Completed would mean
+/// this fixture reached `https://stream.example.com`, which it cannot.
+async fn cancel_and_wait_final(state: &AppState, task_id: &str, limit: Duration) {
+    // A task already finished is not among the living and is left as it is.
+    state
+        .tasks
+        .cancel(task_id)
+        .expect("the build could not be cancelled");
+    let deadline = Instant::now() + limit;
+    loop {
+        let record = state
+            .tasks
+            .get(task_id)
+            .expect("the task list could not be read")
+            .expect("the build task vanished");
+        if record.state.is_final() {
+            assert!(
+                matches!(record.state, TaskState::Cancelled | TaskState::Failed),
+                "the first build ended as {:?} — the fixture cannot verify a set: {record:?}",
+                record.state
+            );
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the build never reached a final state after being cancelled: {record:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rebuilding_while_watched_is_refused_unless_confirmed() {
     let (server, state, id) = setup().await;
@@ -210,13 +284,18 @@ async fn rebuilding_while_watched_is_refused_unless_confirmed() {
         .expect("the medium was not created");
 
     // ---- the first build: nobody is watching, so it goes through unconfirmed ----
-    ladder::ladder_build(&state, build_request(&id, &path, "t571", false))
+    let first = ladder::ladder_build(&state, build_request(&id, &path, "t571", false))
         .await
         .expect("the first build was refused although nobody was watching yet");
     wait_for_master(&server, "t571", Duration::from_secs(60)).await;
+    // ---- and is then brought to a final state, so that what is asked below is the
+    // viewer guard and nothing else (T671; module doc) ----
+    cancel_and_wait_final(&state, &first, Duration::from_secs(120)).await;
     let master_before = server
         .exec_inside(&format!("cat '{VIDEO_DIR}/t571/master.m3u8'"))
         .expect("the built master.m3u8 is not on the server");
+    let identity_before =
+        master_identity(&server, "t571").expect("the built master.m3u8 cannot be looked at");
 
     // ---- a viewer starts pulling something being served, so there is now an open
     // connection on port 80 for `active_use::serving_connections` to see ----
@@ -254,16 +333,23 @@ async fn rebuilding_while_watched_is_refused_unless_confirmed() {
         master_before, master_after_refusal,
         "master.m3u8 changed even though the rebuild was refused"
     );
+    assert_eq!(
+        master_identity(&server, "t571").as_deref(),
+        Some(identity_before.as_str()),
+        "master.m3u8 was rewritten even though the rebuild was refused"
+    );
 
     // ---- confirmed, the same rebuild goes through — even with the viewer still pulling:
     // the warning is the interface's to act on, not a bar the core enforces by itself,
     // exactly as `media_rename` already documents for the same shape of guard. Submission
-    // itself succeeding (no FileInUse) is already most of the point; that the build then
-    // actually ran is confirmed by master.m3u8 landing on the server again below. ----
-    ladder::ladder_build(&state, build_request(&id, &path, "t571", true))
+    // itself succeeding (no FileInUse, and — the first build being over — no
+    // BUILD_ALREADY_RUNNING either) is already most of the point; that the build then
+    // actually ran is confirmed by master.m3u8 being written anew on the server below. ----
+    let rebuild = ladder::ladder_build(&state, build_request(&id, &path, "t571", true))
         .await
         .expect("the confirmed rebuild was refused");
-    wait_for_master(&server, "t571", Duration::from_secs(60)).await;
+    wait_for_master_rewritten(&server, "t571", &identity_before, Duration::from_secs(60)).await;
+    cancel_and_wait_final(&state, &rebuild, Duration::from_secs(120)).await;
 
     viewer.stop_watching().ok();
     let _ = std::fs::remove_dir_all(&film_dir);

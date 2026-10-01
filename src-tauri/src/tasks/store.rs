@@ -586,6 +586,32 @@ pub fn recover_after_start(db: &Db) -> Result<RecoveryReport, DbError> {
     Ok(RecoveryReport { interrupted })
 }
 
+/// Unfinished tasks of one kind whose owner is gone (T670(3)).
+///
+/// What a crashed run left behind: a task the database still calls running, paused or queued,
+/// while the instance that ran it is no longer there — the same owner check
+/// [`recover_after_start`] makes, and the same direction when it cannot tell ("still
+/// running", so nothing of a live instance's is touched). A finished task is never among
+/// these: whatever it left was left on purpose, or already tidied by the task itself.
+pub fn unfinished_without_owner(db: &Db, kind: TaskKind) -> Result<Vec<TaskRecord>, DbError> {
+    db.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT * FROM tasks
+             WHERE kind = ?1 AND state NOT IN ('completed', 'failed', 'cancelled')",
+        )?;
+        let mut rows = stmt.query([kind.as_str()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let pid: Option<u32> = row.get("owner_pid")?;
+            let identity: Option<String> = row.get("owner_identity")?;
+            if !owner_is_still_running(pid, identity.as_deref()) {
+                out.push(row_to_record(row)?);
+            }
+        }
+        Ok(out)
+    })
+}
+
 /// Remove tasks that finished long ago.
 pub fn purge_finished_before(db: &Db, before_rfc3339: &str) -> Result<usize, DbError> {
     db.with_conn(|c| {

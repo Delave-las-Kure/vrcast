@@ -159,6 +159,93 @@ impl LadderVerdict {
     }
 }
 
+/// What the ladder rules are told about a source.
+fn facts_of(probed: &crate::domain::source::SourceFile, native_height: Option<u32>) -> SourceFacts {
+    SourceFacts {
+        width: probed.width,
+        height: probed.height,
+        fps: probed.fps,
+        bitrate_bps: probed.bitrate_bps,
+        heavier_codec: probed.video_codec.eq_ignore_ascii_case("hevc"),
+        native_height,
+    }
+}
+
+/// The screen's `ladder_plan` calls still in flight, by file (T670(2)).
+///
+/// **Why by file and not "the latest wins".** A screen asks about one file several times on
+/// purpose — first with nothing, again once the peak measurement lands, again on every edit
+/// of the advanced fields — and each of those answers is wanted. What nobody wants is the
+/// probe for a file the screen has already left. So a call cancels only calls about *other*
+/// files: the one signal that the screen has moved on that the core can see without the
+/// screen saying so. Closing the screen without opening another file is not seen; the probe
+/// then runs to its end (three pieces, bounded by `process::SILENCE_LIMIT` each), as before.
+///
+/// Held on [`super::AppState`] rather than in a static: two states in one test binary are
+/// two applications, and one must not cancel the other's questions.
+#[derive(Clone, Default)]
+pub struct PlanProbes {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<InFlight>>>,
+    next: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+struct InFlight {
+    id: u64,
+    path: String,
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+/// One call's place among those in flight; it leaves when this is dropped.
+pub struct PlanAsk {
+    id: u64,
+    cancel: tokio_util::sync::CancellationToken,
+    owner: PlanProbes,
+}
+
+impl PlanProbes {
+    /// Register a call about `path`, stopping every call still in flight about another file.
+    pub fn enter(&self, path: &str) -> PlanAsk {
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let mut asked = self.asked.lock().unwrap_or_else(|e| e.into_inner());
+        for other in asked.iter().filter(|a| a.path != path) {
+            other.cancel.cancel();
+        }
+        asked.push(InFlight {
+            id,
+            path: path.to_owned(),
+            cancel: cancel.clone(),
+        });
+        PlanAsk {
+            id,
+            cancel,
+            owner: self.clone(),
+        }
+    }
+
+    /// How many calls are in flight — for checking that a finished call leaves.
+    pub fn in_flight(&self) -> usize {
+        self.asked.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+}
+
+impl PlanAsk {
+    /// The cancel this call's probe listens to.
+    pub fn cancel(&self) -> &tokio_util::sync::CancellationToken {
+        &self.cancel
+    }
+}
+
+impl Drop for PlanAsk {
+    fn drop(&mut self) {
+        self.owner
+            .asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|a| a.id != self.id);
+    }
+}
+
 pub mod api {
     use super::*;
 
@@ -182,19 +269,34 @@ pub mod api {
     ///
     /// Hands back the measured ladder when this material has been measured, and the
     /// formula's preview when it has not — saying which, every time.
+    ///
+    /// **A newer question about another file stops this one's probe** (T670(2)). The
+    /// formula's preview runs the complexity probe — three trial encodes, managed processes
+    /// since T661, but until now with nothing to stop them: a person who opened one film,
+    /// then another, then a third left two probes encoding for answers nobody would read.
+    /// Each call is registered in [`PlanProbes`] for its file; a call for a *different* file
+    /// raises the cancel of every call still in flight, and those end `TASK_CANCELLED` —
+    /// the screen already drops a stale answer by its own generation counter, so nothing
+    /// reaches what is shown. A call for the *same* file does not: the screen asks again
+    /// when the peak measurement lands or an advanced field changes, and that question
+    /// supersedes nothing. Calls from inside a task go through [`ladder_plan_until`] with the
+    /// task's own cancel instead, and are never stopped by a screen.
     pub async fn ladder_plan(
         state: &super::super::AppState,
         request: &LadderRequest,
     ) -> Result<LadderPreview> {
+        let asked = state.plan_probes.enter(&request.path);
+        ladder_plan_until(state, request, Some(asked.cancel())).await
+    }
+
+    /// The same, stopping its probe when `cancel` says so (T670(2)).
+    pub(crate) async fn ladder_plan_until(
+        state: &super::super::AppState,
+        request: &LadderRequest,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<LadderPreview> {
         let probed = super::super::api::source_probe(&request.path).await?;
-        let source = SourceFacts {
-            width: probed.width,
-            height: probed.height,
-            fps: probed.fps,
-            bitrate_bps: probed.bitrate_bps,
-            heavier_codec: probed.video_codec.eq_ignore_ascii_case("hevc"),
-            native_height: request.native_height,
-        };
+        let source = facts_of(&probed, request.native_height);
 
         // A measurement of this material, if there is one. This is the ladder; everything
         // below is what happens when there is not one.
@@ -203,12 +305,14 @@ pub mod api {
         }
 
         let (encoder, mut notices) = pick_encoder(request.prefer_hardware).await?;
-        let probe = probe_complexity::probe(
+        let probe = probe_complexity::probe_until(
             std::path::Path::new(&request.path),
             probed.duration_s,
             &encoder,
+            cancel,
         )
-        .await;
+        .await
+        .map_err(|_| AppError::new(ErrorCode::TaskCancelled))?;
         notices.extend(probe.notice.clone());
 
         // The measured peak wins over the probe's own estimate whenever it has landed in
@@ -349,7 +453,7 @@ pub mod api {
         // Where these rungs came from, so the description can say it (T433). Asked of the
         // same planner the screen asked, rather than guessed from the rungs: a rung carries
         // `Quality::Borrowed`, but a set is measured, borrowed or guessed as a whole.
-        let provenance = match ladder_plan(
+        let provenance = match ladder_plan_until(
             state,
             &LadderRequest {
                 path: request.path.clone(),
@@ -361,6 +465,9 @@ pub mod api {
                 measured_peak_bps: None,
                 prefer_hardware: request.prefer_hardware,
             },
+            // Not among the screen's questions (T670(2)): a build being started must not
+            // stop the screen's probe, nor be stopped by the screen opening another file.
+            None,
         )
         .await
         {
