@@ -1,0 +1,471 @@
+//! T672 — the commands of a video in work, through the real core with a real film and a
+//! server that does not answer.
+//!
+//! What can be checked without a server is checked here: each file taken or refused on its
+//! own, the plan that comes back, what each state allows, a problem with its actions instead
+//! of a stuck card, the event that carries the whole video, and what a restart does with each
+//! state. The whole way to «done» against a real server is `tests/integration/video_pipeline.rs`.
+
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use vrcast_studio_lib::commands::error::{DetailCode, ErrorCode};
+use vrcast_studio_lib::commands::servers::api as servers;
+use vrcast_studio_lib::commands::video::{api as video, PlanSource, SpaceCheck, VideoView};
+use vrcast_studio_lib::commands::{AppEvent, AppState};
+use vrcast_studio_lib::domain::ladder::{Quality, Rung};
+use vrcast_studio_lib::domain::server_profile::AuthKind;
+use vrcast_studio_lib::domain::video::{VideoAction, VideoStage, VideoState};
+use vrcast_studio_lib::media::ffmpeg;
+use vrcast_studio_lib::store::videos::{self as rows, VideoRow};
+
+use super::support::{state, valid_input};
+
+/// A directory of films that removes itself.
+struct Films(PathBuf);
+
+impl Films {
+    fn new() -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("vrcast-t672-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    /// A short real film, with sound unless told otherwise. `None` when there is no bundled
+    /// FFmpeg to make it with.
+    fn film(&self, name: &str, with_audio: bool) -> Option<String> {
+        let ff = ffmpeg::locate("ffmpeg").ok()?;
+        let out = self.0.join(name);
+        let mut cmd = std::process::Command::new(ff);
+        cmd.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=24:duration=3",
+        ]);
+        if with_audio {
+            cmd.args(["-f", "lavfi", "-i", "sine=frequency=440:duration=3"]);
+        }
+        cmd.args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-b:v",
+            "4000k",
+            "-pix_fmt",
+            "yuv420p",
+        ]);
+        if with_audio {
+            cmd.args(["-c:a", "aac", "-shortest"]);
+        }
+        let made = cmd.arg(&out).output().ok()?;
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        Some(out.to_string_lossy().into_owned())
+    }
+
+    fn path(&self, name: &str) -> String {
+        self.0.join(name).to_string_lossy().into_owned()
+    }
+}
+
+impl Drop for Films {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A server that refuses at once: nothing listens on port 1 of this machine.
+fn server(state: &AppState) -> String {
+    let mut input = valid_input("Nowhere");
+    input.host = String::from("127.0.0.1");
+    input.port = 1;
+    input.auth_kind = AuthKind::Password;
+    servers::server_add(state, input, "not-a-real-password").expect("the profile was not made")
+}
+
+async fn until(
+    state: &AppState,
+    id: &str,
+    what: &str,
+    limit: Duration,
+    ok: impl Fn(&VideoView) -> bool,
+) -> VideoView {
+    let deadline = Instant::now() + limit;
+    loop {
+        let now = video::video_get(state, id).expect("the video went missing");
+        if ok(&now) {
+            return now;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what}: the video never got there; it is {:?} at {:?}: {:?}",
+            now.state,
+            now.stage,
+            now.problem
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn skipped() -> bool {
+    if ffmpeg::locate("ffmpeg").is_err() {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return true;
+    }
+    false
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_file_is_taken_or_refused_on_its_own() {
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let good = films.film("Good One.mp4", true).unwrap();
+    let silent = films.film("silent.mp4", false).unwrap();
+    let text = films.path("notes.txt");
+    std::fs::write(&text, "not a film").unwrap();
+    let missing = films.path("gone.mp4");
+
+    let state = state();
+    let server = server(&state);
+    let added = video::video_add(
+        &state,
+        &server,
+        &[
+            text.clone(),
+            good.clone(),
+            missing.clone(),
+            silent.clone(),
+            good.clone(),
+        ],
+    )
+    .await
+    .expect("adding went wrong as a whole");
+
+    // The good one is added though the one before it is not a film (as T665).
+    assert_eq!(added.added.len(), 1);
+    let one = &added.added[0];
+    assert_eq!(one.source_path, good);
+    assert_eq!(one.title, "Good One");
+    assert_eq!(one.slug, "good-one");
+    assert_eq!(one.state, VideoState::Planning);
+    assert_eq!(one.stage, VideoStage::Planned);
+
+    // Each refusal names its file and why.
+    let refused: Vec<(&str, ErrorCode)> = added
+        .refused
+        .iter()
+        .map(|r| (r.path.as_str(), r.error.code))
+        .collect();
+    assert!(
+        refused.contains(&(text.as_str(), ErrorCode::InvalidInput)),
+        "{refused:?}"
+    );
+    assert!(
+        refused.contains(&(missing.as_str(), ErrorCode::InvalidInput)),
+        "{refused:?}"
+    );
+    assert!(
+        refused.contains(&(silent.as_str(), ErrorCode::NoAudioTracks)),
+        "{refused:?}"
+    );
+    // The same file twice in one call is one video.
+    let twice = added
+        .refused
+        .iter()
+        .find(|r| r.path == good)
+        .expect("the second copy of the same file was taken");
+    assert_eq!(twice.error.details[0].key, DetailCode::VideoAlreadyListed);
+
+    // And it is not added again while it is on its way.
+    let again = video::video_add(&state, &server, std::slice::from_ref(&good))
+        .await
+        .unwrap();
+    assert!(again.added.is_empty());
+    assert_eq!(
+        again.refused[0].error.details[0].key,
+        DetailCode::VideoAlreadyListed
+    );
+}
+
+#[tokio::test]
+async fn a_video_for_a_server_that_does_not_exist_is_refused_whole() {
+    let state = state();
+    let err = video::video_add(&state, "srv_nobody", &[String::from("x.mp4")])
+        .await
+        .expect_err("videos were added for nowhere");
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_plan_comes_back_with_its_rungs_sizes_time_and_room() {
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let film = films.film("plan.mp4", true).unwrap();
+    let state = state();
+    let server = server(&state);
+    let id = video::video_add(&state, &server, &[film])
+        .await
+        .unwrap()
+        .added[0]
+        .id
+        .clone();
+
+    let ready = until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    assert_eq!(ready.state, VideoState::Ready, "{:?}", ready.problem);
+    let plan = ready.plan.expect("a ready video has no plan");
+    assert!(!plan.rungs.is_empty());
+    // Nothing measured yet: the formula's preview, and «Start» begins with measuring.
+    assert_eq!(plan.from, PlanSource::Formula);
+    assert!(plan.needs_measuring);
+    assert!(plan.measure_s > 0);
+    assert!(plan.server_bytes > 0 && plan.local_bytes > 0);
+    assert!(plan.server_bytes >= plan.local_bytes);
+    assert!(plan.encode_s.is_some());
+    assert!(!plan.encoder.is_empty());
+    // The server did not answer: not a refusal, an unknown.
+    assert_eq!(plan.server_space, SpaceCheck::Unknown);
+    assert_eq!(plan.name_taken, None);
+    // This machine's own disk was asked.
+    assert!(
+        matches!(plan.local_space, SpaceCheck::Fits { .. }),
+        "{:?}",
+        plan.local_space
+    );
+    // The source and its sound are there to choose from.
+    let source = ready.source.expect("no source");
+    assert_eq!(source.audio_tracks.len(), 1);
+    assert_eq!(ready.audio_track, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn what_a_state_does_not_allow_is_refused_and_changes_nothing() {
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let film = films.film("states.mp4", true).unwrap();
+    let state = state();
+    let server = server(&state);
+    let id = video::video_add(&state, &server, &[film])
+        .await
+        .unwrap()
+        .added[0]
+        .id
+        .clone();
+    until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state == VideoState::Ready
+    })
+    .await;
+
+    for err in [
+        video::video_pause(&state, &id).unwrap_err(),
+        video::video_resume(&state, &id).unwrap_err(),
+        video::video_retry(&state, &id, false).unwrap_err(),
+    ] {
+        assert_eq!(err.code, ErrorCode::VideoNotNow);
+    }
+    assert_eq!(
+        video::video_get(&state, &id).unwrap().state,
+        VideoState::Ready
+    );
+
+    // The audio track is checked against the film.
+    let err = video::video_set_audio(&state, &id, 3).unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert_eq!(err.details[0].key, DetailCode::PlanNoSuchTrack);
+    assert_eq!(
+        video::video_set_audio(&state, &id, 0).unwrap().audio_track,
+        0
+    );
+
+    // Rungs nobody measured are not built (FR-141), here as on the ladder screen.
+    let unmeasured = vec![Rung {
+        index: 0,
+        bitrate_bps: 2_000_000,
+        maxrate_bps: 2_200_000,
+        bufsize_bps: 2_200_000,
+        width: 1280,
+        height: 720,
+        level: String::from("3.1"),
+        reasons: Vec::new(),
+        quality: Quality::NotMeasured,
+    }];
+    let err = video::video_set_rungs(&state, &id, Some(unmeasured.clone())).unwrap_err();
+    assert_eq!(err.code, ErrorCode::LadderNotMeasured);
+    // Measured ones are taken, and the plan says so; `None` goes back to the plan's own.
+    let measured: Vec<Rung> = unmeasured
+        .into_iter()
+        .map(|r| Rung {
+            quality: Quality::MeasuredHere { vmaf_x100: 9400 },
+            ..r
+        })
+        .collect();
+    let edited = video::video_set_rungs(&state, &id, Some(measured)).unwrap();
+    let plan = edited.plan.unwrap();
+    assert_eq!(plan.from, PlanSource::Edited);
+    assert!(!plan.needs_measuring);
+    assert_eq!(plan.rungs.len(), 1);
+    let back = video::video_set_rungs(&state, &id, None).unwrap();
+    assert_eq!(back.plan.unwrap().from, PlanSource::Formula);
+
+    // A name is checked as a medium's would be.
+    let err = video::video_set_name(&state, &id, "  ", None).unwrap_err();
+    assert_eq!(err.details[0].key, DetailCode::MediaTitleEmpty);
+    let renamed = video::video_set_name(&state, &id, "Серия 1", None).unwrap();
+    assert_eq!(renamed.slug, "seriya-1");
+
+    // Off the list; nothing else is asked of anybody.
+    video::video_remove(&state, &id).unwrap();
+    assert!(video::video_list(&state).unwrap().is_empty());
+    assert_eq!(
+        video::video_remove(&state, &id).unwrap_err().code,
+        ErrorCode::VideoNotFound
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_that_cannot_reach_the_server_stops_on_a_problem_with_a_retry() {
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let film = films.film("start.mp4", true).unwrap();
+    let state = state();
+    let server = server(&state);
+    let mut events = state.subscribe();
+    let id = video::video_add(&state, &server, &[film])
+        .await
+        .unwrap()
+        .added[0]
+        .id
+        .clone();
+
+    // «Start» before the plan is ready: it goes the moment the plan is.
+    let started = video::video_start(&state, std::slice::from_ref(&id));
+    assert_eq!(started.len(), 1);
+    assert!(started[0].error.is_none(), "{:?}", started[0].error);
+    assert!(video::video_get(&state, &id).unwrap().start_requested);
+
+    let stopped = until(&state, &id, "the problem", Duration::from_secs(120), |v| {
+        v.state == VideoState::Problem
+    })
+    .await;
+    let problem = stopped.problem.expect("a problem with nothing to say");
+    assert!(
+        problem.actions.contains(&VideoAction::Retry),
+        "{:?}",
+        problem.actions
+    );
+    // Nothing was made, so it stopped where it began.
+    assert_eq!(stopped.stage, VideoStage::Planned);
+    assert!(stopped.media_id.is_none());
+
+    // Every change went out as the whole video, by id.
+    let mut seen_problem = false;
+    while let Ok(event) = events.try_recv() {
+        if let AppEvent::VideoUpdate(view) = event {
+            assert_eq!(view.id, id);
+            seen_problem |= view.state == VideoState::Problem;
+        }
+    }
+    assert!(seen_problem, "the problem was never sent to the screen");
+
+    // A retry tries again, and stops on the same problem again — not stuck, not silent.
+    let retried = video::video_retry(&state, &id, false).unwrap();
+    assert!(matches!(
+        retried.state,
+        VideoState::Working | VideoState::Problem | VideoState::Planning
+    ));
+    until(
+        &state,
+        &id,
+        "the second problem",
+        Duration::from_secs(120),
+        |v| v.state == VideoState::Problem,
+    )
+    .await;
+
+    // A problem can be stopped and then removed.
+    let cancelled = video::video_cancel(&state, &id).unwrap();
+    assert_eq!(cancelled.state, VideoState::Cancelled);
+    video::video_remove(&state, &id).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn after_a_restart_each_video_does_what_its_state_says() {
+    let state = state();
+    let server = server(&state);
+    let put = |id: &str, stage: VideoStage, state_: VideoState, paused: bool| {
+        let mut row = VideoRow::new(id, &server, "C:/nowhere/film.mp4", id, id);
+        row.stage = stage;
+        row.state = state_;
+        row.paused_by_person = paused;
+        row.media_id = Some(format!("m_{id}"));
+        rows::save(&state.db, &row).unwrap();
+    };
+    put("paused", VideoStage::Uploading, VideoState::Paused, true);
+    put("ready", VideoStage::Planned, VideoState::Ready, false);
+    put(
+        "stopping",
+        VideoStage::Cutting,
+        VideoState::Cancelling,
+        false,
+    );
+    put("done", VideoStage::Done, VideoState::Done, false);
+    put("going", VideoStage::Encoding, VideoState::Working, false);
+
+    let carried = video::restore_videos(&state).unwrap();
+    assert_eq!(
+        carried, 1,
+        "only the one that was going carries on by itself"
+    );
+
+    let get = |id: &str| video::video_get(&state, id).unwrap();
+    // A pause a person pressed stays a pause.
+    let paused = get("paused");
+    assert_eq!(paused.state, VideoState::Paused);
+    assert!(paused.paused_by_person);
+    assert_eq!(paused.stage, VideoStage::Uploading);
+    assert_eq!(get("ready").state, VideoState::Ready);
+    assert_eq!(get("done").state, VideoState::Done);
+    // Stop had been pressed: it is stopped now, and «Retry» is there for it.
+    assert_eq!(get("stopping").state, VideoState::Cancelled);
+
+    // The one that was going was taken up again from its stage. Its source is gone, so it
+    // stops on a problem — at its stage, not back at the beginning.
+    let going = until(
+        &state,
+        "going",
+        "carrying on",
+        Duration::from_secs(60),
+        |v| v.state == VideoState::Problem,
+    )
+    .await;
+    assert_eq!(going.stage, VideoStage::Encoding);
+    assert!(going.problem.unwrap().actions.contains(&VideoAction::Retry));
+}
+
+#[test]
+fn a_video_waiting_for_start_is_not_paused_or_resumed_by_a_restart() {
+    // The rule in one line, apart from the commands: what does not carry on is left as it is.
+    use vrcast_studio_lib::domain::video::{after_restart, AfterRestart};
+    assert_eq!(after_restart(VideoState::Ready), AfterRestart::Leave);
+    assert_eq!(after_restart(VideoState::Paused), AfterRestart::Leave);
+}

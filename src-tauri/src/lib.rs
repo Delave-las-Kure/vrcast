@@ -305,6 +305,18 @@ pub fn run() {
             commands::convert::ipc::convert_validate,
             commands::upload::ipc::upload_start,
             commands::upload::ipc::upload_resume,
+            commands::video::ipc::video_add,
+            commands::video::ipc::video_list,
+            commands::video::ipc::video_set_audio,
+            commands::video::ipc::video_set_name,
+            commands::video::ipc::video_set_rungs,
+            commands::video::ipc::video_start,
+            commands::video::ipc::video_pause,
+            commands::video::ipc::video_resume,
+            commands::video::ipc::video_cancel,
+            commands::video::ipc::video_retry,
+            commands::video::ipc::video_replace,
+            commands::video::ipc::video_remove,
         ])
         .run(context)
         .expect("error while running tauri application");

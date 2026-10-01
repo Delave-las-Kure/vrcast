@@ -171,6 +171,7 @@ fn the_event_names_match_both_ways() {
         names::DEPLOY_PROGRESS,
         names::APP_QUIT,
         names::APP_HIDDEN,
+        names::VIDEO_UPDATE,
     ]
     .into_iter()
     .map(str::to_owned)
@@ -1668,4 +1669,182 @@ fn keys_of_block(ts: &str, name: &str, lang: &str) -> HashSet<String> {
          would pass"
     );
     out
+}
+
+// ---------- videos in work (T672) ----------
+
+#[test]
+fn the_video_stages_states_and_actions_match_both_ways() {
+    use vrcast_studio_lib::domain::video::{VideoAction, VideoStage, VideoState};
+    let ts = contract_ts();
+    assert_same_sets(
+        "video stages",
+        VideoStage::ALL
+            .iter()
+            .map(|s| s.as_str().to_owned())
+            .collect(),
+        declared_strings(&ts, "export type VideoStage ="),
+    );
+    assert_same_sets(
+        "video states",
+        VideoState::ALL
+            .iter()
+            .map(|s| s.as_str().to_owned())
+            .collect(),
+        declared_strings(&ts, "export type VideoState ="),
+    );
+    assert_same_sets(
+        "video actions",
+        VideoAction::ALL
+            .iter()
+            .map(|s| s.as_str().to_owned())
+            .collect(),
+        declared_strings(&ts, "export type VideoProblemAction ="),
+    );
+}
+
+#[test]
+fn a_video_s_shape_matches_both_ways() {
+    use vrcast_studio_lib::commands::error::AppError;
+    use vrcast_studio_lib::commands::video::{
+        EncodeEstimate, PlanSource, SpaceCheck, VideoAdded, VideoPlan, VideoProblem, VideoProgress,
+        VideoRefusal, VideoStarted, VideoView,
+    };
+    use vrcast_studio_lib::domain::video::{VideoAction, VideoStage, VideoState};
+
+    let plan = VideoPlan {
+        rungs: Vec::new(),
+        from: PlanSource::Formula,
+        needs_measuring: true,
+        measure_s: 1,
+        encode_s: Some(1),
+        encode_estimate: EncodeEstimate::Model,
+        encoder: String::from("libx264"),
+        server_bytes: 1,
+        local_bytes: 1,
+        server_space: SpaceCheck::Unknown,
+        local_space: SpaceCheck::Unknown,
+        name_taken: None,
+        objections: Vec::new(),
+        notices: Vec::new(),
+    };
+    let progress = VideoProgress {
+        task_state: TaskState::Running,
+        progress: 0.5,
+        speed_bps: None,
+        eta_s: None,
+        rung: Some(1),
+        rungs: 2,
+    };
+    let problem = VideoProblem {
+        error: AppError::new(ErrorCode::Internal),
+        actions: vec![VideoAction::Retry],
+    };
+    let view = VideoView {
+        id: String::from("v"),
+        server_id: String::from("s"),
+        source_path: String::from("p"),
+        title: String::from("t"),
+        slug: String::from("t"),
+        audio_track: 0,
+        stage: VideoStage::Encoding,
+        state: VideoState::Working,
+        paused_by_person: false,
+        start_requested: true,
+        source: None,
+        plan: Some(plan.clone()),
+        progress: Some(progress.clone()),
+        task_id: None,
+        media_id: None,
+        problem: Some(problem.clone()),
+        link: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    let ts = contract_ts();
+    same_shape(
+        &serialized_fields(&view),
+        &declared_fields(&ts, "VideoView"),
+        "VideoView",
+    );
+    same_shape(
+        &serialized_fields(&plan),
+        &declared_fields(&ts, "VideoPlan"),
+        "VideoPlan",
+    );
+    same_shape(
+        &serialized_fields(&progress),
+        &declared_fields(&ts, "VideoProgress"),
+        "VideoProgress",
+    );
+    same_shape(
+        &serialized_fields(&problem),
+        &declared_fields(&ts, "VideoProblem"),
+        "VideoProblem",
+    );
+    same_shape(
+        &serialized_fields(&VideoAdded {
+            added: Vec::new(),
+            refused: vec![VideoRefusal {
+                path: String::new(),
+                error: AppError::new(ErrorCode::Internal),
+            }],
+        }),
+        &declared_fields(&ts, "VideoAdded"),
+        "VideoAdded",
+    );
+    same_shape(
+        &serialized_fields(&VideoRefusal {
+            path: String::new(),
+            error: AppError::new(ErrorCode::Internal),
+        }),
+        &declared_fields(&ts, "VideoRefusal"),
+        "VideoRefusal",
+    );
+    same_shape(
+        &serialized_fields(&VideoStarted {
+            id: String::new(),
+            error: None,
+        }),
+        &declared_fields(&ts, "VideoStarted"),
+        "VideoStarted",
+    );
+    same_kinds(&view, "VideoView");
+    same_kinds(&plan, "VideoPlan");
+    same_kinds(&progress, "VideoProgress");
+
+    // The event is the whole video, tagged.
+    let event = serde_json::to_value(vrcast_studio_lib::commands::AppEvent::VideoUpdate(
+        Box::new(view),
+    ))
+    .unwrap();
+    assert_eq!(event["event"], "video_update");
+    assert_eq!(event["id"], "v");
+
+    // The space check's states, as the interface switches on them.
+    for (check, want) in [
+        (SpaceCheck::Unknown, "unknown"),
+        (
+            SpaceCheck::Fits {
+                needed_bytes: 1,
+                free_bytes: 2,
+            },
+            "fits",
+        ),
+        (
+            SpaceCheck::Short {
+                needed_bytes: 2,
+                free_bytes: 1,
+                short_by: 1,
+            },
+            "short",
+        ),
+    ] {
+        let json = serde_json::to_value(check).unwrap();
+        assert_eq!(json["state"], want);
+        assert!(
+            ts.contains(&format!("state: \"{want}\"")),
+            "contract.ts has no VideoSpaceCheck state {want}"
+        );
+    }
 }

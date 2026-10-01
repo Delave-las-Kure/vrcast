@@ -161,6 +161,13 @@ error_codes! {
     TaskBadTransition => "TASK_BAD_TRANSITION",
     TaskNotPausable => "TASK_NOT_PAUSABLE",
 
+    // --- videos in work (T672) ---
+    /// No video with this id — removed from the list meanwhile.
+    VideoNotFound => "VIDEO_NOT_FOUND",
+    /// What was pressed does not apply to the video as it is now (pausing one that is not
+    /// going, removing one that is). The cause says its state and stage. Nothing changed.
+    VideoNotNow => "VIDEO_NOT_NOW",
+
     // --- removing everything (FR-114) ---
     /// `forget_everything` refused: a task is alive (queued, running, or paused with its work
     /// held) or a command is about to create one (T643). Nothing was removed. The way on is to

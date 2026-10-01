@@ -292,6 +292,15 @@ export const en: Catalogue = {
       message: "An internal error in the application",
       hint: "Please report this error. If it keeps happening, the logs in the diagnostics section will help.",
     },
+    // --- videos in work (T672) ---
+    VIDEO_NOT_FOUND: {
+      message: "The video is not on the list",
+      hint: "It was removed from the list. Refresh the screen.",
+    },
+    VIDEO_NOT_NOW: {
+      message: "This cannot be done right now",
+      hint: "The video is in another state. Refresh the screen.",
+    },
   },
 
   details: {
@@ -669,6 +678,8 @@ export const en: Catalogue = {
       "Not the viewer's link. While anything was arriving it arrived at {in_download_mbit_s} Mbit/s, which would keep up with a film needing {average_mbit}. The shortfall built up in the gaps, when the viewer was asking for nothing: a player stopped, a decoder that could not keep pace, or somebody pressing pause. Over the clock they got {mbit_s} Mbit/s, a ratio of {ratio}. Player restarts: {restarts}, segments skipped: {skipped}.",
     STALLS_VIEWER_LINK:
       "The viewer's link is short: {ratio}× of real time received at {mbit_s} Mbit/s (inside the downloads — {in_download_mbit_s}). Segments skipped: {skipped}, player restarts: {restarts}.",
+    // --- videos in work (T672) ---
+    VIDEO_ALREADY_LISTED: "This video is already on the list",
   },
 
   plurals: {
