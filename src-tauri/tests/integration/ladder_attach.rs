@@ -371,3 +371,43 @@ async fn a_build_records_its_rung_files_under_the_medium_in_the_catalogue() {
     );
     assert_eq!(parsed["media"][0]["files"], serde_json::json!([]), "{text}");
 }
+
+#[tokio::test]
+async fn renaming_a_medium_moves_an_older_set_s_rung_files_and_records_them() {
+    let (server, state, server_id) = setup().await;
+    let media_id = library::media_create(&state, &server_id, "Задние комнаты", Some("backrooms"))
+        .await
+        .expect("the medium was not created");
+    hls_fixture::lay_out_ladder(&server, "backrooms").expect("the quality set was not laid out");
+    server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && for f in backrooms_1.mp4 backrooms_7.mp4; \
+             do head -c 5000 /dev/urandom > \"$f\"; done"
+        ))
+        .unwrap();
+    let conn = connect(&server).await;
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+        .await
+        .expect("the set was not attached");
+    conn.close().await;
+
+    library::media_rename(&state, &server_id, &media_id, None, Some("rooms"), true)
+        .await
+        .expect("the rename was refused");
+
+    let left = server
+        .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -1"))
+        .unwrap();
+    let left: Vec<&str> = left.lines().map(str::trim).collect();
+    assert!(
+        left.contains(&"rooms") && left.contains(&"rooms_1.mp4"),
+        "{left:?}"
+    );
+    // Not the set's (the master serves no 7): left under its own name.
+    assert!(left.contains(&"backrooms_7.mp4"), "{left:?}");
+    let parsed: serde_json::Value = serde_json::from_str(&catalogue_text(&server)).unwrap();
+    assert_eq!(
+        parsed["media"][0]["set_files"],
+        serde_json::json!(["rooms_1.mp4"])
+    );
+}

@@ -342,7 +342,8 @@ fn ladder_build_calls_attach_and_invalidate_together_on_success() {
     let text = std::fs::read_to_string(&path).expect("could not read ladder.rs");
 
     let guard = text
-        .find("if outcome.is_ok() {")
+        // T678: the guard binds the build's outcome, since its rung files go to the catalogue.
+        .find("if let Ok(built) = &outcome {")
         .expect("ladder_build's closure no longer guards attaching on outcome.is_ok()");
     // The next closing brace at the same nesting level as the `if` would take real brace
     // counting to find exactly; a generous slice past the guard is enough to prove both
