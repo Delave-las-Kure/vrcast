@@ -113,7 +113,6 @@ export function LimitDialog({
   return (
     <section aria-label={words.title}>
       <h3>{words.title}</h3>
-      <p>{words.explain}</p>
 
       <label>
         {words.pickMedia}

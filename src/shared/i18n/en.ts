@@ -1097,22 +1097,18 @@ export const en: Catalogue = {
     },
     limits: {
       title: "Capping quality",
-      explain:
-        "A player takes the best it is shown and will not be talked out of it. The only way to bring a viewer down to a rung they can hold is to stop showing them the ones they cannot.",
       pickMedia: "Which medium",
       cap: "Cap, Mbit/s",
-      willGet: "This viewer would be given:",
+      willGet: "The viewer will get:",
       apply: "Cap it",
       confirm: "Understood — cap it",
       cancel: "Cancel",
-      noLadder: "This medium has no quality set — there is nothing to shorten",
+      noLadder: "This medium has no quality set.",
       previewing: "Working out what the viewer would be left with…",
       applying: "Capping…",
 
       listTitle: "Limits in force",
       listEmpty: "Nothing is capped.",
-      listFromServer:
-        "Read from the server rather than from a note here: a note goes stale the hour somebody edits the server by hand.",
       columnWho: "Address",
       columnMedia: "Medium",
       columnCap: "Cap",
@@ -1122,21 +1118,17 @@ export const en: Catalogue = {
     },
 
     viewers: {
-      placesMissing:
-        "The tables of places have not been downloaded, so no country or city is shown for a viewer.",
-      placesStale:
-        "The tables of places are from {month}; a newer set is out, so places may be off.",
+      placesMissing: "No place tables — country and city are not shown.",
+      placesStale: "The place tables from {month} are out of date.",
       placesFetch: "Download",
       placesFetching: "Downloading…",
       placesFailed: "The download did not go through — try again later.",
-      explain:
-        "Who is pulling from your server right now. The list keeps itself up to date while this screen is open.",
-      noServer: "Choose a server first — there is nobody to watch yet.",
+      noServer: "No server selected.",
       starting: "Starting to watch…",
       nobody: "Nobody is watching at the moment.",
       notKnown: "not determined",
       watchingUnknown: "what they are watching is not known yet",
-      speedNotYet: "A speed appears once there is enough to work one out from.",
+      speedNotYet: "Not measured yet.",
       needs: "needs",
       fine: "fine",
       columnAddress: "Address",
@@ -1147,22 +1139,18 @@ export const en: Catalogue = {
       columnState: "State",
       problems: {
         slowLink: "not enough link",
-        slowLinkHint:
-          "Less is arriving than the quality they are getting needs. The player will not step down by itself — the quality has to be capped by hand.",
+        slowLinkHint: "The link is too slow for this quality — cap the quality.",
         retransmits: "a lossy link",
-        retransmitsHint:
-          "A noticeable share of what is sent has to be sent again. Usually the viewer's connection rather than the server's.",
+        retransmitsHint: "Poor connection on the viewer's side.",
         stalls: "the pulling has stopped",
-        stallsHint:
-          "The connection is open but nothing is moving. If it lasts, the viewer's film has cut out.",
+        stallsHint: "No data flowing. If it lasts, the viewing has dropped.",
       },
       watchingNow: "watching now",
       reconnecting: "The connection to the server was lost — reconnecting…",
       reconnectingTry: "Attempt {n}.",
-      staleAge: "The list below is the last one received, {age} ago. It may be different by now.",
+      staleAge: "List from {age} ago — it may have changed.",
       staleNever: "No list has come from the server yet.",
-      stopped:
-        "Watching has stopped: the server will not let us in, and trying again will not help — its key has changed or the login is refused. Check the server in the Servers section.",
+      stopped: "Watching stopped: cannot sign in to the server. Check the server.",
       restart: "Start again",
       ageSeconds: "{n} s",
       ageMinutes: "{n} min",

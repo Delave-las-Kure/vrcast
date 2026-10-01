@@ -38,7 +38,6 @@ export function LimitsList({ serverId }: { serverId: string }) {
   return (
     <section aria-label={words.listTitle}>
       <h3>{words.listTitle}</h3>
-      <p>{words.listFromServer}</p>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 

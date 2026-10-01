@@ -308,7 +308,7 @@ describe("the tables of places", () => {
     // The ordinary state. A line reporting it on every visit is noise, and noise in a corner
     // of the screen teaches people to skip that corner — including the times it matters.
     renderIn(<ViewersScreen />);
-    await waitFor(() => expect(screen.getByText(ru.ui.viewers.explain)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(ru.ui.sections.viewers)).toBeTruthy());
     expect(screen.queryByTestId("places-tables")).toBeNull();
   });
 
