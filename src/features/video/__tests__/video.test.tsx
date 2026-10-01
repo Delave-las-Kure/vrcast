@@ -423,6 +423,37 @@ describe("adding videos", () => {
     expect(screen.queryByTestId(/^video-/)).toBeNull();
   });
 
+  it("adds a medium's video stopped on a set nobody owns, with «Replace» (T677)", async () => {
+    mockOpen.mockResolvedValue("F:/films/Фильм.mkv");
+    const held = video({
+      id: "a",
+      media_id: "m1",
+      state: "problem",
+      problem: {
+        error: {
+          code: "MEDIA_HAS_SET",
+          details: [{ key: "OLD_SET_UNRECOGNIZED", params: { name: "film" } }],
+          cause: "film",
+        },
+        actions: ["replace"],
+      },
+    });
+    mockVideoAdd.mockResolvedValue({ added: [held], refused: [] });
+    mockVideoReplace.mockResolvedValue({ ...held, state: "working", problem: null });
+    show("ru", "/video?media=m1");
+
+    const c = await card("a");
+    // Added, not refused: the card is there with its one-line problem and «Replace» only.
+    expect(c.getByRole("alert")).toHaveTextContent(ru.errors.MEDIA_HAS_SET.message);
+    expect(c.queryByRole("button", { name: ru.ui.video.retry })).toBeNull();
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.replace }));
+    const ask = c.getByRole("group", { name: ru.ui.video.replace });
+    expect(ask).toHaveTextContent("Старый набор «Фильм» будет удалён и собран заново");
+    expect(mockVideoReplace).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole("button", { name: ru.ui.video.replace }));
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("a", false));
+  });
+
   it("says there is no server rather than offering to add", async () => {
     useServers.setState({ profiles: [], loading: false });
     mockServersList.mockResolvedValue([]);

@@ -555,8 +555,8 @@ detail_codes! {
     /// it (T675). Nothing was removed or written.
     RungFileClaimed => "RUNG_FILE_CLAIMED",
     /// `name`. A set of this medium's short name is on the server and no medium claims it —
-    /// an old build, another film's (T675). It would be taken for this one's rungs, so it is
-    /// removed first, by a person, from the library's unrecognised files.
+    /// an old build, another film's (T675). It would be taken for this one's rungs, so a video
+    /// for the medium waits on it with «Replace», which removes it first (T677).
     OldSetUnrecognized => "OLD_SET_UNRECOGNIZED",
 }
 

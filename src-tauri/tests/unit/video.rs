@@ -671,3 +671,60 @@ fn nothing_under_the_name_is_nothing_to_remove() {
     // A file called like the directory is not the directory.
     assert!(!video::old_set("film", &top(&[("film", false)]), &[]).dir);
 }
+
+// ---------- a set nobody owns under a medium's name (T677) ----------
+
+#[test]
+fn a_set_nobody_owns_under_a_medium_s_name_is_a_problem_with_replace_not_a_refusal() {
+    let entries = top(&[
+        ("film", true),
+        ("film_8.mp4", false),
+        // The medium's own single file, named like a rung: its own, not the old set's.
+        ("film_4.mp4", false),
+    ]);
+    let problem = video::old_set_problem("film", &entries, &["film_4.mp4"])
+        .expect("a set nobody owns was not seen");
+    assert_eq!(problem.code, ErrorCode::MediaHasSet);
+    assert_eq!(problem.details[0].key, DetailCode::OldSetUnrecognized);
+    assert!(video::is_old_set_problem(&problem));
+    assert_eq!(video::actions_for(&problem), vec![VideoAction::Replace]);
+    // What «Replace» would remove: the directory and the loose rung, never the medium's file.
+    let old = video::unclaimed_old_set("film", &entries, &["film_4.mp4"]);
+    assert_eq!(old.tops("film"), vec!["film", "film_8.mp4"]);
+
+    // «Replace» may be pressed on it although the video has its medium already; on any other
+    // problem of such a video it may not.
+    let error = Some(&problem);
+    assert!(video::may_replace(
+        VideoState::Problem,
+        VideoStage::Planned,
+        true,
+        error
+    ));
+    assert!(!video::may_replace(
+        VideoState::Ready,
+        VideoStage::Planned,
+        true,
+        error
+    ));
+    let other = AppError::new(ErrorCode::SshUnreachable);
+    assert!(!video::may_replace(
+        VideoState::Problem,
+        VideoStage::Planned,
+        true,
+        Some(&other)
+    ));
+    // A plain «this medium has a set» is a refusal, not this.
+    assert!(!video::is_old_set_problem(&AppError::new(
+        ErrorCode::MediaHasSet
+    )));
+}
+
+#[test]
+fn a_directory_filed_in_the_catalogue_is_somebody_s_set_not_nobody_s() {
+    let entries = top(&[("film", true)]);
+    assert!(video::old_set_problem("film", &entries, &["film/master.m3u8"]).is_none());
+    assert!(video::unclaimed_old_set("film", &entries, &["film/master.m3u8"]).is_empty());
+    // Nothing under the name: nothing to wait on.
+    assert!(video::old_set_problem("film", &top(&[("other", true)]), &[]).is_none());
+}

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ladder::Rung;
 use super::source::SourceFile;
-use super::wording::DetailCode;
+use super::wording::{Detail, DetailCode};
 use crate::error::{AppError, ErrorCode};
 
 /// Declares a string enumeration from one list, like `tasks::state` does: the enum, `ALL`,
@@ -254,6 +254,8 @@ pub fn actions_for(error: &AppError) -> Vec<VideoAction> {
         // A medium's own file under a rung's name (T675/T676): another bitrate for that rung
         // names the file differently, another short name names them all differently. Retry
         // would meet the same file. (The screen offers «rename» only while there is no medium.)
+        // Since T677 a build names its rung around such a file; this stays for problems
+        // written down before.
         ErrorCode::InvalidInput
             if error
                 .details
@@ -262,8 +264,70 @@ pub fn actions_for(error: &AppError) -> Vec<VideoAction> {
         {
             vec![A::EditRungs, A::Rename]
         }
+        // A set of the medium's name nobody claims (T677): «Replace» removes it and builds.
+        ErrorCode::MediaHasSet if is_old_set_problem(error) => vec![A::Replace],
         _ => vec![A::Retry],
     }
+}
+
+/// Whether this is the problem a video for a medium is added with when a set of the
+/// medium's name nobody claims lies on the server (T677).
+pub fn is_old_set_problem(error: &AppError) -> bool {
+    error.code == ErrorCode::MediaHasSet
+        && error
+            .details
+            .iter()
+            .any(|d| d.key == DetailCode::OldSetUnrecognized)
+}
+
+/// What a set built into a medium stops on before it starts (T677): a set of the medium's
+/// short name that no medium claims, left on the server — an old build, or another film's.
+/// It would be taken for this film's rungs by length alone (the reason for T676), so the
+/// video waits on it with «Replace». `None` when there is none.
+///
+/// A directory something in the catalogue is filed under is somebody's, not nobody's; files
+/// a medium claims are never part of it (`old_set`). [`unclaimed_old_set`] is what
+/// «Replace» removes for such a video, by the same rule.
+pub fn old_set_problem(
+    slug: &str,
+    entries: &[(String, bool)],
+    claimed: &[&str],
+) -> Option<AppError> {
+    let old = unclaimed_old_set(slug, entries, claimed);
+    let tops = old.tops(slug);
+    let first = tops.first()?;
+    Some(
+        AppError::new(ErrorCode::MediaHasSet)
+            .with_detail(Detail::new(DetailCode::OldSetUnrecognized).with("name", first.clone()))
+            .with_cause(tops.join(", ")),
+    )
+}
+
+/// [`old_set`], with the set's directory left out when anything in the catalogue is filed
+/// under it (T677).
+pub fn unclaimed_old_set(slug: &str, entries: &[(String, bool)], claimed: &[&str]) -> OldSet {
+    let mut old = old_set(slug, entries, claimed);
+    if claimed
+        .iter()
+        .any(|p| p.trim_matches('/').split('/').next() == Some(slug))
+    {
+        old.dir = false;
+    }
+    old
+}
+
+/// Whether «Replace» may be pressed: on a taken name before the medium is the video's
+/// (T672/T676), or on an old set nobody claims under a medium's name (T677).
+pub fn may_replace(
+    state: VideoState,
+    stage: VideoStage,
+    has_medium: bool,
+    error: Option<&AppError>,
+) -> bool {
+    allowed(Act::Replace, state, stage, has_medium)
+        || (state == VideoState::Problem
+            && stage == VideoStage::Planned
+            && error.is_some_and(is_old_set_problem))
 }
 
 /// Whether `name`, at the top of the serving directory, is a prepared rung of the set `slug`:

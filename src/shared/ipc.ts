@@ -416,7 +416,9 @@ export const ipc = {
   // --- videos in work (T672) ---
   /** Add files; each gets a plan and waits for «Start». Each file on its own: a refusal
    *  names its file and reason, the rest are added. With `mediaId` (T675): one file, built
-   *  into that medium of the library (its short name; its own files stay). */
+   *  into that medium of the library (its short name; its own files stay). A set of its name
+   *  nobody owns on the server (T677): added stopped on MEDIA_HAS_SET + OLD_SET_UNRECOGNIZED,
+   *  with «Replace». */
   videoAdd: (serverId: string, paths: string[], mediaId: string | null) =>
     call<VideoAdded>("video_add", { serverId, paths, mediaId }),
   /** Every video, in the order added — after a restart too. */
