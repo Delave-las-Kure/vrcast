@@ -202,6 +202,17 @@ pub fn run() {
                 }
             }
 
+            // Videos that were on their way carry on from their stage (T672, the owner's
+            // decision of 2026-10-01). After the uploads, for the same reason they are here and
+            // not in `bootstrap`: carrying on spawns work on the runtime.
+            match commands::video::api::restore_videos(&state) {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(carried_on = n, "videos from the previous run carry on"),
+                Err(e) => {
+                    tracing::error!(error = %e, "videos from the previous run were not carried on")
+                }
+            }
+
             // Retention for the task journal (T564): `purge_finished_before` existed,
             // worked, and was called from nowhere — the table grew by one row per task
             // for as long as the application ran, forever. Ninety days: long enough that
