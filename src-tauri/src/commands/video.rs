@@ -824,16 +824,30 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                     }
                 }
                 (TaskKind::BuildLadder, TaskState::Completed) => {
-                    row.stage = VideoStage::Done;
-                    row.state = VideoState::Done;
-                    row.problem_json = None;
-                    row.paused_by_person = false;
-                    if let Some(result) = crate::tasks::store::get(&state.db, task_id)
+                    let filed = crate::tasks::store::get(&state.db, task_id)
                         .ok()
                         .flatten()
-                        .and_then(|t| t.result)
-                    {
-                        row.media_id = Some(result.media_id);
+                        .and_then(|t| t.result);
+                    row.paused_by_person = false;
+                    match filed {
+                        Some(result) => {
+                            row.stage = VideoStage::Done;
+                            row.state = VideoState::Done;
+                            row.problem_json = None;
+                            row.media_id = Some(result.media_id);
+                        }
+                        // **No medium to file the set under** (T684, QA-25 №5): it was deleted
+                        // meanwhile — by another copy of the application; this one refuses
+                        // while the video is on its way — or the catalogue could not be read.
+                        // Not «Done» with a set the catalogue does not know: a problem, and
+                        // «Retry» makes the medium again and files the set (its rungs are
+                        // found done by the set's own record, T681).
+                        None => {
+                            set_problem(&mut row, AppError::new(ErrorCode::VideoMediumGone));
+                            row.media_id = None;
+                            row.own_medium = false;
+                            row.task_id = None;
+                        }
                     }
                 }
                 (TaskKind::BuildLadder, _) => {

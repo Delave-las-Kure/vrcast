@@ -808,3 +808,134 @@ async fn the_library_says_a_medium_s_set_is_building_or_stopped_not_missing() {
         Some(SetWorkState::Stopped)
     );
 }
+
+// ---------- the medium a video builds into is not the library's to delete (T684) ----------
+
+/// QA-25 №5: the library deleted, or renamed, the medium a video was building its set into —
+/// during the measurement there is no build task yet, and a medium made a moment ago has no
+/// paths for the old guard to ask about. The medium is the video's for as long as the video is
+/// on its way: planned and started, measuring, encoding, sending, cutting, checking, stopped on
+/// a problem, paused, stopping.
+#[tokio::test]
+async fn the_library_does_not_delete_or_rename_the_medium_a_video_is_building_into() {
+    use vrcast_studio_lib::commands::library::api as library;
+
+    let state = state();
+    let server = server(&state);
+    let mut n = 0;
+    let mut on = |st: VideoState, stage: VideoStage| {
+        n += 1;
+        let medium = format!("m{n}");
+        let mut r = VideoRow::new(
+            &format!("v{n}"),
+            &server,
+            "C:/nowhere/film.mp4",
+            "Film",
+            &medium,
+        );
+        r.media_id = Some(medium.clone());
+        r.state = st;
+        r.stage = stage;
+        r.start_requested = true;
+        rows::save(&state.db, &r).unwrap();
+        medium
+    };
+    let busy = [
+        on(VideoState::Working, VideoStage::Measuring),
+        on(VideoState::Working, VideoStage::Encoding),
+        on(VideoState::Working, VideoStage::Cutting),
+        on(VideoState::Working, VideoStage::Verifying),
+        on(VideoState::Paused, VideoStage::Uploading),
+        on(VideoState::Problem, VideoStage::Encoding),
+        on(VideoState::Cancelling, VideoStage::Cutting),
+        on(VideoState::Planning, VideoStage::Planned),
+        // Cancelled once begun: the library shows it «stopped», and «Retry» carries on into
+        // the same medium.
+        on(VideoState::Cancelled, VideoStage::Encoding),
+    ];
+    for medium in &busy {
+        for confirmed in [false, true] {
+            let e = library::media_delete(&state, &server, medium, confirmed)
+                .await
+                .expect_err("a medium a video builds into was deleted");
+            assert_eq!(e.code, ErrorCode::MediaBusy, "{medium}: {e:?}");
+            assert!(
+                e.details
+                    .iter()
+                    .any(|d| d.key == DetailCode::MediaBusyVideo),
+                "{medium}: {e:?}"
+            );
+        }
+        let e = library::media_rename(&state, &server, medium, None, Some("other"), true)
+            .await
+            .expect_err("a medium a video builds into was renamed");
+        assert_eq!(e.code, ErrorCode::MediaBusy, "{medium}: {e:?}");
+    }
+    // Finished: the medium is the library's again — the refusal that comes back is the
+    // unreachable server's, not this one.
+    {
+        let medium = on(VideoState::Done, VideoStage::Done);
+        let e = library::media_delete(&state, &server, &medium, true)
+            .await
+            .unwrap_err();
+        assert_ne!(e.code, ErrorCode::MediaBusy, "{e:?}");
+    }
+    let mut waiting = VideoRow::new("v_wait", &server, "C:/nowhere/film.mp4", "Film", "m_wait");
+    waiting.media_id = Some(String::from("m_wait"));
+    waiting.state = VideoState::Ready;
+    rows::save(&state.db, &waiting).unwrap();
+    // A plan for a medium of the library waiting for «Start» builds into it all the same.
+    let e = library::media_delete(&state, &server, "m_wait", true)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::MediaBusy, "{e:?}");
+    // Once the video is removed from the list, the medium is the library's again.
+    video::video_remove(&state, "v_wait").unwrap();
+    let e = library::media_delete(&state, &server, "m_wait", true)
+        .await
+        .unwrap_err();
+    assert_ne!(e.code, ErrorCode::MediaBusy, "{e:?}");
+}
+
+/// QA-25 №5, the other half: a build that finished with no medium to file its set under — it
+/// vanished meanwhile (another copy of the application) — is a problem of the video, not
+/// «Done» with a set the catalogue does not know.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_finds_no_medium_to_file_its_set_under_is_a_problem_not_done() {
+    use vrcast_studio_lib::tasks::state::TaskKind;
+    use vrcast_studio_lib::tasks::store::Batch;
+
+    let state = state();
+    let server = server(&state);
+    let mut r = VideoRow::new("v_gone", &server, "C:/nowhere/film.mp4", "Film", "film");
+    r.media_id = Some(String::from("m_gone"));
+    r.state = VideoState::Working;
+    r.stage = VideoStage::Verifying;
+    r.start_requested = true;
+    rows::save(&state.db, &r).unwrap();
+    video::video_list(&state).unwrap();
+
+    // The build ends well and files nothing: `attach_built_set` found no medium of the slug.
+    state
+        .tasks
+        .submit_in_batch(
+            TaskKind::BuildLadder,
+            Some(server.clone()),
+            Some(Batch {
+                id: r.id.clone(),
+                label: r.title.clone(),
+            }),
+            |_ctx| async move { Ok(()) },
+        )
+        .await
+        .unwrap();
+    let ended = until(&state, "v_gone", "the end", Duration::from_secs(10), |v| {
+        !matches!(v.state, VideoState::Working)
+    })
+    .await;
+    assert_eq!(ended.state, VideoState::Problem, "{ended:?}");
+    let problem = ended.problem.expect("no problem said");
+    assert_eq!(problem.error.code, ErrorCode::VideoMediumGone);
+    assert_eq!(problem.actions, vec![VideoAction::Retry]);
+    assert!(ended.link.is_none());
+}

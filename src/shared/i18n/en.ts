@@ -309,6 +309,10 @@ export const en: Catalogue = {
       message: "A set for this medium is already on its way",
       hint: "Look for it on the Video screen.",
     },
+    VIDEO_MEDIUM_GONE: {
+      message: "The set's medium was deleted",
+      hint: "“Retry” makes it again.",
+    },
   },
 
   details: {
@@ -393,6 +397,7 @@ export const en: Catalogue = {
       "The quality set “{slug}” is being built on the server right now — deletion will wait until the build finishes.",
     MEDIA_BUSY_UPLOADING:
       "The file “{name}” is being uploaded to the server right now — deletion will wait until the upload finishes.",
+    MEDIA_BUSY_VIDEO: "A set is being built into this medium — see Video.",
 
     // --- preparing files ---
     FFMPEG_SELF_BROKEN: "The bundled FFmpeg does not work. Reinstall the application.",
@@ -1154,6 +1159,7 @@ export const en: Catalogue = {
       buildSet: "Build a set",
       setBuilding: "Set is building",
       setStopped: "Build stopped",
+      openVideo: "Open Video",
       deleteMedia: "Delete the medium",
       diskFree: "Free",
       diskOf: "of",
