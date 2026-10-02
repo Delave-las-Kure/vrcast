@@ -1009,3 +1009,101 @@ async fn a_pause_a_person_pressed_is_still_a_pause_after_a_restart() {
     );
     drop(killed.scratch);
 }
+// ---------- found here: «Start» on several videos at once ----------
+
+/// Two measured rungs at 360p — enough to get past making the medium, which is what this is
+/// about, without a measurement.
+fn two_small_rungs() -> Vec<Rung> {
+    let rung = |index, bitrate_bps: u64, width, height| Rung {
+        index,
+        bitrate_bps,
+        maxrate_bps: bitrate_bps + bitrate_bps / 10,
+        bufsize_bps: bitrate_bps + bitrate_bps / 10,
+        width,
+        height,
+        level: String::from("3.1"),
+        reasons: Vec::new(),
+        quality: Quality::MeasuredHere { vmaf_x100: 9000 },
+    };
+    vec![rung(0, 1_000_000, 640, 360), rung(1, 500_000, 426, 240)]
+}
+
+/// Found by the acceptance run (2026-10-02): «Start» pressed on several videos at once — the
+/// screen's own way of starting a selection — made every medium at the same moment. Each
+/// `media_create` read the catalogue at the same generation, the first write won, and the
+/// rest stopped on `MANIFEST_CONFLICT` with «Retry», although nothing was wrong. Each video
+/// must get its medium and go on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn several_videos_started_at_once_each_get_their_medium() {
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t672-start-many");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+    let names = ["Many One", "Many Two", "Many Three"];
+    let mut paths = Vec::new();
+    for n in names {
+        let p = scratch.0.join(format!("{n}.mp4"));
+        make_film(&p, "1280x720", 8);
+        paths.push(p.to_string_lossy().into_owned());
+    }
+    let added = video::video_add(&state, &server_id, &paths, None)
+        .await
+        .unwrap();
+    assert!(added.refused.is_empty(), "{:?}", added.refused);
+    let ids: Vec<String> = added.added.iter().map(|v| v.id.clone()).collect();
+    for id in &ids {
+        until(&state, id, "the plan", Duration::from_secs(120), |v| {
+            v.state == VideoState::Ready
+        })
+        .await;
+        video::video_set_rungs(&state, id, Some(two_small_rungs())).unwrap();
+    }
+    let started = video::video_start(&state, &ids);
+    assert!(started.iter().all(|s| s.error.is_none()), "{started:?}");
+    for id in &ids {
+        let v = until(&state, id, "the medium", Duration::from_secs(120), |v| {
+            v.media_id.is_some() || v.state == VideoState::Problem
+        })
+        .await;
+        assert!(
+            v.problem.is_none(),
+            "{} stopped on {:?}",
+            v.title,
+            v.problem.map(|p| p.error)
+        );
+    }
+    for id in &ids {
+        let v = until(&state, id, "done", Duration::from_secs(300), |v| {
+            matches!(
+                v.state,
+                VideoState::Done | VideoState::Problem | VideoState::Cancelled
+            )
+        })
+        .await;
+        assert_eq!(v.state, VideoState::Done, "{} {:?}", v.title, v.problem);
+    }
+    // And every set is attached to its own medium in the catalogue.
+    let view = vrcast_studio_lib::commands::library::api::library_list(&state, &server_id, true)
+        .await
+        .unwrap();
+    for id in &ids {
+        let v = video::video_get(&state, id).unwrap();
+        let m = view
+            .media
+            .iter()
+            .find(|m| Some(&m.id) == v.media_id.as_ref())
+            .unwrap_or_else(|| panic!("{} has no medium in the library", v.title));
+        assert!(
+            m.ladders
+                .iter()
+                .any(|l| l.path == format!("{}/master.m3u8", v.slug)),
+            "{}'s set is not attached to its medium: {m:?}",
+            v.title
+        );
+    }
+}
