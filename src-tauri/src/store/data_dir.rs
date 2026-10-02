@@ -29,8 +29,26 @@ use std::path::PathBuf;
 /// The variable an e2e build takes its data directory from. Read only with the `e2e` feature.
 pub const ENV: &str = "VRCAST_DATA_DIR";
 
+/// Where an e2e build's ladder check asks for a set (`AppState::verify_origin`): the plain
+/// HTTP of the throwaway container the harness started, which has no domain and no
+/// certificate. Read only with the `e2e` feature; the application never sets it otherwise.
+pub const VERIFY_ORIGIN_ENV: &str = "VRCAST_E2E_VERIFY_ORIGIN";
+
+/// The e2e build's check origin, when the harness gave one (`http://` or `https://` only).
+#[cfg(feature = "e2e")]
+pub fn e2e_verify_origin() -> Option<String> {
+    std::env::var(VERIFY_ORIGIN_ENV)
+        .ok()
+        .filter(|o| o.starts_with("http://") || o.starts_with("https://"))
+}
+
 /// Whether this binary is the e2e build.
 pub const E2E: bool = cfg!(feature = "e2e");
+
+/// Text only the e2e binary carries (see `lib.rs::run`): the harness refuses a binary
+/// without it. Compiled in only with the feature.
+#[cfg(feature = "e2e")]
+pub const E2E_MARKER: &str = "VRCAST-E2E-BUILD-a7c3f19e";
 
 /// The application's data directory: the database, `logs/`, the tables of places.
 ///

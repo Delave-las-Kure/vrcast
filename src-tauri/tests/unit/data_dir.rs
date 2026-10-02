@@ -125,3 +125,25 @@ fn the_e2e_secrets_live_in_a_file_in_the_given_directory() {
     store.delete(&r).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The check origin the e2e harness hands in is taken only by the e2e build: an ordinary
+/// application always asks the address a viewer would use.
+#[test]
+fn the_check_origin_from_the_environment_is_the_e2e_build_s_only() {
+    use vrcast_studio_lib::store::data_dir::VERIFY_ORIGIN_ENV;
+    let dir = std::env::temp_dir().join(format!("vrcast-e2e-origin-{}", uuid::Uuid::new_v4()));
+    std::env::set_var(VERIFY_ORIGIN_ENV, "http://127.0.0.1:1");
+    let state = vrcast_studio_lib::commands::AppState::bootstrap_at(dir.join("db.sqlite"));
+    std::env::remove_var(VERIFY_ORIGIN_ENV);
+    let state = state.unwrap_or_else(|e| panic!("{e}"));
+    if E2E {
+        assert_eq!(state.verify_origin.as_deref(), Some("http://127.0.0.1:1"));
+    } else {
+        assert_eq!(
+            state.verify_origin, None,
+            "an ordinary build took {VERIFY_ORIGIN_ENV}"
+        );
+    }
+    drop(state);
+    let _ = std::fs::remove_dir_all(&dir);
+}

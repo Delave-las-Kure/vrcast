@@ -154,6 +154,12 @@ impl AppState {
         // The one place a real directory is handed over. Everything else — tests included —
         // gets `None` and can therefore delete nothing.
         state.data_dir = path.parent().map(|p| p.to_path_buf());
+        // The e2e build only: where the build's last check asks for the set (a throwaway
+        // container has no domain and no certificate). See `store::data_dir`.
+        #[cfg(feature = "e2e")]
+        {
+            state.verify_origin = crate::store::data_dir::e2e_verify_origin();
+        }
         Ok(state)
     }
 
