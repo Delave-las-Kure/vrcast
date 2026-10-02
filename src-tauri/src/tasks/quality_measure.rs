@@ -175,6 +175,64 @@ pub async fn run(job: &MeasureJob<'_>, ctx: &TaskContext) -> Result<Outcome, Mea
     })
 }
 
+/// Measure only these points of the grid (T680) — the rungs a person edited by hand, or chose
+/// out of a plan nobody measured yet — skipping any already measured. The same points, the
+/// same store, the same resumption as [`run`]; no ladder is chosen from them: the rungs are
+/// the person's, and only their scores were missing.
+///
+/// Returns how many points were measured now.
+pub async fn run_cells(
+    job: &MeasureJob<'_>,
+    cells: &[Cell],
+    ctx: &TaskContext,
+) -> Result<usize, MeasureError> {
+    if !vmaf::available().await.unwrap_or(false) {
+        return Err(MeasureError::Unavailable);
+    }
+    measurements::begin(job.db, job.run)?;
+    let already: HashSet<(u64, u32)> =
+        measurements::points(job.db, &job.run.source_key, &job.run.codec)?
+            .iter()
+            .map(|p| (p.bitrate_mbps, p.height))
+            .collect();
+    let missing: Vec<Cell> = cells
+        .iter()
+        .copied()
+        .filter(|c| !already.contains(&(c.bitrate_mbps, c.height)))
+        .collect();
+    let total = missing.len();
+    let mut done = 0usize;
+    report(ctx, done, total);
+    for cell in missing {
+        if ctx.is_cancelled() {
+            return Err(MeasureError::Cancelled);
+        }
+        ctx.wait_while_paused().await;
+        let started = std::time::Instant::now();
+        match measure_one(job, cell, ctx).await {
+            Ok(sampled) => {
+                measurements::record(
+                    job.db,
+                    &job.run.source_key,
+                    &job.run.codec,
+                    &sampled.point,
+                    started.elapsed(),
+                )?;
+                done += 1;
+            }
+            Err(VmafError::Cancelled) => return Err(MeasureError::Cancelled),
+            Err(VmafError::Unavailable) => return Err(MeasureError::Unavailable),
+            // A rung whose point will not measure cannot be built on: said, not stepped over.
+            Err(e) => {
+                tracing::warn!(?cell, error = %e, "an edited rung's point would not measure");
+                return Err(MeasureError::NothingMeasured);
+            }
+        }
+        report(ctx, done, total);
+    }
+    Ok(done)
+}
+
 async fn measure_one(
     job: &MeasureJob<'_>,
     cell: Cell,

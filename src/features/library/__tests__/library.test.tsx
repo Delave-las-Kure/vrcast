@@ -504,6 +504,46 @@ describe("what was not recognised", () => {
 });
 
 describe("deleting", () => {
+  it("does not offer deleting or renaming a medium a video builds into (T684)", async () => {
+    mockLibraryList.mockResolvedValue(
+      view({
+        media: [
+          media({ set_work: { state: "building", video_id: "v1" } }),
+          media({
+            id: "m2",
+            title: "Остановленный",
+            set_work: { state: "stopped", video_id: "v2" },
+          }),
+        ],
+      }),
+    );
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(screen.getByRole("button", { name: /Остановленный/ }));
+    for (const b of screen.getAllByRole("button", { name: ru.ui.library.deleteMedia })) {
+      expect(b).toBeDisabled();
+    }
+    for (const b of screen.getAllByRole("button", { name: ru.ui.library.renameMedia })) {
+      expect(b).toBeDisabled();
+    }
+    expect(mockMediaDelete).not.toHaveBeenCalled();
+  });
+
+  it("a refusal because a video builds into the medium leads to «Video» (T684)", async () => {
+    mockMediaDelete.mockRejectedValueOnce({
+      code: "MEDIA_BUSY",
+      details: [{ key: "MEDIA_BUSY_VIDEO", params: { video_id: "v1" } }],
+    } satisfies AppError);
+    draw();
+    fireEvent.click(await screen.findByText("Название фильма"));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteMedia));
+    expect(await screen.findByText(ru.errors.MEDIA_BUSY.message)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: ru.ui.library.openVideo })).toHaveAttribute(
+      "href",
+      "/video",
+    );
+  });
+
   it("names the set's rung files among what a medium's deletion takes (T678)", async () => {
     mockMediaDelete.mockRejectedValueOnce({
       code: "CONFIRMATION_REQUIRED",

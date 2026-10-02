@@ -33,6 +33,7 @@ const mockVideoRemove = vi.fn();
 const mockVideoSetAudio = vi.fn();
 const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
+const mockLadderRecomputeRung = vi.fn();
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
@@ -63,6 +64,7 @@ vi.mock("../../../shared/ipc", async () => {
       videoSetName: (...a: unknown[]) => mockVideoSetName(...a),
       videoSetRungs: (...a: unknown[]) => mockVideoSetRungs(...a),
       ladderValidate: () => Promise.resolve({ objections: [], not_buildable: null }),
+      ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
       push = handler;
@@ -398,6 +400,32 @@ describe("adding videos", () => {
     expect(refused).toHaveTextContent(ru.details.VIDEO_ALREADY_LISTED);
   });
 
+  it("a plan waiting for a place among the heavy work says it is queued (T688)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({
+        id: "a",
+        state: "planning",
+        plan: null,
+        progress: {
+          task_state: "queued",
+          progress: 0,
+          speed_bps: null,
+          eta_s: null,
+          rung: null,
+          rungs: 0,
+        },
+      }),
+      video({ id: "b", state: "planning", plan: null }),
+    ]);
+    show();
+    const a = await card("a");
+    expect(a.getByRole("status")).toHaveTextContent(
+      `${ru.ui.video.planning} · ${ru.ui.video.queued}`,
+    );
+    expect((await card("b")).getByRole("status")).toHaveTextContent(ru.ui.video.planning);
+    expect((await card("b")).getByRole("status")).not.toHaveTextContent(ru.ui.video.queued);
+  });
+
   it("opens the file dialog by itself when the library sent somebody here to add", async () => {
     mockOpen.mockResolvedValue(["F:/films/a.mkv"]);
     mockVideoAdd.mockResolvedValue({ added: [video({ id: "a" })], refused: [] });
@@ -475,6 +503,29 @@ describe("adding videos", () => {
 });
 
 describe("the plan before Start", () => {
+  it("says what the time covers and when it is only an estimate (T689)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({ id: "a" }),
+      video({
+        id: "b",
+        plan: plan({
+          from: "formula",
+          needs_measuring: true,
+          measure_s: 600,
+          encode_s: 1200,
+          encode_estimate: "model",
+        }),
+      }),
+    ]);
+    show();
+    const measured = (await card("a")).getByTestId("plan");
+    expect(measured).toHaveTextContent(`${ru.ui.video.encodeTime} ≈ 25 мин`);
+    expect(measured).not.toHaveTextContent(ru.ui.video.preliminary);
+    const guessed = (await card("b")).getByTestId("plan");
+    expect(guessed).toHaveTextContent(`${ru.ui.video.measureAndEncodeTime} ≈ 30 мин`);
+    expect(guessed).toHaveTextContent(ru.ui.video.preliminary);
+  });
+
   it("lists the rungs, the size on the server and the time", async () => {
     mockVideoList.mockResolvedValue([video()]);
     show();
@@ -582,6 +633,31 @@ describe("the stages after Start", () => {
     expect(facts).toHaveTextContent("42%");
     expect(facts).toHaveTextContent("осталось 10:00");
     expect(facts).toHaveTextContent("ступень 2 из 3");
+  });
+
+  it("the check shows no made-up number; the cutting shows its own share (T689)", async () => {
+    const at = (stage: VideoView["stage"], progress: number) =>
+      working({
+        id: stage,
+        stage,
+        progress: {
+          task_state: "running",
+          progress,
+          speed_bps: null,
+          eta_s: null,
+          rung: null,
+          rungs: 4,
+        },
+      });
+    mockVideoList.mockResolvedValue([at("verifying", 0), at("cutting", 0.25)]);
+    show();
+    const checking = await card("verifying");
+    // No figure for a stage that cannot say how far it is: a bar without a value.
+    expect(checking.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    expect(checking.queryByTestId("stage-facts")?.textContent ?? "").not.toContain("%");
+    const cutting = await card("cutting");
+    expect(cutting.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    expect(cutting.getByTestId("stage-facts")).toHaveTextContent("25%");
   });
 
   it("offers pause while working and resume while paused, and cancel for both", async () => {
@@ -761,6 +837,50 @@ describe("a problem", () => {
 });
 
 describe("the rungs before Start", () => {
+  it("a rung retyped by hand is saved without an error and is marked to measure (T680)", async () => {
+    mockVideoList.mockResolvedValue([video()]);
+    const unmeasured = {
+      ...rung(1, 3, 720),
+      reasons: ["edited_by_hand"],
+      quality: { state: "not_measured" },
+    } as Rung;
+    mockLadderRecomputeRung.mockResolvedValue(unmeasured);
+    mockVideoSetRungs.mockImplementation(() =>
+      Promise.resolve(
+        video({
+          plan: plan({
+            rungs: [rung(0, 8, 1080), unmeasured],
+            from: "edited",
+            needs_measuring: true,
+            measure_s: 120,
+          }),
+        }),
+      ),
+    );
+    show();
+    fireEvent.click((await card()).getByRole("button", { name: ru.ui.video.rungs }));
+    const editor = await screen.findByRole("dialog", { name: ru.ui.video.rungs });
+    fireEvent.change(within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 2`), {
+      target: { value: "3" },
+    });
+    await waitFor(() => expect(mockLadderRecomputeRung).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(within(editor).getByTestId("rung-1")).toHaveTextContent(ru.ui.ladder.notMeasured),
+    );
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent[1].quality).toEqual({ state: "not_measured" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(mockVideoStart).not.toHaveBeenCalled();
+    // The plan says which rung is still to be measured.
+    const p = (await card()).getByTestId("plan");
+    expect(p).toHaveTextContent(`720p · 3 Мбит/с · ${ru.ui.video.rungToMeasure}`);
+    expect(p).not.toHaveTextContent(`1080p · 8 Мбит/с · ${ru.ui.video.rungToMeasure}`);
+  });
+
   it("are edited on this screen and saved to the video without starting it", async () => {
     mockVideoList.mockResolvedValue([video()]);
     show();

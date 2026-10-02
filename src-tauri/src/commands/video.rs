@@ -591,6 +591,28 @@ fn custom_rungs(row: &VideoRow) -> Option<Vec<Rung>> {
         .and_then(|s| serde_json::from_str(s).ok())
 }
 
+/// The person's rungs with what this film already has measured for them (T680): the
+/// film's own measurement (measured here, or lent), and the points measured for rungs edited
+/// before (`quality::edited_codec`). Only a point at exactly the rung's bitrate and height
+/// counts (`ladder::with_measured`); nothing is marked measured otherwise.
+fn with_measured_here(state: &AppState, path: &str, rungs: &[Rung]) -> Vec<Rung> {
+    use crate::store::measurements;
+    let Ok(key) = measurements::key_for(std::path::Path::new(path)) else {
+        return rungs.to_vec();
+    };
+    let codec = "h264";
+    let mut out = rungs.to_vec();
+    if let Ok(Some(run)) = measurements::run(&state.db, &key, codec) {
+        if !run.check_pending {
+            let points = measurements::points(&state.db, &key, codec).unwrap_or_default();
+            out = crate::domain::ladder::with_measured(&out, &points, run.borrowed_from.is_some());
+        }
+    }
+    let edited = super::quality::edited_codec(codec);
+    let points = measurements::points(&state.db, &key, &edited).unwrap_or_default();
+    crate::domain::ladder::with_measured(&out, &points, false)
+}
+
 fn facts_of(source: &SourceFile) -> SourceFacts {
     SourceFacts {
         width: source.width,
@@ -634,6 +656,22 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
     let custom = custom_rungs(row);
     let edited = custom.is_some();
     let rungs = custom.unwrap_or_else(|| basis.rungs.clone());
+    // What of the person's rungs is still to be measured before the build (T680): «Start»
+    // measures those points first. Preliminary: a point's time on this machine's model.
+    let edited_cells = if edited {
+        crate::domain::ladder::cells_to_measure(&rungs).len()
+    } else {
+        0
+    };
+    let edited_measure_s = (edited_cells as f64
+        * crate::domain::measure_grid::seconds_per_point(
+            source.width,
+            source.height,
+            source.fps,
+            crate::domain::chunks::CHUNK_S as u64,
+            3,
+        ))
+    .round() as u64;
     let audio_bps = source
         .audio_tracks
         .get(row.audio_track)
@@ -658,8 +696,14 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
         } else {
             basis.from
         },
-        needs_measuring: !edited && basis.needs_measuring && !row.measured,
-        measure_s: if !edited && basis.needs_measuring && !row.measured {
+        needs_measuring: if edited {
+            edited_cells > 0
+        } else {
+            basis.needs_measuring && !row.measured
+        },
+        measure_s: if edited {
+            edited_measure_s
+        } else if basis.needs_measuring && !row.measured {
             basis.measure_s
         } else {
             0
@@ -712,8 +756,10 @@ fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
     };
     let progress = if matches!(
         row.state,
-        VideoState::Working | VideoState::Paused | VideoState::Cancelling
+        VideoState::Working | VideoState::Paused | VideoState::Cancelling | VideoState::Planning
     ) {
+        // While planning, only the wait for a place for the plan's trial encodes (T688):
+        // `task_state: queued`, nothing else.
         lock(&state.videos.inner.live)
             .get(&row.id)
             .map(|l| l.progress.clone())
@@ -894,7 +940,10 @@ fn on_progress(
         if row.task_id.as_deref() != Some(task_id) {
             return;
         }
-        if kind == TaskKind::MeasureQuality && code == Some(DetailCode::StageDone) && !row.measured
+        if kind == TaskKind::MeasureQuality
+            && code == Some(DetailCode::StageDone)
+            && !row.measured
+            && row.rungs_json.is_none()
         {
             row.measured = true;
             refresh = true;
@@ -1050,7 +1099,7 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                     row.task_id = None;
                 }
                 (TaskKind::MeasureQuality, TaskState::Completed) => {
-                    if !row.measured {
+                    if !row.measured && row.rungs_json.is_none() {
                         row.measured = true;
                         refresh = true;
                     }
@@ -1071,7 +1120,7 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                         .ok()
                         .flatten()
                         .is_some_and(|t| t.stage == Some(DetailCode::StageDone));
-                    if measured && !row.measured {
+                    if measured && !row.measured && row.rungs_json.is_none() {
                         row.measured = true;
                         refresh = true;
                     }
@@ -1091,16 +1140,30 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                     }
                 }
                 (TaskKind::BuildLadder, TaskState::Completed) => {
-                    row.stage = VideoStage::Done;
-                    row.state = VideoState::Done;
-                    row.problem_json = None;
-                    row.paused_by_person = false;
-                    if let Some(result) = crate::tasks::store::get(&state.db, task_id)
+                    let filed = crate::tasks::store::get(&state.db, task_id)
                         .ok()
                         .flatten()
-                        .and_then(|t| t.result)
-                    {
-                        row.media_id = Some(result.media_id);
+                        .and_then(|t| t.result);
+                    row.paused_by_person = false;
+                    match filed {
+                        Some(result) => {
+                            row.stage = VideoStage::Done;
+                            row.state = VideoState::Done;
+                            row.problem_json = None;
+                            row.media_id = Some(result.media_id);
+                        }
+                        // **No medium to file the set under** (T684, QA-25 №5): it was deleted
+                        // meanwhile — by another copy of the application; this one refuses
+                        // while the video is on its way — or the catalogue could not be read.
+                        // Not «Done» with a set the catalogue does not know: a problem, and
+                        // «Retry» makes the medium again and files the set (its rungs are
+                        // found done by the set's own record, T681).
+                        None => {
+                            set_problem(&mut row, AppError::new(ErrorCode::VideoMediumGone));
+                            row.media_id = None;
+                            row.own_medium = false;
+                            row.task_id = None;
+                        }
                     }
                 }
                 (TaskKind::BuildLadder, _) => {
@@ -1279,16 +1342,65 @@ fn begin_planning(state: &AppState, id: &str) {
     });
 }
 
+/// Say on the card whether its plan waits for a place for its trial encodes (T688): a
+/// `queued` progress while it waits, none once it has the place.
+fn plan_waiting(state: &AppState, id: &str, queued: bool) {
+    let changed = {
+        let mut live = lock(&state.videos.inner.live);
+        if queued {
+            live.insert(
+                id.to_owned(),
+                Live {
+                    code: None,
+                    since: Instant::now(),
+                    from: 0.0,
+                    progress: VideoProgress {
+                        task_state: TaskState::Queued,
+                        progress: 0.0,
+                        speed_bps: None,
+                        eta_s: None,
+                        rung: None,
+                        rungs: 0,
+                    },
+                },
+            );
+            true
+        } else {
+            match live.get(id) {
+                Some(l) if l.code.is_none() && l.progress.task_state == TaskState::Queued => {
+                    live.remove(id);
+                    true
+                }
+                _ => false,
+            }
+        }
+    };
+    if changed {
+        emit(state, id);
+    }
+}
+
 async fn make_basis(state: &AppState, id: &str, cancel: &CancellationToken) -> Result<PlanBasis> {
     let row = load(state, id)?;
     let profile = super::library::api::profile_of(state, &row.server_id)?;
 
-    let preview = super::ladder::api::ladder_plan_until(
+    // **The trial encodes wait for a place among the heavy work** (T688, QA-25 №9): with a
+    // limit of one, ten videos added at once encode one plan's pieces at a time, and the card
+    // says «in the queue» while it waits. «Remove» cancels the wait and the encodes.
+    let waiting = {
+        let state = state.clone();
+        let id = id.to_owned();
+        move |queued: bool| plan_waiting(&state, &id, queued)
+    };
+    let preview = super::ladder::api::ladder_plan_under_limit(
         state,
         &ladder_request(&row.source_path),
-        Some(cancel),
+        cancel,
+        &waiting,
     )
-    .await?;
+    .await;
+    plan_waiting(state, id, false);
+    let preview = preview?;
     let from = match preview.from {
         super::ladder::LadderSource::Measured => PlanSource::Measured,
         super::ladder::LadderSource::Borrowed => PlanSource::Borrowed,
@@ -1595,7 +1707,40 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
     }
 
     let rungs = match custom {
-        Some(rungs) => rungs,
+        // **The person's rungs: what is not measured yet is measured first** (T680, the
+        // owner's decision of 2026-10-02). Only the points still missing — a point measured
+        // before, on the grid or for an earlier edit, is taken as it is — and then on to
+        // the build.
+        Some(rungs) => {
+            let rungs = with_measured_here(state, &row.source_path, &rungs);
+            if custom_rungs(&row).as_ref() != Some(&rungs) {
+                let kept = rungs.clone();
+                change(state, id, |r| {
+                    r.rungs_json = serde_json::to_string(&kept).ok();
+                    Ok(())
+                })?;
+            }
+            let cells = crate::domain::ladder::cells_to_measure(&rungs);
+            if !cells.is_empty() {
+                let task = super::quality::api::quality_measure_cells_start(
+                    state,
+                    super::quality::MeasureRequest {
+                        path: row.source_path.clone(),
+                        codec: String::from("h264"),
+                        native_height: None,
+                        prefer_hardware: true,
+                        then_build: None,
+                        batch: Some(batch_of(&row)),
+                    },
+                    cells,
+                )
+                .await?;
+                return Ok((task, VideoStage::Measuring));
+            }
+            // The person's own rungs are built as they are, as before T680: what they chose
+            // was theirs to choose, and the measurement only fills in the score.
+            rungs
+        }
         None => {
             let preview = super::ladder::api::ladder_plan_until(
                 state,
@@ -2059,32 +2204,44 @@ pub mod api {
     }
 
     /// Set the rungs by hand (`Some`), or go back to the planned ones (`None`).
+    ///
+    /// **A rung not measured yet is taken** (T680, the owner's decision of 2026-10-02): an
+    /// edited rung, or a preliminary one chosen before the first «Start». It is saved as it
+    /// is — never marked measured — and the plan says it needs measuring; «Start» measures
+    /// what is missing, then builds. Refused only what no measurement can answer:
+    /// no rungs, or a rung that is not a whole number of megabits (no point of the grid).
     pub fn video_set_rungs(
         state: &AppState,
         id: &str,
         rungs: Option<Vec<Rung>>,
     ) -> Result<VideoView> {
         if let Some(rungs) = &rungs {
-            crate::domain::ladder::buildable(rungs).map_err(|why| match why {
-                crate::domain::ladder::NotBuildable::NoRungs => {
-                    AppError::new(ErrorCode::InvalidInput)
-                }
-                crate::domain::ladder::NotBuildable::RungsNotMeasured { indexes } => {
-                    AppError::new(ErrorCode::LadderNotMeasured).with_cause(format!(
-                        "rungs {}",
-                        indexes
-                            .iter()
-                            .map(|i| (i + 1).to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ))
-                }
-            })?;
+            if rungs.is_empty() {
+                return Err(AppError::new(ErrorCode::InvalidInput));
+            }
+            let unmeasurable: Vec<String> = rungs
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    !r.quality.is_enough_to_build_on()
+                        && crate::domain::ladder::cell_of(r).is_none()
+                })
+                .map(|(i, _)| (i + 1).to_string())
+                .collect();
+            if !unmeasurable.is_empty() {
+                return Err(AppError::new(ErrorCode::LadderNotMeasured)
+                    .with_cause(format!("rungs {}", unmeasurable.join(", "))));
+            }
         }
         change(state, id, |row| {
             if !video::allowed(Act::SetRungs, row.state, row.stage, row.media_id.is_some()) {
                 return Err(not_now(row));
             }
+            // What this film already has measured for these rungs is taken now (T680), so the
+            // plan says exactly what «Start» will still have to measure.
+            let rungs = rungs
+                .as_ref()
+                .map(|r| with_measured_here(state, &row.source_path, r));
             row.rungs_json = rungs.as_ref().and_then(|r| serde_json::to_string(r).ok());
             Ok(())
         })?;

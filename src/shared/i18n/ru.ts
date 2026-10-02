@@ -307,6 +307,10 @@ export const ruCore: CatalogueCore = {
       message: "Набор для этого медиа уже собирается",
       hint: "Он на экране «Видео».",
     },
+    VIDEO_MEDIUM_GONE: {
+      message: "Медиа набора удалено",
+      hint: "«Повторить» создаст его снова.",
+    },
   },
 
   details: {
@@ -389,6 +393,7 @@ export const ruCore: CatalogueCore = {
       "Набор качеств «{slug}» сейчас собирается на сервере — удаление подождёт, пока сборка закончится.",
     MEDIA_BUSY_UPLOADING:
       "Файл «{name}» сейчас заливается на сервер — удаление подождёт, пока заливка закончится.",
+    MEDIA_BUSY_VIDEO: "В это медиа собирается набор — см. «Видео».",
 
     // --- подготовка файлов ---
     FFMPEG_SELF_BROKEN: "Вложенный FFmpeg не работает. Переустановите приложение.",
@@ -1079,8 +1084,12 @@ const ui = {
     planning: "Считаю план…",
     startsAfterPlan: "Стартует после плана",
     rungLine: "{height}p · {mbps} Мбит/с",
+    rungToMeasure: "замерить",
     onServer: "На сервере ≈ {bytes|bytes}",
-    aboutMinutes: "≈ {n} мин",
+    aboutMinutes: "{what} ≈ {n} мин",
+    encodeTime: "Кодирование",
+    measureAndEncodeTime: "Замер и кодирование",
+    preliminary: "предварительно",
     shortServer: "Не хватает {bytes|bytes} на сервере",
     shortLocal: "Не хватает {bytes|bytes} на этом компьютере",
     nameTaken: "Имя «{slug}» занято",
@@ -1150,6 +1159,7 @@ const ui = {
     buildSet: "Собрать набор",
     setBuilding: "Набор собирается",
     setStopped: "Сборка остановлена",
+    openVideo: "Открыть «Видео»",
     deleteMedia: "Удалить медиа",
     diskFree: "Свободно",
     diskOf: "из",

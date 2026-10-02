@@ -90,6 +90,16 @@ pub fn rung_mbit_of(slug: &str, name: &str) -> Option<u64> {
     mbit.parse().ok()
 }
 
+/// How far a stage that goes rung by rung has got: `done` of `of`, from 0 to 1 (T689). A
+/// stage with nothing to do is done.
+pub fn share_of(done: usize, of: usize) -> f64 {
+    if of == 0 {
+        1.0
+    } else {
+        (done as f64 / of as f64).clamp(0.0, 1.0)
+    }
+}
+
 /// The name of the set's own record of its prepared files, inside `{slug}/` (T677).
 ///
 /// Written only when a rung took a name other than its first, before anything is encoded,
@@ -99,9 +109,14 @@ pub fn rung_mbit_of(slug: &str, name: &str) -> Option<u64> {
 pub const PREPARED_RECORD: &str = ".prepared";
 
 /// Read [`PREPARED_RECORD`]: the rung directory and its prepared file, as written.
+///
+/// Only the `v9=film_9v.mp4` lines; the lines of what was made ([`MadeRung`]) are read by
+/// [`parse_made`].
 pub fn parse_prepared(text: &str) -> Vec<(String, String)> {
     text.lines()
-        .filter_map(|l| l.trim().split_once('='))
+        .map(str::trim)
+        .filter(|l| !l.starts_with(MADE_PREFIX))
+        .filter_map(|l| l.split_once('='))
         .map(|(sub, file)| (sub.trim().to_owned(), file.trim().to_owned()))
         .filter(|(sub, file)| !sub.is_empty() && !file.is_empty())
         .collect()
@@ -114,23 +129,163 @@ pub fn prepared_text(work: &[VariantWork]) -> String {
         .collect()
 }
 
-/// Which prepared file each rung is made into (T677), in the order of `work`.
+/// The same, with the lines of what this set has made (T681), one per rung, after the names.
+pub fn prepared_text_with(work: &[VariantWork], made: &[MadeRung]) -> String {
+    let mut out = prepared_text(work);
+    for m in made {
+        out.push_str(&m.line());
+        out.push('\n');
+    }
+    out
+}
+
+const MADE_PREFIX: &str = "made ";
+
+/// A rung file this set made and put in place itself, with what it was made as (T681).
+///
+/// **Why it is written down.** A file under a rung's name proves nothing: a medium's single
+/// file of the same film length passed for a rung of another film once (QA-25 №2, after
+/// T676). A rung file is taken as done only when the set's own record says this set made it,
+/// from this source (its size and length), at this height and bitrate, with this sound track —
+/// and the file is still whole. Written into [`PREPARED_RECORD`] in the same command that puts
+/// the file in place, so the record never names a file that is not there.
+///
+/// Line: `made v9 film_9v.mp4 h=1080 b=9000000 a=0 s=4000000000 d=3600000`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MadeRung {
+    pub sub: String,
+    pub file: String,
+    pub height: u32,
+    pub bitrate_bps: u64,
+    pub audio_track: usize,
+    /// The source's size, in bytes — which film it was made from.
+    pub source_bytes: u64,
+    /// The source's length, in milliseconds.
+    pub duration_ms: u64,
+}
+
+impl MadeRung {
+    /// What `variant` of `source` is, made with `audio_track`.
+    pub fn of(variant: &VariantWork, source: &SourceFile, audio_track: usize) -> Self {
+        Self {
+            sub: variant.sub.clone(),
+            file: variant.file.clone(),
+            height: variant.rung.height,
+            bitrate_bps: variant.rung.bitrate_bps,
+            audio_track,
+            source_bytes: source.size_bytes,
+            duration_ms: duration_ms(source.duration_s),
+        }
+    }
+
+    pub fn line(&self) -> String {
+        format!(
+            "{MADE_PREFIX}{} {} h={} b={} a={} s={} d={}",
+            self.sub,
+            self.file,
+            self.height,
+            self.bitrate_bps,
+            self.audio_track,
+            self.source_bytes,
+            self.duration_ms
+        )
+    }
+
+    fn parse(line: &str) -> Option<Self> {
+        let mut parts = line.trim().strip_prefix(MADE_PREFIX)?.split_whitespace();
+        let sub = parts.next()?.to_owned();
+        let file = parts.next()?.to_owned();
+        let mut field = |key: &str| -> Option<u64> {
+            parts
+                .next()?
+                .strip_prefix(key)?
+                .strip_prefix('=')?
+                .parse()
+                .ok()
+        };
+        Some(Self {
+            sub,
+            file,
+            height: u32::try_from(field("h")?).ok()?,
+            bitrate_bps: field("b")?,
+            audio_track: usize::try_from(field("a")?).ok()?,
+            source_bytes: field("s")?,
+            duration_ms: field("d")?,
+        })
+    }
+
+    /// Whether this record says that `variant` of `source` with `audio_track` is made.
+    ///
+    /// The same rung directory and file, the same height, the bitrate within a tenth, the
+    /// same sound track and the same source (size, and length within a second).
+    pub fn is(&self, variant: &VariantWork, source: &SourceFile, audio_track: usize) -> bool {
+        let want = variant.rung.bitrate_bps;
+        self.sub == variant.sub
+            && self.file == variant.file
+            && self.height == variant.rung.height
+            && self.bitrate_bps.abs_diff(want) * 10 <= want
+            && self.audio_track == audio_track
+            && self.source_bytes == source.size_bytes
+            && self.duration_ms.abs_diff(duration_ms(source.duration_s)) < 1000
+    }
+}
+
+fn duration_ms(s: f64) -> u64 {
+    if s.is_finite() && s > 0.0 {
+        (s * 1000.0).round() as u64
+    } else {
+        0
+    }
+}
+
+/// Read the lines of what the set made out of [`PREPARED_RECORD`].
+pub fn parse_made(text: &str) -> Vec<MadeRung> {
+    text.lines().filter_map(MadeRung::parse).collect()
+}
+
+/// Whether the set's own record says `variant` is made (T681): see [`MadeRung::is`]. Whether
+/// the file is still there and whole is the server's to say.
+pub fn made_here(
+    made: &[MadeRung],
+    variant: &VariantWork,
+    source: &SourceFile,
+    audio_track: usize,
+) -> bool {
+    made.iter().any(|m| m.is(variant, source, audio_track))
+}
+
+/// What a rung file on the server is, read off `ffprobe -show_entries
+/// stream=height:format=duration -of default=nw=1`: its length and its picture's height.
+pub fn parse_rung_facts(text: &str) -> (Option<f64>, Option<u32>) {
+    let mut duration = None;
+    let mut height = None;
+    for line in text.lines() {
+        match line.trim().split_once('=') {
+            Some(("duration", v)) => duration = v.trim().parse().ok(),
+            Some(("height", v)) if height.is_none() => height = v.trim().parse().ok(),
+            _ => {}
+        }
+    }
+    (duration, height)
+}
+
+/// Which prepared file each rung is made into (T677, T681), in the order of `work`.
 ///
 /// - What the set's own record says, while that is still a rung's name of this set at this
 ///   bitrate and no medium claims it — carrying on finds what it began.
 /// - Otherwise the first of [`file_names`] that no medium claims and no other rung of this
-///   set has taken. `whole_claimed` are claimed files that already are their rung, whole:
-///   those are taken as they are (T675 — a rebuild whose rungs a person filed under the
-///   medium) and keep their first name.
+///   set has taken.
 ///
-/// A claimed file is never one of the names given out otherwise: it is somebody's, and it
-/// is neither written over nor removed (T577, part b).
+/// **A claimed file is never given out** — not even when it is the same length as the
+/// source (T681, QA-25 №2): it is somebody's, and it is neither written over, nor removed
+/// (T577, part b), nor taken for a rung. Whether a file under a name given out is already
+/// this rung is decided by the set's own record of what it made ([`made_here`]), not by
+/// what the file looks like.
 pub fn choose_files(
     slug: &str,
     work: &[VariantWork],
     claimed: &[&str],
     stored: &[(String, String)],
-    whole_claimed: &[String],
 ) -> Vec<String> {
     let mut taken: Vec<String> = Vec::new();
     for w in work {
@@ -143,9 +298,6 @@ pub fn choose_files(
             .filter(|f| !claimed.contains(&f.as_str()) && !taken.contains(f));
         let first = file_name(slug, &w.rung);
         let name = from_record.unwrap_or_else(|| {
-            if whole_claimed.contains(&first) && !taken.contains(&first) {
-                return first;
-            }
             file_names(slug, &w.rung)
                 .find(|n| !claimed.contains(&n.as_str()) && !taken.contains(n))
                 .unwrap_or(first)

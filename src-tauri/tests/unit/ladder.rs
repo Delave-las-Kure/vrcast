@@ -990,3 +990,55 @@ fn a_hand_edited_bitrate_gets_its_own_ceiling_height_and_reason() {
     assert!(!edited.quality.is_enough_to_build_on());
 }
 
+// ---------- the points an edited ladder still needs (T680) ----------
+
+#[test]
+fn only_the_rungs_not_measured_are_measured_and_only_from_their_own_point() {
+    use vrcast_studio_lib::domain::ladder::{cell_of, cells_to_measure, with_measured, Quality};
+    use vrcast_studio_lib::domain::measure_grid::Cell;
+    use vrcast_studio_lib::domain::measured_ladder::Point;
+
+    let mut measured = rung(0, 8, 1920, 1080, "4.0");
+    measured.quality = Quality::MeasuredHere { vmaf_x100: 9500 };
+    let mut edited = rung(1, 4, 1280, 720, "3.1");
+    edited.quality = Quality::NotMeasured;
+    let mut twin = rung(2, 4, 1280, 720, "3.1");
+    twin.quality = Quality::NotMeasured;
+    let mut odd = rung(3, 2, 960, 540, "3.1");
+    odd.bitrate_bps = 2_500_000;
+    odd.quality = Quality::NotMeasured;
+
+    // One point per unmeasured rung, once; none for a bitrate that is not whole megabits.
+    assert_eq!(cell_of(&odd), None);
+    assert_eq!(
+        cells_to_measure(&[measured.clone(), edited.clone(), twin.clone(), odd.clone()]),
+        vec![Cell {
+            bitrate_mbps: 4,
+            height: 720
+        }]
+    );
+    assert!(cells_to_measure(std::slice::from_ref(&measured)).is_empty());
+
+    // A score only from exactly its point; a near one does not count.
+    let near = Point {
+        bitrate_mbps: 4,
+        height: 702,
+        actual_bps: 4_000_000,
+        vmaf: 93.0,
+    };
+    let rungs = [measured.clone(), edited.clone()];
+    assert_eq!(with_measured(&rungs, &[near], false), rungs.to_vec());
+    let exact = Point {
+        height: 720,
+        vmaf: 91.25,
+        ..near
+    };
+    let got = with_measured(&rungs, &[exact], false);
+    assert_eq!(got[1].quality, Quality::MeasuredHere { vmaf_x100: 9125 });
+    assert_eq!(got[1].bitrate_bps, edited.bitrate_bps);
+    assert_eq!(got[1].height, edited.height);
+    // A measured rung keeps its own score; a lent point says it was lent.
+    assert_eq!(got[0].quality, measured.quality);
+    let lent = with_measured(&rungs, &[exact], true);
+    assert_eq!(lent[1].quality, Quality::Borrowed { vmaf_x100: 9125 });
+}

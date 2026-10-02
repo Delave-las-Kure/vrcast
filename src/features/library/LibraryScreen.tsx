@@ -325,6 +325,12 @@ export function LibraryScreen() {
       </p>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+      {/* T684 — refused because a video builds its set into the medium: the way on. */}
+      {error?.details?.some((d) => d.key === "MEDIA_BUSY_VIDEO") && (
+        <Link className="button-link" to="/video">
+          {t.ui.library.openVideo}
+        </Link>
+      )}
       {view?.stale && <StaleBanner onRetry={() => void load(true)} />}
       {view?.disk && <DiskBar disk={view.disk} t={t} lang={lang} />}
 
@@ -563,10 +569,16 @@ function MediaCard({
                 {t.ui.library.buildSet}
               </Link>
             )}
-            <button onClick={onRename} disabled={disabled}>
+            <button onClick={onRename} disabled={disabled || Boolean(media.set_work)}>
               {t.ui.library.renameMedia}
             </button>
-            <button className="button--danger" onClick={onDelete} disabled={disabled}>
+            {/* T684 — a medium a video builds its set into is the video's until it is done:
+                the core refuses with MEDIA_BUSY, and the way on is the «Video» screen above. */}
+            <button
+              className="button--danger"
+              onClick={onDelete}
+              disabled={disabled || Boolean(media.set_work)}
+            >
               {t.ui.library.deleteMedia}
             </button>
           </div>

@@ -83,6 +83,7 @@ export type ErrorCode =
   // a set for a medium already in the library (T675)
   | "MEDIA_HAS_SET"
   | "MEDIA_SET_IN_WORK"
+  | "VIDEO_MEDIUM_GONE"
   // removing everything (FR-114, T643)
   | "FORGET_TASKS_RUNNING"
   | "FORGET_IN_PROGRESS"
@@ -172,6 +173,7 @@ export type DetailCode =
   | "CONFIRM_DELETE_SET_FILES"
   | "MEDIA_BUSY_BUILDING"
   | "MEDIA_BUSY_UPLOADING"
+  | "MEDIA_BUSY_VIDEO"
 
   // preparing files
   | "FFMPEG_SELF_BROKEN"
@@ -1771,7 +1773,8 @@ export interface VideoView {
   start_requested: boolean;
   source: SourceFile | null;
   plan: VideoPlan | null;
-  /** Present while `working`, `paused` or `cancelling`. */
+  /** Present while `working`, `paused` or `cancelling` — and while `planning` waits for a
+   *  place for its trial encodes (`task_state: "queued"`, T688). */
   progress: VideoProgress | null;
   task_id: string | null;
   media_id: string | null;

@@ -175,6 +175,10 @@ error_codes! {
     /// `video_add` with a medium (T675) refused: a set of this medium is being built, or
     /// another video on the list is on its way to it. Nothing was added.
     MediaSetInWork => "MEDIA_SET_IN_WORK",
+    /// A video's build finished and there was no medium to file its set under (T684): it was
+    /// deleted meanwhile — by another copy of the application — or the catalogue could not be
+    /// read. The video stops on it instead of «Done»; «Retry» makes the medium again.
+    VideoMediumGone => "VIDEO_MEDIUM_GONE",
 
     // --- removing everything (FR-114) ---
     /// `forget_everything` refused: a task is alive (queued, running, or paused with its work
