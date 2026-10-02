@@ -451,3 +451,74 @@ async fn a_failed_write_leaves_no_litter_in_the_serving_directory() {
         "litter was left in the directory after a failed write: {leftovers:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_catalogue_that_appears_while_it_is_read_is_not_a_missing_file() {
+    // T691. On a server with no catalogue yet, «Start» on several videos makes every medium
+    // at once: each reads the catalogue, finds none, and the first write creates it. A read
+    // that found no file used to ask the server a second time, in a separate step, whether
+    // the file is there — and a catalogue created by another write between the two steps
+    // turned the first answer, «no such file», into an error: FILE_MISSING_ON_SERVER, a
+    // video stopped before it had its medium. A catalogue is never taken away (it is only
+    // replaced, by a rename, under its own name), so a read that started before it appeared
+    // can only fairly answer «no catalogue» or the catalogue itself.
+    //
+    // Here readers read without a pause while a write creates the catalogue, round after
+    // round: a reader is inside that window most of the time, so the old code fails here
+    // within the first rounds.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    const ROUNDS: usize = 12;
+    const READERS: usize = 4;
+    let server = TestServer::start().expect("the container would not come up");
+    let writer = connect(&server).await;
+    let mut readers = Vec::new();
+    for _ in 0..READERS {
+        readers.push(Arc::new(connect(&server).await));
+    }
+
+    for round in 0..ROUNDS {
+        server
+            .exec_inside(&format!("rm -f {VIDEO_DIR}/library.json"))
+            .expect("the catalogue would not go");
+        let done = Arc::new(AtomicBool::new(false));
+        let mut reading = Vec::new();
+        for conn in &readers {
+            let conn = Arc::clone(conn);
+            let done = Arc::clone(&done);
+            reading.push(tokio::spawn(async move {
+                let mut failures = Vec::new();
+                let mut reads = 0usize;
+                // A few reads more after the write, so the reads that began just before it
+                // are among them.
+                let mut after = 0;
+                while after < 3 {
+                    if done.load(Ordering::SeqCst) {
+                        after += 1;
+                    }
+                    reads += 1;
+                    if let Err(e) = manifest_io::read(&conn, VIDEO_DIR).await {
+                        failures.push(e.to_string());
+                    }
+                }
+                (reads, failures)
+            }));
+        }
+        // Let the readers get going on a catalogue that is not there.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let next = with_media(&Manifest::empty(), &format!("m_{round}"), "film");
+        manifest_io::write(&writer, VIDEO_DIR, &next, 0)
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: the catalogue would not be created: {e}"));
+        done.store(true, Ordering::SeqCst);
+
+        for r in reading {
+            let (reads, failures) = r.await.expect("a reader fell over");
+            assert!(reads > 3, "round {round}: a reader barely read ({reads})");
+            assert!(
+                failures.is_empty(),
+                "round {round}: a read of a catalogue that was being created failed: {failures:?}"
+            );
+        }
+    }
+}

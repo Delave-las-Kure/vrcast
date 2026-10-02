@@ -113,10 +113,28 @@ async fn read_raw(conn: &Connection, video_dir: &str) -> Result<Option<Vec<u8>>>
 
     match sftp.read(path.clone()).await {
         Ok(b) => Ok(Some(b)),
-        // Telling "no file" from "no access" by the shape of the library's error is
-        // not reliable enough, so the server is asked directly. Treating any failed
-        // read as an empty library is dangerous: the application would decide there
-        // is no catalogue and wipe out the real one with its very next write.
+        // **The server's own "no such file" is the answer, taken as it was given** (T691).
+        // It is a status code of the protocol, not a text, and it describes the moment the
+        // catalogue was opened. It used to be checked by asking the server again, in a
+        // separate step, whether the file is there — and on a server with no catalogue yet,
+        // where «Start» on several videos makes every medium at once, another video's write
+        // created the catalogue between the two steps: the second answer said "it is there",
+        // and the first answer, "no such file", was reported as an error —
+        // FILE_MISSING_ON_SERVER, a video stopped before it had its medium. Two answers from
+        // two moments do not make one fact.
+        //
+        // "No catalogue" here is safe even when one appears a moment later: a catalogue is
+        // never taken away, only replaced by a rename under its own name, so "none" is a
+        // true state the catalogue was in; and a write built on it carries `ABSENT`, which
+        // the replacement refuses as a conflict once a catalogue is there (`replace_script`).
+        Err(russh_sftp::client::error::Error::Status(status))
+            if status.status_code == russh_sftp::protocol::StatusCode::NoSuchFile =>
+        {
+            Ok(None)
+        }
+        // Any other failure is not taken for "no catalogue": treating any failed read as an
+        // empty library is dangerous — the application would decide there is no catalogue
+        // and wipe out the real one with its very next write. The server is asked directly.
         Err(e) => {
             let exists = conn
                 .exec(&format!("test -e {}", shell_quote(&path)))
