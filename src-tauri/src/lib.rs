@@ -62,6 +62,14 @@ fn say_where_the_window_went<R: tauri::Runtime>(
 }
 
 pub fn run() {
+    // The e2e build keeps the webview's own folder inside the directory it was given as well
+    // (`store::data_dir`): WebView2 reads this variable itself, ahead of any folder named in
+    // code. Before anything else, while this process is still a single thread.
+    #[cfg(feature = "e2e")]
+    if let Some(dir) = store::data_dir::root() {
+        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", dir.join("webview"));
+    }
+
     // First of all, the log with secret redaction. Nothing may be logged before this
     // line: anything written earlier goes past the guard (constitution, principle IV).
     // To stderr as before and, since T655, to a file in the data directory: a Windows
@@ -121,7 +129,10 @@ pub fn run() {
     // first one's work; this plugin keeps a second instance from starting up at all.
     // Registered first, as the plugin's own documentation asks: that way it runs before
     // anything else can interfere.
-    #[cfg(desktop)]
+    //
+    // Not in the e2e build: there the lock would hand a test window to the person's own
+    // running application and quietly exit (`store::data_dir`).
+    #[cfg(all(desktop, not(feature = "e2e")))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {

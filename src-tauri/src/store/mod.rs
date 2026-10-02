@@ -9,6 +9,7 @@
 //! | profiles, tasks, cache, fingerprints | [`db`] — SQLite | survive a restart |
 //! | cutting secrets out of output | [`redact`] | the guard stands at the exit, not at each call site |
 
+pub mod data_dir;
 pub mod db;
 pub mod geo;
 pub mod library_cache;

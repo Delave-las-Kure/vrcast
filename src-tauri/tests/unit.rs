@@ -254,3 +254,8 @@ mod startup_failure;
 /// T672 — a video in work: its stages, what a state allows, after a restart, the store.
 #[path = "unit/video.rs"]
 mod video;
+
+/// The e2e build takes its data directory from VRCAST_DATA_DIR and keeps secrets in a file
+/// there; an ordinary build ignores the variable, and no release path turns the feature on.
+#[path = "unit/data_dir.rs"]
+mod data_dir;
