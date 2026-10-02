@@ -1411,8 +1411,8 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
     let rungs = match custom {
         // **The person's rungs: what is not measured yet is measured first** (T680, the
         // owner's decision of 2026-10-02). Only the points still missing — a point measured
-        // before, on the grid or for an earlier edit, is taken as it is — and then on through
-        // the objection check to the build, as a planned ladder goes.
+        // before, on the grid or for an earlier edit, is taken as it is — and then on to
+        // the build.
         Some(rungs) => {
             let rungs = with_measured_here(state, &row.source_path, &rungs);
             if custom_rungs(&row).as_ref() != Some(&rungs) {
@@ -1439,14 +1439,8 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
                 .await?;
                 return Ok((task, VideoStage::Measuring));
             }
-            let source = source_of(&row).ok_or_else(|| AppError::new(ErrorCode::Internal))?;
-            let objections =
-                crate::domain::ladder::validate(&rungs, &facts_of(&source), source.fps);
-            if !row.confirmed && !crate::domain::ladder::may_build_unasked(&objections) {
-                return Err(AppError::new(ErrorCode::LadderObjection)
-                    .with_details(objections.iter().map(|o| o.detail()))
-                    .detail(DetailCode::ChainStoppedByObjection));
-            }
+            // The person's own rungs are built as they are, as before T680: what they chose
+            // was theirs to choose, and the measurement only fills in the score.
             rungs
         }
         None => {
@@ -1758,7 +1752,7 @@ pub mod api {
     /// **A rung not measured yet is taken** (T680, the owner's decision of 2026-10-02): an
     /// edited rung, or a preliminary one chosen before the first «Start». It is saved as it
     /// is — never marked measured — and the plan says it needs measuring; «Start» measures
-    /// what is missing, then checks and builds. Refused only what no measurement can answer:
+    /// what is missing, then builds. Refused only what no measurement can answer:
     /// no rungs, or a rung that is not a whole number of megabits (no point of the grid).
     pub fn video_set_rungs(
         state: &AppState,
