@@ -33,11 +33,14 @@ const mockVideoRemove = vi.fn();
 const mockVideoSetAudio = vi.fn();
 const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
+const mockLadderRecomputeRung = vi.fn();
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
 /** The screen's own `video:update` listener, held so a test can send an event. */
 let push: ((v: VideoView) => void) | null = null;
+/** The screen's own `video:removed` listener (T683). */
+let pushRemoved: ((id: string) => void) | null = null;
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (o: unknown) => mockOpen(o) }));
 
@@ -61,11 +64,18 @@ vi.mock("../../../shared/ipc", async () => {
       videoSetName: (...a: unknown[]) => mockVideoSetName(...a),
       videoSetRungs: (...a: unknown[]) => mockVideoSetRungs(...a),
       ladderValidate: () => Promise.resolve({ objections: [], not_buildable: null }),
+      ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
       push = handler;
       return () => {
         if (push === handler) push = null;
+      };
+    },
+    onVideoRemoved: async (handler: (id: string) => void) => {
+      pushRemoved = handler;
+      return () => {
+        if (pushRemoved === handler) pushRemoved = null;
       };
     },
   };
@@ -174,6 +184,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     link: null,
     created_at: "2026-10-01T10:00:00Z",
     updated_at: "2026-10-01T10:00:00Z",
+    rev: 1,
     ...over,
   };
 }
@@ -221,6 +232,7 @@ async function card(id = "v1") {
 beforeEach(() => {
   vi.clearAllMocks();
   push = null;
+  pushRemoved = null;
   useServers.setState({ profiles: [profile()], loading: false, error: null });
   mockServersList.mockResolvedValue([profile()]);
   mockVideoList.mockResolvedValue([]);
@@ -237,7 +249,7 @@ beforeEach(() => {
   ]) {
     m.mockImplementation((id: string) => Promise.resolve(video({ id })));
   }
-  mockVideoRemove.mockResolvedValue(undefined);
+  mockVideoRemove.mockResolvedValue(null);
   mockVideoStart.mockImplementation((ids: string[]) =>
     Promise.resolve(ids.map((id) => ({ id, error: null }))),
   );
@@ -312,6 +324,7 @@ describe("the list", () => {
         working({
           stage: "uploading",
           updated_at: "2026-10-01T10:05:00Z",
+          rev: 5,
           progress: {
             task_state: "running",
             progress: 0.1,
@@ -339,8 +352,8 @@ describe("the list", () => {
     show();
     await card();
     await waitFor(() => expect(push).not.toBeNull());
-    act(() => push!(working({ stage: "cutting", updated_at: "2026-10-01T11:00:00Z" })));
-    act(() => push!(working({ stage: "encoding", updated_at: "2026-10-01T10:30:00Z" })));
+    act(() => push!(working({ stage: "cutting", updated_at: "2026-10-01T11:00:00Z", rev: 11 })));
+    act(() => push!(working({ stage: "encoding", updated_at: "2026-10-01T10:30:00Z", rev: 10 })));
 
     const c = await card();
     expect(
@@ -385,6 +398,32 @@ describe("adding videos", () => {
     const refused = await screen.findByTestId("refused");
     expect(refused).toHaveTextContent("notes.txt");
     expect(refused).toHaveTextContent(ru.details.VIDEO_ALREADY_LISTED);
+  });
+
+  it("a plan waiting for a place among the heavy work says it is queued (T688)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({
+        id: "a",
+        state: "planning",
+        plan: null,
+        progress: {
+          task_state: "queued",
+          progress: 0,
+          speed_bps: null,
+          eta_s: null,
+          rung: null,
+          rungs: 0,
+        },
+      }),
+      video({ id: "b", state: "planning", plan: null }),
+    ]);
+    show();
+    const a = await card("a");
+    expect(a.getByRole("status")).toHaveTextContent(
+      `${ru.ui.video.planning} · ${ru.ui.video.queued}`,
+    );
+    expect((await card("b")).getByRole("status")).toHaveTextContent(ru.ui.video.planning);
+    expect((await card("b")).getByRole("status")).not.toHaveTextContent(ru.ui.video.queued);
   });
 
   it("opens the file dialog by itself when the library sent somebody here to add", async () => {
@@ -464,6 +503,29 @@ describe("adding videos", () => {
 });
 
 describe("the plan before Start", () => {
+  it("says what the time covers and when it is only an estimate (T689)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({ id: "a" }),
+      video({
+        id: "b",
+        plan: plan({
+          from: "formula",
+          needs_measuring: true,
+          measure_s: 600,
+          encode_s: 1200,
+          encode_estimate: "model",
+        }),
+      }),
+    ]);
+    show();
+    const measured = (await card("a")).getByTestId("plan");
+    expect(measured).toHaveTextContent(`${ru.ui.video.encodeTime} ≈ 25 мин`);
+    expect(measured).not.toHaveTextContent(ru.ui.video.preliminary);
+    const guessed = (await card("b")).getByTestId("plan");
+    expect(guessed).toHaveTextContent(`${ru.ui.video.measureAndEncodeTime} ≈ 30 мин`);
+    expect(guessed).toHaveTextContent(ru.ui.video.preliminary);
+  });
+
   it("lists the rungs, the size on the server and the time", async () => {
     mockVideoList.mockResolvedValue([video()]);
     show();
@@ -544,6 +606,23 @@ describe("the plan before Start", () => {
     await waitFor(() => expect(mockVideoRemove).toHaveBeenCalledWith("v1"));
     await waitFor(() => expect(screen.queryByTestId("video-v1")).toBeNull());
   });
+
+  it("removing a video at work keeps the card, stopping, until the core says it is gone (T683)", async () => {
+    mockVideoList.mockResolvedValue([working({ state: "paused", paused_by_person: true })]);
+    mockVideoRemove.mockResolvedValue(
+      working({ state: "cancelling", updated_at: "2026-10-01T10:05:00Z" }),
+    );
+    show();
+    fireEvent.click((await card()).getByRole("button", { name: ru.ui.video.remove }));
+    await waitFor(() => expect(mockVideoRemove).toHaveBeenCalledWith("v1"));
+    const c = await card();
+    await waitFor(() => expect(c.getByText(ru.ui.video.stopping)).toBeInTheDocument());
+    expect(c.queryAllByRole("button")).toHaveLength(0);
+
+    await waitFor(() => expect(pushRemoved).not.toBeNull());
+    act(() => pushRemoved!("v1"));
+    await waitFor(() => expect(screen.queryByTestId("video-v1")).toBeNull());
+  });
 });
 
 describe("the stages after Start", () => {
@@ -556,12 +635,37 @@ describe("the stages after Start", () => {
     expect(facts).toHaveTextContent("ступень 2 из 3");
   });
 
+  it("the check shows no made-up number; the cutting shows its own share (T689)", async () => {
+    const at = (stage: VideoView["stage"], progress: number) =>
+      working({
+        id: stage,
+        stage,
+        progress: {
+          task_state: "running",
+          progress,
+          speed_bps: null,
+          eta_s: null,
+          rung: null,
+          rungs: 4,
+        },
+      });
+    mockVideoList.mockResolvedValue([at("verifying", 0), at("cutting", 0.25)]);
+    show();
+    const checking = await card("verifying");
+    // No figure for a stage that cannot say how far it is: a bar without a value.
+    expect(checking.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    expect(checking.queryByTestId("stage-facts")?.textContent ?? "").not.toContain("%");
+    const cutting = await card("cutting");
+    expect(cutting.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    expect(cutting.getByTestId("stage-facts")).toHaveTextContent("25%");
+  });
+
   it("offers pause while working and resume while paused, and cancel for both", async () => {
     mockVideoList.mockResolvedValue([working({ id: "a" }), working({ id: "b", state: "paused" })]);
     show();
     const a = await card("a");
     expect(a.queryByRole("button", { name: ru.ui.video.resume })).toBeNull();
-    expect(a.queryByRole("button", { name: ru.ui.video.remove })).toBeNull();
+    // «Remove» is there while working too (T683): the core stops the work first.
     fireEvent.click(a.getByRole("button", { name: ru.ui.video.pause }));
     await waitFor(() => expect(mockVideoPause).toHaveBeenCalledWith("a"));
 
@@ -576,6 +680,33 @@ describe("the stages after Start", () => {
     const b = await card("b");
     fireEvent.click(b.getByRole("button", { name: ru.ui.video.resume }));
     await waitFor(() => expect(mockVideoResume).toHaveBeenCalledWith("b"));
+  });
+
+  it("offers «Continue» on the card after a pause pressed in «Tasks» (T685)", async () => {
+    mockVideoList.mockResolvedValue([working()]);
+    show();
+    await card();
+    await waitFor(() => expect(push).not.toBeNull());
+    // The core makes the task's pause the video's own and says so.
+    act(() =>
+      push!(
+        working({
+          state: "paused",
+          paused_by_person: true,
+          updated_at: "2026-10-01T10:05:00Z",
+          rev: 5,
+          progress: { ...working().progress!, task_state: "paused" },
+        }),
+      ),
+    );
+    const c = await card();
+    await waitFor(() =>
+      expect(c.getByRole("button", { name: ru.ui.video.resume })).toBeInTheDocument(),
+    );
+    expect(c.queryByRole("button", { name: ru.ui.video.pause })).toBeNull();
+    expect(c.getByText(ru.ui.video.paused)).toBeInTheDocument();
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.resume }));
+    await waitFor(() => expect(mockVideoResume).toHaveBeenCalledWith("v1"));
   });
 
   it("says it is stopping while cancelling, and offers nothing to press", async () => {
@@ -706,6 +837,50 @@ describe("a problem", () => {
 });
 
 describe("the rungs before Start", () => {
+  it("a rung retyped by hand is saved without an error and is marked to measure (T680)", async () => {
+    mockVideoList.mockResolvedValue([video()]);
+    const unmeasured = {
+      ...rung(1, 3, 720),
+      reasons: ["edited_by_hand"],
+      quality: { state: "not_measured" },
+    } as Rung;
+    mockLadderRecomputeRung.mockResolvedValue(unmeasured);
+    mockVideoSetRungs.mockImplementation(() =>
+      Promise.resolve(
+        video({
+          plan: plan({
+            rungs: [rung(0, 8, 1080), unmeasured],
+            from: "edited",
+            needs_measuring: true,
+            measure_s: 120,
+          }),
+        }),
+      ),
+    );
+    show();
+    fireEvent.click((await card()).getByRole("button", { name: ru.ui.video.rungs }));
+    const editor = await screen.findByRole("dialog", { name: ru.ui.video.rungs });
+    fireEvent.change(within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 2`), {
+      target: { value: "3" },
+    });
+    await waitFor(() => expect(mockLadderRecomputeRung).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(within(editor).getByTestId("rung-1")).toHaveTextContent(ru.ui.ladder.notMeasured),
+    );
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent[1].quality).toEqual({ state: "not_measured" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(mockVideoStart).not.toHaveBeenCalled();
+    // The plan says which rung is still to be measured.
+    const p = (await card()).getByTestId("plan");
+    expect(p).toHaveTextContent(`720p · 3 Мбит/с · ${ru.ui.video.rungToMeasure}`);
+    expect(p).not.toHaveTextContent(`1080p · 8 Мбит/с · ${ru.ui.video.rungToMeasure}`);
+  });
+
   it("are edited on this screen and saved to the video without starting it", async () => {
     mockVideoList.mockResolvedValue([video()]);
     show();

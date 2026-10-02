@@ -45,6 +45,8 @@ pub mod names {
     pub const APP_HIDDEN: &str = "app:hidden-to-tray";
     /// A video in work changed (T672): the whole `VideoView`, every time.
     pub const VIDEO_UPDATE: &str = "video:update";
+    /// A video left the list (T683): `{ event: "video_removed", id }`.
+    pub const VIDEO_REMOVED: &str = "video:removed";
 }
 
 /// Start forwarding task events to the interface.
@@ -178,6 +180,7 @@ pub fn long_enough(created_at: &str, updated_at: &str) -> bool {
 /// Start forwarding the core's other events to the interface.
 pub fn bridge_app_events(app: AppHandle, state: &AppState) {
     let mut rx = state.subscribe();
+    let state = state.clone();
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
@@ -188,6 +191,7 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                         AppEvent::ViewersUpdate(_) => names::VIEWERS_UPDATE,
                         AppEvent::DeployProgress { .. } => names::DEPLOY_PROGRESS,
                         AppEvent::VideoUpdate(_) => names::VIDEO_UPDATE,
+                        AppEvent::VideoRemoved { .. } => names::VIDEO_REMOVED,
                     };
                     if let Err(e) = app.emit(name, &event) {
                         tracing::debug!(error = %e, "event not delivered to the interface");
@@ -198,6 +202,17 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                         skipped,
                         "the interface fell behind, some events were dropped"
                     );
+                    // A dropped `video:update` may have been the one that said a video was
+                    // done (T687): every video goes out again as it is now — straight to the
+                    // interface, not through the channel that just overflowed.
+                    if let Ok(all) = crate::commands::video::api::video_list(&state) {
+                        for view in all {
+                            let event = AppEvent::VideoUpdate(Box::new(view));
+                            if let Err(e) = app.emit(names::VIDEO_UPDATE, &event) {
+                                tracing::debug!(error = %e, "event not delivered to the interface");
+                            }
+                        }
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }

@@ -382,29 +382,81 @@ pub mod api {
     ///
     /// A secret left behind is access to somebody else's server that a person no longer
     /// remembers (FR-005).
-    pub fn server_remove(state: &AppState, id: &str) -> Result<()> {
-        // T636: under the same lock as every change of the way of signing in — a deployment
-        // keeping its key in the middle of this would otherwise write it into the entry of a
-        // profile that is going away, after that entry was deleted.
-        let _sign_in = state.db.sign_in_lock();
+    ///
+    /// **Not under live work** (T683, the owner's decision of 2026-10-02). The profile's rows
+    /// cascade — its videos, its tasks — and a row deleted while its work runs leaves a
+    /// build, an upload, a cutting with nobody to answer for them. So with work alive on the
+    /// server (its own tasks, and every task of its videos) the first call is refused with
+    /// `CONFIRMATION_REQUIRED` + `CONFIRM_STOP_SERVER_WORK {count}` and nothing changes;
+    /// `confirmed` stops everything there — each video `cancelling` as after «Cancel», the
+    /// server's cutting confirmed stopped — and only then deletes the profile. The answer
+    /// comes once it is deleted. Each video of the server leaves the list with
+    /// `video:removed`.
+    pub async fn server_remove(state: &AppState, id: &str, confirmed: bool) -> Result<()> {
         // A missing profile is not an error: repeating must be safe (the contract,
         // rule 5).
-        let Some(profile) = profiles::get(&state.db, id)? else {
+        if profiles::get(&state.db, id)?.is_none() {
             return Ok(());
-        };
-
-        profiles::remove(&state.db, id)?;
-        if let Err(e) = state
-            .secrets
-            .delete(&SecretRef::from_stored(&profile.secret_ref))
-        {
-            // The profile is already deleted. Reporting the dangling secret matters more
-            // than keeping quiet, but an error must not be returned: deleting again would
-            // then be impossible, and the profile is already gone.
-            tracing::error!(server = %id, error = %e, "the deleted profile's secret stayed in the store");
         }
+        let work = super::super::video::work_on_server(state, id);
+        if !work.is_empty() && !confirmed {
+            return Err(AppError::new(ErrorCode::ConfirmationRequired)
+                .with_detail(
+                    Detail::new(DetailCode::ConfirmStopServerWork).with("count", work.len() as u64),
+                )
+                .with_cause(work.join(", ")));
+        }
+        // Nothing of this server's videos is put on the queue from here on.
+        let _closing = super::super::video::close_server(state, id);
+        loop {
+            if !super::super::video::work_on_server(state, id).is_empty() {
+                super::super::video::stop_server_work(state, id);
+                while !super::super::video::work_on_server(state, id).is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+            // Asked again under the lock: something put on the queue for this server while
+            // the rest was stopping (an upload) is stopped too before anything is deleted.
+            if remove_now(state, id)? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Delete the profile, its rows and its secret — when nothing of it is alive. `false`
+    /// when something is, and nothing was deleted.
+    fn remove_now(state: &AppState, id: &str) -> Result<bool> {
+        let videos = {
+            // T636: under the same lock as every change of the way of signing in — a
+            // deployment keeping its key in the middle of this would otherwise write it into
+            // the entry of a profile that is going away, after that entry was deleted.
+            let _sign_in = state.db.sign_in_lock();
+            if !super::super::video::work_on_server(state, id).is_empty() {
+                return Ok(false);
+            }
+            let Some(profile) = profiles::get(&state.db, id)? else {
+                return Ok(true);
+            };
+            let videos = super::super::video::videos_of_server(state, id);
+            profiles::remove(&state.db, id)?;
+            if let Err(e) = state
+                .secrets
+                .delete(&SecretRef::from_stored(&profile.secret_ref))
+            {
+                // The profile is already deleted. Reporting the dangling secret matters more
+                // than keeping quiet, but an error must not be returned: deleting again would
+                // then be impossible, and the profile is already gone.
+                tracing::error!(server = %id, error = %e, "the deleted profile's secret stayed in the store");
+            }
+            videos
+        };
+        // The watching of viewers on a server that is gone has nobody to show them to.
+        if state.viewers.watching().as_deref() == Some(id) {
+            super::super::viewers::api::viewers_watch_stop(state);
+        }
+        super::super::video::forget_server_videos(state, &videos);
         tracing::info!(server = %id, "the server profile was deleted");
-        Ok(())
+        Ok(true)
     }
 
     /// Make a profile the active one. Exactly one is active (FR-002).
@@ -509,8 +561,12 @@ pub mod ipc {
     }
 
     #[tauri::command]
-    pub fn server_remove(state: State<'_, AppState>, id: String) -> Result<()> {
-        api::server_remove(&state, &id)
+    pub async fn server_remove(
+        state: State<'_, AppState>,
+        id: String,
+        confirmed: Option<bool>,
+    ) -> Result<()> {
+        api::server_remove(&state, &id, confirmed.unwrap_or(false)).await
     }
 
     #[tauri::command]

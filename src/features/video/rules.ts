@@ -47,8 +47,12 @@ export function canCancel(v: VideoView): boolean {
   );
 }
 
+/**
+ * Always but while stopping: with its work alive the core stops it first and the video leaves
+ * once it has (T683); a video already stopping has nothing more to press.
+ */
 export function canRemove(v: VideoView): boolean {
-  return v.state !== "working" && v.state !== "cancelling";
+  return v.state !== "cancelling";
 }
 
 export function canSetAudio(v: VideoView): boolean {
@@ -115,23 +119,38 @@ export function trackLabel(track: AudioTrack, t: Catalogue, lang: Lang): string 
 /**
  * Put a newer view of a video into the list. An answer older than what is already shown is
  * dropped: an action's reply and the event about the same change can arrive in either order.
+ * «Older» is by `rev` (T687), which grows with every change — progress included, which
+ * `updated_at` does not follow.
  */
 export function upsert(list: VideoView[], v: VideoView): VideoView[] {
   const at = list.findIndex((x) => x.id === v.id);
   if (at < 0) return [...list, v];
-  if (list[at].updated_at > v.updated_at) return list;
+  if (list[at].rev > v.rev) return list;
   const next = list.slice();
   next[at] = v;
   return next;
 }
 
-/** The list `videoList` gave, merged with whatever events got here first. */
-export function mergeListed(current: VideoView[], listed: VideoView[]): VideoView[] {
+/**
+ * The list `videoList` gave, merged with what is shown. A video the list does not have is
+ * kept only when it was heard of after the list was asked for (`heardSince` — an event of a
+ * video just added); one known from before is gone from the list, and from the screen.
+ */
+export function mergeListed(
+  current: VideoView[],
+  listed: VideoView[],
+  heardSince: ReadonlySet<string> = new Set(),
+): VideoView[] {
   const known = new Map(current.map((v) => [v.id, v]));
   const out = listed.map((v) => {
     const seen = known.get(v.id);
-    return seen && seen.updated_at > v.updated_at ? seen : v;
+    return seen && seen.rev > v.rev ? seen : v;
   });
   const listedIds = new Set(listed.map((v) => v.id));
-  return [...out, ...current.filter((v) => !listedIds.has(v.id))];
+  return [...out, ...current.filter((v) => !listedIds.has(v.id) && heardSince.has(v.id))];
+}
+
+/** Whether anything on the list may still change by itself — what keeps the screen asking. */
+export function anyInWork(list: VideoView[]): boolean {
+  return list.some((v) => ["planning", "working", "paused", "cancelling"].includes(v.state));
 }

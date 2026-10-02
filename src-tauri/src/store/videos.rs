@@ -23,12 +23,17 @@ pub struct VideoRow {
     pub measured: bool,
     pub own_medium: bool,
     pub confirmed: bool,
+    /// «Remove» was pressed while the work was alive (T683): it is being stopped, and the
+    /// video goes off the list the moment it has.
+    pub remove_requested: bool,
     pub task_id: Option<String>,
     pub media_id: Option<String>,
     pub source_json: Option<String>,
     pub plan_json: Option<String>,
     pub rungs_json: Option<String>,
     pub problem_json: Option<String>,
+    /// A confirmed «Replace» on its way (T686): JSON `domain::video::Replacing`.
+    pub replacing_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -51,12 +56,14 @@ impl VideoRow {
             measured: false,
             own_medium: false,
             confirmed: false,
+            remove_requested: false,
             task_id: None,
             media_id: None,
             source_json: None,
             plan_json: None,
             rungs_json: None,
             problem_json: None,
+            replacing_json: None,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -82,12 +89,14 @@ fn row_to_video(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoRow> {
         measured: row.get::<_, i64>("measured")? != 0,
         own_medium: row.get::<_, i64>("own_medium")? != 0,
         confirmed: row.get::<_, i64>("confirmed")? != 0,
+        remove_requested: row.get::<_, i64>("remove_requested")? != 0,
         task_id: row.get("task_id")?,
         media_id: row.get("media_id")?,
         source_json: row.get("source_json")?,
         plan_json: row.get("plan_json")?,
         rungs_json: row.get("rungs_json")?,
         problem_json: row.get("problem_json")?,
+        replacing_json: row.get("replacing")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -104,9 +113,9 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 (id, server_id, source_path, title, slug, audio_track, stage, state,
                  paused_by_person, start_requested, measured, own_medium, confirmed,
                  task_id, media_id, source_json, plan_json, rungs_json, problem_json,
-                 created_at, updated_at, seq)
+                 created_at, updated_at, remove_requested, replacing, seq)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                     ?17, ?18, ?19, ?20, ?21,
+                     ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                      (SELECT COALESCE(MAX(seq), 0) + 1 FROM videos))
              ON CONFLICT (id) DO UPDATE SET
                 title = excluded.title,
@@ -119,6 +128,8 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 measured = excluded.measured,
                 own_medium = excluded.own_medium,
                 confirmed = excluded.confirmed,
+                remove_requested = excluded.remove_requested,
+                replacing = excluded.replacing,
                 task_id = excluded.task_id,
                 media_id = excluded.media_id,
                 source_json = excluded.source_json,
@@ -148,6 +159,8 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 v.problem_json,
                 v.created_at,
                 now_rfc3339(),
+                v.remove_requested as i64,
+                v.replacing_json,
             ],
         )?;
         Ok(())

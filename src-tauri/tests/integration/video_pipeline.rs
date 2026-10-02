@@ -27,14 +27,14 @@ use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretStore};
 use super::fixture::TestServer;
 use super::upload_live::{add_profile, attach_secret};
 
-const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
+pub(crate) const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 
 /// Where the check at the end looks for the set: the container's own HTTP.
-fn origin_of(server: &TestServer) -> String {
+pub(crate) fn origin_of(server: &TestServer) -> String {
     format!("http://{}:{}", server.host(), server.http_port)
 }
 
-fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState {
+pub(crate) fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState {
     let mut state = AppState::with_db(
         Arc::new(Db::open(db).expect("the database would not open")),
         secrets,
@@ -45,12 +45,12 @@ fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState 
 }
 
 /// A real film. `seconds` long at `size`, with sound, keyframes every second.
-fn make_film(path: &Path, size: &str, seconds: u32) {
+pub(crate) fn make_film(path: &Path, size: &str, seconds: u32) {
     make_film_from(path, &format!("testsrc2=size={size}:rate=24"), seconds);
 }
 
 /// The same, with the picture from another lavfi source — another film of the same length.
-fn make_film_from(path: &Path, picture: &str, seconds: u32) {
+pub(crate) fn make_film_from(path: &Path, picture: &str, seconds: u32) {
     let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg: run `npm run ffmpeg`");
     let out = std::process::Command::new(ff)
         .args(["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i"])
@@ -85,10 +85,10 @@ fn make_film_from(path: &Path, picture: &str, seconds: u32) {
 }
 
 /// A directory that removes itself.
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 
 impl Scratch {
-    fn new(what: &str) -> Self {
+    pub(crate) fn new(what: &str) -> Self {
         let dir =
             std::env::temp_dir().join(format!("vrcast-{what}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("could not make a working directory");
@@ -102,7 +102,7 @@ impl Drop for Scratch {
     }
 }
 
-async fn until(
+pub(crate) async fn until(
     state: &AppState,
     id: &str,
     what: &str,
@@ -147,7 +147,7 @@ fn two_rungs() -> Vec<Rung> {
     ]
 }
 
-fn the_set_is_served(server: &TestServer, slug: &str) {
+pub(crate) fn the_set_is_served(server: &TestServer, slug: &str) {
     let master = server
         .exec_inside(&format!("cat '{VIDEO_DIR}/{slug}/master.m3u8'"))
         .expect("master.m3u8 is not on the server");
@@ -333,7 +333,7 @@ fn digest(server: &TestServer, path: &str) -> String {
 
 /// Every file of the set `slug` on the server, by its bytes: the prepared rungs, the cut
 /// segments, their playlists and the master.
-fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
+pub(crate) fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
     let names = server
         .exec_inside(&format!(
             "cd '{VIDEO_DIR}' && ls -1 {slug}_*.mp4 && find '{slug}' -type f \\( -name '*.ts' -o -name '*.m3u8' \\) | sort"
@@ -348,7 +348,7 @@ fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
 }
 
 /// Add a film, give it the two measured rungs, start it, and wait until it stops.
-async fn build_one(state: &AppState, server_id: &str, film: &Path) -> VideoView {
+pub(crate) async fn build_one(state: &AppState, server_id: &str, film: &Path) -> VideoView {
     let added = video::video_add(
         state,
         server_id,
@@ -740,6 +740,84 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
         "{:?}",
         view.unrecognized
     );
+    drop(scratch);
+}
+
+// ---------- a medium's single file of the same length is not a rung (T681, QA-25 №2) ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_single_file_of_the_same_length_named_like_a_rung_stays_and_the_rung_is_made_anew() {
+    use vrcast_studio_lib::commands::library::api as library;
+
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t681-same-length");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+
+    // Another film of exactly the same length, 720p like the top rung, lying on the server as
+    // the medium's single file under the name the 2 Mbit/s rung would take: the one
+    // `variant_already_there` took for the rung by its length alone.
+    let medium = library::media_create(&state, &server_id, "Same", Some("same"))
+        .await
+        .expect("the medium was not made");
+    let theirs = scratch.0.join("theirs.mp4");
+    make_film_from(&theirs, "testsrc=size=1280x720:rate=24", 12);
+    server
+        .put_file(&theirs, &format!("{VIDEO_DIR}/same_2.mp4"))
+        .expect("the single file was not put on the server");
+    library::file_move(&state, &server_id, "same_2.mp4", &medium, true)
+        .await
+        .expect("the file was not filed under the medium");
+    let single = digest(&server, &format!("{VIDEO_DIR}/same_2.mp4"));
+
+    let film = scratch.0.join("ours.mp4");
+    make_film(&film, "1280x720", 12);
+    let added = video::video_add(
+        &state,
+        &server_id,
+        &[film.to_string_lossy().into_owned()],
+        Some(&medium),
+    )
+    .await
+    .expect("the medium did not take the film");
+    let id = added.added[0].id.clone();
+    until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    video::video_set_rungs(&state, &id, Some(two_rungs())).unwrap();
+    video::video_start(&state, std::slice::from_ref(&id));
+    let done = until(&state, &id, "the set", Duration::from_secs(400), |v| {
+        matches!(v.state, VideoState::Done | VideoState::Problem)
+    })
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+
+    // The single file is untouched and still the medium's own.
+    assert_eq!(digest(&server, &format!("{VIDEO_DIR}/same_2.mp4")), single);
+    // The rung was made from this film, under the next free name.
+    let made = identity(&server, &format!("{VIDEO_DIR}/same_2v.mp4"));
+    assert!(made.is_some(), "the rung was not made as same_2v.mp4");
+    let record = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/same/.prepared'"))
+        .expect("the set has no record of its prepared files");
+    assert!(record.contains("v2=same_2v.mp4"), "{record}");
+    assert!(record.contains("made v2 same_2v.mp4"), "{record}");
+    the_set_is_served(&server, "same");
+    let view = library::library_list(&state, &server_id, true)
+        .await
+        .unwrap();
+    let m = view.media.iter().find(|m| m.id == medium).unwrap();
+    assert_eq!(
+        m.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+        vec!["same_2.mp4"]
+    );
+    assert!(m.set_files.iter().any(|f| f.path == "same_2v.mp4"), "{m:?}");
     drop(scratch);
 }
 

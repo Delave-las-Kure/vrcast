@@ -151,6 +151,31 @@ pub struct SetWork {
     pub video_id: String,
 }
 
+/// Where a confirmed «Replace» is (T686, QA-25 №7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplacePhase {
+    /// Confirmed; the old set is being removed — or may have been, in part.
+    Deleting,
+    /// The old set is gone; what is left is building the new one.
+    Building,
+}
+
+/// A «Replace» a person confirmed, kept from before the first thing is removed until the
+/// build is on its way (T686). A restart in between carries it through rather than leaving a
+/// video on its old problem with the old set already gone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Replacing {
+    pub phase: ReplacePhase,
+    /// A video for a medium of the library waiting on a set nobody owns (T677).
+    pub into_medium: bool,
+    /// «Replace anyway» — past viewers on the server.
+    pub confirmed: bool,
+    /// The medium the set is built into, once known: the library shows its set as building
+    /// from then on, not as missing.
+    pub media_id: Option<String>,
+}
+
 /// What a video says about its medium's set, from its state alone (T677).
 ///
 /// `None` while nothing of the set has been begun: a plan waiting for «Start», a video
@@ -206,7 +231,9 @@ pub fn allowed(act: Act, state: VideoState, stage: VideoStage, has_medium: bool)
         Act::Resume => state == S::Paused,
         Act::Cancel => matches!(state, S::Working | S::Paused | S::Problem | S::Planning),
         Act::Retry => matches!(state, S::Problem | S::Cancelled),
-        Act::Remove => !state.is_going(),
+        // Always (T683, the owner's decision of 2026-10-02): with its work alive the work is
+        // stopped first, and the video leaves the list once it has.
+        Act::Remove => true,
         Act::SetAudio => stage <= VideoStage::Measuring && !state.is_going() && state != S::Done,
         Act::SetName => !has_medium && !state.is_going() && state != S::Done,
         Act::SetRungs => matches!(state, S::Planning | S::Ready | S::Problem | S::Cancelled),

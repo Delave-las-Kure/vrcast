@@ -594,7 +594,7 @@ pub mod api {
     /// stale — and never kept in the cache: it changes with the videos, not with the server.
     /// The most telling video wins when there are several (one going over one stopped).
     pub fn with_set_work(state: &AppState, mut view: LibraryView) -> LibraryView {
-        use crate::domain::video::{set_work_of, SetWork, SetWorkState};
+        use crate::domain::video::{SetWork, SetWorkState};
         let videos = crate::store::videos::list(&state.db).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "the videos were not read for the library");
             Vec::new()
@@ -602,14 +602,16 @@ pub mod api {
         for media in &mut view.media {
             media.set_work = videos
                 .iter()
-                .filter(|v| {
-                    v.server_id == view.server_id && v.media_id.as_deref() == Some(&media.id)
-                })
+                // By the medium the video says it is building — its own, or (T686) the one a
+                // confirmed «Replace» is building into before the video holds it.
+                .filter(|v| v.server_id == view.server_id)
                 .filter_map(|v| {
-                    set_work_of(v.state, v.stage, v.start_requested).map(|s| SetWork {
-                        state: s,
-                        video_id: v.id.clone(),
-                    })
+                    crate::commands::video::set_work_of_row(v)
+                        .filter(|(m, _)| m == &media.id)
+                        .map(|(_, s)| SetWork {
+                            state: s,
+                            video_id: v.id.clone(),
+                        })
                 })
                 .min_by_key(|w| w.state != SetWorkState::Building);
         }
@@ -973,6 +975,8 @@ pub mod api {
             media::validate_slug(s)
                 .map_err(|e| AppError::new(ErrorCode::InvalidInput).with_detail(e.detail()))?;
         }
+        // T684 — the medium a video builds its set into keeps its name until the video is done.
+        refuse_if_a_video_builds_into(state, server_id, media_id, None)?;
 
         let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
             .await?
@@ -983,6 +987,15 @@ pub mod api {
             conn.close().await;
             return Err(no_such_media(media_id));
         };
+        if let Err(e) = refuse_if_a_video_builds_into(
+            state,
+            server_id,
+            media_id,
+            Some(&manifest.media[index].slug),
+        ) {
+            conn.close().await;
+            return Err(e);
+        }
         if let Some(s) = new_slug {
             if !manifest.slug_available(s, Some(media_id)) {
                 conn.close().await;
@@ -1102,6 +1115,8 @@ pub mod api {
         confirmed: bool,
     ) -> Result<String> {
         let profile = profile_of(state, server_id)?;
+        // T684 — the medium a video builds its set into is not the library's to delete.
+        refuse_if_a_video_builds_into(state, server_id, media_id, None)?;
         let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
             .await?
             .conn;
@@ -1111,6 +1126,15 @@ pub mod api {
             conn.close().await;
             return Err(no_such_media(media_id));
         };
+        if let Err(e) = refuse_if_a_video_builds_into(
+            state,
+            server_id,
+            media_id,
+            Some(&manifest.media[index].slug),
+        ) {
+            conn.close().await;
+            return Err(e);
+        }
 
         // **The set's rung files go with the medium** (T678): those the catalogue records,
         // and those of a set built before T678, found by the set's own word. The same view
@@ -1305,6 +1329,46 @@ pub mod api {
         AppError::new(ErrorCode::InvalidInput)
             .detail(DetailCode::MediaNotFound)
             .with_cause(id)
+    }
+
+    /// Refuse to delete or rename a medium a video on the «Video» screen builds its set into
+    /// (T684, QA-25 №5).
+    ///
+    /// **Why the old guard did not see it.** `refuse_if_busy` asks about a running build or
+    /// upload by the medium's paths, and both doors were open: while the film is measured there
+    /// is no build task yet, and a medium a video made a moment ago has no paths at all. The
+    /// medium is the video's for its whole way — planned, measuring, building, stopped on a
+    /// problem, paused, stopping — and a cancelled one that began, which «Retry» carries on
+    /// (the library shows it as «stopped», `with_set_work`). Asked of this machine's videos
+    /// before the server is: it needs no connection, and answers the same when there is none.
+    ///
+    /// `slug` — the medium's short name, when known: a video whose own medium is not written
+    /// down yet builds under it all the same.
+    pub(crate) fn refuse_if_a_video_builds_into(
+        state: &AppState,
+        server_id: &str,
+        media_id: &str,
+        slug: Option<&str>,
+    ) -> Result<()> {
+        let videos = crate::store::videos::list(&state.db)?;
+        let holder = videos.iter().find(|v| {
+            v.server_id == server_id
+                && match v.media_id.as_deref() {
+                    Some(m) => m == media_id,
+                    // Started, and its medium not written down yet: it is about to make or
+                    // take the medium of its short name.
+                    None => v.start_requested && slug == Some(v.slug.as_str()),
+                }
+                && (v.state.is_unfinished()
+                    || crate::domain::video::set_work_of(v.state, v.stage, v.start_requested)
+                        .is_some())
+        });
+        match holder {
+            Some(v) => Err(AppError::new(ErrorCode::MediaBusy)
+                .with_detail(Detail::new(DetailCode::MediaBusyVideo).with("video_id", v.id.clone()))
+                .with_cause(format!("video {} ({:?}, {:?})", v.id, v.state, v.stage))),
+            None => Ok(()),
+        }
     }
 
     /// A refusal that names the consequences. Without the numbers there would be nothing

@@ -83,6 +83,7 @@ export type ErrorCode =
   // a set for a medium already in the library (T675)
   | "MEDIA_HAS_SET"
   | "MEDIA_SET_IN_WORK"
+  | "VIDEO_MEDIUM_GONE"
   // removing everything (FR-114, T643)
   | "FORGET_TASKS_RUNNING"
   | "FORGET_IN_PROGRESS"
@@ -172,6 +173,7 @@ export type DetailCode =
   | "CONFIRM_DELETE_SET_FILES"
   | "MEDIA_BUSY_BUILDING"
   | "MEDIA_BUSY_UPLOADING"
+  | "MEDIA_BUSY_VIDEO"
 
   // preparing files
   | "FFMPEG_SELF_BROKEN"
@@ -374,7 +376,9 @@ export type DetailCode =
   // Videos in work (T672).
   | "VIDEO_ALREADY_LISTED"
   | "RUNG_FILE_CLAIMED"
-  | "OLD_SET_UNRECOGNIZED";
+  | "OLD_SET_UNRECOGNIZED"
+  // Removing a server with work alive on it (T683): `count`.
+  | "CONFIRM_STOP_SERVER_WORK";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {
@@ -1470,6 +1474,8 @@ export const EVENTS = {
   appHiddenToTray: "app:hidden-to-tray",
   /** A video in work changed (T672): the whole `VideoView`, every time. */
   videoUpdate: "video:update",
+  /** A video left the list (T683): `{ event: "video_removed", id }`. */
+  videoRemoved: "video:removed",
 } as const;
 
 export interface TaskProgressEvent {
@@ -1767,7 +1773,8 @@ export interface VideoView {
   start_requested: boolean;
   source: SourceFile | null;
   plan: VideoPlan | null;
-  /** Present while `working`, `paused` or `cancelling`. */
+  /** Present while `working`, `paused` or `cancelling` — and while `planning` waits for a
+   *  place for its trial encodes (`task_state: "queued"`, T688). */
   progress: VideoProgress | null;
   task_id: string | null;
   media_id: string | null;
@@ -1776,6 +1783,11 @@ export interface VideoView {
   link: Links | null;
   created_at: string;
   updated_at: string;
+  /**
+   * The version of this view (T687): higher is newer, for every change — progress included,
+   * which `updated_at` does not follow. Keep the view with the higher one.
+   */
+  rev: number;
 }
 
 export interface VideoUpdateEvent extends VideoView {

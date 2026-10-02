@@ -54,7 +54,7 @@ fn detached_ctx() -> TaskContext {
 /// finish remuxing on its own so quickly that a test asserting "`ffmpeg` gone soon after
 /// the stop" could pass by coincidence even against the unfixed bug. A five-plus gigabyte
 /// file, measured the same way, took several real seconds to remux.
-fn make_slow_film(server: &TestServer, name: &str) -> Result<(), String> {
+pub(crate) fn make_slow_film(server: &TestServer, name: &str) -> Result<(), String> {
     server.exec_inside(&format!(
         "ffmpeg -nostdin -y -loglevel error \
          -f lavfi -i testsrc2=size=1920x1080:rate=30:duration=1200 \

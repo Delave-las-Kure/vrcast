@@ -131,15 +131,17 @@ fn a_secret_that_is_passed_replaces_the_old_one() {
     assert_eq!(s.secrets.get(&reference).unwrap(), fresh);
 }
 
-#[test]
-fn deleting_a_profile_removes_its_secret_from_the_store_too() {
+#[tokio::test]
+async fn deleting_a_profile_removes_its_secret_from_the_store_too() {
     // FR-005: deleting a profile, the application forgets the access too. A secret left
     // behind is access to somebody else's server that a person no longer remembers.
     let s = state();
     let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
     let reference = SecretRef::from_stored(&api::servers_list(&s).unwrap()[0].secret_ref);
 
-    api::server_remove(&s, &id).expect("the profile was not deleted");
+    api::server_remove(&s, &id, false)
+        .await
+        .expect("the profile was not deleted");
 
     assert!(api::servers_list(&s).unwrap().is_empty());
     assert!(
@@ -148,14 +150,16 @@ fn deleting_a_profile_removes_its_secret_from_the_store_too() {
     );
 }
 
-#[test]
-fn deleting_twice_is_safe() {
+#[tokio::test]
+async fn deleting_twice_is_safe() {
     // The contract, rule 5: repeating the same command does not spoil the result.
     let s = state();
     let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
 
-    api::server_remove(&s, &id).unwrap();
-    api::server_remove(&s, &id).expect("deleting a second time counted as an error");
+    api::server_remove(&s, &id, false).await.unwrap();
+    api::server_remove(&s, &id, false)
+        .await
+        .expect("deleting a second time counted as an error");
 }
 
 #[test]

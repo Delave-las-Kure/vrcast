@@ -80,3 +80,9 @@ mod supplied;
 /// problem with its actions, the event, and a restart.
 #[path = "contract/video.rs"]
 mod video;
+
+/// QA-25 — a video's life from the controls' side: pause and carry on from either place,
+/// taking it off the list, removing its server, a stop across a restart, «Replace» (T682,
+/// T683, T685, T686, T687).
+#[path = "contract/video_lifecycle.rs"]
+mod video_lifecycle;

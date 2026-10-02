@@ -597,7 +597,7 @@ fn a_rung_whose_name_a_medium_claims_takes_the_next_free_one_and_the_file_is_not
     // The medium's own single file is `film_9.mp4`: the 9 Mbit/s rung becomes `film_9v.mp4`,
     // the other keeps its first name.
     assert_eq!(
-        choose_files("film", &work, &["film_9.mp4"], &[], &[]),
+        choose_files("film", &work, &["film_9.mp4"], &[]),
         vec!["film_9v.mp4", "film_4.mp4"]
     );
     // That one claimed too: `v2`, and so on. A claimed name is never given out.
@@ -606,25 +606,13 @@ fn a_rung_whose_name_a_medium_claims_takes_the_next_free_one_and_the_file_is_not
             "film",
             &work,
             &["film_9.mp4", "film_9v.mp4", "film_9v2.mp4"],
-            &[],
             &[]
         ),
         vec!["film_9v3.mp4", "film_4.mp4"]
     );
     // Nothing claimed: every rung its first name, as always.
     assert_eq!(
-        choose_files("film", &work, &[], &[], &[]),
-        vec!["film_9.mp4", "film_4.mp4"]
-    );
-    // A claimed file that already is this rung, whole, is taken as it is (T675).
-    assert_eq!(
-        choose_files(
-            "film",
-            &work,
-            &["film_9.mp4"],
-            &[],
-            &[String::from("film_9.mp4")]
-        ),
+        choose_files("film", &work, &[], &[]),
         vec!["film_9.mp4", "film_4.mp4"]
     );
 }
@@ -633,7 +621,7 @@ fn a_rung_whose_name_a_medium_claims_takes_the_next_free_one_and_the_file_is_not
 fn carrying_on_finds_the_rung_under_the_name_it_was_given() {
     use vrcast_studio_lib::domain::ladder_build::{choose_files, parse_prepared, prepared_text};
     let mut work = two_rung_work();
-    let first = choose_files("film", &work, &["film_9.mp4"], &[], &[]);
+    let first = choose_files("film", &work, &["film_9.mp4"], &[]);
     for (w, f) in work.iter_mut().zip(&first) {
         w.file = f.clone();
     }
@@ -649,18 +637,18 @@ fn carrying_on_finds_the_rung_under_the_name_it_was_given() {
     // found under the name it was begun under, not made again under `film_9.mp4`.
     let again = two_rung_work();
     assert_eq!(
-        choose_files("film", &again, &[], &stored, &[]),
+        choose_files("film", &again, &[], &stored),
         vec!["film_9v.mp4", "film_4.mp4"]
     );
     // A record that names a file somebody claims now, or a name of another bitrate, is not
     // followed.
     assert_eq!(
-        choose_files("film", &again, &["film_9v.mp4"], &stored, &[]),
+        choose_files("film", &again, &["film_9v.mp4"], &stored),
         vec!["film_9.mp4", "film_4.mp4"]
     );
     let wrong = vec![(String::from("v9"), String::from("film_4v.mp4"))];
     assert_eq!(
-        choose_files("film", &again, &[], &wrong, &[]),
+        choose_files("film", &again, &[], &wrong),
         vec!["film_9.mp4", "film_4.mp4"]
     );
 }
@@ -690,4 +678,164 @@ fn every_name_a_rung_may_take_is_known_as_a_rung_of_its_set_and_nothing_else_is(
     ] {
         assert_eq!(rung_mbit_of("film", no), None, "{no}");
     }
+}
+
+// ---------- a medium's single file of the same length is not a rung (T681, QA-25 №2) ----------
+
+/// Two real films of the same length — a red picture and a blue one — the way QA-25 found it:
+/// the blue one lies on the server as a medium's single file `film_4.mp4`, the red one is
+/// being built into a set whose 4 Mbit/s rung would have that name.
+#[tokio::test]
+async fn a_claimed_single_file_of_the_same_length_is_never_taken_for_a_rung() {
+    use vrcast_studio_lib::domain::ladder_build::choose_files;
+    use vrcast_studio_lib::media::ffmpeg;
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        eprintln!("no bundled FFmpeg: skipped");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("vrcast-t681-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, color) in [("source.mp4", "red"), ("film_4.mp4", "blue")] {
+        let out = std::process::Command::new(&ff)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg(format!("color=c={color}:s=1280x720:r=24:d=2"))
+            .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=2"])
+            .args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(dir.join(name))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let probe = |n: &str| {
+        let p = dir.join(n).to_string_lossy().into_owned();
+        async move {
+            vrcast_studio_lib::commands::api::source_probe(&p)
+                .await
+                .unwrap()
+        }
+    };
+    let source = probe("source.mp4").await;
+    let other = probe("film_4.mp4").await;
+    // What `variant_already_there` asked, and all it asked: the same length.
+    assert!(other.duration_s > 0.0 && (other.duration_s - source.duration_s).abs() < 1.0);
+
+    let mut r = rung(0, 4_000_000, 720);
+    r.width = 1280;
+    let work = work_for("film", &[r], &source, 0, Some(1.0), 4);
+    // The medium's file is claimed: the rung takes the next free name, whatever length the
+    // file is — one length is not a film.
+    let names = choose_files("film", &work, &["film_4.mp4"], &[]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(names, vec!["film_4v.mp4"]);
+}
+
+/// The set's own record of what it made (T681): the only thing that lets a rung file be
+/// taken as done — this source, this height, the bitrate within a tenth, this sound track.
+#[test]
+fn a_rung_is_done_only_when_the_sets_record_says_it_made_it_from_this_source() {
+    use vrcast_studio_lib::domain::ladder_build::{
+        made_here, parse_made, parse_prepared, parse_rung_facts, prepared_text_with, MadeRung,
+    };
+    let src = source(1920, 1080, 24, 30_000_000, "h264");
+    let work = two_rung_work();
+    let made = vec![MadeRung::of(&work[0], &src, 0)];
+    let text = prepared_text_with(&work, &made);
+    // The names read as before; the line of what was made is not a name.
+    assert_eq!(
+        parse_prepared(&text),
+        vec![
+            (String::from("v9"), String::from("film_9.mp4")),
+            (String::from("v4"), String::from("film_4.mp4")),
+        ]
+    );
+    let back = parse_made(&text);
+    assert_eq!(back, made);
+    assert!(made_here(&back, &work[0], &src, 0));
+    // The other rung was not made.
+    assert!(!made_here(&back, &work[1], &src, 0));
+    // Another sound track, another film (size or length), another height: not this rung.
+    assert!(!made_here(&back, &work[0], &src, 1));
+    let mut other = src.clone();
+    other.size_bytes += 1;
+    assert!(!made_here(&back, &work[0], &other, 0));
+    let mut longer = src.clone();
+    longer.duration_s += 2.0;
+    assert!(!made_here(&back, &work[0], &longer, 0));
+    let mut lower = work[0].clone();
+    lower.rung.height = 720;
+    assert!(!made_here(&back, &lower, &src, 0));
+    // Under another name: not this file.
+    let mut moved = work[0].clone();
+    moved.file = String::from("film_9v.mp4");
+    assert!(!made_here(&back, &moved, &src, 0));
+    // Without a record — a set built before T681, or a file nobody made here — nothing is.
+    assert!(!made_here(&[], &work[0], &src, 0));
+    // A bitrate within a tenth is the same rung.
+    let mut near = work[0].clone();
+    near.rung.bitrate_bps = 9_500_000;
+    assert!(made_here(&back, &near, &src, 0));
+    // What ffprobe says of a file on the server.
+    assert_eq!(
+        parse_rung_facts("height=1080\nduration=3600.040000\n"),
+        (Some(3600.04), Some(1080))
+    );
+    assert_eq!(parse_rung_facts(""), (None, None));
+}
+
+// ---------- a stage's own progress, not the whole build's (T689, QA-25 №10) ----------
+
+#[test]
+fn the_cutting_and_the_check_begin_at_their_own_beginning() {
+    use vrcast_studio_lib::domain::ladder_build::share_of;
+    // The cutting goes rung by rung: four rungs, none cut yet, is nought — not 4/5 of the set.
+    assert_eq!(share_of(0, 4), 0.0);
+    assert_eq!(share_of(1, 4), 0.25);
+    assert_eq!(share_of(4, 4), 1.0);
+    assert_eq!(share_of(5, 4), 1.0);
+    assert_eq!(share_of(0, 0), 1.0);
+
+    // And the build says so: no stage of the cutting or the check is reported from the share
+    // of the whole set, nor from a fixed 0.99.
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tasks/ladder_build.rs"),
+    )
+    .unwrap();
+    let code: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !code.contains("0.99, DetailCode::StageVerifyingLadder"),
+        "the check still begins at 99%"
+    );
+    assert!(
+        code.contains("report_important(0.0, DetailCode::StageVerifyingLadder)"),
+        "the check does not begin at nought"
+    );
+    assert!(
+        code.contains("report_important(0.0, DetailCode::StageCuttingSegments)")
+            && code.contains("share_of(p.cut.len(), work.len())"),
+        "the cutting is not reported by the rungs it has cut"
+    );
 }

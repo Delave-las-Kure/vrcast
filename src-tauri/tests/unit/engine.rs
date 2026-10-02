@@ -1499,3 +1499,55 @@ fn a_changed_limit_is_seen_by_a_task_engine_handle_already_given_out() {
     );
     assert_eq!(already_handed_out.limits().network, 2);
 }
+
+// ---------- a place held by work that is not a task (T688) ----------
+
+/// A plan's trial encodes hold a place in the compute lane: a task of that lane waits until
+/// it is let go of, and a second hold waits for a running task — one limit over both.
+#[tokio::test]
+async fn a_held_place_counts_against_the_lane_and_is_let_go_of_when_dropped() {
+    let e = engine().with_limits(LaneLimits {
+        compute: 1,
+        ..LaneLimits::default()
+    });
+    let hold = e
+        .try_hold_lane(Lane::Compute)
+        .expect("an empty lane gave no place");
+    assert_eq!(e.held_in_lane(Lane::Compute), 1);
+    assert!(
+        e.try_hold_lane(Lane::Compute).is_none(),
+        "two places under a limit of one"
+    );
+    // Another lane is not this one's business.
+    assert!(e.try_hold_lane(Lane::Network).is_some());
+
+    let id = e
+        .submit(TaskKind::MeasureQuality, None, |ctx| async move {
+            ctx.cancel_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(e.get(&id).unwrap().unwrap().state, TaskState::Queued);
+
+    drop(hold);
+    assert_eq!(e.held_in_lane(Lane::Compute), 0);
+    assert!(wait_for_state(&e, &id, TaskState::Running, Duration::from_secs(5)).await);
+
+    // Now the task has the place: a hold waits, and a cancel ends the wait.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let waiting = {
+        let e = e.clone();
+        let cancel = cancel.clone();
+        tokio::spawn(async move { e.hold_lane(Lane::Compute, &cancel).await.is_some() })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished());
+    cancel.cancel();
+    assert!(
+        !waiting.await.unwrap(),
+        "a cancelled wait came back with a place"
+    );
+    e.cancel(&id).unwrap();
+}

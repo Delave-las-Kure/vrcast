@@ -307,6 +307,10 @@ export const ruCore: CatalogueCore = {
       message: "Набор для этого медиа уже собирается",
       hint: "Он на экране «Видео».",
     },
+    VIDEO_MEDIUM_GONE: {
+      message: "Медиа набора удалено",
+      hint: "«Повторить» создаст его снова.",
+    },
   },
 
   details: {
@@ -389,6 +393,7 @@ export const ruCore: CatalogueCore = {
       "Набор качеств «{slug}» сейчас собирается на сервере — удаление подождёт, пока сборка закончится.",
     MEDIA_BUSY_UPLOADING:
       "Файл «{name}» сейчас заливается на сервер — удаление подождёт, пока заливка закончится.",
+    MEDIA_BUSY_VIDEO: "В это медиа собирается набор — см. «Видео».",
 
     // --- подготовка файлов ---
     FFMPEG_SELF_BROKEN: "Вложенный FFmpeg не работает. Переустановите приложение.",
@@ -647,6 +652,8 @@ export const ruCore: CatalogueCore = {
       "Файл «{name}» принадлежит медиа и не перезаписывается. Смените ступени или имя.",
     OLD_SET_UNRECOGNIZED:
       "На сервере лежит «{name}» — ничей набор под этим именем. «Заменить» удалит его.",
+    CONFIRM_STOP_SERVER_WORK:
+      "Остановить {count} {count|plural:taskAcc} на этом сервере и удалить его?",
   },
 
   plurals: {
@@ -654,6 +661,7 @@ export const ruCore: CatalogueCore = {
     media: { one: "медиа", few: "медиа", many: "медиа" },
     time: { one: "раз", few: "раза", many: "раз" },
     task: { one: "задача", few: "задачи", many: "задач" },
+    taskAcc: { one: "задачу", few: "задачи", many: "задач" },
     track: { one: "дорожка", few: "дорожки", many: "дорожек" },
     package: { one: "пакет", few: "пакета", many: "пакетов" },
     port: { one: "порт", few: "порта", many: "портов" },
@@ -1076,8 +1084,12 @@ const ui = {
     planning: "Считаю план…",
     startsAfterPlan: "Стартует после плана",
     rungLine: "{height}p · {mbps} Мбит/с",
+    rungToMeasure: "замерить",
     onServer: "На сервере ≈ {bytes|bytes}",
-    aboutMinutes: "≈ {n} мин",
+    aboutMinutes: "{what} ≈ {n} мин",
+    encodeTime: "Кодирование",
+    measureAndEncodeTime: "Замер и кодирование",
+    preliminary: "предварительно",
     shortServer: "Не хватает {bytes|bytes} на сервере",
     shortLocal: "Не хватает {bytes|bytes} на этом компьютере",
     nameTaken: "Имя «{slug}» занято",
@@ -1147,6 +1159,7 @@ const ui = {
     buildSet: "Собрать набор",
     setBuilding: "Набор собирается",
     setStopped: "Сборка остановлена",
+    openVideo: "Открыть «Видео»",
     deleteMedia: "Удалить медиа",
     diskFree: "Свободно",
     diskOf: "из",
@@ -1218,6 +1231,7 @@ const ui = {
     test: "Проверить подключение",
     confirmRemoval: "Удалить профиль и сохранённый пароль?",
     removeYes: "Да, удалить",
+    stoppingWork: "Останавливаем задачи…",
     remove: "Удалить",
     steps: {
       network: "Сервер доступен по сети",

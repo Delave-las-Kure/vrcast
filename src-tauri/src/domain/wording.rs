@@ -150,6 +150,10 @@ detail_codes! {
     /// `name` — the file already being uploaded. `media_delete`/`file_delete` refused
     /// because an `upload_start` is actively writing it right now (T596).
     MediaBusyUploading => "MEDIA_BUSY_UPLOADING",
+    /// `video_id` — `media_delete`/`media_rename` refused because a video on the «Video»
+    /// screen builds its set into this medium (T684): planned, measuring, building, stopped
+    /// on a problem, paused or stopping.
+    MediaBusyVideo => "MEDIA_BUSY_VIDEO",
 
     // --- preparing files ---
     FfmpegSelfBroken => "FFMPEG_SELF_BROKEN",
@@ -560,6 +564,9 @@ detail_codes! {
     /// an old build, another film's (T675). It would be taken for this one's rungs, so a video
     /// for the medium waits on it with «Replace», which removes it first (T677).
     OldSetUnrecognized => "OLD_SET_UNRECOGNIZED",
+    /// `count`. Removing a server stops what runs on it first — its videos and its tasks
+    /// (T683): the question asked before `server_remove(confirmed)`.
+    ConfirmStopServerWork => "CONFIRM_STOP_SERVER_WORK",
 }
 
 impl TryFrom<String> for DetailCode {

@@ -803,6 +803,63 @@ pub fn buildable(rungs: &[Rung]) -> Result<(), NotBuildable> {
     }
 }
 
+/// The point of the measured grid a rung is: its bitrate in whole megabits at its height
+/// (T680). `None` for a bitrate that is not a whole number of megabits — no point of any grid
+/// is, and measuring the nearest one would pass off one rung's score as another's. Every rung
+/// this application makes, the editor's included, is whole megabits.
+pub fn cell_of(rung: &Rung) -> Option<super::measure_grid::Cell> {
+    (rung.bitrate_bps > 0 && rung.bitrate_bps % MBIT == 0).then_some(super::measure_grid::Cell {
+        bitrate_mbps: rung.bitrate_bps / MBIT,
+        height: rung.height,
+    })
+}
+
+/// The points that still have to be measured before these rungs can be built (T680): one per
+/// rung that is not measured, once each, in the order of the rungs. A rung that is not whole
+/// megabits has none and stays unmeasured ([`cell_of`]).
+pub fn cells_to_measure(rungs: &[Rung]) -> Vec<super::measure_grid::Cell> {
+    let mut out: Vec<super::measure_grid::Cell> = Vec::new();
+    for cell in rungs
+        .iter()
+        .filter(|r| !r.quality.is_enough_to_build_on())
+        .filter_map(cell_of)
+    {
+        if !out.contains(&cell) {
+            out.push(cell);
+        }
+    }
+    out
+}
+
+/// These rungs with what the store already measured for them (T680, the owner's decision of
+/// 2026-10-02): a rung that is not measured, and whose point (`cell_of`) is among `points`,
+/// takes that point's score — measured on this material, or lent to it when `borrowed`.
+/// **Only from a point that was really measured**, at exactly this bitrate and height: a rung
+/// edited by hand is never marked measured otherwise. Everything else is left as it was.
+pub fn with_measured(
+    rungs: &[Rung],
+    points: &[super::measured_ladder::Point],
+    borrowed: bool,
+) -> Vec<Rung> {
+    rungs
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            if !r.quality.is_enough_to_build_on() {
+                if let Some(cell) = cell_of(&r) {
+                    if let Some(p) = points
+                        .iter()
+                        .find(|p| p.bitrate_mbps == cell.bitrate_mbps && p.height == cell.height)
+                    {
+                        r.quality = Quality::from_vmaf(p.vmaf, borrowed);
+                    }
+                }
+            }
+            r
+        })
+        .collect()
+}
+
 /// The ceiling and the buffer for a rung, in bits per second.
 ///
 /// The same arithmetic as for preparing a single file, and deliberately the same function:

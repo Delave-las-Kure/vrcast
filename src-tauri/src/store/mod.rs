@@ -16,6 +16,7 @@ pub mod library_cache;
 pub mod measurements;
 pub mod profiles;
 pub mod redact;
+pub mod remote_runs;
 pub mod secrets;
 pub mod settings;
 pub mod videos;

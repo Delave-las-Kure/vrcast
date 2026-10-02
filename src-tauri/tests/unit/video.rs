@@ -108,30 +108,13 @@ fn retry_is_offered_after_a_problem_or_a_stop_and_nowhere_else() {
 }
 
 #[test]
-fn a_video_is_not_taken_off_the_list_while_its_work_is_alive() {
-    // Removing it would leave a build running for something nobody can see any more.
-    assert!(!allowed(
-        Act::Remove,
-        VideoState::Working,
-        VideoStage::Encoding,
-        true
-    ));
-    assert!(!allowed(
-        Act::Remove,
-        VideoState::Cancelling,
-        VideoStage::Cutting,
-        true
-    ));
-    for state in [
-        VideoState::Ready,
-        VideoState::Paused,
-        VideoState::Problem,
-        VideoState::Cancelled,
-        VideoState::Done,
-        VideoState::Planning,
-    ] {
+fn a_video_is_taken_off_the_list_in_any_state_its_work_stopped_first() {
+    // T683 (the owner's decision of 2026-10-02): «Remove» on a video whose work is alive
+    // stops the work first and takes the video off once it has — never a build left
+    // running for something nobody can see any more (`video_remove`).
+    for state in VideoState::ALL {
         assert!(
-            allowed(Act::Remove, state, VideoStage::Encoding, true),
+            allowed(Act::Remove, *state, VideoStage::Encoding, true),
             "{state:?}"
         );
     }

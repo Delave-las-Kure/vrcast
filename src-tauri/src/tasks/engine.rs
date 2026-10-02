@@ -454,6 +454,26 @@ impl TaskContext {
         Ok(())
     }
 
+    /// Write down work this task has started on a server apart from itself (T682): the mark
+    /// its processes carry and where they run, so that a stop can still be confirmed after
+    /// the application was killed. Written before anything is waited for; struck out with
+    /// [`Self::forget_remote_run`] once the work's end is confirmed.
+    ///
+    /// Failures are swallowed and logged, as `set_result`'s: the work itself is not to be
+    /// stopped by a write that could not land.
+    pub fn note_remote_run(&self, run: &crate::store::remote_runs::RemoteRun) {
+        if let Err(e) = crate::store::remote_runs::save(&self.db, &self.id, run) {
+            tracing::warn!(id = %self.id, error = %e, "the remote run was not written down");
+        }
+    }
+
+    /// The work on the server has ended and its end is confirmed (T682).
+    pub fn forget_remote_run(&self) {
+        if let Err(e) = crate::store::remote_runs::clear(&self.db, &self.id) {
+            tracing::warn!(id = %self.id, error = %e, "the remote run was not struck out");
+        }
+    }
+
     /// Read the resume position left by the previous run.
     pub fn resume_token(&self) -> Result<Option<String>> {
         Ok(store::get(&self.db, &self.id)?.and_then(|r| r.resume_token))
@@ -504,6 +524,33 @@ pub struct TaskEngine {
     /// and the closing in which a task could slip in. Order: this one, then `claims`, then
     /// `live` — never the other way round.
     closed: Arc<Mutex<bool>>,
+    /// Places in a lane held by work that is not a task (T688): the heavy part of a video's
+    /// plan — the complexity probe's trial encodes. Counted by [`TaskEngine::try_claim_lane`]
+    /// beside the running tasks, so the lane's limit is one limit over both. Indexed by
+    /// [`lane_index`].
+    holds: Arc<Mutex<[usize; 3]>>,
+}
+
+fn lane_index(lane: Lane) -> usize {
+    match lane {
+        Lane::Compute => 0,
+        Lane::Network => 1,
+        Lane::Light => 2,
+    }
+}
+
+/// A place in a lane held by work that is not a task (T688), let go of when dropped.
+pub struct LaneHold {
+    holds: Arc<Mutex<[usize; 3]>>,
+    lane: Lane,
+}
+
+impl Drop for LaneHold {
+    fn drop(&mut self) {
+        let mut holds = self.holds.lock().unwrap_or_else(|e| e.into_inner());
+        let n = &mut holds[lane_index(self.lane)];
+        *n = n.saturating_sub(1);
+    }
 }
 
 /// The right to do one thing, held by one caller at a time (T621).
@@ -541,7 +588,51 @@ impl TaskEngine {
             next_position: Arc::new(std::sync::atomic::AtomicI64::new(next)),
             claims: Arc::new(Mutex::new(std::collections::HashSet::new())),
             closed: Arc::new(Mutex::new(false)),
+            holds: Arc::new(Mutex::new([0; 3])),
         }
+    }
+
+    /// Take a place in `lane` for work that is not a task (T688), waiting while the lane is
+    /// full — of running tasks and of other holds together. `None` once `cancel` is raised
+    /// first. The place is let go of when the [`LaneHold`] is dropped; a queued task's placer
+    /// asks again on its own.
+    pub async fn hold_lane(&self, lane: Lane, cancel: &CancellationToken) -> Option<LaneHold> {
+        loop {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            if let Some(hold) = self.try_hold_lane(lane) {
+                return Some(hold);
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                _ = cancel.cancelled() => return None,
+            }
+        }
+    }
+
+    /// The same, now or not at all.
+    pub fn try_hold_lane(&self, lane: Lane) -> Option<LaneHold> {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let mut holds = self.holds.lock().unwrap_or_else(|e| e.into_inner());
+        let used = live
+            .values()
+            .filter(|x| x.state.occupies_lane() && x.kind.lane() == lane)
+            .count()
+            + holds[lane_index(lane)];
+        if used >= self.limits().for_lane(lane) {
+            return None;
+        }
+        holds[lane_index(lane)] += 1;
+        Some(LaneHold {
+            holds: self.holds.clone(),
+            lane,
+        })
+    }
+
+    /// How many places in `lane` are held by work that is not a task (T688).
+    pub fn held_in_lane(&self, lane: Lane) -> usize {
+        self.holds.lock().unwrap_or_else(|e| e.into_inner())[lane_index(lane)]
     }
 
     /// Take `key` for this caller, or `None` when somebody holds it already (T621) — or when
@@ -1249,7 +1340,9 @@ impl TaskEngine {
         let used = live
             .values()
             .filter(|x| x.state.occupies_lane() && x.kind.lane() == lane)
-            .count();
+            .count()
+            // A place held by a plan's probe is a place taken (T688).
+            + self.held_in_lane(lane);
         if used >= self.limits().for_lane(lane) {
             return ClaimOutcome::Busy;
         }

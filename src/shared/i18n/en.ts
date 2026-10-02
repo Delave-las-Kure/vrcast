@@ -309,6 +309,10 @@ export const en: Catalogue = {
       message: "A set for this medium is already on its way",
       hint: "Look for it on the Video screen.",
     },
+    VIDEO_MEDIUM_GONE: {
+      message: "The set's medium was deleted",
+      hint: "“Retry” makes it again.",
+    },
   },
 
   details: {
@@ -393,6 +397,7 @@ export const en: Catalogue = {
       "The quality set “{slug}” is being built on the server right now — deletion will wait until the build finishes.",
     MEDIA_BUSY_UPLOADING:
       "The file “{name}” is being uploaded to the server right now — deletion will wait until the upload finishes.",
+    MEDIA_BUSY_VIDEO: "A set is being built into this medium — see Video.",
 
     // --- preparing files ---
     FFMPEG_SELF_BROKEN: "The bundled FFmpeg does not work. Reinstall the application.",
@@ -661,6 +666,7 @@ export const en: Catalogue = {
       "The file “{name}” belongs to a medium and is not overwritten. Change the rungs or the name.",
     OLD_SET_UNRECOGNIZED:
       "“{name}” is on the server — a set nobody owns under this name. “Replace” removes it.",
+    CONFIRM_STOP_SERVER_WORK: "Stop {count} {count|plural:taskAcc} on this server and delete it?",
   },
 
   plurals: {
@@ -668,6 +674,7 @@ export const en: Catalogue = {
     media: { one: "medium", few: "media", many: "media" },
     time: { one: "time", few: "times", many: "times" },
     task: { one: "task", few: "tasks", many: "tasks" },
+    taskAcc: { one: "task", few: "tasks", many: "tasks" },
     track: { one: "track", few: "tracks", many: "tracks" },
     package: { one: "package", few: "packages", many: "packages" },
     port: { one: "port", few: "ports", many: "ports" },
@@ -1083,8 +1090,12 @@ export const en: Catalogue = {
       planning: "Working out the plan…",
       startsAfterPlan: "Starts once planned",
       rungLine: "{height}p · {mbps} Mbit/s",
+      rungToMeasure: "to measure",
       onServer: "On the server ≈ {bytes|bytes}",
-      aboutMinutes: "≈ {n} min",
+      aboutMinutes: "{what} ≈ {n} min",
+      encodeTime: "Encoding",
+      measureAndEncodeTime: "Measuring and encoding",
+      preliminary: "preliminary",
       shortServer: "{bytes|bytes} short on the server",
       shortLocal: "{bytes|bytes} short on this computer",
       nameTaken: "The name “{slug}” is taken",
@@ -1154,6 +1165,7 @@ export const en: Catalogue = {
       buildSet: "Build a set",
       setBuilding: "Set is building",
       setStopped: "Build stopped",
+      openVideo: "Open Video",
       deleteMedia: "Delete the medium",
       diskFree: "Free",
       diskOf: "of",
@@ -1225,6 +1237,7 @@ export const en: Catalogue = {
       test: "Check the connection",
       confirmRemoval: "Remove the profile and its saved password?",
       removeYes: "Yes, delete",
+      stoppingWork: "Stopping the tasks…",
       remove: "Delete",
       steps: {
         network: "The server is reachable over the network",

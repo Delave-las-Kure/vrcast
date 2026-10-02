@@ -163,6 +163,10 @@ pub struct VideoView {
     pub link: Option<Links>,
     pub created_at: String,
     pub updated_at: String,
+    /// The version of this view (T687): higher is newer, for every change — the progress
+    /// of the stage included, which `updated_at` does not follow. A screen keeps the view with
+    /// the higher one, whichever arrived first.
+    pub rev: u64,
 }
 
 /// A file `video_add` would not take, and why.
@@ -218,6 +222,22 @@ pub struct VideoHub {
     inner: Arc<Hub>,
 }
 
+impl VideoHub {
+    /// The next version of a view of a video (T687): it grows with every view this run
+    /// makes — a change of progress included, which writes nothing to the row — and starts
+    /// from the clock, in microseconds, so that a run started later is above every view an
+    /// earlier one gave out. Well inside what a JavaScript number holds exactly.
+    pub(crate) fn next_rev(&self) -> u64 {
+        let base = *self.inner.rev_base.get_or_init(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros() as u64)
+                .unwrap_or(0)
+        });
+        base + self.inner.rev.fetch_add(1, Ordering::SeqCst) + 1
+    }
+}
+
 #[derive(Default)]
 struct Hub {
     /// Held around every read-change-write of a video row, so the watcher and a command never
@@ -234,6 +254,14 @@ struct Hub {
     /// What each video last said about its medium's set (T677), so the library is told only
     /// when that changes, not on every tick of a bar.
     set_work: Mutex<HashMap<String, (String, String, video::SetWorkState)>>,
+    /// Servers being removed (T683): nothing of theirs is put on the queue meanwhile.
+    closing: Mutex<HashSet<String>>,
+    /// Videos whose stop on the server is being confirmed after a restart (T682): a cutting
+    /// a run that is over started and left `cancelling`.
+    stopping: Mutex<HashSet<String>>,
+    /// The versions of the views (T687): see [`VideoHub::next_rev`].
+    rev_base: std::sync::OnceLock<u64>,
+    rev: std::sync::atomic::AtomicU64,
 }
 
 struct Live {
@@ -301,11 +329,170 @@ fn change<T>(state: &AppState, id: &str, f: impl FnOnce(&mut VideoRow) -> Result
 }
 
 fn emit(state: &AppState, id: &str) {
+    // The version is taken before the row is read (T687): a view with a higher one has seen
+    // every change written before a lower one was taken.
+    let rev = state.videos.next_rev();
     if let Ok(row) = load(state, id) {
+        // «Remove» on a video whose work was alive (T683): it goes off the list the moment
+        // the work has stopped, whichever way the news of that arrived.
+        if row.remove_requested && row.state == VideoState::Cancelled {
+            take_off_list(state, id);
+            return;
+        }
         tell_library(state, id, Some(&row));
         let _ = state
             .events
-            .send(super::AppEvent::VideoUpdate(Box::new(view_of(state, &row))));
+            .send(super::AppEvent::VideoUpdate(Box::new(view_at(
+                state, &row, rev,
+            ))));
+    }
+}
+
+/// Send every video as it is now (T687): after the stream of events fell behind, a change
+/// may never have reached the screen — a build that ended, a stop confirmed.
+pub(crate) fn republish(state: &AppState) {
+    let Ok(all) = rows::list(&state.db) else {
+        return;
+    };
+    for row in all {
+        emit(state, &row.id);
+    }
+}
+
+/// Take a video off the list now — the row, what this run holds about it — and say so.
+/// Nothing on the server is touched (T577, part b). Only ever called once nothing of the
+/// video's work is alive.
+fn take_off_list(state: &AppState, id: &str) {
+    {
+        let _held = lock(&state.videos.inner.rows);
+        if let Some(planning) = lock(&state.videos.inner.planning).remove(id) {
+            planning.cancel();
+        }
+        let _ = rows::remove(&state.db, id);
+    }
+    forget_video(state, id);
+}
+
+/// What this run holds about a video that is gone from the list, and the news of it.
+fn forget_video(state: &AppState, id: &str) {
+    lock(&state.videos.inner.live).remove(id);
+    tell_library(state, id, None);
+    let _ = state
+        .events
+        .send(super::AppEvent::VideoRemoved { id: id.to_owned() });
+}
+
+// ---------- a server going away (T683) ----------
+
+/// The work alive in this run on a server: its own tasks, and every task of its videos (a
+/// measurement names no server of its own, only the video's batch), plus a video whose next
+/// task is being put on the queue right now. What removing the server would have to stop.
+pub(crate) fn work_on_server(state: &AppState, server_id: &str) -> Vec<String> {
+    let videos: HashSet<String> = rows::list(&state.db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|v| v.server_id == server_id)
+        .map(|v| v.id)
+        .collect();
+    let mut out: Vec<String> = state
+        .tasks
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|t| !t.state.is_final() && state.tasks.is_alive(&t.id))
+        .filter(|t| {
+            t.server_id.as_deref() == Some(server_id)
+                || t.batch.as_ref().is_some_and(|b| videos.contains(&b.id))
+        })
+        .map(|t| t.id)
+        .collect();
+    let starting = lock(&state.videos.inner.starting);
+    out.extend(
+        videos
+            .iter()
+            .filter(|v| starting.contains(*v))
+            .map(|v| format!("video:{v}")),
+    );
+    let stopping = lock(&state.videos.inner.stopping);
+    out.extend(
+        videos
+            .iter()
+            .filter(|v| stopping.contains(*v))
+            .map(|v| format!("stop:{v}")),
+    );
+    out
+}
+
+/// Stop everything on a server that is being removed (T683): its videos' plans, their tasks
+/// (each video `cancelling` until they have stopped, as after «Cancel»), and its own tasks.
+/// Safe to repeat: a cancellation already under way is left to finish.
+pub(crate) fn stop_server_work(state: &AppState, server_id: &str) {
+    ensure_watching(state);
+    let videos: Vec<VideoRow> = rows::list(&state.db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|v| v.server_id == server_id)
+        .collect();
+    for v in &videos {
+        if let Some(planning) = lock(&state.videos.inner.planning).remove(&v.id) {
+            planning.cancel();
+        }
+        let busy =
+            !alive(state, &v.id).is_empty() || lock(&state.videos.inner.starting).contains(&v.id);
+        if busy {
+            let _ = change(state, &v.id, |r| {
+                r.state = VideoState::Cancelling;
+                r.paused_by_person = false;
+                r.start_requested = false;
+                Ok(())
+            });
+        }
+        cancel_tasks_of(state, &v.id);
+    }
+    for task in work_on_server(state, server_id) {
+        let _ = state.tasks.cancel(&task);
+    }
+}
+
+/// The server's videos are gone with it (its rows cascade): what this run holds about them
+/// goes too, and the screen is told (T683).
+pub(crate) fn forget_server_videos(state: &AppState, ids: &[String]) {
+    for id in ids {
+        if let Some(planning) = lock(&state.videos.inner.planning).remove(id) {
+            planning.cancel();
+        }
+        forget_video(state, id);
+    }
+}
+
+/// The videos of a server, by id.
+pub(crate) fn videos_of_server(state: &AppState, server_id: &str) -> Vec<String> {
+    rows::list(&state.db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|v| v.server_id == server_id)
+        .map(|v| v.id)
+        .collect()
+}
+
+/// While held, nothing of this server's videos is put on the queue (T683): «Start», «Retry»,
+/// «Continue» pressed while the server is being removed do not start what is being stopped.
+pub(crate) struct Closing {
+    state: AppState,
+    server_id: String,
+}
+
+pub(crate) fn close_server(state: &AppState, server_id: &str) -> Closing {
+    lock(&state.videos.inner.closing).insert(server_id.to_owned());
+    Closing {
+        state: state.clone(),
+        server_id: server_id.to_owned(),
+    }
+}
+
+impl Drop for Closing {
+    fn drop(&mut self) {
+        lock(&self.state.videos.inner.closing).remove(&self.server_id);
     }
 }
 
@@ -314,8 +501,7 @@ fn emit(state: &AppState, id: &str) {
 /// video taken off the list.
 fn tell_library(state: &AppState, id: &str, row: Option<&VideoRow>) {
     let now = row.and_then(|r| {
-        let media = r.media_id.clone()?;
-        let work = video::set_work_of(r.state, r.stage, r.start_requested)?;
+        let (media, work) = set_work_of_row(r)?;
         Some((r.server_id.clone(), media, work))
     });
     let was = {
@@ -364,6 +550,27 @@ fn problem_of(row: &VideoRow) -> Option<VideoProblem> {
         .and_then(|s| serde_json::from_str(s).ok())
 }
 
+/// The confirmed «Replace» this video is carrying out, if any (T686).
+fn replacing_of(row: &VideoRow) -> Option<video::Replacing> {
+    row.replacing_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+}
+
+/// Which medium's set this video says something about, and what (T677) — `building` from
+/// the moment a «Replace» is confirmed until it is on its way (T686), whatever the video's
+/// own state reads meanwhile. Shared with the library (`library::api::with_set_work`).
+pub(crate) fn set_work_of_row(row: &VideoRow) -> Option<(String, video::SetWorkState)> {
+    if let Some(replacing) = replacing_of(row) {
+        if let Some(media) = replacing.media_id.or_else(|| row.media_id.clone()) {
+            return Some((media, video::SetWorkState::Building));
+        }
+    }
+    let media = row.media_id.clone()?;
+    let work = video::set_work_of(row.state, row.stage, row.start_requested)?;
+    Some((media, work))
+}
+
 /// A video for a medium, added stopped on a set of the medium's name that nobody claims
 /// (T677): it waits for «Replace», and nothing — its plan finishing included — moves it on.
 fn held_for_replace(row: &VideoRow) -> bool {
@@ -382,6 +589,28 @@ fn custom_rungs(row: &VideoRow) -> Option<Vec<Rung>> {
     row.rungs_json
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
+}
+
+/// The person's rungs with what this film already has measured for them (T680): the
+/// film's own measurement (measured here, or lent), and the points measured for rungs edited
+/// before (`quality::edited_codec`). Only a point at exactly the rung's bitrate and height
+/// counts (`ladder::with_measured`); nothing is marked measured otherwise.
+fn with_measured_here(state: &AppState, path: &str, rungs: &[Rung]) -> Vec<Rung> {
+    use crate::store::measurements;
+    let Ok(key) = measurements::key_for(std::path::Path::new(path)) else {
+        return rungs.to_vec();
+    };
+    let codec = "h264";
+    let mut out = rungs.to_vec();
+    if let Ok(Some(run)) = measurements::run(&state.db, &key, codec) {
+        if !run.check_pending {
+            let points = measurements::points(&state.db, &key, codec).unwrap_or_default();
+            out = crate::domain::ladder::with_measured(&out, &points, run.borrowed_from.is_some());
+        }
+    }
+    let edited = super::quality::edited_codec(codec);
+    let points = measurements::points(&state.db, &key, &edited).unwrap_or_default();
+    crate::domain::ladder::with_measured(&out, &points, false)
 }
 
 fn facts_of(source: &SourceFile) -> SourceFacts {
@@ -427,6 +656,22 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
     let custom = custom_rungs(row);
     let edited = custom.is_some();
     let rungs = custom.unwrap_or_else(|| basis.rungs.clone());
+    // What of the person's rungs is still to be measured before the build (T680): «Start»
+    // measures those points first. Preliminary: a point's time on this machine's model.
+    let edited_cells = if edited {
+        crate::domain::ladder::cells_to_measure(&rungs).len()
+    } else {
+        0
+    };
+    let edited_measure_s = (edited_cells as f64
+        * crate::domain::measure_grid::seconds_per_point(
+            source.width,
+            source.height,
+            source.fps,
+            crate::domain::chunks::CHUNK_S as u64,
+            3,
+        ))
+    .round() as u64;
     let audio_bps = source
         .audio_tracks
         .get(row.audio_track)
@@ -451,8 +696,14 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
         } else {
             basis.from
         },
-        needs_measuring: !edited && basis.needs_measuring && !row.measured,
-        measure_s: if !edited && basis.needs_measuring && !row.measured {
+        needs_measuring: if edited {
+            edited_cells > 0
+        } else {
+            basis.needs_measuring && !row.measured
+        },
+        measure_s: if edited {
+            edited_measure_s
+        } else if basis.needs_measuring && !row.measured {
             basis.measure_s
         } else {
             0
@@ -488,7 +739,16 @@ fn link_of(state: &AppState, row: &VideoRow) -> Option<Links> {
     ))
 }
 
+/// A view of a video at a version taken now — after the row was read. Fine where nothing
+/// else can be changing the video meanwhile (it was just written under the rows lock, and
+/// its event follows with a higher one); a reader racing the watcher takes its version
+/// before reading, with [`view_at`].
 fn view_of(state: &AppState, row: &VideoRow) -> VideoView {
+    view_at(state, row, state.videos.next_rev())
+}
+
+/// A view of a video, at the version `rev` taken **before** `row` was read (T687).
+fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
     let source = source_of(row);
     let plan = match (basis_of(row), source.as_ref()) {
         (Some(basis), Some(source)) => Some(effective_plan(row, &basis, source)),
@@ -496,8 +756,10 @@ fn view_of(state: &AppState, row: &VideoRow) -> VideoView {
     };
     let progress = if matches!(
         row.state,
-        VideoState::Working | VideoState::Paused | VideoState::Cancelling
+        VideoState::Working | VideoState::Paused | VideoState::Cancelling | VideoState::Planning
     ) {
+        // While planning, only the wait for a place for the plan's trial encodes (T688):
+        // `task_state: queued`, nothing else.
         lock(&state.videos.inner.live)
             .get(&row.id)
             .map(|l| l.progress.clone())
@@ -527,6 +789,7 @@ fn view_of(state: &AppState, row: &VideoRow) -> VideoView {
         link: link_of(state, row),
         created_at: row.created_at.clone(),
         updated_at: row.updated_at.clone(),
+        rev,
     }
 }
 
@@ -540,6 +803,22 @@ fn alive(state: &AppState, id: &str) -> Vec<String> {
         .into_iter()
         .filter(|t| state.tasks.is_alive(t))
         .collect()
+}
+
+/// Stop every task of this video — except a row of a run that is over whose work on the
+/// server is not confirmed stopped yet (T682): that one stays unfinished, and its set busy,
+/// until [`stop_after_restart`] has the server's word.
+fn cancel_tasks_of(state: &AppState, id: &str) {
+    for task in unfinished(state, id) {
+        let waiting_for_server = !state.tasks.is_alive(&task)
+            && crate::store::remote_runs::get(&state.db, &task)
+                .ok()
+                .flatten()
+                .is_some();
+        if !waiting_for_server {
+            let _ = state.tasks.cancel(&task);
+        }
+    }
 }
 
 // ---------- watching the tasks ----------
@@ -557,7 +836,12 @@ fn ensure_watching(state: &AppState) {
             tokio::select! {
                 got = rx.recv() => match got {
                     Ok(event) => on_task_event(&state, event),
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => reconcile(&state),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Task events were missed, so a video may have changed with nothing
+                        // sent about it (T687): every one is sent again as it now is.
+                        reconcile(&state);
+                        republish(&state);
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
                 _ = tick.tick() => reconcile(&state),
@@ -638,6 +922,7 @@ fn on_progress(
             return;
         }
         let mut dirty = false;
+        let mut taken_over = false;
         // The build the measurement chained onto becomes the video's task the moment it is
         // heard from; a measurement never takes the place back from a build.
         let current_is_live = row
@@ -649,12 +934,16 @@ fn on_progress(
             && (kind == TaskKind::BuildLadder || !current_is_live)
         {
             row.task_id = Some(task_id.to_owned());
+            taken_over = true;
             dirty = true;
         }
         if row.task_id.as_deref() != Some(task_id) {
             return;
         }
-        if kind == TaskKind::MeasureQuality && code == Some(DetailCode::StageDone) && !row.measured
+        if kind == TaskKind::MeasureQuality
+            && code == Some(DetailCode::StageDone)
+            && !row.measured
+            && row.rungs_json.is_none()
         {
             row.measured = true;
             refresh = true;
@@ -665,6 +954,32 @@ fn on_progress(
                 row.stage = stage;
                 dirty = true;
             }
+        }
+        // **A pause is the video's, wherever it was pressed** (T685, QA-25 №6). «Pause» in
+        // «Tasks» pauses the task of the video's current stage, and that is the video paused
+        // by a person — kept across a restart as such, with «Continue» on the card. «Continue»
+        // in «Tasks» on a task that was paused is the video going again. Told apart from a
+        // task only waiting for its place (`queued` from the start) by what the task was
+        // last: a task carried on goes `paused` → `queued` → `running`. What was last is the
+        // same task's only while it did not just take the place over (a build chained on).
+        let was = lock(&state.videos.inner.live)
+            .get(&vid)
+            .map(|l| l.progress.task_state)
+            .filter(|_| !taken_over);
+        match (row.state, task_state) {
+            (VideoState::Working, TaskState::Paused) => {
+                row.state = VideoState::Paused;
+                row.paused_by_person = true;
+                dirty = true;
+            }
+            (VideoState::Paused, TaskState::Queued | TaskState::Running)
+                if was == Some(TaskState::Paused) =>
+            {
+                row.state = VideoState::Working;
+                row.paused_by_person = false;
+                dirty = true;
+            }
+            _ => {}
         }
         // A pause pressed while the task was still waiting for its turn is carried out the
         // moment it starts: a queued task cannot be paused, a running one can.
@@ -784,7 +1099,7 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                     row.task_id = None;
                 }
                 (TaskKind::MeasureQuality, TaskState::Completed) => {
-                    if !row.measured {
+                    if !row.measured && row.rungs_json.is_none() {
                         row.measured = true;
                         refresh = true;
                     }
@@ -805,7 +1120,7 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                         .ok()
                         .flatten()
                         .is_some_and(|t| t.stage == Some(DetailCode::StageDone));
-                    if measured && !row.measured {
+                    if measured && !row.measured && row.rungs_json.is_none() {
                         row.measured = true;
                         refresh = true;
                     }
@@ -825,16 +1140,30 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                     }
                 }
                 (TaskKind::BuildLadder, TaskState::Completed) => {
-                    row.stage = VideoStage::Done;
-                    row.state = VideoState::Done;
-                    row.problem_json = None;
-                    row.paused_by_person = false;
-                    if let Some(result) = crate::tasks::store::get(&state.db, task_id)
+                    let filed = crate::tasks::store::get(&state.db, task_id)
                         .ok()
                         .flatten()
-                        .and_then(|t| t.result)
-                    {
-                        row.media_id = Some(result.media_id);
+                        .and_then(|t| t.result);
+                    row.paused_by_person = false;
+                    match filed {
+                        Some(result) => {
+                            row.stage = VideoStage::Done;
+                            row.state = VideoState::Done;
+                            row.problem_json = None;
+                            row.media_id = Some(result.media_id);
+                        }
+                        // **No medium to file the set under** (T684, QA-25 №5): it was deleted
+                        // meanwhile — by another copy of the application; this one refuses
+                        // while the video is on its way — or the catalogue could not be read.
+                        // Not «Done» with a set the catalogue does not know: a problem, and
+                        // «Retry» makes the medium again and files the set (its rungs are
+                        // found done by the set's own record, T681).
+                        None => {
+                            set_problem(&mut row, AppError::new(ErrorCode::VideoMediumGone));
+                            row.media_id = None;
+                            row.own_medium = false;
+                            row.task_id = None;
+                        }
                     }
                 }
                 (TaskKind::BuildLadder, _) => {
@@ -882,6 +1211,10 @@ fn reconcile(state: &AppState) {
             continue;
         }
         if lock(&state.videos.inner.starting).contains(&row.id) {
+            continue;
+        }
+        // A stop on the server being confirmed after a restart (T682) is over when it says.
+        if lock(&state.videos.inner.stopping).contains(&row.id) {
             continue;
         }
         if let Some(task_id) = row.task_id.clone() {
@@ -1009,16 +1342,65 @@ fn begin_planning(state: &AppState, id: &str) {
     });
 }
 
+/// Say on the card whether its plan waits for a place for its trial encodes (T688): a
+/// `queued` progress while it waits, none once it has the place.
+fn plan_waiting(state: &AppState, id: &str, queued: bool) {
+    let changed = {
+        let mut live = lock(&state.videos.inner.live);
+        if queued {
+            live.insert(
+                id.to_owned(),
+                Live {
+                    code: None,
+                    since: Instant::now(),
+                    from: 0.0,
+                    progress: VideoProgress {
+                        task_state: TaskState::Queued,
+                        progress: 0.0,
+                        speed_bps: None,
+                        eta_s: None,
+                        rung: None,
+                        rungs: 0,
+                    },
+                },
+            );
+            true
+        } else {
+            match live.get(id) {
+                Some(l) if l.code.is_none() && l.progress.task_state == TaskState::Queued => {
+                    live.remove(id);
+                    true
+                }
+                _ => false,
+            }
+        }
+    };
+    if changed {
+        emit(state, id);
+    }
+}
+
 async fn make_basis(state: &AppState, id: &str, cancel: &CancellationToken) -> Result<PlanBasis> {
     let row = load(state, id)?;
     let profile = super::library::api::profile_of(state, &row.server_id)?;
 
-    let preview = super::ladder::api::ladder_plan_until(
+    // **The trial encodes wait for a place among the heavy work** (T688, QA-25 №9): with a
+    // limit of one, ten videos added at once encode one plan's pieces at a time, and the card
+    // says «in the queue» while it waits. «Remove» cancels the wait and the encodes.
+    let waiting = {
+        let state = state.clone();
+        let id = id.to_owned();
+        move |queued: bool| plan_waiting(&state, &id, queued)
+    };
+    let preview = super::ladder::api::ladder_plan_under_limit(
         state,
         &ladder_request(&row.source_path),
-        Some(cancel),
+        cancel,
+        &waiting,
     )
-    .await?;
+    .await;
+    plan_waiting(state, id, false);
+    let preview = preview?;
     let from = match preview.from {
         super::ladder::LadderSource::Measured => PlanSource::Measured,
         super::ladder::LadderSource::Borrowed => PlanSource::Borrowed,
@@ -1137,6 +1519,7 @@ async fn carry_on(state: &AppState, id: &str) {
     let ready = {
         let _held = lock(&state.videos.inner.rows);
         match load(state, id) {
+            Ok(row) if lock(&state.videos.inner.closing).contains(&row.server_id) => false,
             Ok(mut row) if row.state == VideoState::Working => {
                 // Whatever task it had belongs to a run that is over, or has ended: it is let go
                 // of here, so its ending cannot be taken for this video's.
@@ -1324,7 +1707,40 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
     }
 
     let rungs = match custom {
-        Some(rungs) => rungs,
+        // **The person's rungs: what is not measured yet is measured first** (T680, the
+        // owner's decision of 2026-10-02). Only the points still missing — a point measured
+        // before, on the grid or for an earlier edit, is taken as it is — and then on to
+        // the build.
+        Some(rungs) => {
+            let rungs = with_measured_here(state, &row.source_path, &rungs);
+            if custom_rungs(&row).as_ref() != Some(&rungs) {
+                let kept = rungs.clone();
+                change(state, id, |r| {
+                    r.rungs_json = serde_json::to_string(&kept).ok();
+                    Ok(())
+                })?;
+            }
+            let cells = crate::domain::ladder::cells_to_measure(&rungs);
+            if !cells.is_empty() {
+                let task = super::quality::api::quality_measure_cells_start(
+                    state,
+                    super::quality::MeasureRequest {
+                        path: row.source_path.clone(),
+                        codec: String::from("h264"),
+                        native_height: None,
+                        prefer_hardware: true,
+                        then_build: None,
+                        batch: Some(batch_of(&row)),
+                    },
+                    cells,
+                )
+                .await?;
+                return Ok((task, VideoStage::Measuring));
+            }
+            // The person's own rungs are built as they are, as before T680: what they chose
+            // was theirs to choose, and the measurement only fills in the score.
+            rungs
+        }
         None => {
             let preview = super::ladder::api::ladder_plan_until(
                 state,
@@ -1366,6 +1782,160 @@ fn start_going(state: &AppState, id: &str) {
     let state = state.clone();
     let id = id.to_owned();
     spawn(async move { carry_on(&state, &id).await });
+}
+
+// ---------- a stop left unconfirmed by a run that is over (T682) ----------
+
+/// A video found `cancelling` at start-up: «Cancel» was pressed and the application went
+/// away before every part of the work had stopped (T682, QA-25 №3).
+///
+/// **Local work died with the application** — a task of the previous run is a row and
+/// nothing more (`ManagedProcess`'s sweep at start-up has ended any program it left). **Work
+/// on the server did not:** a cutting runs there apart from us, and the start of it is written
+/// down (`remote_runs`) until its end is confirmed. So:
+/// - a task with no such note is closed at once, as before;
+/// - a task with one stays unfinished — its set stays busy for the library and for
+///   «Replace» (`running_build_for` sees it) — while the stop of **that start's mark** is
+///   tried again, through a fresh connection to the server and account it ran on, until the
+///   server confirms nothing carrying it is alive; only then is the task closed and the
+///   video `cancelled`;
+/// - a task another copy of the application is running (still `running` after
+///   `recover_after_start`) is not ours: nothing of it is stopped or closed, and the video
+///   waits for it.
+///
+/// The mark is unique to one start, so a cutting of the same set started by another copy
+/// carries another mark and is never reached by this stop.
+fn stop_after_restart(state: &AppState, row: &VideoRow) {
+    let mut pending: Vec<(String, crate::store::remote_runs::RemoteRun)> = Vec::new();
+    let mut foreign: Option<String> = None;
+    for task in unfinished(state, &row.id) {
+        if state.tasks.is_alive(&task) {
+            continue;
+        }
+        let record = crate::tasks::store::get(&state.db, &task).ok().flatten();
+        if record
+            .as_ref()
+            .is_some_and(|t| t.state == TaskState::Running)
+        {
+            foreign = Some(task);
+            continue;
+        }
+        match crate::store::remote_runs::get(&state.db, &task)
+            .ok()
+            .flatten()
+        {
+            Some(run) if run.var == crate::domain::hls_package::JOB_VAR => {
+                pending.push((task, run));
+            }
+            _ => {
+                let _ = state.tasks.cancel(&task);
+            }
+        }
+    }
+    if pending.is_empty() {
+        let _ = change(state, &row.id, |r| {
+            match &foreign {
+                // Another copy's work: its ending, when the watcher hears of it, ends this.
+                Some(task) => r.task_id = Some(task.clone()),
+                None => {
+                    r.state = VideoState::Cancelled;
+                    r.task_id = None;
+                }
+            }
+            Ok(())
+        });
+        return;
+    }
+    lock(&state.videos.inner.stopping).insert(row.id.clone());
+    let first = pending[0].0.clone();
+    let _ = change(state, &row.id, |r| {
+        r.task_id = Some(first.clone());
+        Ok(())
+    });
+    let state = state.clone();
+    let vid = row.id.clone();
+    let server_id = row.server_id.clone();
+    spawn(async move {
+        for (_, run) in &pending {
+            confirm_remote_stop(&state, &server_id, run).await;
+        }
+        lock(&state.videos.inner.stopping).remove(&vid);
+        for (task, _) in &pending {
+            let _ = crate::store::remote_runs::clear(&state.db, task);
+            // Its ending reaches the watcher, which makes the video `cancelled` — or takes it
+            // off the list, when «Remove» was what had been pressed.
+            let _ = state.tasks.cancel(task);
+        }
+        let _ = change(&state, &vid, |r| {
+            if r.state == VideoState::Cancelling && foreign.is_none() {
+                r.state = VideoState::Cancelled;
+                r.task_id = None;
+            }
+            Ok(())
+        });
+    });
+}
+
+/// Try the stop of one start on the server until the server confirms it (T682). Does not
+/// return before then: what it protects is exactly the files that start may be writing.
+async fn confirm_remote_stop(
+    state: &AppState,
+    server_id: &str,
+    run: &crate::store::remote_runs::RemoteRun,
+) {
+    let attempt = || remote_stop_once(state, server_id, run);
+    match attempt().await {
+        Ok(how) => {
+            tracing::info!(mark = %run.mark, ?how, "the stop left from the last run is confirmed");
+        }
+        Err(why) => {
+            crate::server::marked::retry_until_confirmed("cutting", &run.mark, why, attempt).await;
+        }
+    }
+}
+
+/// One attempt: a fresh connection to the server and account the work ran on — not to
+/// wherever the profile points by now (the lesson of T647) — and the stop of that mark.
+async fn remote_stop_once(
+    state: &AppState,
+    server_id: &str,
+    run: &crate::store::remote_runs::RemoteRun,
+) -> std::result::Result<crate::server::hls_package::Stopped, String> {
+    let profile = crate::store::profiles::get(&state.db, server_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| String::from("the server's profile is gone"))?;
+    let mut at = profile.clone();
+    let same_place = profile.host == run.host && profile.port == run.port;
+    at.host = run.host.clone();
+    at.port = run.port;
+    at.user = run.user.clone();
+    if !same_place {
+        // The profile was pointed elsewhere meanwhile: the run's own machine is checked by
+        // the fingerprint confirmed for it, and never by the profile's new one.
+        at.host_fingerprint = crate::ssh::fingerprint::stored(
+            &state.db,
+            &crate::ssh::ServerAddress::new(&run.host, run.port),
+        )
+        .ok()
+        .flatten();
+    }
+    let target = crate::server::gate::StopTarget::new(
+        &at,
+        super::deploy::own_credentials(state.secrets.as_ref(), &profile),
+    )
+    .ok_or_else(|| String::from("no confirmed fingerprint for the server the work ran on"))?;
+    let opened = crate::server::gate::open_to_stop(&target, None)
+        .await
+        .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
+    let stopped = crate::server::marked::stop_confirmed(
+        &opened.conn,
+        &run.var,
+        &run.mark,
+        crate::server::marked::Patience::NONE,
+    )
+    .await;
+    opened.conn.close().await;
+    stopped.map_err(|problem| problem.to_string())
 }
 
 pub mod api {
@@ -1560,16 +2130,20 @@ pub mod api {
     /// Every video, in the order they were added.
     pub fn video_list(state: &AppState) -> Result<Vec<VideoView>> {
         ensure_watching(state);
+        // One version for the whole list, taken before it is read (T687): an event sent
+        // after it has a higher one, and wins over this list however late the list arrives.
+        let rev = state.videos.next_rev();
         Ok(rows::list(&state.db)
             .map_err(storage)?
             .iter()
-            .map(|r| view_of(state, r))
+            .map(|r| view_at(state, r, rev))
             .collect())
     }
 
     /// One video.
     pub fn video_get(state: &AppState, id: &str) -> Result<VideoView> {
-        Ok(view_of(state, &load(state, id)?))
+        let rev = state.videos.next_rev();
+        Ok(view_at(state, &load(state, id)?, rev))
     }
 
     /// Choose the audio track. Before anything is encoded only.
@@ -1630,32 +2204,44 @@ pub mod api {
     }
 
     /// Set the rungs by hand (`Some`), or go back to the planned ones (`None`).
+    ///
+    /// **A rung not measured yet is taken** (T680, the owner's decision of 2026-10-02): an
+    /// edited rung, or a preliminary one chosen before the first «Start». It is saved as it
+    /// is — never marked measured — and the plan says it needs measuring; «Start» measures
+    /// what is missing, then builds. Refused only what no measurement can answer:
+    /// no rungs, or a rung that is not a whole number of megabits (no point of the grid).
     pub fn video_set_rungs(
         state: &AppState,
         id: &str,
         rungs: Option<Vec<Rung>>,
     ) -> Result<VideoView> {
         if let Some(rungs) = &rungs {
-            crate::domain::ladder::buildable(rungs).map_err(|why| match why {
-                crate::domain::ladder::NotBuildable::NoRungs => {
-                    AppError::new(ErrorCode::InvalidInput)
-                }
-                crate::domain::ladder::NotBuildable::RungsNotMeasured { indexes } => {
-                    AppError::new(ErrorCode::LadderNotMeasured).with_cause(format!(
-                        "rungs {}",
-                        indexes
-                            .iter()
-                            .map(|i| (i + 1).to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ))
-                }
-            })?;
+            if rungs.is_empty() {
+                return Err(AppError::new(ErrorCode::InvalidInput));
+            }
+            let unmeasurable: Vec<String> = rungs
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    !r.quality.is_enough_to_build_on()
+                        && crate::domain::ladder::cell_of(r).is_none()
+                })
+                .map(|(i, _)| (i + 1).to_string())
+                .collect();
+            if !unmeasurable.is_empty() {
+                return Err(AppError::new(ErrorCode::LadderNotMeasured)
+                    .with_cause(format!("rungs {}", unmeasurable.join(", "))));
+            }
         }
         change(state, id, |row| {
             if !video::allowed(Act::SetRungs, row.state, row.stage, row.media_id.is_some()) {
                 return Err(not_now(row));
             }
+            // What this film already has measured for these rungs is taken now (T680), so the
+            // plan says exactly what «Start» will still have to measure.
+            let rungs = rungs
+                .as_ref()
+                .map(|r| with_measured_here(state, &row.source_path, r));
             row.rungs_json = rungs.as_ref().and_then(|r| serde_json::to_string(r).ok());
             Ok(())
         })?;
@@ -1863,12 +2449,75 @@ pub mod api {
         if !lock(&state.videos.inner.starting).insert(id.to_owned()) {
             return Err(not_now(&row));
         }
-        let cleared = clear_old_set(state, &row, confirmed, into_medium).await;
+        // **Kept before anything is removed** (T686, QA-25 №7): what was confirmed, so that a
+        // restart between the removal and the build carries the replace through rather than
+        // leaving the video on its old problem with the old set already gone.
+        let noted = change(state, id, |r| {
+            r.replacing_json = serde_json::to_string(&video::Replacing {
+                phase: video::ReplacePhase::Deleting,
+                into_medium,
+                confirmed,
+                media_id: r.media_id.clone(),
+            })
+            .ok();
+            Ok(())
+        });
+        if let Err(e) = noted {
+            lock(&state.videos.inner.starting).remove(id);
+            return Err(e);
+        }
+        let outcome = replace_through(state, id, confirmed, into_medium).await;
+        lock(&state.videos.inner.starting).remove(id);
+        if outcome? {
+            begin_planning(state, id);
+        } else {
+            start_going(state, id);
+        }
+        video_get(state, id)
+    }
+
+    /// The rest of a confirmed «Replace», from wherever it is (T686): the old set removed
+    /// (again — a repeat removes nothing new and asks the same questions), then the video set
+    /// going. `Ok(true)` when its plan has to be made first. On a refusal the note is struck
+    /// out and the video stays on its problem, «Replace» still there.
+    async fn replace_through(
+        state: &AppState,
+        id: &str,
+        confirmed: bool,
+        into_medium: bool,
+    ) -> Result<bool> {
+        let row = load(state, id)?;
+        let may = |r: &VideoRow| {
+            video::may_replace(
+                r.state,
+                r.stage,
+                r.media_id.is_some(),
+                problem_of(r).as_ref().map(|p| &p.error),
+            )
+        };
+        let building = replacing_of(&row).is_some_and(|r| r.phase == video::ReplacePhase::Building);
+        let cleared = if building {
+            Ok(replacing_of(&row).and_then(|r| r.media_id))
+        } else {
+            clear_old_set(state, &row, confirmed, into_medium).await
+        };
+        // The old set is gone: from here a restart only builds (T686).
+        if let Ok(media_id) = &cleared {
+            let _ = change(state, id, |r| {
+                if let Some(mut replacing) = replacing_of(r) {
+                    replacing.phase = video::ReplacePhase::Building;
+                    replacing.media_id = media_id.clone();
+                    r.replacing_json = serde_json::to_string(&replacing).ok();
+                }
+                Ok(())
+            });
+        }
         let outcome = cleared.and_then(|media_id| {
             change(state, id, |r| {
                 if !may(r) {
                     return Err(not_now(r));
                 }
+                r.replacing_json = None;
                 r.media_id = media_id.clone();
                 // The set this medium had is gone, so nobody can be watching it: the build
                 // that makes it again needs no «anyway» against viewers (T571), as for a
@@ -1887,13 +2536,56 @@ pub mod api {
                 }
             })
         });
-        lock(&state.videos.inner.starting).remove(id);
-        if outcome? {
-            begin_planning(state, id);
-        } else {
-            start_going(state, id);
+        if outcome.is_err() {
+            let _ = change(state, id, |r| {
+                r.replacing_json = None;
+                Ok(())
+            });
         }
-        video_get(state, id)
+        outcome
+    }
+
+    /// Carry a confirmed «Replace» through after a restart (T686).
+    pub(super) fn replace_after_restart(state: &AppState, row: &VideoRow) {
+        let Some(replacing) = replacing_of(row) else {
+            return;
+        };
+        if !lock(&state.videos.inner.starting).insert(row.id.clone()) {
+            return;
+        }
+        let state = state.clone();
+        let id = row.id.clone();
+        spawn(async move {
+            // A server that does not answer yet is asked again — the replace was confirmed,
+            // and the old set may be half gone; a refusal (busy, watched, claimed, gone) puts
+            // the video back on its problem with «Replace» to press again.
+            let mut pause = Duration::from_secs(2);
+            let outcome = loop {
+                let outcome =
+                    replace_through(&state, &id, replacing.confirmed, replacing.into_medium).await;
+                match &outcome {
+                    Err(e)
+                        if e.code == ErrorCode::SshUnreachable
+                            && load(&state, &id).is_ok_and(|r| r.replacing_json.is_some()) =>
+                    {
+                        tokio::time::sleep(pause).await;
+                        pause = (pause * 2).min(Duration::from_secs(60));
+                    }
+                    _ => break outcome,
+                }
+            };
+            lock(&state.videos.inner.starting).remove(&id);
+            match outcome {
+                Ok(true) => begin_planning(&state, &id),
+                Ok(false) => start_going(&state, &id),
+                Err(e) => {
+                    // The video is still on the problem it was replacing, «Replace» on it:
+                    // pressing it asks again, with whatever the server now says.
+                    tracing::warn!(video = %id, error = %e, "the replace could not be carried through");
+                    emit(&state, &id);
+                }
+            }
+        });
     }
 
     /// Remove what a set of this video's name has on the server; the medium that holds the
@@ -1976,6 +2668,17 @@ pub mod api {
                         .with_cause(format!("connections={connections}")));
                 }
             }
+            // T686: the medium whose set is about to go is named in the note before a byte
+            // is removed — the library reads it as building from here, not as missing.
+            if let Some(media) = &media_id {
+                let _ = change(state, &row.id, |r| {
+                    if let Some(mut replacing) = replacing_of(r) {
+                        replacing.media_id = Some(media.clone());
+                        r.replacing_json = serde_json::to_string(&replacing).ok();
+                    }
+                    Ok(())
+                });
+            }
             library::remove_entries(&conn, &profile.video_dir, old.tops(&row.slug).iter()).await?;
             tracing::info!(
                 video = %row.id,
@@ -1991,21 +2694,49 @@ pub mod api {
         cleared
     }
 
-    /// Take a video off the list. Nothing on the server is touched (T577, part b). Not while it is
-    /// going: stop it first.
-    pub fn video_remove(state: &AppState, id: &str) -> Result<()> {
-        let _held = lock(&state.videos.inner.rows);
-        let row = load(state, id)?;
-        if !video::allowed(Act::Remove, row.state, row.stage, row.media_id.is_some()) {
-            return Err(not_now(&row));
-        }
+    /// Take a video off the list. Nothing on the server is touched (T577, part b).
+    ///
+    /// **With its work alive, the work is stopped first** (T683, the owner's decision of
+    /// 2026-10-02): a paused build, a task waiting for its place, a stop still being
+    /// confirmed. The video goes `cancelling`, exactly as after «Cancel», with
+    /// `remove_requested` kept; it leaves the list — `video:removed` — the moment everything
+    /// has stopped, the server's cutting included, and not before: a build with no video
+    /// left to answer for it is what this prevents. A restart in between finishes the job.
+    ///
+    /// Answers `null` when the video is gone at once, and the video as it is now
+    /// (`cancelling`) when it leaves once its work has stopped.
+    pub fn video_remove(state: &AppState, id: &str) -> Result<Option<VideoView>> {
+        ensure_watching(state);
         if let Some(planning) = lock(&state.videos.inner.planning).remove(id) {
             planning.cancel();
         }
-        rows::remove(&state.db, id).map_err(storage)?;
-        lock(&state.videos.inner.live).remove(id);
-        tell_library(state, id, None);
-        Ok(())
+        let living = alive(state, id);
+        let busy = !living.is_empty() || lock(&state.videos.inner.starting).contains(id);
+        let gone = {
+            let _held = lock(&state.videos.inner.rows);
+            let mut row = load(state, id)?;
+            if !busy && row.state != VideoState::Cancelling {
+                rows::remove(&state.db, id).map_err(storage)?;
+                None
+            } else {
+                row.remove_requested = true;
+                row.state = VideoState::Cancelling;
+                row.paused_by_person = false;
+                row.start_requested = false;
+                rows::save(&state.db, &row).map_err(storage)?;
+                Some(view_of(state, &row))
+            }
+        };
+        let Some(stopping) = gone else {
+            // Rows of tasks a run that is over left behind: nothing works behind them, and a
+            // video that is gone must not leave them looking unfinished.
+            cancel_tasks_of(state, id);
+            forget_video(state, id);
+            return Ok(None);
+        };
+        emit(state, id);
+        cancel_tasks_of(state, id);
+        Ok(Some(stopping))
     }
 
     /// Carry on after the application starts (T672, the owner's decision of 2026-10-01).
@@ -2018,24 +2749,19 @@ pub mod api {
         ensure_watching(state);
         let mut carried = 0;
         for row in rows::list(&state.db).map_err(storage)? {
+            // A confirmed «Replace» the last run did not finish (T686) is carried through,
+            // whatever the video's state reads: it is still on the problem it was replacing.
+            if row.replacing_json.is_some() {
+                replace_after_restart(state, &row);
+                continue;
+            }
             match video::after_restart(row.state) {
                 video::AfterRestart::PlanAgain => begin_planning(state, &row.id),
                 video::AfterRestart::CarryOn => {
                     carried += 1;
                     start_going(state, &row.id);
                 }
-                video::AfterRestart::NowCancelled => {
-                    for task in unfinished(state, &row.id) {
-                        if !state.tasks.is_alive(&task) {
-                            let _ = state.tasks.cancel(&task);
-                        }
-                    }
-                    let _ = change(state, &row.id, |r| {
-                        r.state = VideoState::Cancelled;
-                        r.task_id = None;
-                        Ok(())
-                    });
-                }
+                video::AfterRestart::NowCancelled => stop_after_restart(state, &row),
                 video::AfterRestart::Leave => {}
             }
         }
@@ -2129,7 +2855,7 @@ pub mod ipc {
     }
 
     #[tauri::command]
-    pub fn video_remove(state: State<'_, AppState>, id: String) -> Result<()> {
+    pub fn video_remove(state: State<'_, AppState>, id: String) -> Result<Option<VideoView>> {
         api::video_remove(&state, &id)
     }
 }

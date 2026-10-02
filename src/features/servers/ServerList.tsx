@@ -14,9 +14,10 @@
  */
 
 import { useEffect, useState } from "react";
-import type { ServerProfile, TestStep } from "../../shared/contract";
+import type { Detail, ServerProfile, TestStep } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
-import { useT } from "../../shared/i18n";
+import { useLang, useT } from "../../shared/i18n";
+import { renderDetail } from "../../shared/i18n/render";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { EditServerDialog } from "./EditServerDialog";
 import { ServerStateCard } from "./ServerStateCard";
@@ -82,8 +83,12 @@ function ServerCard({
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<ReturnType<typeof toAppError> | null>(null);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+  /** Work is alive on the server (T683): the core's one-line question, «stop N and delete?». */
+  const [stopFirst, setStopFirst] = useState<Detail | null>(null);
+  const [removing, setRemoving] = useState(false);
   const [editing, setEditing] = useState(false);
   const t = useT();
+  const { lang } = useLang();
 
   const runTest = async () => {
     setTesting(true);
@@ -98,12 +103,25 @@ function ServerCard({
   };
 
   const remove = async () => {
+    setRemoving(true);
     try {
-      await ipc.serverRemove(profile.id);
+      // The first time without leave to stop anything: with work alive on the server the
+      // core asks (`CONFIRM_STOP_SERVER_WORK`), and the second press says yes to that.
+      await ipc.serverRemove(profile.id, stopFirst !== null);
       onChanged();
     } catch (e) {
-      setError(toAppError(e));
+      const error = toAppError(e);
+      const ask = error.details?.find((d) => d.key === "CONFIRM_STOP_SERVER_WORK");
+      if (error.code === "CONFIRMATION_REQUIRED" && ask) setStopFirst(ask);
+      else setError(error);
+    } finally {
+      setRemoving(false);
     }
+  };
+
+  const dropRemoval = () => {
+    setConfirmingRemoval(false);
+    setStopFirst(null);
   };
 
   if (editing) {
@@ -175,11 +193,19 @@ function ServerCard({
         <button onClick={() => setEditing(true)}>{t.ui.servers.edit}</button>
         {confirmingRemoval ? (
           <>
-            <span className="server__confirm">{t.ui.servers.confirmRemoval}</span>
-            <button className="button--danger" onClick={() => void remove()}>
+            <span className="server__confirm">
+              {removing && stopFirst
+                ? t.ui.servers.stoppingWork
+                : stopFirst
+                  ? renderDetail(stopFirst, t, lang)
+                  : t.ui.servers.confirmRemoval}
+            </span>
+            <button className="button--danger" onClick={() => void remove()} disabled={removing}>
               {t.ui.servers.removeYes}
             </button>
-            <button onClick={() => setConfirmingRemoval(false)}>{t.ui.common.cancel}</button>
+            <button onClick={dropRemoval} disabled={removing}>
+              {t.ui.common.cancel}
+            </button>
           </>
         ) : (
           <button className="button--danger" onClick={() => setConfirmingRemoval(true)}>
