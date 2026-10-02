@@ -731,6 +731,7 @@ fn note_progress(
         entry.progress.eta_s = None;
         return;
     }
+    let progress = video::bar_of(code, progress);
     if entry.code != Some(code) {
         entry.code = Some(code);
         entry.since = Instant::now();
