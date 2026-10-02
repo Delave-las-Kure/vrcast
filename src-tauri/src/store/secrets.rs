@@ -138,6 +138,90 @@ impl SecretStore for OsSecretStore {
     }
 }
 
+/// A store in a file, **for the e2e build only** (Cargo feature `e2e`, see `store::data_dir`).
+///
+/// The e2e harness runs the real binary on the owner's own Windows machine, and the operating
+/// system's store there is the owner's: test keys written into it would sit beside — and under
+/// the same names as — the real ones. So that build keeps its secrets in a file inside the data
+/// directory it was given, which the harness throws away. The values are test keys for a
+/// throwaway container; a release binary does not contain this type at all.
+#[cfg(feature = "e2e")]
+#[derive(Debug)]
+pub struct FileSecretStore {
+    path: std::path::PathBuf,
+    lock: std::sync::Mutex<()>,
+}
+
+#[cfg(feature = "e2e")]
+impl FileSecretStore {
+    /// The file's name inside the data directory.
+    pub const FILE_NAME: &'static str = "e2e-secrets.json";
+
+    pub fn in_dir(dir: &std::path::Path) -> Self {
+        Self {
+            path: dir.join(Self::FILE_NAME),
+            lock: std::sync::Mutex::new(()),
+        }
+    }
+
+    fn read(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        match std::fs::read(&self.path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| SecretError::Backend(format!("the e2e secrets file: {e}"))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+            Err(e) => Err(SecretError::Backend(format!("the e2e secrets file: {e}"))),
+        }
+    }
+
+    fn write(&self, items: &std::collections::BTreeMap<String, String>) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(items)
+            .map_err(|e| SecretError::Backend(format!("the e2e secrets file: {e}")))?;
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| SecretError::Backend(format!("the e2e secrets file: {e}")))?;
+        }
+        let part = self.path.with_extension("json.part");
+        std::fs::write(&part, bytes)
+            .and_then(|()| std::fs::rename(&part, &self.path))
+            .map_err(|e| SecretError::Backend(format!("the e2e secrets file: {e}")))
+    }
+
+    fn guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+#[cfg(feature = "e2e")]
+impl SecretStore for FileSecretStore {
+    fn set(&self, reference: &SecretRef, value: &str) -> Result<()> {
+        redact::register(value);
+        let _g = self.guard();
+        let mut items = self.read()?;
+        items.insert(reference.as_str().to_owned(), value.to_owned());
+        self.write(&items)
+    }
+
+    fn get(&self, reference: &SecretRef) -> Result<String> {
+        let _g = self.guard();
+        let value = self
+            .read()?
+            .remove(reference.as_str())
+            .ok_or(SecretError::NotFound)?;
+        redact::register(&value);
+        Ok(value)
+    }
+
+    fn delete(&self, reference: &SecretRef) -> Result<()> {
+        let _g = self.guard();
+        let mut items = self.read()?;
+        if let Some(value) = items.remove(reference.as_str()) {
+            self.write(&items)?;
+            redact::forget(&value);
+        }
+        Ok(())
+    }
+}
+
 /// A store in memory, for tests. It never touches a person's real store.
 #[derive(Debug, Default)]
 pub struct InMemorySecretStore {

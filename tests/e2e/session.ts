@@ -113,8 +113,10 @@ export class Harness {
      * One test needs that badly: the one that presses "remove everything" (T359).
      */
     extraEnv: Record<string, string> = {},
+    /** A binary other than the release one — the e2e build (`video.e2e.ts`). */
+    applicationOverride?: string,
   ): Promise<Harness> {
-    const application = applicationPath();
+    const application = applicationOverride ?? applicationPath();
     const said: string[] = [];
 
     const driver = spawn(driverPath(), ["--port", String(PORT), "--native-driver", nativeDriver], {

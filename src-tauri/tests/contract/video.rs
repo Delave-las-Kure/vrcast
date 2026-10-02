@@ -1208,3 +1208,83 @@ async fn plans_encode_their_trial_pieces_within_the_limit_of_heavy_work() {
     );
     assert!(video::video_get(&state, &ids[2]).is_err());
 }
+
+/// Found by the acceptance run on a real film (2026-10-02): within one rung the encoding bar
+/// went to 100 % and then back to 0 %, because «encoding» is two pieces of work — the encode
+/// (`STAGE_CONVERTING`, its own 0…1) and the decode check after it (`STAGE_VALIDATING`, 0…1
+/// again) — both shown as the one stage «encoding», rung k of n. A person watching sees the
+/// bar finish and start over on the same rung. The bar of one stage of one rung must not go
+/// back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_encoding_bar_of_one_rung_does_not_go_back_when_the_check_after_the_encode_starts() {
+    use vrcast_studio_lib::tasks::state::TaskKind;
+    use vrcast_studio_lib::tasks::store::Batch;
+
+    let state = state();
+    let server = server(&state);
+    let mut row = VideoRow::new("v_bar", &server, "C:/nowhere/film.mp4", "Film", "film");
+    row.state = VideoState::Working;
+    row.stage = VideoStage::Encoding;
+    row.start_requested = true;
+    rows::save(&state.db, &row).unwrap();
+    // The watcher of the task stream starts with the first command, as on the screen.
+    video::video_list(&state).unwrap();
+    let mut events = state.subscribe();
+
+    // What one rung of the build reports, in the build's own order and with its own calls.
+    let step = Duration::from_millis(300);
+    let task = state
+        .tasks
+        .submit_in_batch(
+            TaskKind::BuildLadder,
+            None,
+            Some(Batch {
+                id: String::from("v_bar"),
+                label: String::from("Film"),
+            }),
+            move |ctx| async move {
+                ctx.report(0.0, DetailCode::StageBuildingLadder);
+                for share in [0.3, 0.7, 0.99] {
+                    tokio::time::sleep(step).await;
+                    ctx.report(share, DetailCode::StageConverting);
+                }
+                tokio::time::sleep(step).await;
+                ctx.report_important(0.0, DetailCode::StageValidating);
+                for share in [0.4, 0.9] {
+                    tokio::time::sleep(step).await;
+                    ctx.report(share, DetailCode::StageValidating);
+                }
+                tokio::time::sleep(step).await;
+                // Held here, so the video stays «working» while the events are read.
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut bars: Vec<(VideoStage, Option<u32>, f64)> = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && bars.len() < 7 {
+        if let Ok(Ok(AppEvent::VideoUpdate(v))) =
+            tokio::time::timeout(Duration::from_millis(200), events.recv()).await
+        {
+            if v.id == "v_bar" {
+                if let Some(p) = &v.progress {
+                    bars.push((v.stage, p.rung, p.progress));
+                }
+            }
+        }
+    }
+    let _ = state.tasks.cancel(&task);
+    assert!(bars.len() >= 6, "too few updates: {bars:?}");
+    for pair in bars.windows(2) {
+        let ((s0, r0, p0), (s1, r1, p1)) = (pair[0], pair[1]);
+        if s0 == s1 && r0 == r1 {
+            assert!(
+                p1 + 1e-9 >= p0,
+                "the bar of {s1:?}, rung {r1:?} went back from {p0} to {p1}: {bars:?}"
+            );
+        }
+    }
+}
