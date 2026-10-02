@@ -176,14 +176,14 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         ctx.add_notice(said);
     }
 
-    // **A file somebody owns is never written over, and is not a reason to stop** (T675;
-    // T677, the owner's decision of 2026-10-02). A medium's own single file is often named the
-    // way a rung's prepared file is — `film_9.mp4`, the shell script's convention — and a
-    // build into that medium would replace it. Asked once, before a byte is encoded: a claimed
-    // file that already is this rung, whole, is taken as it is (a rebuild of the same set
-    // whose rungs a person filed under the medium); otherwise the rung takes the next name
-    // nobody claims (`film_9v.mp4`), and the set records it so that carrying on finds it.
-    let record = name_prepared_files(job, &mut work).await?;
+    // **A file somebody owns is never written over, is not a reason to stop, and is never
+    // taken for a rung** (T675; T677, the owner's decision of 2026-10-02; T681). A medium's own
+    // single file is often named the way a rung's prepared file is — `film_9.mp4`, the shell
+    // script's convention — and a build into that medium would replace it. Asked once, before a
+    // byte is encoded: the rung takes the next name nobody claims (`film_9v.mp4`), and the set
+    // records it so that carrying on finds it. A claimed file is not taken as done because it
+    // is as long as the source (QA-25 №2): one length is not a film.
+    let (record, mut made) = name_prepared_files(job, &mut work).await?;
 
     // **Will it fit?** Asked once, here, before a byte is encoded. A set is hours of work
     // and tens of gigabytes; running into the end of the disk halfway leaves the first
@@ -198,7 +198,7 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         ctx.add_notice(unknown);
     }
     if record {
-        write_prepared_record(job, &work).await?;
+        write_prepared_record(job, &work, &made).await?;
     }
 
     let mut prepared = 0usize;
@@ -212,15 +212,19 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
             DetailCode::StageBuildingLadder,
         );
 
-        // Already on the server, whole? Then it is done, and asking the server is the only
-        // way to know that is still true.
-        if variant_already_there(
-            job.conn,
-            job.video_dir,
-            &variant.file,
-            job.source.duration_s,
-        )
-        .await?
+        // Already done? Only when this set's own record says it made this rung — from this
+        // source, at this height and bitrate, with this sound track — and the server says the
+        // file is still there, whole (T681). A file under the rung's name proves nothing by
+        // itself: a medium's single file of the same length is not this film.
+        if ladder_build::made_here(&made, variant, job.source, job.audio_track)
+            && rung_file_whole(
+                job.conn,
+                job.video_dir,
+                &variant.file,
+                job.source.duration_s,
+                variant.rung.height,
+            )
+            .await?
         {
             reused += 1;
             continue;
@@ -228,9 +232,32 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         // What preparing this variant had to say — the graphics card refusing and the work
         // going to the processor, for instance. Collected rather than dropped: a fallback
         // nobody is told about is a slower build with no explanation for why (T464).
-        for said in prepare_and_send(job, variant, ctx).await? {
+        //
+        // The set's record of what it made is written in the same server command that puts
+        // the rung in place (T681), so carrying on knows it is ours and nothing else is.
+        let mut next = made.clone();
+        next.retain(|m| m.sub != variant.sub);
+        next.push(ladder_build::MadeRung::of(
+            variant,
+            job.source,
+            job.audio_track,
+        ));
+        let then = format!(
+            "{} && rm -f {}",
+            record_command(job, &work, &next),
+            // A cut of an earlier file under this rung is not a cut of this one: the cutting
+            // recognises a rung cut whole by its `.facts`, and does it again without them.
+            crate::server::shell_quote(&format!(
+                "{}/{}/{}/.facts",
+                job.video_dir.trim_end_matches('/'),
+                job.slug,
+                variant.sub
+            ))
+        );
+        for said in prepare_and_send(job, variant, ctx, &then).await? {
             ctx.add_notice(said);
         }
+        made = next;
         prepared += 1;
     }
 
@@ -532,15 +559,17 @@ pub async fn room_for_the_set(
     }
 }
 
-/// Give each rung the prepared file it is made into (T675, T677). See [`run`] and
+/// Give each rung the prepared file it is made into (T675, T677, T681). See [`run`] and
 /// `domain::ladder_build::choose_files`.
 ///
-/// Returns whether the set's own record of its names has to be written: a rung took a name
-/// other than its first, or a record is already there (it is kept in step).
+/// Returns whether the set's own record of its names has to be written before anything is
+/// encoded (a rung took a name other than its first, or a record is already there and is kept
+/// in step), and what the record says this set has made (`MadeRung`) — under the names given
+/// out now, and nothing a medium claims.
 async fn name_prepared_files(
     job: &BuildJob<'_>,
     work: &mut [VariantWork],
-) -> Result<bool, BuildError> {
+) -> Result<(bool, Vec<ladder_build::MadeRung>), BuildError> {
     let manifest = crate::server::manifest_io::read(job.conn, job.video_dir)
         .await
         .map_err(|e| BuildError::Catalogue(e.to_string()))?;
@@ -557,23 +586,7 @@ async fn name_prepared_files(
         .stdout;
     let stored = ladder_build::parse_prepared(&stored_text);
 
-    // A claimed file under a rung's first name that already is that rung, whole.
-    let mut whole_claimed = Vec::new();
-    for variant in work.iter() {
-        if claimed.contains(&variant.file.as_str())
-            && variant_already_there(
-                job.conn,
-                job.video_dir,
-                &variant.file,
-                job.source.duration_s,
-            )
-            .await?
-        {
-            whole_claimed.push(variant.file.clone());
-        }
-    }
-
-    let names = ladder_build::choose_files(job.slug, work, &claimed, &stored, &whole_claimed);
+    let names = ladder_build::choose_files(job.slug, work, &claimed, &stored);
     let mut moved = false;
     for (variant, name) in work.iter_mut().zip(names) {
         if variant.file != name {
@@ -587,7 +600,12 @@ async fn name_prepared_files(
             moved = true;
         }
     }
-    Ok(moved || !stored.is_empty())
+    let made = ladder_build::parse_made(&stored_text)
+        .into_iter()
+        .filter(|m| work.iter().any(|w| w.sub == m.sub && w.file == m.file))
+        .filter(|m| !claimed.contains(&m.file.as_str()))
+        .collect();
+    Ok((moved || !stored.is_empty(), made))
 }
 
 fn prepared_record_path(job: &BuildJob<'_>) -> String {
@@ -599,22 +617,61 @@ fn prepared_record_path(job: &BuildJob<'_>) -> String {
     )
 }
 
-/// Write the set's record of its prepared files (T677), staged and renamed into place.
-async fn write_prepared_record(job: &BuildJob<'_>, work: &[VariantWork]) -> Result<(), BuildError> {
-    let path = prepared_record_path(job);
-    let dir = format!("{}/{}", job.video_dir.trim_end_matches('/'), job.slug);
+/// Write the set's record of its prepared files (T677) and of what it made (T681), staged and
+/// renamed into place.
+async fn write_prepared_record(
+    job: &BuildJob<'_>,
+    work: &[VariantWork],
+    made: &[ladder_build::MadeRung],
+) -> Result<(), BuildError> {
     job.conn
-        .exec(&format!(
-            "mkdir -p {d} && printf '%s' {body} > {p}.part && mv -f {p}.part {p}",
-            d = crate::server::shell_quote(&dir),
-            body = crate::server::shell_quote(&ladder_build::prepared_text(work)),
-            p = crate::server::shell_quote(&path),
-        ))
+        .exec(&record_command(job, work, made))
         .await?
         .require_ok("could not write the set's record of its prepared files")?;
     Ok(())
 }
 
+/// The shell command that writes the set's record, staged and renamed into place.
+fn record_command(
+    job: &BuildJob<'_>,
+    work: &[VariantWork],
+    made: &[ladder_build::MadeRung],
+) -> String {
+    let path = prepared_record_path(job);
+    let dir = format!("{}/{}", job.video_dir.trim_end_matches('/'), job.slug);
+    format!(
+        "mkdir -p {d} && printf '%s' {body} > {p}.part && mv -f {p}.part {p}",
+        d = crate::server::shell_quote(&dir),
+        body = crate::server::shell_quote(&ladder_build::prepared_text_with(work, made)),
+        p = crate::server::shell_quote(&path),
+    )
+}
+
+/// Whether a rung file this set made is still on the server, whole: as long as the source
+/// (within a second) and of the rung's height (T681). Asked only of a file the set's own
+/// record says it made — see [`run`]; on its own it proves nothing.
+pub async fn rung_file_whole(
+    conn: &Connection,
+    video_dir: &str,
+    file: &str,
+    expected_s: f64,
+    height: u32,
+) -> Result<bool, crate::ssh::SshError> {
+    let path = format!("{}/{}", video_dir.trim_end_matches('/'), file);
+    let out = conn
+        .exec(&format!(
+            "test -f {p} && ffprobe -v error -select_streams v:0 -show_entries \
+             stream=height:format=duration -of default=nw=1 {p} || true",
+            p = crate::server::shell_quote(&path)
+        ))
+        .await?;
+    let (duration, found) = ladder_build::parse_rung_facts(&out.stdout);
+    Ok(duration.is_some_and(|d| d > 0.0 && (d - expected_s).abs() < 1.0) && found == Some(height))
+}
+
+/// Whether a file is on the server and as long as `expected_s`, within a second — **and no
+/// more than that** (T681): a medium's single file of the same length passes. Not a test of
+/// whether a file is a rung; the build asks [`rung_file_whole`] of what it made.
 pub async fn variant_already_there(
     conn: &Connection,
     video_dir: &str,
@@ -639,6 +696,7 @@ async fn prepare_and_send(
     job: &BuildJob<'_>,
     variant: &VariantWork,
     ctx: &TaskContext,
+    then: &str,
 ) -> Result<Vec<Detail>, BuildError> {
     let out_path = job.work_dir.join(&variant.file);
     std::fs::create_dir_all(job.work_dir).map_err(|e| BuildError::Prepare(e.to_string()))?;
@@ -716,7 +774,7 @@ async fn prepare_and_send(
         return Err(BuildError::Cancelled);
     }
 
-    let sent = send(job, &out_path, &variant.file, ctx).await;
+    let sent = send(job, &out_path, &variant.file, ctx, then).await;
     // The local copy goes whether the sending worked or not: it is gigabytes, and a failed
     // build that quietly fills somebody's disk is a second failure on top of the first.
     let _ = std::fs::remove_file(&out_path);
@@ -735,9 +793,10 @@ async fn send(
     local: &Path,
     name: &str,
     ctx: &TaskContext,
+    then: &str,
 ) -> Result<(), BuildError> {
     let target = format!("{}/{}", job.video_dir.trim_end_matches('/'), name);
-    send_file(job.conn, local, &target, ctx, PAUSE_HOLD_LIMIT).await
+    send_file_then(job.conn, local, &target, ctx, PAUSE_HOLD_LIMIT, then).await
 }
 
 /// How long a pause may keep a variant's file session open on the server (T670(4)).
@@ -770,6 +829,20 @@ pub async fn send_file(
     target: &str,
     ctx: &TaskContext,
     hold_limit: std::time::Duration,
+) -> Result<(), BuildError> {
+    send_file_then(conn, local, target, ctx, hold_limit, "").await
+}
+
+/// [`send_file`], with a shell command run in the same command as the final rename, after it
+/// and only if it worked (T681): the set's record of what it made is written there, so a rung
+/// in place is never one the record does not know about.
+async fn send_file_then(
+    conn: &Connection,
+    local: &Path,
+    target: &str,
+    ctx: &TaskContext,
+    hold_limit: std::time::Duration,
+    then: &str,
 ) -> Result<(), BuildError> {
     use russh_sftp::protocol::OpenFlags;
     use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -870,9 +943,14 @@ pub async fn send_file(
     // whole one, never a growing one. That is also what lets `already_there` trust a file
     // it finds.
     conn.exec(&format!(
-        "mv {} {}",
+        "mv {} {}{}",
         crate::server::shell_quote(&staged),
-        crate::server::shell_quote(target)
+        crate::server::shell_quote(target),
+        if then.is_empty() {
+            String::new()
+        } else {
+            format!(" && {then}")
+        }
     ))
     .await?
     .require_ok("could not put the variant in place")?;
