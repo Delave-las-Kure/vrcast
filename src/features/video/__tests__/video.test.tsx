@@ -578,6 +578,32 @@ describe("the stages after Start", () => {
     await waitFor(() => expect(mockVideoResume).toHaveBeenCalledWith("b"));
   });
 
+  it("offers «Continue» on the card after a pause pressed in «Tasks» (T685)", async () => {
+    mockVideoList.mockResolvedValue([working()]);
+    show();
+    await card();
+    await waitFor(() => expect(push).not.toBeNull());
+    // The core makes the task's pause the video's own and says so.
+    act(() =>
+      push!(
+        working({
+          state: "paused",
+          paused_by_person: true,
+          updated_at: "2026-10-01T10:05:00Z",
+          progress: { ...working().progress!, task_state: "paused" },
+        }),
+      ),
+    );
+    const c = await card();
+    await waitFor(() =>
+      expect(c.getByRole("button", { name: ru.ui.video.resume })).toBeInTheDocument(),
+    );
+    expect(c.queryByRole("button", { name: ru.ui.video.pause })).toBeNull();
+    expect(c.getByText(ru.ui.video.paused)).toBeInTheDocument();
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.resume }));
+    await waitFor(() => expect(mockVideoResume).toHaveBeenCalledWith("v1"));
+  });
+
   it("says it is stopping while cancelling, and offers nothing to press", async () => {
     mockVideoList.mockResolvedValue([working({ state: "cancelling" })]);
     show();

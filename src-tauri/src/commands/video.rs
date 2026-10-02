@@ -638,6 +638,7 @@ fn on_progress(
             return;
         }
         let mut dirty = false;
+        let mut taken_over = false;
         // The build the measurement chained onto becomes the video's task the moment it is
         // heard from; a measurement never takes the place back from a build.
         let current_is_live = row
@@ -649,6 +650,7 @@ fn on_progress(
             && (kind == TaskKind::BuildLadder || !current_is_live)
         {
             row.task_id = Some(task_id.to_owned());
+            taken_over = true;
             dirty = true;
         }
         if row.task_id.as_deref() != Some(task_id) {
@@ -665,6 +667,32 @@ fn on_progress(
                 row.stage = stage;
                 dirty = true;
             }
+        }
+        // **A pause is the video's, wherever it was pressed** (T685, QA-25 №6). «Pause» in
+        // «Tasks» pauses the task of the video's current stage, and that is the video paused
+        // by a person — kept across a restart as such, with «Continue» on the card. «Continue»
+        // in «Tasks» on a task that was paused is the video going again. Told apart from a
+        // task only waiting for its place (`queued` from the start) by what the task was
+        // last: a task carried on goes `paused` → `queued` → `running`. What was last is the
+        // same task's only while it did not just take the place over (a build chained on).
+        let was = lock(&state.videos.inner.live)
+            .get(&vid)
+            .map(|l| l.progress.task_state)
+            .filter(|_| !taken_over);
+        match (row.state, task_state) {
+            (VideoState::Working, TaskState::Paused) => {
+                row.state = VideoState::Paused;
+                row.paused_by_person = true;
+                dirty = true;
+            }
+            (VideoState::Paused, TaskState::Queued | TaskState::Running)
+                if was == Some(TaskState::Paused) =>
+            {
+                row.state = VideoState::Working;
+                row.paused_by_person = false;
+                dirty = true;
+            }
+            _ => {}
         }
         // A pause pressed while the task was still waiting for its turn is carried out the
         // moment it starts: a queued task cannot be paused, a running one can.
