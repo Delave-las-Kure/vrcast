@@ -331,3 +331,122 @@ async fn removing_a_server_with_nothing_running_asks_nothing() {
         .unwrap();
     assert!(rows::get(&state.db, &row.id).unwrap().is_none());
 }
+
+// ---------- T682: a stop on the server that outlived the application ----------
+
+/// A video left `cancelling` at the cutting by a run that is over, with its build's row as a
+/// killed run leaves it (`recover_after_start` makes it `paused`) and — when `cut` — the note
+/// of the cutting it had started on the server.
+fn left_cancelling(state: &AppState, id: &str, server: &str, cut: bool) -> String {
+    use vrcast_studio_lib::store::remote_runs::{self, RemoteRun};
+    use vrcast_studio_lib::tasks::store::{self as tasks, TaskRecord};
+
+    let mut row = VideoRow::new(id, server, "C:/nowhere/film.mp4", id, id);
+    row.state = VideoState::Cancelling;
+    row.stage = VideoStage::Cutting;
+    let task = format!("old-cutting-{id}");
+    row.task_id = Some(task.clone());
+    rows::save(&state.db, &row).unwrap();
+    let mut t = TaskRecord::new(&task, TaskKind::BuildLadder, Some(server.to_owned()));
+    t.state = TaskState::Paused;
+    t.stage = Some(DetailCode::StageStopUnconfirmed);
+    t.batch = Some(Batch {
+        id: id.to_owned(),
+        label: id.to_owned(),
+    });
+    t.resume_token = Some(id.to_owned());
+    tasks::upsert(&state.db, &t).unwrap();
+    if cut {
+        remote_runs::save(
+            &state.db,
+            &task,
+            &RemoteRun {
+                var: String::from("VRCAST_HLS_JOB"),
+                mark: format!("{id}:0123456789abcdef"),
+                // Nothing listens there: the stop cannot be confirmed.
+                host: String::from("127.0.0.1"),
+                port: 1,
+                user: String::from("root"),
+            },
+        )
+        .unwrap();
+    }
+    task
+}
+
+/// A server nobody answers on, with a confirmed fingerprint so a stop is at least tried.
+fn unreachable_server(state: &AppState) -> String {
+    let mut input = valid_input("Nowhere");
+    input.host = String::from("127.0.0.1");
+    input.port = 1;
+    let id = servers::server_add(state, input, "in-memory-only").unwrap();
+    vrcast_studio_lib::store::profiles::set_fingerprint(&state.db, &id, "SHA256:test").ok();
+    id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_the_server_never_confirmed_stays_cancelling_after_a_restart() {
+    let state = state();
+    let server = unreachable_server(&state);
+    let task = left_cancelling(&state, "stop-unconfirmed", &server, true);
+
+    let next = restarted(&state);
+    video::restore_videos(&next).unwrap();
+    // The server cannot be reached, so the stop is not confirmed: still stopping, and the
+    // build's row still unfinished — its set stays busy for the library and «Replace».
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let v = video::video_get(&next, "stop-unconfirmed").unwrap();
+    assert_eq!(v.state, VideoState::Cancelling);
+    let t = next.tasks.get(&task).unwrap().unwrap();
+    assert!(!t.state.is_final(), "the build was closed without a stop");
+    // Not «Retry», not «Remove»-at-once, not a new build: it is still being stopped.
+    assert!(video::video_retry(&next, "stop-unconfirmed", false).is_err());
+    assert!(vrcast_studio_lib::store::remote_runs::get(&next.db, &task)
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_with_nothing_on_the_server_is_cancelled_after_a_restart() {
+    let state = state();
+    let server = unreachable_server(&state);
+    // Stopped while measuring or encoding — the work died with the application.
+    let task = left_cancelling(&state, "stop-local", &server, false);
+    let next = restarted(&state);
+    video::restore_videos(&next).unwrap();
+    assert_eq!(
+        video::video_get(&next, "stop-local").unwrap().state,
+        VideoState::Cancelled
+    );
+    assert_eq!(
+        next.tasks.get(&task).unwrap().unwrap().state,
+        TaskState::Cancelled
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn work_another_copy_is_running_is_left_alone_after_a_restart() {
+    use vrcast_studio_lib::tasks::store as tasks;
+    let state = state();
+    let server = unreachable_server(&state);
+    let task = left_cancelling(&state, "stop-foreign", &server, true);
+    // Still `running` after start-up: its owner — another copy — is alive (stamped with
+    // this very process, which is alive, as `save_state` does for a running task).
+    tasks::save_state(&state.db, &task, TaskState::Running, None).unwrap();
+    let next = restarted(&state);
+    assert_eq!(
+        tasks::get(&next.db, &task).unwrap().unwrap().state,
+        TaskState::Running
+    );
+    video::restore_videos(&next).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        video::video_get(&next, "stop-foreign").unwrap().state,
+        VideoState::Cancelling
+    );
+    assert_eq!(
+        tasks::get(&next.db, &task).unwrap().unwrap().state,
+        TaskState::Running,
+        "another copy's work was closed"
+    );
+}

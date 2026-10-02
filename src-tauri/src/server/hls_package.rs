@@ -395,10 +395,25 @@ impl Cutting<'_> {
         F: FnMut(&Progress),
     {
         let started = self.start().await?;
-        match self.watch(ctx, &started, &mut on_progress).await {
+        // T682: which start this is, written down before anything is waited for — a stop
+        // pressed now must still be confirmable if the application is killed before it is.
+        ctx.note_remote_run(&crate::store::remote_runs::RemoteRun {
+            var: hls_package::JOB_VAR.to_owned(),
+            mark: started.mark.as_str().to_owned(),
+            host: self.conn.address().host.clone(),
+            port: self.conn.address().port,
+            user: self.conn.user().to_owned(),
+        });
+        let outcome = match self.watch(ctx, &started, &mut on_progress).await {
             Ok(facts) => Ok(facts),
             Err(then) => Err(self.stop_after_failure(&started.mark, then).await),
+        };
+        // Over and confirmed — or still to be confirmed (`StopUnconfirmed`), which keeps the
+        // note until the caller's `settle_stop` has confirmed it.
+        if !matches!(outcome, Err(CuttingError::StopUnconfirmed(_))) {
+            ctx.forget_remote_run();
         }
+        outcome
     }
 
     async fn watch<F>(

@@ -454,6 +454,26 @@ impl TaskContext {
         Ok(())
     }
 
+    /// Write down work this task has started on a server apart from itself (T682): the mark
+    /// its processes carry and where they run, so that a stop can still be confirmed after
+    /// the application was killed. Written before anything is waited for; struck out with
+    /// [`Self::forget_remote_run`] once the work's end is confirmed.
+    ///
+    /// Failures are swallowed and logged, as `set_result`'s: the work itself is not to be
+    /// stopped by a write that could not land.
+    pub fn note_remote_run(&self, run: &crate::store::remote_runs::RemoteRun) {
+        if let Err(e) = crate::store::remote_runs::save(&self.db, &self.id, run) {
+            tracing::warn!(id = %self.id, error = %e, "the remote run was not written down");
+        }
+    }
+
+    /// The work on the server has ended and its end is confirmed (T682).
+    pub fn forget_remote_run(&self) {
+        if let Err(e) = crate::store::remote_runs::clear(&self.db, &self.id) {
+            tracing::warn!(id = %self.id, error = %e, "the remote run was not struck out");
+        }
+    }
+
     /// Read the resume position left by the previous run.
     pub fn resume_token(&self) -> Result<Option<String>> {
         Ok(store::get(&self.db, &self.id)?.and_then(|r| r.resume_token))

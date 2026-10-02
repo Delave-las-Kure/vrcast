@@ -569,6 +569,9 @@ pub mod api {
                         }
                     })
                     .await;
+                    // T682: the stop is confirmed (or there was none to make): the note of the
+                    // cutting's start is struck out.
+                    ctx.forget_remote_run();
                     // **The built set's own medium, found while the connection is still
                     // open** (T519(3)), and now attached to it in the catalogue itself
                     // (T528). Best effort and only on success: the slug may match no

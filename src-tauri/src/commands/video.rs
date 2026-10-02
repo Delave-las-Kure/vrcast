@@ -236,6 +236,9 @@ struct Hub {
     set_work: Mutex<HashMap<String, (String, String, video::SetWorkState)>>,
     /// Servers being removed (T683): nothing of theirs is put on the queue meanwhile.
     closing: Mutex<HashSet<String>>,
+    /// Videos whose stop on the server is being confirmed after a restart (T682): a cutting
+    /// a run that is over started and left `cancelling`.
+    stopping: Mutex<HashSet<String>>,
 }
 
 struct Live {
@@ -371,6 +374,13 @@ pub(crate) fn work_on_server(state: &AppState, server_id: &str) -> Vec<String> {
             .filter(|v| starting.contains(*v))
             .map(|v| format!("video:{v}")),
     );
+    let stopping = lock(&state.videos.inner.stopping);
+    out.extend(
+        videos
+            .iter()
+            .filter(|v| stopping.contains(*v))
+            .map(|v| format!("stop:{v}")),
+    );
     out
 }
 
@@ -398,7 +408,7 @@ pub(crate) fn stop_server_work(state: &AppState, server_id: &str) {
                 Ok(())
             });
         }
-        let _ = state.tasks.cancel_batch(&v.id);
+        cancel_tasks_of(state, &v.id);
     }
     for task in work_on_server(state, server_id) {
         let _ = state.tasks.cancel(&task);
@@ -678,6 +688,22 @@ fn alive(state: &AppState, id: &str) -> Vec<String> {
         .into_iter()
         .filter(|t| state.tasks.is_alive(t))
         .collect()
+}
+
+/// Stop every task of this video — except a row of a run that is over whose work on the
+/// server is not confirmed stopped yet (T682): that one stays unfinished, and its set busy,
+/// until [`stop_after_restart`] has the server's word.
+fn cancel_tasks_of(state: &AppState, id: &str) {
+    for task in unfinished(state, id) {
+        let waiting_for_server = !state.tasks.is_alive(&task)
+            && crate::store::remote_runs::get(&state.db, &task)
+                .ok()
+                .flatten()
+                .is_some();
+        if !waiting_for_server {
+            let _ = state.tasks.cancel(&task);
+        }
+    }
 }
 
 // ---------- watching the tasks ----------
@@ -1047,6 +1073,10 @@ fn reconcile(state: &AppState) {
             continue;
         }
         if lock(&state.videos.inner.starting).contains(&row.id) {
+            continue;
+        }
+        // A stop on the server being confirmed after a restart (T682) is over when it says.
+        if lock(&state.videos.inner.stopping).contains(&row.id) {
             continue;
         }
         if let Some(task_id) = row.task_id.clone() {
@@ -1506,6 +1536,160 @@ fn start_going(state: &AppState, id: &str) {
     let state = state.clone();
     let id = id.to_owned();
     spawn(async move { carry_on(&state, &id).await });
+}
+
+// ---------- a stop left unconfirmed by a run that is over (T682) ----------
+
+/// A video found `cancelling` at start-up: «Cancel» was pressed and the application went
+/// away before every part of the work had stopped (T682, QA-25 №3).
+///
+/// **Local work died with the application** — a task of the previous run is a row and
+/// nothing more (`ManagedProcess`'s sweep at start-up has ended any program it left). **Work
+/// on the server did not:** a cutting runs there apart from us, and the start of it is written
+/// down (`remote_runs`) until its end is confirmed. So:
+/// - a task with no such note is closed at once, as before;
+/// - a task with one stays unfinished — its set stays busy for the library and for
+///   «Replace» (`running_build_for` sees it) — while the stop of **that start's mark** is
+///   tried again, through a fresh connection to the server and account it ran on, until the
+///   server confirms nothing carrying it is alive; only then is the task closed and the
+///   video `cancelled`;
+/// - a task another copy of the application is running (still `running` after
+///   `recover_after_start`) is not ours: nothing of it is stopped or closed, and the video
+///   waits for it.
+///
+/// The mark is unique to one start, so a cutting of the same set started by another copy
+/// carries another mark and is never reached by this stop.
+fn stop_after_restart(state: &AppState, row: &VideoRow) {
+    let mut pending: Vec<(String, crate::store::remote_runs::RemoteRun)> = Vec::new();
+    let mut foreign: Option<String> = None;
+    for task in unfinished(state, &row.id) {
+        if state.tasks.is_alive(&task) {
+            continue;
+        }
+        let record = crate::tasks::store::get(&state.db, &task).ok().flatten();
+        if record
+            .as_ref()
+            .is_some_and(|t| t.state == TaskState::Running)
+        {
+            foreign = Some(task);
+            continue;
+        }
+        match crate::store::remote_runs::get(&state.db, &task)
+            .ok()
+            .flatten()
+        {
+            Some(run) if run.var == crate::domain::hls_package::JOB_VAR => {
+                pending.push((task, run));
+            }
+            _ => {
+                let _ = state.tasks.cancel(&task);
+            }
+        }
+    }
+    if pending.is_empty() {
+        let _ = change(state, &row.id, |r| {
+            match &foreign {
+                // Another copy's work: its ending, when the watcher hears of it, ends this.
+                Some(task) => r.task_id = Some(task.clone()),
+                None => {
+                    r.state = VideoState::Cancelled;
+                    r.task_id = None;
+                }
+            }
+            Ok(())
+        });
+        return;
+    }
+    lock(&state.videos.inner.stopping).insert(row.id.clone());
+    let first = pending[0].0.clone();
+    let _ = change(state, &row.id, |r| {
+        r.task_id = Some(first.clone());
+        Ok(())
+    });
+    let state = state.clone();
+    let vid = row.id.clone();
+    let server_id = row.server_id.clone();
+    spawn(async move {
+        for (_, run) in &pending {
+            confirm_remote_stop(&state, &server_id, run).await;
+        }
+        lock(&state.videos.inner.stopping).remove(&vid);
+        for (task, _) in &pending {
+            let _ = crate::store::remote_runs::clear(&state.db, task);
+            // Its ending reaches the watcher, which makes the video `cancelled` — or takes it
+            // off the list, when «Remove» was what had been pressed.
+            let _ = state.tasks.cancel(task);
+        }
+        let _ = change(&state, &vid, |r| {
+            if r.state == VideoState::Cancelling && foreign.is_none() {
+                r.state = VideoState::Cancelled;
+                r.task_id = None;
+            }
+            Ok(())
+        });
+    });
+}
+
+/// Try the stop of one start on the server until the server confirms it (T682). Does not
+/// return before then: what it protects is exactly the files that start may be writing.
+async fn confirm_remote_stop(
+    state: &AppState,
+    server_id: &str,
+    run: &crate::store::remote_runs::RemoteRun,
+) {
+    let attempt = || remote_stop_once(state, server_id, run);
+    match attempt().await {
+        Ok(how) => {
+            tracing::info!(mark = %run.mark, ?how, "the stop left from the last run is confirmed");
+        }
+        Err(why) => {
+            crate::server::marked::retry_until_confirmed("cutting", &run.mark, why, attempt).await;
+        }
+    }
+}
+
+/// One attempt: a fresh connection to the server and account the work ran on — not to
+/// wherever the profile points by now (the lesson of T647) — and the stop of that mark.
+async fn remote_stop_once(
+    state: &AppState,
+    server_id: &str,
+    run: &crate::store::remote_runs::RemoteRun,
+) -> std::result::Result<crate::server::hls_package::Stopped, String> {
+    let profile = crate::store::profiles::get(&state.db, server_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| String::from("the server's profile is gone"))?;
+    let mut at = profile.clone();
+    let same_place = profile.host == run.host && profile.port == run.port;
+    at.host = run.host.clone();
+    at.port = run.port;
+    at.user = run.user.clone();
+    if !same_place {
+        // The profile was pointed elsewhere meanwhile: the run's own machine is checked by
+        // the fingerprint confirmed for it, and never by the profile's new one.
+        at.host_fingerprint = crate::ssh::fingerprint::stored(
+            &state.db,
+            &crate::ssh::ServerAddress::new(&run.host, run.port),
+        )
+        .ok()
+        .flatten();
+    }
+    let target = crate::server::gate::StopTarget::new(
+        &at,
+        super::deploy::own_credentials(state.secrets.as_ref(), &profile),
+    )
+    .ok_or_else(|| String::from("no confirmed fingerprint for the server the work ran on"))?;
+    let opened = crate::server::gate::open_to_stop(&target, None)
+        .await
+        .map_err(|refusal| format!("the gate would not open: {refusal}"))?;
+    let stopped = crate::server::marked::stop_confirmed(
+        &opened.conn,
+        &run.var,
+        &run.mark,
+        crate::server::marked::Patience::NONE,
+    )
+    .await;
+    opened.conn.close().await;
+    stopped.map_err(|problem| problem.to_string())
 }
 
 pub mod api {
@@ -2167,12 +2351,12 @@ pub mod api {
         let Some(stopping) = gone else {
             // Rows of tasks a run that is over left behind: nothing works behind them, and a
             // video that is gone must not leave them looking unfinished.
-            let _ = state.tasks.cancel_batch(id);
+            cancel_tasks_of(state, id);
             forget_video(state, id);
             return Ok(None);
         };
         emit(state, id);
-        let _ = state.tasks.cancel_batch(id);
+        cancel_tasks_of(state, id);
         Ok(Some(stopping))
     }
 
@@ -2192,18 +2376,7 @@ pub mod api {
                     carried += 1;
                     start_going(state, &row.id);
                 }
-                video::AfterRestart::NowCancelled => {
-                    for task in unfinished(state, &row.id) {
-                        if !state.tasks.is_alive(&task) {
-                            let _ = state.tasks.cancel(&task);
-                        }
-                    }
-                    let _ = change(state, &row.id, |r| {
-                        r.state = VideoState::Cancelled;
-                        r.task_id = None;
-                        Ok(())
-                    });
-                }
+                video::AfterRestart::NowCancelled => stop_after_restart(state, &row),
                 video::AfterRestart::Leave => {}
             }
         }
