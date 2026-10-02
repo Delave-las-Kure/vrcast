@@ -27,14 +27,14 @@ use vrcast_studio_lib::store::secrets::{InMemorySecretStore, SecretStore};
 use super::fixture::TestServer;
 use super::upload_live::{add_profile, attach_secret};
 
-const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
+pub(crate) const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 
 /// Where the check at the end looks for the set: the container's own HTTP.
-fn origin_of(server: &TestServer) -> String {
+pub(crate) fn origin_of(server: &TestServer) -> String {
     format!("http://{}:{}", server.host(), server.http_port)
 }
 
-fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState {
+pub(crate) fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState {
     let mut state = AppState::with_db(
         Arc::new(Db::open(db).expect("the database would not open")),
         secrets,
@@ -45,12 +45,12 @@ fn state_on(db: &Path, secrets: Arc<dyn SecretStore>, origin: &str) -> AppState 
 }
 
 /// A real film. `seconds` long at `size`, with sound, keyframes every second.
-fn make_film(path: &Path, size: &str, seconds: u32) {
+pub(crate) fn make_film(path: &Path, size: &str, seconds: u32) {
     make_film_from(path, &format!("testsrc2=size={size}:rate=24"), seconds);
 }
 
 /// The same, with the picture from another lavfi source — another film of the same length.
-fn make_film_from(path: &Path, picture: &str, seconds: u32) {
+pub(crate) fn make_film_from(path: &Path, picture: &str, seconds: u32) {
     let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg: run `npm run ffmpeg`");
     let out = std::process::Command::new(ff)
         .args(["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i"])
@@ -85,10 +85,10 @@ fn make_film_from(path: &Path, picture: &str, seconds: u32) {
 }
 
 /// A directory that removes itself.
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 
 impl Scratch {
-    fn new(what: &str) -> Self {
+    pub(crate) fn new(what: &str) -> Self {
         let dir =
             std::env::temp_dir().join(format!("vrcast-{what}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).expect("could not make a working directory");
@@ -102,7 +102,7 @@ impl Drop for Scratch {
     }
 }
 
-async fn until(
+pub(crate) async fn until(
     state: &AppState,
     id: &str,
     what: &str,
@@ -147,7 +147,7 @@ fn two_rungs() -> Vec<Rung> {
     ]
 }
 
-fn the_set_is_served(server: &TestServer, slug: &str) {
+pub(crate) fn the_set_is_served(server: &TestServer, slug: &str) {
     let master = server
         .exec_inside(&format!("cat '{VIDEO_DIR}/{slug}/master.m3u8'"))
         .expect("master.m3u8 is not on the server");
@@ -333,7 +333,7 @@ fn digest(server: &TestServer, path: &str) -> String {
 
 /// Every file of the set `slug` on the server, by its bytes: the prepared rungs, the cut
 /// segments, their playlists and the master.
-fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
+pub(crate) fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
     let names = server
         .exec_inside(&format!(
             "cd '{VIDEO_DIR}' && ls -1 {slug}_*.mp4 && find '{slug}' -type f \\( -name '*.ts' -o -name '*.m3u8' \\) | sort"
@@ -348,7 +348,7 @@ fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
 }
 
 /// Add a film, give it the two measured rungs, start it, and wait until it stops.
-async fn build_one(state: &AppState, server_id: &str, film: &Path) -> VideoView {
+pub(crate) async fn build_one(state: &AppState, server_id: &str, film: &Path) -> VideoView {
     let added = video::video_add(
         state,
         server_id,
