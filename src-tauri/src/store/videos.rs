@@ -32,6 +32,8 @@ pub struct VideoRow {
     pub plan_json: Option<String>,
     pub rungs_json: Option<String>,
     pub problem_json: Option<String>,
+    /// A confirmed «Replace» on its way (T686): JSON `domain::video::Replacing`.
+    pub replacing_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -61,6 +63,7 @@ impl VideoRow {
             plan_json: None,
             rungs_json: None,
             problem_json: None,
+            replacing_json: None,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -93,6 +96,7 @@ fn row_to_video(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoRow> {
         plan_json: row.get("plan_json")?,
         rungs_json: row.get("rungs_json")?,
         problem_json: row.get("problem_json")?,
+        replacing_json: row.get("replacing")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
@@ -109,9 +113,9 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 (id, server_id, source_path, title, slug, audio_track, stage, state,
                  paused_by_person, start_requested, measured, own_medium, confirmed,
                  task_id, media_id, source_json, plan_json, rungs_json, problem_json,
-                 created_at, updated_at, remove_requested, seq)
+                 created_at, updated_at, remove_requested, replacing, seq)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                     ?17, ?18, ?19, ?20, ?21, ?22,
+                     ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                      (SELECT COALESCE(MAX(seq), 0) + 1 FROM videos))
              ON CONFLICT (id) DO UPDATE SET
                 title = excluded.title,
@@ -125,6 +129,7 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 own_medium = excluded.own_medium,
                 confirmed = excluded.confirmed,
                 remove_requested = excluded.remove_requested,
+                replacing = excluded.replacing,
                 task_id = excluded.task_id,
                 media_id = excluded.media_id,
                 source_json = excluded.source_json,
@@ -155,6 +160,7 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 v.created_at,
                 now_rfc3339(),
                 v.remove_requested as i64,
+                v.replacing_json,
             ],
         )?;
         Ok(())

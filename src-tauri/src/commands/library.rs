@@ -594,7 +594,7 @@ pub mod api {
     /// stale — and never kept in the cache: it changes with the videos, not with the server.
     /// The most telling video wins when there are several (one going over one stopped).
     pub fn with_set_work(state: &AppState, mut view: LibraryView) -> LibraryView {
-        use crate::domain::video::{set_work_of, SetWork, SetWorkState};
+        use crate::domain::video::{SetWork, SetWorkState};
         let videos = crate::store::videos::list(&state.db).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "the videos were not read for the library");
             Vec::new()
@@ -602,14 +602,16 @@ pub mod api {
         for media in &mut view.media {
             media.set_work = videos
                 .iter()
-                .filter(|v| {
-                    v.server_id == view.server_id && v.media_id.as_deref() == Some(&media.id)
-                })
+                // By the medium the video says it is building — its own, or (T686) the one a
+                // confirmed «Replace» is building into before the video holds it.
+                .filter(|v| v.server_id == view.server_id)
                 .filter_map(|v| {
-                    set_work_of(v.state, v.stage, v.start_requested).map(|s| SetWork {
-                        state: s,
-                        video_id: v.id.clone(),
-                    })
+                    crate::commands::video::set_work_of_row(v)
+                        .filter(|(m, _)| m == &media.id)
+                        .map(|(_, s)| SetWork {
+                            state: s,
+                            video_id: v.id.clone(),
+                        })
                 })
                 .min_by_key(|w| w.state != SetWorkState::Building);
         }

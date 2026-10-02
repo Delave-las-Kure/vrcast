@@ -462,8 +462,7 @@ impl Drop for Closing {
 /// video taken off the list.
 fn tell_library(state: &AppState, id: &str, row: Option<&VideoRow>) {
     let now = row.and_then(|r| {
-        let media = r.media_id.clone()?;
-        let work = video::set_work_of(r.state, r.stage, r.start_requested)?;
+        let (media, work) = set_work_of_row(r)?;
         Some((r.server_id.clone(), media, work))
     });
     let was = {
@@ -510,6 +509,27 @@ fn problem_of(row: &VideoRow) -> Option<VideoProblem> {
     row.problem_json
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
+}
+
+/// The confirmed «Replace» this video is carrying out, if any (T686).
+fn replacing_of(row: &VideoRow) -> Option<video::Replacing> {
+    row.replacing_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+}
+
+/// Which medium's set this video says something about, and what (T677) — `building` from
+/// the moment a «Replace» is confirmed until it is on its way (T686), whatever the video's
+/// own state reads meanwhile. Shared with the library (`library::api::with_set_work`).
+pub(crate) fn set_work_of_row(row: &VideoRow) -> Option<(String, video::SetWorkState)> {
+    if let Some(replacing) = replacing_of(row) {
+        if let Some(media) = replacing.media_id.or_else(|| row.media_id.clone()) {
+            return Some((media, video::SetWorkState::Building));
+        }
+    }
+    let media = row.media_id.clone()?;
+    let work = video::set_work_of(row.state, row.stage, row.start_requested)?;
+    Some((media, work))
 }
 
 /// A video for a medium, added stopped on a set of the medium's name that nobody claims
@@ -2187,12 +2207,75 @@ pub mod api {
         if !lock(&state.videos.inner.starting).insert(id.to_owned()) {
             return Err(not_now(&row));
         }
-        let cleared = clear_old_set(state, &row, confirmed, into_medium).await;
+        // **Kept before anything is removed** (T686, QA-25 №7): what was confirmed, so that a
+        // restart between the removal and the build carries the replace through rather than
+        // leaving the video on its old problem with the old set already gone.
+        let noted = change(state, id, |r| {
+            r.replacing_json = serde_json::to_string(&video::Replacing {
+                phase: video::ReplacePhase::Deleting,
+                into_medium,
+                confirmed,
+                media_id: r.media_id.clone(),
+            })
+            .ok();
+            Ok(())
+        });
+        if let Err(e) = noted {
+            lock(&state.videos.inner.starting).remove(id);
+            return Err(e);
+        }
+        let outcome = replace_through(state, id, confirmed, into_medium).await;
+        lock(&state.videos.inner.starting).remove(id);
+        if outcome? {
+            begin_planning(state, id);
+        } else {
+            start_going(state, id);
+        }
+        video_get(state, id)
+    }
+
+    /// The rest of a confirmed «Replace», from wherever it is (T686): the old set removed
+    /// (again — a repeat removes nothing new and asks the same questions), then the video set
+    /// going. `Ok(true)` when its plan has to be made first. On a refusal the note is struck
+    /// out and the video stays on its problem, «Replace» still there.
+    async fn replace_through(
+        state: &AppState,
+        id: &str,
+        confirmed: bool,
+        into_medium: bool,
+    ) -> Result<bool> {
+        let row = load(state, id)?;
+        let may = |r: &VideoRow| {
+            video::may_replace(
+                r.state,
+                r.stage,
+                r.media_id.is_some(),
+                problem_of(r).as_ref().map(|p| &p.error),
+            )
+        };
+        let building = replacing_of(&row).is_some_and(|r| r.phase == video::ReplacePhase::Building);
+        let cleared = if building {
+            Ok(replacing_of(&row).and_then(|r| r.media_id))
+        } else {
+            clear_old_set(state, &row, confirmed, into_medium).await
+        };
+        // The old set is gone: from here a restart only builds (T686).
+        if let Ok(media_id) = &cleared {
+            let _ = change(state, id, |r| {
+                if let Some(mut replacing) = replacing_of(r) {
+                    replacing.phase = video::ReplacePhase::Building;
+                    replacing.media_id = media_id.clone();
+                    r.replacing_json = serde_json::to_string(&replacing).ok();
+                }
+                Ok(())
+            });
+        }
         let outcome = cleared.and_then(|media_id| {
             change(state, id, |r| {
                 if !may(r) {
                     return Err(not_now(r));
                 }
+                r.replacing_json = None;
                 r.media_id = media_id.clone();
                 // The set this medium had is gone, so nobody can be watching it: the build
                 // that makes it again needs no «anyway» against viewers (T571), as for a
@@ -2211,13 +2294,56 @@ pub mod api {
                 }
             })
         });
-        lock(&state.videos.inner.starting).remove(id);
-        if outcome? {
-            begin_planning(state, id);
-        } else {
-            start_going(state, id);
+        if outcome.is_err() {
+            let _ = change(state, id, |r| {
+                r.replacing_json = None;
+                Ok(())
+            });
         }
-        video_get(state, id)
+        outcome
+    }
+
+    /// Carry a confirmed «Replace» through after a restart (T686).
+    pub(super) fn replace_after_restart(state: &AppState, row: &VideoRow) {
+        let Some(replacing) = replacing_of(row) else {
+            return;
+        };
+        if !lock(&state.videos.inner.starting).insert(row.id.clone()) {
+            return;
+        }
+        let state = state.clone();
+        let id = row.id.clone();
+        spawn(async move {
+            // A server that does not answer yet is asked again — the replace was confirmed,
+            // and the old set may be half gone; a refusal (busy, watched, claimed, gone) puts
+            // the video back on its problem with «Replace» to press again.
+            let mut pause = Duration::from_secs(2);
+            let outcome = loop {
+                let outcome =
+                    replace_through(&state, &id, replacing.confirmed, replacing.into_medium).await;
+                match &outcome {
+                    Err(e)
+                        if e.code == ErrorCode::SshUnreachable
+                            && load(&state, &id).is_ok_and(|r| r.replacing_json.is_some()) =>
+                    {
+                        tokio::time::sleep(pause).await;
+                        pause = (pause * 2).min(Duration::from_secs(60));
+                    }
+                    _ => break outcome,
+                }
+            };
+            lock(&state.videos.inner.starting).remove(&id);
+            match outcome {
+                Ok(true) => begin_planning(&state, &id),
+                Ok(false) => start_going(&state, &id),
+                Err(e) => {
+                    // The video is still on the problem it was replacing, «Replace» on it:
+                    // pressing it asks again, with whatever the server now says.
+                    tracing::warn!(video = %id, error = %e, "the replace could not be carried through");
+                    emit(&state, &id);
+                }
+            }
+        });
     }
 
     /// Remove what a set of this video's name has on the server; the medium that holds the
@@ -2300,6 +2426,17 @@ pub mod api {
                         .with_cause(format!("connections={connections}")));
                 }
             }
+            // T686: the medium whose set is about to go is named in the note before a byte
+            // is removed — the library reads it as building from here, not as missing.
+            if let Some(media) = &media_id {
+                let _ = change(state, &row.id, |r| {
+                    if let Some(mut replacing) = replacing_of(r) {
+                        replacing.media_id = Some(media.clone());
+                        r.replacing_json = serde_json::to_string(&replacing).ok();
+                    }
+                    Ok(())
+                });
+            }
             library::remove_entries(&conn, &profile.video_dir, old.tops(&row.slug).iter()).await?;
             tracing::info!(
                 video = %row.id,
@@ -2370,6 +2507,12 @@ pub mod api {
         ensure_watching(state);
         let mut carried = 0;
         for row in rows::list(&state.db).map_err(storage)? {
+            // A confirmed «Replace» the last run did not finish (T686) is carried through,
+            // whatever the video's state reads: it is still on the problem it was replacing.
+            if row.replacing_json.is_some() {
+                replace_after_restart(state, &row);
+                continue;
+            }
             match video::after_restart(row.state) {
                 video::AfterRestart::PlanAgain => begin_planning(state, &row.id),
                 video::AfterRestart::CarryOn => {

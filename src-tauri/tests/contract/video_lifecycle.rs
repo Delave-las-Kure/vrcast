@@ -6,7 +6,6 @@
 //! measurement and the build are: the real engine, the real store and the real watcher of the
 //! video commands, without a film or a server.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -15,7 +14,6 @@ use vrcast_studio_lib::commands::video::{api as video, VideoView};
 use vrcast_studio_lib::commands::AppState;
 use vrcast_studio_lib::domain::video::{after_restart, AfterRestart, VideoStage, VideoState};
 use vrcast_studio_lib::domain::wording::DetailCode;
-use vrcast_studio_lib::store::secrets::InMemorySecretStore;
 use vrcast_studio_lib::store::videos::{self as rows, VideoRow};
 use vrcast_studio_lib::tasks::state::{TaskKind, TaskState};
 use vrcast_studio_lib::tasks::store::Batch;
@@ -99,7 +97,8 @@ async fn build(
 
 /// The same database, opened by a new run of the application.
 fn restarted(state: &AppState) -> AppState {
-    AppState::with_db(state.db.clone(), Arc::new(InMemorySecretStore::new())).unwrap()
+    // The same store of secrets: it is the operating system's, and outlives the run.
+    AppState::with_db(state.db.clone(), state.secrets.clone()).unwrap()
 }
 
 // ---------- T685: pause and carry on, from the card or from «Tasks» ----------
@@ -449,4 +448,146 @@ async fn work_another_copy_is_running_is_left_alone_after_a_restart() {
         TaskState::Running,
         "another copy's work was closed"
     );
+}
+
+// ---------- T686: a confirmed «Replace» kept across a restart ----------
+
+/// A video stopped on a taken name, as `next_task` leaves it, with a plan, and — when
+/// `phase` — a «Replace» confirmed and carried as far as `phase` by a run that was killed.
+fn replacing(state: &AppState, id: &str, server: &str, phase: Option<&str>) {
+    use vrcast_studio_lib::commands::error::{AppError, ErrorCode};
+    let mut row = VideoRow::new(id, server, "C:/nowhere/film.mp4", "Film", id);
+    row.stage = VideoStage::Planned;
+    row.state = VideoState::Problem;
+    row.problem_json = Some(
+        serde_json::json!({
+            "error": AppError::new(ErrorCode::SlugTaken),
+            "actions": ["replace", "rename"],
+        })
+        .to_string(),
+    );
+    if let Some(phase) = phase {
+        row.replacing_json = Some(
+            serde_json::json!({
+                "phase": phase,
+                "into_medium": false,
+                "confirmed": false,
+                "media_id": "m_taken",
+            })
+            .to_string(),
+        );
+    }
+    rows::save(&state.db, &row).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replace_killed_after_the_old_set_went_carries_on_building_after_a_restart() {
+    let state = state();
+    let server = unreachable_server(&state);
+    replacing(&state, "replace-built", &server, Some("building"));
+
+    let next = restarted(&state);
+    video::restore_videos(&next).unwrap();
+    // Not left on its old problem: the replace goes on — the medium it was building into is
+    // the video's now, and the build is started (it then stops on the server not answering,
+    // past the plan, never back on «name taken»).
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let v = video::video_get(&next, "replace-built").unwrap();
+        let row = rows::get(&next.db, "replace-built").unwrap().unwrap();
+        if row.replacing_json.is_none() && v.media_id.as_deref() == Some("m_taken") {
+            assert!(v.start_requested);
+            assert!(!v.problem.as_ref().is_some_and(
+                |p| p.error.code == vrcast_studio_lib::commands::error::ErrorCode::SlugTaken
+            ));
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the replace was not carried on: {:?} {:?}",
+            v.state,
+            row.replacing_json
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replace_killed_while_removing_is_kept_and_the_library_says_building() {
+    use vrcast_studio_lib::commands::library::{api as library, LibraryView, MediaView};
+    use vrcast_studio_lib::domain::video::SetWorkState;
+    use vrcast_studio_lib::store::library_cache;
+
+    let state = state();
+    let server = unreachable_server(&state);
+    replacing(&state, "replace-removing", &server, Some("deleting"));
+    let medium = MediaView {
+        id: String::from("m_taken"),
+        title: String::from("Film"),
+        slug: String::from("replace-removing"),
+        files: Vec::new(),
+        ladders: Vec::new(),
+        set_files: Vec::new(),
+        total_bytes: 0,
+        created_at: String::from("2026-10-02T00:00:00Z"),
+        set_work: None,
+    };
+    library_cache::save(
+        &state.db,
+        &server,
+        &LibraryView {
+            server_id: server.clone(),
+            media: vec![medium],
+            unrecognized: Vec::new(),
+            disk: None,
+            stale: false,
+        },
+    )
+    .unwrap();
+
+    let next = restarted(&state);
+    video::restore_videos(&next).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The server does not answer: the confirmed replace is kept — asked again later, never
+    // dropped — and the medium whose set it is removing reads as building, not missing.
+    let row = rows::get(&next.db, "replace-removing").unwrap().unwrap();
+    assert!(
+        row.replacing_json.is_some(),
+        "the confirmed replace was forgotten"
+    );
+    let view = library::library_list_known(&next, &server).await.unwrap();
+    let work = view.media[0]
+        .set_work
+        .clone()
+        .expect("the set reads as missing");
+    assert_eq!(work.state, SetWorkState::Building);
+    assert_eq!(work.video_id, "replace-removing");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replace_the_server_refuses_leaves_the_video_on_its_problem_with_replace() {
+    let state = state();
+    // No fingerprint confirmed: the gate refuses at once, not «unreachable».
+    let mut input = valid_input("Refusing");
+    input.host = String::from("127.0.0.1");
+    input.port = 1;
+    let server = servers::server_add(&state, input, "in-memory-only").unwrap();
+    replacing(&state, "replace-refused", &server, None);
+
+    let err = video::video_replace(&state, "replace-refused", false)
+        .await
+        .expect_err("replaced without the server");
+    assert_ne!(
+        err.code,
+        vrcast_studio_lib::commands::error::ErrorCode::VideoNotNow
+    );
+    let row = rows::get(&state.db, "replace-refused").unwrap().unwrap();
+    assert!(row.replacing_json.is_none(), "a refused replace was kept");
+    let v = video::video_get(&state, "replace-refused").unwrap();
+    assert_eq!(v.state, VideoState::Problem);
+    assert!(v
+        .problem
+        .unwrap()
+        .actions
+        .contains(&vrcast_studio_lib::domain::video::VideoAction::Replace));
 }

@@ -1,0 +1,13 @@
+-- QA-25 №7 — «Replace» kept across a restart (T686).
+--
+-- «Replace» removes a set from the server and then builds it again. The removal is the one
+-- step that cannot be taken back, and the intent used to live only in memory: the
+-- application closed between the removal and the build left the video on its old problem,
+-- with the old set already gone and nothing to say a new one was coming.
+--
+-- `replacing` (JSON `domain::video::Replacing`): written when the person confirms, before
+-- anything is removed — the phase (`deleting`, then `building`), whether it is a set built
+-- into a medium (T677), «anyway», and the medium once known — and cleared once the build is
+-- on its way. A start finding it carries the replace through, and the library shows the
+-- medium's set as building the whole time.
+ALTER TABLE videos ADD COLUMN replacing TEXT;

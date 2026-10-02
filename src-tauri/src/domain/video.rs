@@ -151,6 +151,31 @@ pub struct SetWork {
     pub video_id: String,
 }
 
+/// Where a confirmed «Replace» is (T686, QA-25 №7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplacePhase {
+    /// Confirmed; the old set is being removed — or may have been, in part.
+    Deleting,
+    /// The old set is gone; what is left is building the new one.
+    Building,
+}
+
+/// A «Replace» a person confirmed, kept from before the first thing is removed until the
+/// build is on its way (T686). A restart in between carries it through rather than leaving a
+/// video on its old problem with the old set already gone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Replacing {
+    pub phase: ReplacePhase,
+    /// A video for a medium of the library waiting on a set nobody owns (T677).
+    pub into_medium: bool,
+    /// «Replace anyway» — past viewers on the server.
+    pub confirmed: bool,
+    /// The medium the set is built into, once known: the library shows its set as building
+    /// from then on, not as missing.
+    pub media_id: Option<String>,
+}
+
 /// What a video says about its medium's set, from its state alone (T677).
 ///
 /// `None` while nothing of the set has been begun: a plan waiting for «Start», a video
