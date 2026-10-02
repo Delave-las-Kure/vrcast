@@ -1105,3 +1105,106 @@ async fn an_edited_rung_is_saved_measured_on_start_and_the_build_follows() {
         "measured again with nothing missing"
     );
 }
+
+// ---------- a plan's trial encodes wait for a place among the heavy work (T688) ----------
+
+/// QA-25 №9: with one heavy task at a time allowed and that place taken, two added videos
+/// both ran their plan's trial encodes beside it. Now they wait: none of them encodes while
+/// the place is taken, the card says «in the queue», and once the place is free they go one
+/// at a time. «Remove» on a video still waiting ends its wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plans_encode_their_trial_pieces_within_the_limit_of_heavy_work() {
+    use vrcast_studio_lib::tasks::state::{Lane, LaneLimits, TaskKind, TaskState};
+
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let paths: Vec<String> = (0..3)
+        .map(|i| films.film(&format!("plan {i}.mp4"), true).unwrap())
+        .collect();
+    let state = state();
+    state.tasks.set_limits(LaneLimits {
+        compute: 1,
+        ..LaneLimits::default()
+    });
+    let (began_tx, began_rx) = tokio::sync::oneshot::channel();
+    let blocker = state
+        .tasks
+        .submit(TaskKind::MeasureQuality, None, move |ctx| async move {
+            let _ = began_tx.send(());
+            ctx.cancel_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    began_rx.await.unwrap();
+
+    let server = server(&state);
+    let added = video::video_add(&state, &server, &paths, None)
+        .await
+        .unwrap();
+    assert_eq!(added.added.len(), 3, "{:?}", added.refused);
+    let ids: Vec<String> = added.added.iter().map(|v| v.id.clone()).collect();
+
+    // While the only place is taken, every plan waits — said on the card — and nothing of
+    // theirs takes a place.
+    for id in &ids {
+        until(
+            &state,
+            id,
+            "waiting for a place",
+            Duration::from_secs(30),
+            |v| {
+                v.progress
+                    .as_ref()
+                    .is_some_and(|p| p.task_state == TaskState::Queued)
+            },
+        )
+        .await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    for id in &ids {
+        let v = video::video_get(&state, id).unwrap();
+        assert_eq!(v.state, VideoState::Planning, "a plan went past the limit");
+    }
+    assert_eq!(state.tasks.held_in_lane(Lane::Compute), 0);
+
+    // «Remove» on one that waits: it is gone, and so is its wait.
+    video::video_remove(&state, &ids[2]).unwrap();
+
+    // The place is let go of: the other two go, one at a time.
+    let watch = {
+        let engine = state.tasks.clone();
+        tokio::spawn(async move {
+            let mut most = 0usize;
+            for _ in 0..1200 {
+                let now =
+                    engine.held_in_lane(Lane::Compute) + engine.running_in_lane(Lane::Compute);
+                most = most.max(now);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            most
+        })
+    };
+    state.tasks.cancel(&blocker).unwrap();
+    for id in &ids[..2] {
+        let ready = until(&state, id, "the plan", Duration::from_secs(120), |v| {
+            v.state != VideoState::Planning
+        })
+        .await;
+        assert_eq!(ready.state, VideoState::Ready, "{:?}", ready.problem);
+        assert!(ready.progress.is_none());
+    }
+    let most = watch.await.unwrap();
+    assert!(
+        most <= 1,
+        "{most} heavy things at once under a limit of one"
+    );
+    assert_eq!(
+        state.tasks.held_in_lane(Lane::Compute),
+        0,
+        "a place was never let go of"
+    );
+    assert!(video::video_get(&state, &ids[2]).is_err());
+}

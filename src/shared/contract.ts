@@ -1769,7 +1769,8 @@ export interface VideoView {
   start_requested: boolean;
   source: SourceFile | null;
   plan: VideoPlan | null;
-  /** Present while `working`, `paused` or `cancelling`. */
+  /** Present while `working`, `paused` or `cancelling` — and while `planning` waits for a
+   *  place for its trial encodes (`task_state: "queued"`, T688). */
   progress: VideoProgress | null;
   task_id: string | null;
   media_id: string | null;

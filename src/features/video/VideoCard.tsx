@@ -170,6 +170,8 @@ export function VideoCard({
       {planShown && video.state === "planning" && !video.plan && (
         <p className="muted" role="status">
           {video.start_requested ? w.startsAfterPlan : w.planning}
+          {/* T688 — waiting for a place for its trial encodes among the heavy work. */}
+          {video.progress?.task_state === "queued" && ` · ${w.queued}`}
         </p>
       )}
       {planShown && video.plan && <Plan plan={video.plan} slug={video.slug} t={t} lang={lang} />}

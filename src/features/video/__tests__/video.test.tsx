@@ -389,6 +389,32 @@ describe("adding videos", () => {
     expect(refused).toHaveTextContent(ru.details.VIDEO_ALREADY_LISTED);
   });
 
+  it("a plan waiting for a place among the heavy work says it is queued (T688)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({
+        id: "a",
+        state: "planning",
+        plan: null,
+        progress: {
+          task_state: "queued",
+          progress: 0,
+          speed_bps: null,
+          eta_s: null,
+          rung: null,
+          rungs: 0,
+        },
+      }),
+      video({ id: "b", state: "planning", plan: null }),
+    ]);
+    show();
+    const a = await card("a");
+    expect(a.getByRole("status")).toHaveTextContent(
+      `${ru.ui.video.planning} · ${ru.ui.video.queued}`,
+    );
+    expect((await card("b")).getByRole("status")).toHaveTextContent(ru.ui.video.planning);
+    expect((await card("b")).getByRole("status")).not.toHaveTextContent(ru.ui.video.queued);
+  });
+
   it("opens the file dialog by itself when the library sent somebody here to add", async () => {
     mockOpen.mockResolvedValue(["F:/films/a.mkv"]);
     mockVideoAdd.mockResolvedValue({ added: [video({ id: "a" })], refused: [] });

@@ -295,6 +295,30 @@ pub mod api {
         request: &LadderRequest,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<LadderPreview> {
+        plan_with(state, request, cancel, None).await
+    }
+
+    /// The same, with the probe's trial encodes **under the limit of heavy work** (T688, QA-25
+    /// №9): a place in the compute lane is held for them, as a measurement or a preparation
+    /// holds one, so planning several videos at once encodes no more pieces at a time than
+    /// the limit allows. `waiting(true)` is said while the place is waited for, `waiting(false)`
+    /// once it is had. A film already measured encodes nothing and waits for nothing. A
+    /// `cancel` raised while waiting or probing ends it `TASK_CANCELLED`.
+    pub(crate) async fn ladder_plan_under_limit(
+        state: &super::super::AppState,
+        request: &LadderRequest,
+        cancel: &tokio_util::sync::CancellationToken,
+        waiting: &(dyn Fn(bool) + Send + Sync),
+    ) -> Result<LadderPreview> {
+        plan_with(state, request, Some(cancel), Some(waiting)).await
+    }
+
+    async fn plan_with(
+        state: &super::super::AppState,
+        request: &LadderRequest,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+        under_limit: Option<&(dyn Fn(bool) + Send + Sync)>,
+    ) -> Result<LadderPreview> {
         let probed = super::super::api::source_probe(&request.path).await?;
         let source = facts_of(&probed, request.native_height);
 
@@ -305,6 +329,25 @@ pub mod api {
         }
 
         let (encoder, mut notices) = pick_encoder(request.prefer_hardware).await?;
+        let _place = match under_limit {
+            None => None,
+            Some(waiting) => match state
+                .tasks
+                .try_hold_lane(crate::tasks::state::Lane::Compute)
+            {
+                Some(hold) => Some(hold),
+                None => {
+                    waiting(true);
+                    let never = tokio_util::sync::CancellationToken::new();
+                    let held = state
+                        .tasks
+                        .hold_lane(crate::tasks::state::Lane::Compute, cancel.unwrap_or(&never))
+                        .await;
+                    waiting(false);
+                    Some(held.ok_or_else(|| AppError::new(ErrorCode::TaskCancelled))?)
+                }
+            },
+        };
         let probe = probe_complexity::probe_until(
             std::path::Path::new(&request.path),
             probed.duration_s,

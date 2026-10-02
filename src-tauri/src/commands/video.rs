@@ -540,8 +540,10 @@ fn view_of(state: &AppState, row: &VideoRow) -> VideoView {
     };
     let progress = if matches!(
         row.state,
-        VideoState::Working | VideoState::Paused | VideoState::Cancelling
+        VideoState::Working | VideoState::Paused | VideoState::Cancelling | VideoState::Planning
     ) {
+        // While planning, only the wait for a place for the plan's trial encodes (T688):
+        // `task_state: queued`, nothing else.
         lock(&state.videos.inner.live)
             .get(&row.id)
             .map(|l| l.progress.clone())
@@ -1069,16 +1071,65 @@ fn begin_planning(state: &AppState, id: &str) {
     });
 }
 
+/// Say on the card whether its plan waits for a place for its trial encodes (T688): a
+/// `queued` progress while it waits, none once it has the place.
+fn plan_waiting(state: &AppState, id: &str, queued: bool) {
+    let changed = {
+        let mut live = lock(&state.videos.inner.live);
+        if queued {
+            live.insert(
+                id.to_owned(),
+                Live {
+                    code: None,
+                    since: Instant::now(),
+                    from: 0.0,
+                    progress: VideoProgress {
+                        task_state: TaskState::Queued,
+                        progress: 0.0,
+                        speed_bps: None,
+                        eta_s: None,
+                        rung: None,
+                        rungs: 0,
+                    },
+                },
+            );
+            true
+        } else {
+            match live.get(id) {
+                Some(l) if l.code.is_none() && l.progress.task_state == TaskState::Queued => {
+                    live.remove(id);
+                    true
+                }
+                _ => false,
+            }
+        }
+    };
+    if changed {
+        emit(state, id);
+    }
+}
+
 async fn make_basis(state: &AppState, id: &str, cancel: &CancellationToken) -> Result<PlanBasis> {
     let row = load(state, id)?;
     let profile = super::library::api::profile_of(state, &row.server_id)?;
 
-    let preview = super::ladder::api::ladder_plan_until(
+    // **The trial encodes wait for a place among the heavy work** (T688, QA-25 №9): with a
+    // limit of one, ten videos added at once encode one plan's pieces at a time, and the card
+    // says «in the queue» while it waits. «Remove» cancels the wait and the encodes.
+    let waiting = {
+        let state = state.clone();
+        let id = id.to_owned();
+        move |queued: bool| plan_waiting(&state, &id, queued)
+    };
+    let preview = super::ladder::api::ladder_plan_under_limit(
         state,
         &ladder_request(&row.source_path),
-        Some(cancel),
+        cancel,
+        &waiting,
     )
-    .await?;
+    .await;
+    plan_waiting(state, id, false);
+    let preview = preview?;
     let from = match preview.from {
         super::ladder::LadderSource::Measured => PlanSource::Measured,
         super::ladder::LadderSource::Borrowed => PlanSource::Borrowed,
