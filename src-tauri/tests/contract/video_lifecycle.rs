@@ -150,7 +150,7 @@ async fn carrying_on_from_tasks_after_a_pause_on_the_card_carries_on() {
     })
     .await;
     // And it stays going: the watcher does not pause it back.
-    tx.send((0.5, DetailCode::StageConverting)).unwrap();
+    tx.send((0.5, DetailCode::StageSendingVariant)).unwrap();
     until(&state, &row.id, "the build reporting again", |v| {
         v.progress
             .as_ref()
@@ -600,9 +600,12 @@ async fn a_video_s_rev_grows_with_its_progress_and_a_later_view_never_has_a_lowe
     let row = going(&state, "rev");
     let (task, tx) = build(&state, &row).await;
     let at_10 = video::video_get(&state, &row.id).unwrap();
+    // Same stage as the 10% before it, so the row is not rewritten for the stage either; the bar
+    // of an encode is scaled (`bar_of`, the encode and its check share one bar).
     tx.send((0.7, DetailCode::StageConverting)).unwrap();
+    let at_70_bar = vrcast_studio_lib::domain::video::bar_of(DetailCode::StageConverting, 0.7);
     until(&state, &row.id, "70%", |v| {
-        v.progress.as_ref().is_some_and(|p| p.progress == 0.7)
+        v.progress.as_ref().is_some_and(|p| p.progress == at_70_bar)
     })
     .await;
     let at_70 = video::video_get(&state, &row.id).unwrap();
@@ -626,7 +629,7 @@ async fn every_change_goes_out_with_a_higher_rev_than_the_one_before() {
     let mut events = state.subscribe();
     let (task, tx) = build(&state, &row).await;
     for p in [0.2, 0.4, 0.6] {
-        tx.send((p, DetailCode::StageConverting)).unwrap();
+        tx.send((p, DetailCode::StageSendingVariant)).unwrap();
         until(&state, &row.id, "progress", |v| {
             v.progress.as_ref().is_some_and(|x| x.progress == p)
         })
