@@ -801,3 +801,41 @@ fn a_rung_is_done_only_when_the_sets_record_says_it_made_it_from_this_source() {
     );
     assert_eq!(parse_rung_facts(""), (None, None));
 }
+
+// ---------- a stage's own progress, not the whole build's (T689, QA-25 №10) ----------
+
+#[test]
+fn the_cutting_and_the_check_begin_at_their_own_beginning() {
+    use vrcast_studio_lib::domain::ladder_build::share_of;
+    // The cutting goes rung by rung: four rungs, none cut yet, is nought — not 4/5 of the set.
+    assert_eq!(share_of(0, 4), 0.0);
+    assert_eq!(share_of(1, 4), 0.25);
+    assert_eq!(share_of(4, 4), 1.0);
+    assert_eq!(share_of(5, 4), 1.0);
+    assert_eq!(share_of(0, 0), 1.0);
+
+    // And the build says so: no stage of the cutting or the check is reported from the share
+    // of the whole set, nor from a fixed 0.99.
+    let text = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tasks/ladder_build.rs"),
+    )
+    .unwrap();
+    let code: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !code.contains("0.99, DetailCode::StageVerifyingLadder"),
+        "the check still begins at 99%"
+    );
+    assert!(
+        code.contains("report_important(0.0, DetailCode::StageVerifyingLadder)"),
+        "the check does not begin at nought"
+    );
+    assert!(
+        code.contains("report_important(0.0, DetailCode::StageCuttingSegments)")
+            && code.contains("share_of(p.cut.len(), work.len())"),
+        "the cutting is not reported by the rungs it has cut"
+    );
+}

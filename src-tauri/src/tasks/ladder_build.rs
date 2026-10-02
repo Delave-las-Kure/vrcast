@@ -262,10 +262,12 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     }
 
     // The cutting resumes by itself: a variant already cut whole is left alone.
-    ctx.report(
-        work.len() as f64 / (work.len() as f64 + 1.0),
-        DetailCode::StageCuttingSegments,
-    );
+    //
+    // **The share of the cutting, not of the whole build** (T689, QA-25 №10): it used to begin
+    // at `n / (n + 1)` of the set — 80% on a fresh cutting of four rungs — and stand there. It
+    // is the rungs cut out of the rungs to cut, said as each one is.
+    ctx.report_important(0.0, DetailCode::StageCuttingSegments);
+    let cut_share = std::sync::atomic::AtomicU64::new(0f64.to_bits());
     let to_cut: Vec<ToCut> = work
         .iter()
         .map(|w| ToCut {
@@ -280,16 +282,21 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         base: job.slug,
         variants: &to_cut,
     };
-    let facts = match cutting.run(ctx, |_| {}).await {
+    let facts = match cutting
+        .run(ctx, |p| {
+            let share = ladder_build::share_of(p.cut.len(), work.len());
+            cut_share.store(share.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            ctx.report_important(share, DetailCode::StageCuttingSegments);
+        })
+        .await
+    {
         Ok(facts) => facts,
         Err(e) => {
             if matches!(e, CuttingError::StopUnconfirmed(_)) {
                 // Said out loud while it lasts: a person who pressed "stop" and sees the task
                 // still running is owed the reason, not a frozen bar.
-                ctx.report_important(
-                    work.len() as f64 / (work.len() as f64 + 1.0),
-                    DetailCode::StageStopUnconfirmed,
-                );
+                let share = f64::from_bits(cut_share.load(std::sync::atomic::Ordering::Relaxed));
+                ctx.report_important(share, DetailCode::StageStopUnconfirmed);
             }
             return Err(from_cutting(e));
         }
@@ -334,7 +341,11 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     cutting.tidy_up().await?;
 
     // And the only question that decides whether this was a success.
-    ctx.report_important(0.99, DetailCode::StageVerifyingLadder);
+    //
+    // **Begun at nought, not at 0.99** (T689): the check asks every rung over the viewers'
+    // address and says nothing until it has the answer, so the screen shows it without a
+    // number rather than as nearly done.
+    ctx.report_important(0.0, DetailCode::StageVerifyingLadder);
     let verdict = hls_verify::verify(job.master_url, work.len())
         .await
         .map_err(|e| BuildError::Unreachable(e.to_string()))?;

@@ -90,6 +90,16 @@ pub fn rung_mbit_of(slug: &str, name: &str) -> Option<u64> {
     mbit.parse().ok()
 }
 
+/// How far a stage that goes rung by rung has got: `done` of `of`, from 0 to 1 (T689). A
+/// stage with nothing to do is done.
+pub fn share_of(done: usize, of: usize) -> f64 {
+    if of == 0 {
+        1.0
+    } else {
+        (done as f64 / of as f64).clamp(0.0, 1.0)
+    }
+}
+
 /// The name of the set's own record of its prepared files, inside `{slug}/` (T677).
 ///
 /// Written only when a rung took a name other than its first, before anything is encoded,

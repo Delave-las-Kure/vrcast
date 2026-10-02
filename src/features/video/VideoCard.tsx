@@ -328,6 +328,10 @@ function Plan({
   const w = t.ui.video;
   const seconds = plan.measure_s + (plan.encode_s ?? 0);
   const minutes = seconds > 0 ? Math.max(1, Math.round(seconds / 60)) : null;
+  // T689 — what the time covers (measuring and encoding; not sending, cutting or checking,
+  // which nothing here can reckon), and whether it is a guess of the formula or the model.
+  const covers = plan.measure_s > 0 ? w.measureAndEncodeTime : w.encodeTime;
+  const preliminary = plan.from === "formula" || plan.encode_estimate === "model";
   const folded = [...plan.objections, ...plan.notices];
 
   return (
@@ -345,7 +349,12 @@ function Plan({
       </ul>
       <p className="video__facts muted">
         <span>{fill(w.onServer, { bytes: plan.server_bytes }, t, lang)}</span>
-        {minutes !== null && <span>{fill(w.aboutMinutes, { n: minutes }, t, lang)}</span>}
+        {minutes !== null && (
+          <span>
+            {fill(w.aboutMinutes, { what: covers, n: minutes }, t, lang)}
+            {preliminary && ` · ${w.preliminary}`}
+          </span>
+        )}
       </p>
       {plan.server_space.state === "short" && (
         <p className="video__warn">
@@ -387,6 +396,9 @@ function StageBar({ video, t, lang }: { video: VideoView; t: Catalogue; lang: La
       ? STAGES.length
       : Math.max(0, STAGES.indexOf(video.stage as (typeof STAGES)[number]));
   const p = video.progress;
+  // T689 — a stage that cannot say how far it has got (the check asks every rung and answers
+  // once) is shown without a figure, not as nearly done or as nothing done.
+  const known = !(video.stage === "verifying");
 
   const facts: string[] = [];
   if (video.state === "cancelling") facts.push(w.stopping);
@@ -394,7 +406,7 @@ function StageBar({ video, t, lang }: { video: VideoView; t: Catalogue; lang: La
   else if (video.state === "paused") facts.push(w.paused);
   else if (p?.task_state === "queued") facts.push(w.queued);
   if (p && video.state !== "done" && video.state !== "cancelled") {
-    if (p.task_state !== "queued") facts.push(`${Math.round(p.progress * 100)}%`);
+    if (p.task_state !== "queued" && known) facts.push(`${Math.round(p.progress * 100)}%`);
     if (p.speed_bps) facts.push(fill(w.speed, { bytes: p.speed_bps }, t, lang));
     if (p.eta_s) facts.push(fill(w.left, { time: formatDuration(p.eta_s) }, t, lang));
     if (p.rung !== null) facts.push(fill(w.rungOf, { k: p.rung, n: p.rungs }, t, lang));
@@ -423,12 +435,13 @@ function StageBar({ video, t, lang }: { video: VideoView; t: Catalogue; lang: La
         <div
           className="progress"
           role="progressbar"
-          aria-valuenow={Math.round(p.progress * 100)}
+          aria-valuenow={known ? Math.round(p.progress * 100) : undefined}
           aria-valuemin={0}
           aria-valuemax={100}
+          aria-busy={known ? undefined : true}
           aria-label={w.stages[STAGES[Math.min(at, STAGES.length - 1)]]}
         >
-          <div className="progress__fill" style={{ width: `${p.progress * 100}%` }} />
+          {known && <div className="progress__fill" style={{ width: `${p.progress * 100}%` }} />}
         </div>
       )}
       {facts.length > 0 && (

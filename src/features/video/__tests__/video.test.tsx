@@ -492,6 +492,29 @@ describe("adding videos", () => {
 });
 
 describe("the plan before Start", () => {
+  it("says what the time covers and when it is only an estimate (T689)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({ id: "a" }),
+      video({
+        id: "b",
+        plan: plan({
+          from: "formula",
+          needs_measuring: true,
+          measure_s: 600,
+          encode_s: 1200,
+          encode_estimate: "model",
+        }),
+      }),
+    ]);
+    show();
+    const measured = (await card("a")).getByTestId("plan");
+    expect(measured).toHaveTextContent(`${ru.ui.video.encodeTime} ≈ 25 мин`);
+    expect(measured).not.toHaveTextContent(ru.ui.video.preliminary);
+    const guessed = (await card("b")).getByTestId("plan");
+    expect(guessed).toHaveTextContent(`${ru.ui.video.measureAndEncodeTime} ≈ 30 мин`);
+    expect(guessed).toHaveTextContent(ru.ui.video.preliminary);
+  });
+
   it("lists the rungs, the size on the server and the time", async () => {
     mockVideoList.mockResolvedValue([video()]);
     show();
@@ -582,6 +605,31 @@ describe("the stages after Start", () => {
     expect(facts).toHaveTextContent("42%");
     expect(facts).toHaveTextContent("осталось 10:00");
     expect(facts).toHaveTextContent("ступень 2 из 3");
+  });
+
+  it("the check shows no made-up number; the cutting shows its own share (T689)", async () => {
+    const at = (stage: VideoView["stage"], progress: number) =>
+      working({
+        id: stage,
+        stage,
+        progress: {
+          task_state: "running",
+          progress,
+          speed_bps: null,
+          eta_s: null,
+          rung: null,
+          rungs: 4,
+        },
+      });
+    mockVideoList.mockResolvedValue([at("verifying", 0), at("cutting", 0.25)]);
+    show();
+    const checking = await card("verifying");
+    // No figure for a stage that cannot say how far it is: a bar without a value.
+    expect(checking.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    expect(checking.queryByTestId("stage-facts")?.textContent ?? "").not.toContain("%");
+    const cutting = await card("cutting");
+    expect(cutting.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
+    expect(cutting.getByTestId("stage-facts")).toHaveTextContent("25%");
   });
 
   it("offers pause while working and resume while paused, and cancel for both", async () => {
