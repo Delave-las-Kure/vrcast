@@ -560,6 +560,9 @@ detail_codes! {
     /// an old build, another film's (T675). It would be taken for this one's rungs, so a video
     /// for the medium waits on it with «Replace», which removes it first (T677).
     OldSetUnrecognized => "OLD_SET_UNRECOGNIZED",
+    /// `count`. Removing a server stops what runs on it first — its videos and its tasks
+    /// (T683): the question asked before `server_remove(confirmed)`.
+    ConfirmStopServerWork => "CONFIRM_STOP_SERVER_WORK",
 }
 
 impl TryFrom<String> for DetailCode {

@@ -84,7 +84,9 @@ async fn the_live_server_read_only() {
             "the check went on after the network step failed"
         );
         println!("step 2: wrong credentials stop the check at the very first step — correct");
-        servers::server_remove(&state, &id).expect("the temporary profile would not delete");
+        servers::server_remove(&state, &id, false)
+            .await
+            .expect("the temporary profile would not delete");
     }
 
     // Step 3: the right credentials.

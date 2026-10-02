@@ -168,7 +168,51 @@ describe("the list of servers", () => {
     expect(mockServerRemove).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText(ru.ui.servers.removeYes));
-    await waitFor(() => expect(mockServerRemove).toHaveBeenCalledWith("srv_1"));
+    await waitFor(() => expect(mockServerRemove).toHaveBeenCalledWith("srv_1", false));
+  });
+
+  it("asks in one line to stop the work on the server before deleting it (T683)", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    mockServerRemove.mockImplementation((_id: string, confirmed: boolean) =>
+      confirmed
+        ? Promise.resolve(undefined)
+        : Promise.reject({
+            code: "CONFIRMATION_REQUIRED",
+            details: [{ key: "CONFIRM_STOP_SERVER_WORK", params: { count: 3 } }],
+          }),
+    );
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.remove));
+    fireEvent.click(screen.getByText(ru.ui.servers.removeYes));
+    // The core said there is work: the question is the one line, not an error.
+    expect(
+      await screen.findByText("Остановить 3 задачи на этом сервере и удалить его?"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(ru.errors.CONFIRMATION_REQUIRED.message)).toBeNull();
+    expect(mockServerRemove).toHaveBeenCalledTimes(1);
+    expect(mockServerRemove).toHaveBeenLastCalledWith("srv_1", false);
+
+    // «Yes» stops it all and deletes.
+    fireEvent.click(screen.getByText(ru.ui.servers.removeYes));
+    await waitFor(() => expect(mockServerRemove).toHaveBeenLastCalledWith("srv_1", true));
+  });
+
+  it("asks nothing more when «Cancel» is pressed at the question (T683)", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    mockServerRemove.mockRejectedValue({
+      code: "CONFIRMATION_REQUIRED",
+      details: [{ key: "CONFIRM_STOP_SERVER_WORK", params: { count: 1 } }],
+    });
+    draw();
+    fireEvent.click(await screen.findByText(ru.ui.servers.remove));
+    fireEvent.click(screen.getByText(ru.ui.servers.removeYes));
+    expect(
+      await screen.findByText("Остановить 1 задачу на этом сервере и удалить его?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+    expect(screen.queryByText(/Остановить 1 задачу/)).toBeNull();
+    expect(mockServerRemove).toHaveBeenCalledTimes(1);
   });
 
   it("shows every step of the check, including the ones not run", async () => {

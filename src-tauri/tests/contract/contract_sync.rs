@@ -172,6 +172,7 @@ fn the_event_names_match_both_ways() {
         names::APP_QUIT,
         names::APP_HIDDEN,
         names::VIDEO_UPDATE,
+        names::VIDEO_REMOVED,
     ]
     .into_iter()
     .map(str::to_owned)

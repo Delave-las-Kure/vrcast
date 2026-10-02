@@ -661,6 +661,7 @@ export const en: Catalogue = {
       "The file “{name}” belongs to a medium and is not overwritten. Change the rungs or the name.",
     OLD_SET_UNRECOGNIZED:
       "“{name}” is on the server — a set nobody owns under this name. “Replace” removes it.",
+    CONFIRM_STOP_SERVER_WORK: "Stop {count} {count|plural:taskAcc} on this server and delete it?",
   },
 
   plurals: {
@@ -668,6 +669,7 @@ export const en: Catalogue = {
     media: { one: "medium", few: "media", many: "media" },
     time: { one: "time", few: "times", many: "times" },
     task: { one: "task", few: "tasks", many: "tasks" },
+    taskAcc: { one: "task", few: "tasks", many: "tasks" },
     track: { one: "track", few: "tracks", many: "tracks" },
     package: { one: "package", few: "packages", many: "packages" },
     port: { one: "port", few: "ports", many: "ports" },
@@ -1225,6 +1227,7 @@ export const en: Catalogue = {
       test: "Check the connection",
       confirmRemoval: "Remove the profile and its saved password?",
       removeYes: "Yes, delete",
+      stoppingWork: "Stopping the tasks…",
       remove: "Delete",
       steps: {
         network: "The server is reachable over the network",

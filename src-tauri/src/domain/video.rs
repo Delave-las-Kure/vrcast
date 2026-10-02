@@ -206,7 +206,9 @@ pub fn allowed(act: Act, state: VideoState, stage: VideoStage, has_medium: bool)
         Act::Resume => state == S::Paused,
         Act::Cancel => matches!(state, S::Working | S::Paused | S::Problem | S::Planning),
         Act::Retry => matches!(state, S::Problem | S::Cancelled),
-        Act::Remove => !state.is_going(),
+        // Always (T683, the owner's decision of 2026-10-02): with its work alive the work is
+        // stopped first, and the video leaves the list once it has.
+        Act::Remove => true,
         Act::SetAudio => stage <= VideoStage::Measuring && !state.is_going() && state != S::Done,
         Act::SetName => !has_medium && !state.is_going() && state != S::Done,
         Act::SetRungs => matches!(state, S::Planning | S::Ready | S::Problem | S::Cancelled),

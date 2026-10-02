@@ -293,7 +293,10 @@ export function VideoCard({
               disabled={busy}
               onClick={() =>
                 void run(async () => {
-                  await ipc.videoRemove(id);
+                  // With its work alive the core stops it first (T683): the card stays,
+                  // «stopping», until `video:removed`.
+                  const left = await ipc.videoRemove(id);
+                  if (left) return left;
                   onRemoved(id);
                 })
               }

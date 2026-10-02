@@ -197,3 +197,137 @@ async fn a_pause_on_the_card_carried_on_from_the_card_and_paused_again_from_task
     .await;
     state.tasks.cancel(&task).unwrap();
 }
+
+// ---------- T683: taking a video off the list, removing its server ----------
+
+/// Nothing of the video's work is alive, and nothing of it is left looking unfinished.
+fn nothing_left(state: &AppState, video_id: &str, task: &str) {
+    assert!(!state.tasks.is_alive(task), "the task is still alive");
+    let unfinished =
+        vrcast_studio_lib::tasks::store::unfinished_in_batch(&state.db, video_id).unwrap();
+    assert!(
+        unfinished.is_empty(),
+        "rows of the video's tasks look unfinished: {unfinished:?}"
+    );
+    assert!(rows::get(&state.db, video_id).unwrap().is_none());
+}
+
+async fn gone(state: &AppState, id: &str, task: &str) {
+    let waited = tokio::time::timeout(Duration::from_secs(10), async {
+        while rows::get(&state.db, id).unwrap().is_some() || state.tasks.is_alive(task) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        waited.is_ok(),
+        "never gone: video {:?}, task alive {}",
+        rows::get(&state.db, id).unwrap().map(|r| r.state),
+        state.tasks.is_alive(task)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_a_paused_video_stops_its_work_then_takes_it_off() {
+    let state = state();
+    let row = going(&state, "remove-paused");
+    let (task, _tx) = build(&state, &row).await;
+    video::video_pause(&state, &row.id).unwrap();
+    let mut events = state.subscribe();
+
+    let answer = video::video_remove(&state, &row.id).unwrap();
+    // Not gone at once: its work is being stopped, as after «Cancel».
+    if let Some(view) = answer {
+        assert_eq!(view.state, VideoState::Cancelling);
+    }
+    gone(&state, &row.id, &task).await;
+    nothing_left(&state, &row.id, &task);
+    assert_eq!(
+        state.tasks.get(&task).unwrap().unwrap().state,
+        TaskState::Cancelled
+    );
+    // The screen is told it is gone.
+    let told = std::iter::from_fn(|| events.try_recv().ok()).any(|e| {
+        matches!(e, vrcast_studio_lib::commands::AppEvent::VideoRemoved { ref id } if id == &row.id)
+    });
+    assert!(told, "video:removed never went out");
+    // Nothing left to resume from «Tasks».
+    assert!(state.tasks.resume(&task).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_a_working_video_stops_its_work_then_takes_it_off() {
+    let state = state();
+    let row = going(&state, "remove-working");
+    let (task, _tx) = build(&state, &row).await;
+    video::video_remove(&state, &row.id).unwrap();
+    gone(&state, &row.id, &task).await;
+    nothing_left(&state, &row.id, &task);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_video_being_removed_across_a_restart_is_gone_after_it() {
+    let state = state();
+    let mut row = going(&state, "remove-restart");
+    row.state = VideoState::Cancelling;
+    row.remove_requested = true;
+    rows::save(&state.db, &row).unwrap();
+    let next = restarted(&state);
+    video::restore_videos(&next).unwrap();
+    let waited = tokio::time::timeout(Duration::from_secs(10), async {
+        while rows::get(&next.db, &row.id).unwrap().is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(waited.is_ok(), "the video asked to be removed came back");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_a_server_with_work_on_it_asks_then_stops_it_all_first() {
+    use vrcast_studio_lib::commands::error::{DetailCode as Code, ErrorCode};
+
+    let state = state();
+    let row = going(&state, "remove-server");
+    let (task, _tx) = build(&state, &row).await;
+
+    // Asked first; nothing changes.
+    let asked = servers::server_remove(&state, &row.server_id, false)
+        .await
+        .unwrap_err();
+    assert_eq!(asked.code, ErrorCode::ConfirmationRequired);
+    assert_eq!(asked.details[0].key, Code::ConfirmStopServerWork);
+    assert_eq!(asked.details[0].params["count"], serde_json::json!(1));
+    assert!(state.tasks.is_alive(&task));
+    assert!(rows::get(&state.db, &row.id).unwrap().is_some());
+    assert_eq!(servers::servers_list(&state).unwrap().len(), 1);
+
+    // Confirmed: everything there stops, then the profile goes — never the other way round.
+    let mut events = state.subscribe();
+    servers::server_remove(&state, &row.server_id, true)
+        .await
+        .unwrap();
+    assert!(!state.tasks.is_alive(&task), "the task outlived its server");
+    assert!(servers::servers_list(&state).unwrap().is_empty());
+    assert!(rows::get(&state.db, &row.id).unwrap().is_none());
+    assert!(vrcast_studio_lib::tasks::store::get(&state.db, &task)
+        .unwrap()
+        .is_none());
+    let told = std::iter::from_fn(|| events.try_recv().ok()).any(|e| {
+        matches!(e, vrcast_studio_lib::commands::AppEvent::VideoRemoved { ref id } if id == &row.id)
+    });
+    assert!(told, "the server's video never left the screen");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_a_server_with_nothing_running_asks_nothing() {
+    let state = state();
+    let row = going(&state, "remove-idle-server");
+    let mut idle = rows::get(&state.db, &row.id).unwrap().unwrap();
+    idle.state = VideoState::Ready;
+    rows::save(&state.db, &idle).unwrap();
+    servers::server_remove(&state, &row.server_id, false)
+        .await
+        .unwrap();
+    assert!(rows::get(&state.db, &row.id).unwrap().is_none());
+}

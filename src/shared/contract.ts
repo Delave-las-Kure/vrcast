@@ -374,7 +374,9 @@ export type DetailCode =
   // Videos in work (T672).
   | "VIDEO_ALREADY_LISTED"
   | "RUNG_FILE_CLAIMED"
-  | "OLD_SET_UNRECOGNIZED";
+  | "OLD_SET_UNRECOGNIZED"
+  // Removing a server with work alive on it (T683): `count`.
+  | "CONFIRM_STOP_SERVER_WORK";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {
@@ -1470,6 +1472,8 @@ export const EVENTS = {
   appHiddenToTray: "app:hidden-to-tray",
   /** A video in work changed (T672): the whole `VideoView`, every time. */
   videoUpdate: "video:update",
+  /** A video left the list (T683): `{ event: "video_removed", id }`. */
+  videoRemoved: "video:removed",
 } as const;
 
 export interface TaskProgressEvent {

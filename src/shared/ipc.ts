@@ -222,7 +222,12 @@ export const ipc = {
    */
   serverUpdate: (id: string, input: ServerInput, secret: string | null) =>
     call<void>("server_update", { id, input, secret }),
-  serverRemove: (id: string) => call<void>("server_remove", { id }),
+  /**
+   * Delete a profile. With work alive on the server the first call is refused with
+   * `CONFIRMATION_REQUIRED` + `CONFIRM_STOP_SERVER_WORK`; `confirmed` stops it all first and
+   * answers once the profile is gone (T683).
+   */
+  serverRemove: (id: string, confirmed = false) => call<void>("server_remove", { id, confirmed }),
   serverSetActive: (id: string) => call<void>("server_set_active", { id }),
   serverTest: (id: string) => call<TestStep[]>("server_test", { id }),
   serverFingerprintConfirm: (id: string, fingerprint: string) =>
@@ -443,8 +448,10 @@ export const ipc = {
    *  (T676). `confirmed` — «anyway» while somebody is watching (FILE_IN_USE). */
   videoReplace: (id: string, confirmed: boolean) =>
     call<VideoView>("video_replace", { id, confirmed }),
-  /** Off the list only; nothing on the server is touched. */
-  videoRemove: (id: string) => call<void>("video_remove", { id }),
+  /** Off the list; nothing on the server is touched. With its work alive the work is stopped
+   *  first (T683): the answer is the video, `cancelling`, and `video:removed` follows once it
+   *  has stopped; `null` when it is gone at once. */
+  videoRemove: (id: string) => call<VideoView | null>("video_remove", { id }),
 };
 
 // ---------- events ----------
@@ -559,4 +566,14 @@ export function onVideoUpdate(handler: (video: VideoView) => void): Promise<Unli
     delete (video as Partial<VideoUpdateEvent>).event;
     handler(video);
   });
+}
+
+/**
+ * A video left the list (T683): «Remove» once its work had stopped, or its server was
+ * removed. Only the id arrives.
+ */
+export function onVideoRemoved(handler: (id: string) => void): Promise<UnlistenFn> {
+  return tauriListen<{ event: "video_removed"; id: string }>(EVENTS.videoRemoved, (ev) =>
+    handler(ev.payload.id),
+  );
 }

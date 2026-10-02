@@ -647,6 +647,8 @@ export const ruCore: CatalogueCore = {
       "Файл «{name}» принадлежит медиа и не перезаписывается. Смените ступени или имя.",
     OLD_SET_UNRECOGNIZED:
       "На сервере лежит «{name}» — ничей набор под этим именем. «Заменить» удалит его.",
+    CONFIRM_STOP_SERVER_WORK:
+      "Остановить {count} {count|plural:taskAcc} на этом сервере и удалить его?",
   },
 
   plurals: {
@@ -654,6 +656,7 @@ export const ruCore: CatalogueCore = {
     media: { one: "медиа", few: "медиа", many: "медиа" },
     time: { one: "раз", few: "раза", many: "раз" },
     task: { one: "задача", few: "задачи", many: "задач" },
+    taskAcc: { one: "задачу", few: "задачи", many: "задач" },
     track: { one: "дорожка", few: "дорожки", many: "дорожек" },
     package: { one: "пакет", few: "пакета", many: "пакетов" },
     port: { one: "порт", few: "порта", many: "портов" },
@@ -1218,6 +1221,7 @@ const ui = {
     test: "Проверить подключение",
     confirmRemoval: "Удалить профиль и сохранённый пароль?",
     removeYes: "Да, удалить",
+    stoppingWork: "Останавливаем задачи…",
     remove: "Удалить",
     steps: {
       network: "Сервер доступен по сети",

@@ -47,8 +47,12 @@ export function canCancel(v: VideoView): boolean {
   );
 }
 
+/**
+ * Always but while stopping: with its work alive the core stops it first and the video leaves
+ * once it has (T683); a video already stopping has nothing more to press.
+ */
 export function canRemove(v: VideoView): boolean {
-  return v.state !== "working" && v.state !== "cancelling";
+  return v.state !== "cancelling";
 }
 
 export function canSetAudio(v: VideoView): boolean {

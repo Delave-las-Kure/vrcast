@@ -16,7 +16,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Link, useSearchParams } from "react-router-dom";
 
 import type { AppError, VideoRefusal, VideoView } from "../../shared/contract";
-import { ipc, onVideoUpdate, toAppError } from "../../shared/ipc";
+import { ipc, onVideoRemoved, onVideoUpdate, toAppError } from "../../shared/ipc";
 import { useT } from "../../shared/i18n";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
@@ -49,6 +49,9 @@ export function VideoScreen() {
     const unlisten = onVideoUpdate((v) => {
       if (alive) setVideos((list) => upsert(list, v));
     });
+    const unlistenRemoved = onVideoRemoved((id) => {
+      if (alive) setVideos((list) => list.filter((x) => x.id !== id));
+    });
     ipc
       .videoList()
       .then((listed) => {
@@ -60,6 +63,7 @@ export function VideoScreen() {
     return () => {
       alive = false;
       void unlisten.then((off) => off());
+      void unlistenRemoved.then((off) => off());
     };
   }, []);
 

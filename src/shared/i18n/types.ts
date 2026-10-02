@@ -34,7 +34,16 @@ export interface PluralForms {
  * a template, and a Russian key would leave the English catalogue naming a Russian
  * word for no reason.
  */
-export type PluralWord = "file" | "media" | "time" | "task" | "track" | "package" | "port";
+export type PluralWord =
+  | "file"
+  | "media"
+  | "time"
+  | "task"
+  /** The same word as the object of a verb: «остановить 1 задачу» (T683). */
+  | "taskAcc"
+  | "track"
+  | "package"
+  | "port";
 
 export interface CatalogueCore {
   /** Wording for every error code. */

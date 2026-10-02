@@ -74,6 +74,9 @@ pub enum AppEvent {
     /// The whole video goes out each time, as with `DeployProgress`: a screen opened in the
     /// middle of a build must not have to piece a card together from a stream of changes.
     VideoUpdate(Box<video::VideoView>),
+    /// A video left the list (T683): «Remove» once its work had stopped, or its server was
+    /// removed. Only the id: there is nothing left to show.
+    VideoRemoved { id: String },
 }
 
 /// The application's shared state. Everything the commands need lives here.

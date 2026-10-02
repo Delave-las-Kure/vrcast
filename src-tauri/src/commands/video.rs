@@ -234,6 +234,8 @@ struct Hub {
     /// What each video last said about its medium's set (T677), so the library is told only
     /// when that changes, not on every tick of a bar.
     set_work: Mutex<HashMap<String, (String, String, video::SetWorkState)>>,
+    /// Servers being removed (T683): nothing of theirs is put on the queue meanwhile.
+    closing: Mutex<HashSet<String>>,
 }
 
 struct Live {
@@ -302,10 +304,146 @@ fn change<T>(state: &AppState, id: &str, f: impl FnOnce(&mut VideoRow) -> Result
 
 fn emit(state: &AppState, id: &str) {
     if let Ok(row) = load(state, id) {
+        // «Remove» on a video whose work was alive (T683): it goes off the list the moment
+        // the work has stopped, whichever way the news of that arrived.
+        if row.remove_requested && row.state == VideoState::Cancelled {
+            take_off_list(state, id);
+            return;
+        }
         tell_library(state, id, Some(&row));
         let _ = state
             .events
             .send(super::AppEvent::VideoUpdate(Box::new(view_of(state, &row))));
+    }
+}
+
+/// Take a video off the list now — the row, what this run holds about it — and say so.
+/// Nothing on the server is touched (T577, part b). Only ever called once nothing of the
+/// video's work is alive.
+fn take_off_list(state: &AppState, id: &str) {
+    {
+        let _held = lock(&state.videos.inner.rows);
+        if let Some(planning) = lock(&state.videos.inner.planning).remove(id) {
+            planning.cancel();
+        }
+        let _ = rows::remove(&state.db, id);
+    }
+    forget_video(state, id);
+}
+
+/// What this run holds about a video that is gone from the list, and the news of it.
+fn forget_video(state: &AppState, id: &str) {
+    lock(&state.videos.inner.live).remove(id);
+    tell_library(state, id, None);
+    let _ = state
+        .events
+        .send(super::AppEvent::VideoRemoved { id: id.to_owned() });
+}
+
+// ---------- a server going away (T683) ----------
+
+/// The work alive in this run on a server: its own tasks, and every task of its videos (a
+/// measurement names no server of its own, only the video's batch), plus a video whose next
+/// task is being put on the queue right now. What removing the server would have to stop.
+pub(crate) fn work_on_server(state: &AppState, server_id: &str) -> Vec<String> {
+    let videos: HashSet<String> = rows::list(&state.db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|v| v.server_id == server_id)
+        .map(|v| v.id)
+        .collect();
+    let mut out: Vec<String> = state
+        .tasks
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|t| !t.state.is_final() && state.tasks.is_alive(&t.id))
+        .filter(|t| {
+            t.server_id.as_deref() == Some(server_id)
+                || t.batch.as_ref().is_some_and(|b| videos.contains(&b.id))
+        })
+        .map(|t| t.id)
+        .collect();
+    let starting = lock(&state.videos.inner.starting);
+    out.extend(
+        videos
+            .iter()
+            .filter(|v| starting.contains(*v))
+            .map(|v| format!("video:{v}")),
+    );
+    out
+}
+
+/// Stop everything on a server that is being removed (T683): its videos' plans, their tasks
+/// (each video `cancelling` until they have stopped, as after «Cancel»), and its own tasks.
+/// Safe to repeat: a cancellation already under way is left to finish.
+pub(crate) fn stop_server_work(state: &AppState, server_id: &str) {
+    ensure_watching(state);
+    let videos: Vec<VideoRow> = rows::list(&state.db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|v| v.server_id == server_id)
+        .collect();
+    for v in &videos {
+        if let Some(planning) = lock(&state.videos.inner.planning).remove(&v.id) {
+            planning.cancel();
+        }
+        let busy =
+            !alive(state, &v.id).is_empty() || lock(&state.videos.inner.starting).contains(&v.id);
+        if busy {
+            let _ = change(state, &v.id, |r| {
+                r.state = VideoState::Cancelling;
+                r.paused_by_person = false;
+                r.start_requested = false;
+                Ok(())
+            });
+        }
+        let _ = state.tasks.cancel_batch(&v.id);
+    }
+    for task in work_on_server(state, server_id) {
+        let _ = state.tasks.cancel(&task);
+    }
+}
+
+/// The server's videos are gone with it (its rows cascade): what this run holds about them
+/// goes too, and the screen is told (T683).
+pub(crate) fn forget_server_videos(state: &AppState, ids: &[String]) {
+    for id in ids {
+        if let Some(planning) = lock(&state.videos.inner.planning).remove(id) {
+            planning.cancel();
+        }
+        forget_video(state, id);
+    }
+}
+
+/// The videos of a server, by id.
+pub(crate) fn videos_of_server(state: &AppState, server_id: &str) -> Vec<String> {
+    rows::list(&state.db)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|v| v.server_id == server_id)
+        .map(|v| v.id)
+        .collect()
+}
+
+/// While held, nothing of this server's videos is put on the queue (T683): «Start», «Retry»,
+/// «Continue» pressed while the server is being removed do not start what is being stopped.
+pub(crate) struct Closing {
+    state: AppState,
+    server_id: String,
+}
+
+pub(crate) fn close_server(state: &AppState, server_id: &str) -> Closing {
+    lock(&state.videos.inner.closing).insert(server_id.to_owned());
+    Closing {
+        state: state.clone(),
+        server_id: server_id.to_owned(),
+    }
+}
+
+impl Drop for Closing {
+    fn drop(&mut self) {
+        lock(&self.state.videos.inner.closing).remove(&self.server_id);
     }
 }
 
@@ -1164,6 +1302,7 @@ async fn carry_on(state: &AppState, id: &str) {
     let ready = {
         let _held = lock(&state.videos.inner.rows);
         match load(state, id) {
+            Ok(row) if lock(&state.videos.inner.closing).contains(&row.server_id) => false,
             Ok(mut row) if row.state == VideoState::Working => {
                 // Whatever task it had belongs to a run that is over, or has ended: it is let go
                 // of here, so its ending cannot be taken for this video's.
@@ -1992,21 +2131,49 @@ pub mod api {
         cleared
     }
 
-    /// Take a video off the list. Nothing on the server is touched (T577, part b). Not while it is
-    /// going: stop it first.
-    pub fn video_remove(state: &AppState, id: &str) -> Result<()> {
-        let _held = lock(&state.videos.inner.rows);
-        let row = load(state, id)?;
-        if !video::allowed(Act::Remove, row.state, row.stage, row.media_id.is_some()) {
-            return Err(not_now(&row));
-        }
+    /// Take a video off the list. Nothing on the server is touched (T577, part b).
+    ///
+    /// **With its work alive, the work is stopped first** (T683, the owner's decision of
+    /// 2026-10-02): a paused build, a task waiting for its place, a stop still being
+    /// confirmed. The video goes `cancelling`, exactly as after «Cancel», with
+    /// `remove_requested` kept; it leaves the list — `video:removed` — the moment everything
+    /// has stopped, the server's cutting included, and not before: a build with no video
+    /// left to answer for it is what this prevents. A restart in between finishes the job.
+    ///
+    /// Answers `null` when the video is gone at once, and the video as it is now
+    /// (`cancelling`) when it leaves once its work has stopped.
+    pub fn video_remove(state: &AppState, id: &str) -> Result<Option<VideoView>> {
+        ensure_watching(state);
         if let Some(planning) = lock(&state.videos.inner.planning).remove(id) {
             planning.cancel();
         }
-        rows::remove(&state.db, id).map_err(storage)?;
-        lock(&state.videos.inner.live).remove(id);
-        tell_library(state, id, None);
-        Ok(())
+        let living = alive(state, id);
+        let busy = !living.is_empty() || lock(&state.videos.inner.starting).contains(id);
+        let gone = {
+            let _held = lock(&state.videos.inner.rows);
+            let mut row = load(state, id)?;
+            if !busy && row.state != VideoState::Cancelling {
+                rows::remove(&state.db, id).map_err(storage)?;
+                None
+            } else {
+                row.remove_requested = true;
+                row.state = VideoState::Cancelling;
+                row.paused_by_person = false;
+                row.start_requested = false;
+                rows::save(&state.db, &row).map_err(storage)?;
+                Some(view_of(state, &row))
+            }
+        };
+        let Some(stopping) = gone else {
+            // Rows of tasks a run that is over left behind: nothing works behind them, and a
+            // video that is gone must not leave them looking unfinished.
+            let _ = state.tasks.cancel_batch(id);
+            forget_video(state, id);
+            return Ok(None);
+        };
+        emit(state, id);
+        let _ = state.tasks.cancel_batch(id);
+        Ok(Some(stopping))
     }
 
     /// Carry on after the application starts (T672, the owner's decision of 2026-10-01).
@@ -2130,7 +2297,7 @@ pub mod ipc {
     }
 
     #[tauri::command]
-    pub fn video_remove(state: State<'_, AppState>, id: String) -> Result<()> {
+    pub fn video_remove(state: State<'_, AppState>, id: String) -> Result<Option<VideoView>> {
         api::video_remove(&state, &id)
     }
 }

@@ -38,6 +38,8 @@ const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>
 
 /** The screen's own `video:update` listener, held so a test can send an event. */
 let push: ((v: VideoView) => void) | null = null;
+/** The screen's own `video:removed` listener (T683). */
+let pushRemoved: ((id: string) => void) | null = null;
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (o: unknown) => mockOpen(o) }));
 
@@ -66,6 +68,12 @@ vi.mock("../../../shared/ipc", async () => {
       push = handler;
       return () => {
         if (push === handler) push = null;
+      };
+    },
+    onVideoRemoved: async (handler: (id: string) => void) => {
+      pushRemoved = handler;
+      return () => {
+        if (pushRemoved === handler) pushRemoved = null;
       };
     },
   };
@@ -221,6 +229,7 @@ async function card(id = "v1") {
 beforeEach(() => {
   vi.clearAllMocks();
   push = null;
+  pushRemoved = null;
   useServers.setState({ profiles: [profile()], loading: false, error: null });
   mockServersList.mockResolvedValue([profile()]);
   mockVideoList.mockResolvedValue([]);
@@ -237,7 +246,7 @@ beforeEach(() => {
   ]) {
     m.mockImplementation((id: string) => Promise.resolve(video({ id })));
   }
-  mockVideoRemove.mockResolvedValue(undefined);
+  mockVideoRemove.mockResolvedValue(null);
   mockVideoStart.mockImplementation((ids: string[]) =>
     Promise.resolve(ids.map((id) => ({ id, error: null }))),
   );
@@ -544,6 +553,23 @@ describe("the plan before Start", () => {
     await waitFor(() => expect(mockVideoRemove).toHaveBeenCalledWith("v1"));
     await waitFor(() => expect(screen.queryByTestId("video-v1")).toBeNull());
   });
+
+  it("removing a video at work keeps the card, stopping, until the core says it is gone (T683)", async () => {
+    mockVideoList.mockResolvedValue([working({ state: "paused", paused_by_person: true })]);
+    mockVideoRemove.mockResolvedValue(
+      working({ state: "cancelling", updated_at: "2026-10-01T10:05:00Z" }),
+    );
+    show();
+    fireEvent.click((await card()).getByRole("button", { name: ru.ui.video.remove }));
+    await waitFor(() => expect(mockVideoRemove).toHaveBeenCalledWith("v1"));
+    const c = await card();
+    await waitFor(() => expect(c.getByText(ru.ui.video.stopping)).toBeInTheDocument());
+    expect(c.queryAllByRole("button")).toHaveLength(0);
+
+    await waitFor(() => expect(pushRemoved).not.toBeNull());
+    act(() => pushRemoved!("v1"));
+    await waitFor(() => expect(screen.queryByTestId("video-v1")).toBeNull());
+  });
 });
 
 describe("the stages after Start", () => {
@@ -561,7 +587,7 @@ describe("the stages after Start", () => {
     show();
     const a = await card("a");
     expect(a.queryByRole("button", { name: ru.ui.video.resume })).toBeNull();
-    expect(a.queryByRole("button", { name: ru.ui.video.remove })).toBeNull();
+    // «Remove» is there while working too (T683): the core stops the work first.
     fireEvent.click(a.getByRole("button", { name: ru.ui.video.pause }));
     await waitFor(() => expect(mockVideoPause).toHaveBeenCalledWith("a"));
 
