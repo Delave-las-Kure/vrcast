@@ -1780,6 +1780,11 @@ export interface VideoView {
   link: Links | null;
   created_at: string;
   updated_at: string;
+  /**
+   * The version of this view (T687): higher is newer, for every change — progress included,
+   * which `updated_at` does not follow. Keep the view with the higher one.
+   */
+  rev: number;
 }
 
 export interface VideoUpdateEvent extends VideoView {

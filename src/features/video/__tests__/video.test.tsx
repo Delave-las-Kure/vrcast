@@ -182,6 +182,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     link: null,
     created_at: "2026-10-01T10:00:00Z",
     updated_at: "2026-10-01T10:00:00Z",
+    rev: 1,
     ...over,
   };
 }
@@ -321,6 +322,7 @@ describe("the list", () => {
         working({
           stage: "uploading",
           updated_at: "2026-10-01T10:05:00Z",
+          rev: 5,
           progress: {
             task_state: "running",
             progress: 0.1,
@@ -348,8 +350,8 @@ describe("the list", () => {
     show();
     await card();
     await waitFor(() => expect(push).not.toBeNull());
-    act(() => push!(working({ stage: "cutting", updated_at: "2026-10-01T11:00:00Z" })));
-    act(() => push!(working({ stage: "encoding", updated_at: "2026-10-01T10:30:00Z" })));
+    act(() => push!(working({ stage: "cutting", updated_at: "2026-10-01T11:00:00Z", rev: 11 })));
+    act(() => push!(working({ stage: "encoding", updated_at: "2026-10-01T10:30:00Z", rev: 10 })));
 
     const c = await card();
     expect(
@@ -616,6 +618,7 @@ describe("the stages after Start", () => {
           state: "paused",
           paused_by_person: true,
           updated_at: "2026-10-01T10:05:00Z",
+          rev: 5,
           progress: { ...working().progress!, task_state: "paused" },
         }),
       ),

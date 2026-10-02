@@ -1761,6 +1761,7 @@ fn a_video_s_shape_matches_both_ways() {
         link: None,
         created_at: String::new(),
         updated_at: String::new(),
+        rev: 1,
     };
     let ts = contract_ts();
     same_shape(

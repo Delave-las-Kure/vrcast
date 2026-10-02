@@ -163,6 +163,10 @@ pub struct VideoView {
     pub link: Option<Links>,
     pub created_at: String,
     pub updated_at: String,
+    /// The version of this view (T687): higher is newer, for every change — the progress
+    /// of the stage included, which `updated_at` does not follow. A screen keeps the view with
+    /// the higher one, whichever arrived first.
+    pub rev: u64,
 }
 
 /// A file `video_add` would not take, and why.
@@ -218,6 +222,22 @@ pub struct VideoHub {
     inner: Arc<Hub>,
 }
 
+impl VideoHub {
+    /// The next version of a view of a video (T687): it grows with every view this run
+    /// makes — a change of progress included, which writes nothing to the row — and starts
+    /// from the clock, in microseconds, so that a run started later is above every view an
+    /// earlier one gave out. Well inside what a JavaScript number holds exactly.
+    pub(crate) fn next_rev(&self) -> u64 {
+        let base = *self.inner.rev_base.get_or_init(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros() as u64)
+                .unwrap_or(0)
+        });
+        base + self.inner.rev.fetch_add(1, Ordering::SeqCst) + 1
+    }
+}
+
 #[derive(Default)]
 struct Hub {
     /// Held around every read-change-write of a video row, so the watcher and a command never
@@ -239,6 +259,9 @@ struct Hub {
     /// Videos whose stop on the server is being confirmed after a restart (T682): a cutting
     /// a run that is over started and left `cancelling`.
     stopping: Mutex<HashSet<String>>,
+    /// The versions of the views (T687): see [`VideoHub::next_rev`].
+    rev_base: std::sync::OnceLock<u64>,
+    rev: std::sync::atomic::AtomicU64,
 }
 
 struct Live {
@@ -306,6 +329,9 @@ fn change<T>(state: &AppState, id: &str, f: impl FnOnce(&mut VideoRow) -> Result
 }
 
 fn emit(state: &AppState, id: &str) {
+    // The version is taken before the row is read (T687): a view with a higher one has seen
+    // every change written before a lower one was taken.
+    let rev = state.videos.next_rev();
     if let Ok(row) = load(state, id) {
         // «Remove» on a video whose work was alive (T683): it goes off the list the moment
         // the work has stopped, whichever way the news of that arrived.
@@ -316,7 +342,20 @@ fn emit(state: &AppState, id: &str) {
         tell_library(state, id, Some(&row));
         let _ = state
             .events
-            .send(super::AppEvent::VideoUpdate(Box::new(view_of(state, &row))));
+            .send(super::AppEvent::VideoUpdate(Box::new(view_at(
+                state, &row, rev,
+            ))));
+    }
+}
+
+/// Send every video as it is now (T687): after the stream of events fell behind, a change
+/// may never have reached the screen — a build that ended, a stop confirmed.
+pub(crate) fn republish(state: &AppState) {
+    let Ok(all) = rows::list(&state.db) else {
+        return;
+    };
+    for row in all {
+        emit(state, &row.id);
     }
 }
 
@@ -656,7 +695,16 @@ fn link_of(state: &AppState, row: &VideoRow) -> Option<Links> {
     ))
 }
 
+/// A view of a video at a version taken now — after the row was read. Fine where nothing
+/// else can be changing the video meanwhile (it was just written under the rows lock, and
+/// its event follows with a higher one); a reader racing the watcher takes its version
+/// before reading, with [`view_at`].
 fn view_of(state: &AppState, row: &VideoRow) -> VideoView {
+    view_at(state, row, state.videos.next_rev())
+}
+
+/// A view of a video, at the version `rev` taken **before** `row` was read (T687).
+fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
     let source = source_of(row);
     let plan = match (basis_of(row), source.as_ref()) {
         (Some(basis), Some(source)) => Some(effective_plan(row, &basis, source)),
@@ -695,6 +743,7 @@ fn view_of(state: &AppState, row: &VideoRow) -> VideoView {
         link: link_of(state, row),
         created_at: row.created_at.clone(),
         updated_at: row.updated_at.clone(),
+        rev,
     }
 }
 
@@ -741,7 +790,12 @@ fn ensure_watching(state: &AppState) {
             tokio::select! {
                 got = rx.recv() => match got {
                     Ok(event) => on_task_event(&state, event),
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => reconcile(&state),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Task events were missed, so a video may have changed with nothing
+                        // sent about it (T687): every one is sent again as it now is.
+                        reconcile(&state);
+                        republish(&state);
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
                 _ = tick.tick() => reconcile(&state),
@@ -1904,16 +1958,20 @@ pub mod api {
     /// Every video, in the order they were added.
     pub fn video_list(state: &AppState) -> Result<Vec<VideoView>> {
         ensure_watching(state);
+        // One version for the whole list, taken before it is read (T687): an event sent
+        // after it has a higher one, and wins over this list however late the list arrives.
+        let rev = state.videos.next_rev();
         Ok(rows::list(&state.db)
             .map_err(storage)?
             .iter()
-            .map(|r| view_of(state, r))
+            .map(|r| view_at(state, r, rev))
             .collect())
     }
 
     /// One video.
     pub fn video_get(state: &AppState, id: &str) -> Result<VideoView> {
-        Ok(view_of(state, &load(state, id)?))
+        let rev = state.videos.next_rev();
+        Ok(view_at(state, &load(state, id)?, rev))
     }
 
     /// Choose the audio track. Before anything is encoded only.

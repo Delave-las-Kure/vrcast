@@ -591,3 +591,54 @@ async fn a_replace_the_server_refuses_leaves_the_video_on_its_problem_with_repla
         .actions
         .contains(&vrcast_studio_lib::domain::video::VideoAction::Replace));
 }
+
+// ---------- T687: a version that grows with the progress too ----------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_video_s_rev_grows_with_its_progress_and_a_later_view_never_has_a_lower_one() {
+    let state = state();
+    let row = going(&state, "rev");
+    let (task, tx) = build(&state, &row).await;
+    let at_10 = video::video_get(&state, &row.id).unwrap();
+    tx.send((0.7, DetailCode::StageConverting)).unwrap();
+    until(&state, &row.id, "70%", |v| {
+        v.progress.as_ref().is_some_and(|p| p.progress == 0.7)
+    })
+    .await;
+    let at_70 = video::video_get(&state, &row.id).unwrap();
+    // The row was not written for a percentage — and the version still moved on.
+    assert_eq!(at_10.updated_at, at_70.updated_at);
+    assert!(at_70.rev > at_10.rev, "{} then {}", at_10.rev, at_70.rev);
+    // The list is a view like any other: taken later, never lower.
+    let listed = video::video_list(&state).unwrap();
+    assert!(listed[0].rev >= at_70.rev);
+    // And it keeps growing across a restart: the next run starts above this one.
+    let next = AppState::with_db(state.db.clone(), state.secrets.clone()).unwrap();
+    assert!(video::video_get(&next, &row.id).unwrap().rev > listed[0].rev);
+    state.tasks.cancel(&task).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_change_goes_out_with_a_higher_rev_than_the_one_before() {
+    use vrcast_studio_lib::commands::AppEvent;
+    let state = state();
+    let row = going(&state, "rev-events");
+    let mut events = state.subscribe();
+    let (task, tx) = build(&state, &row).await;
+    for p in [0.2, 0.4, 0.6] {
+        tx.send((p, DetailCode::StageConverting)).unwrap();
+        until(&state, &row.id, "progress", |v| {
+            v.progress.as_ref().is_some_and(|x| x.progress == p)
+        })
+        .await;
+    }
+    let revs: Vec<u64> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|e| match e {
+            AppEvent::VideoUpdate(v) if v.id == row.id => Some(v.rev),
+            _ => None,
+        })
+        .collect();
+    assert!(revs.len() >= 3, "{revs:?}");
+    assert!(revs.windows(2).all(|w| w[1] > w[0]), "{revs:?}");
+    state.tasks.cancel(&task).unwrap();
+}

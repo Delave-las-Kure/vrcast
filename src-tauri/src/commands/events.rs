@@ -180,6 +180,7 @@ pub fn long_enough(created_at: &str, updated_at: &str) -> bool {
 /// Start forwarding the core's other events to the interface.
 pub fn bridge_app_events(app: AppHandle, state: &AppState) {
     let mut rx = state.subscribe();
+    let state = state.clone();
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
@@ -201,6 +202,17 @@ pub fn bridge_app_events(app: AppHandle, state: &AppState) {
                         skipped,
                         "the interface fell behind, some events were dropped"
                     );
+                    // A dropped `video:update` may have been the one that said a video was
+                    // done (T687): every video goes out again as it is now — straight to the
+                    // interface, not through the channel that just overflowed.
+                    if let Ok(all) = crate::commands::video::api::video_list(&state) {
+                        for view in all {
+                            let event = AppEvent::VideoUpdate(Box::new(view));
+                            if let Err(e) = app.emit(names::VIDEO_UPDATE, &event) {
+                                tracing::debug!(error = %e, "event not delivered to the interface");
+                            }
+                        }
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
