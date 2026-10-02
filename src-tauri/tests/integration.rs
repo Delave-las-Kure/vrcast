@@ -278,3 +278,9 @@ mod diag_live;
 #[path = "integration/viewer.rs"]
 #[allow(dead_code)]
 mod viewer;
+
+/// T682 — a stop pressed during the cutting, the application killed before the server
+/// confirmed it: after the next start the cutting is stopped before the video reads
+/// cancelled, and another copy's cutting is left alone.
+#[path = "integration/video_stop_restart.rs"]
+mod video_stop_restart;
