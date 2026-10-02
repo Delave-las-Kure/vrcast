@@ -201,6 +201,13 @@ mod upload_live;
 #[path = "integration/video_pipeline.rs"]
 mod video_pipeline;
 
+/// Acceptance of the «Video» pipeline on a real film (80 s, 1080p30, two audio tracks,
+/// subtitles, chapters) with a real measurement: the events, the chosen track in every rung,
+/// every rung served and decoded whole, killed while measuring, two at once, stopped while
+/// encoding — and the plan against the fact, printed for the report.
+#[path = "integration/video_acceptance.rs"]
+mod video_acceptance;
+
 #[path = "integration/upload_finish_network_cut.rs"]
 mod upload_finish_network_cut;
 

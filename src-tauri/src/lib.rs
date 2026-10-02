@@ -62,11 +62,40 @@ fn say_where_the_window_went<R: tauri::Runtime>(
 }
 
 pub fn run() {
+    // The e2e build keeps the webview's own folder inside the directory it was given as well
+    // (`store::data_dir`): WebView2 reads this variable itself, ahead of any folder named in
+    // code. Before anything else, while this process is still a single thread. **Not under
+    // the WebDriver**, which hands the webview a profile folder of its own in
+    // `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` and waits for the browser to report there:
+    // moving the folder here made the session fail with «DevToolsActivePort file doesn't
+    // exist». The driver's folder is its own temporary one, never the person's.
+    #[cfg(feature = "e2e")]
+    if let Some(dir) = store::data_dir::root() {
+        let driven = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
+            .is_ok_and(|a| a.contains("--user-data-dir") || a.contains("--remote-debugging"));
+        if !driven {
+            std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", dir.join("webview"));
+        }
+    }
+    // The e2e build says what it is, in the binary as well as in the log: the harness looks
+    // for this exact text in the file before it starts it, and refuses to drive any binary
+    // without it (an ordinary build would open the person's real profiles).
+    #[cfg(feature = "e2e")]
+    let e2e_marker = std::hint::black_box(store::data_dir::E2E_MARKER);
+
     // First of all, the log with secret redaction. Nothing may be logged before this
     // line: anything written earlier goes past the guard (constitution, principle IV).
     // To stderr as before and, since T655, to a file in the data directory: a Windows
     // release has no console, and a log nobody can open is no log.
     let journal = logging::init_for_app(logging::default_dir());
+    #[cfg(feature = "e2e")]
+    tracing::warn!(
+        marker = e2e_marker,
+        data_dir = ?store::data_dir::root(),
+        webview_args = ?std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").ok(),
+        webview_folder = ?std::env::var("WEBVIEW2_USER_DATA_FOLDER").ok(),
+        "an e2e build"
+    );
     if let logging::Journal::NotWritten(why) = &journal {
         tracing::warn!(reason = %why, "the log is not being written to a file");
     }
@@ -121,7 +150,10 @@ pub fn run() {
     // first one's work; this plugin keeps a second instance from starting up at all.
     // Registered first, as the plugin's own documentation asks: that way it runs before
     // anything else can interfere.
-    #[cfg(desktop)]
+    //
+    // Not in the e2e build: there the lock would hand a test window to the person's own
+    // running application and quietly exit (`store::data_dir`).
+    #[cfg(all(desktop, not(feature = "e2e")))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
