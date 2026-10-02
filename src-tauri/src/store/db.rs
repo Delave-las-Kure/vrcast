@@ -132,11 +132,11 @@ impl Db {
         Ok(db)
     }
 
-    /// The default path: the current user's application data directory.
+    /// The default path: the current user's application data directory
+    /// ([`super::data_dir::root`] — in the e2e build, the one it was given).
     pub fn default_path() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("ru", "VRCast", "VRCast Studio")
-            .ok_or(DbError::NoDataDir)?;
-        Ok(dirs.data_dir().join("vrcast-studio.sqlite"))
+        let dir = super::data_dir::root().ok_or(DbError::NoDataDir)?;
+        Ok(dir.join("vrcast-studio.sqlite"))
     }
 
     /// Apply the missing migrations. Safe to repeat: applied ones are skipped.

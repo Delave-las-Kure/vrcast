@@ -997,6 +997,7 @@ fn note_progress(
         entry.progress.eta_s = None;
         return;
     }
+    let progress = video::bar_of(code, progress);
     if entry.code != Some(code) {
         entry.code = Some(code);
         entry.since = Instant::now();
@@ -1473,6 +1474,34 @@ async fn carry_on(state: &AppState, id: &str) {
     }
 }
 
+/// How many times a video tries to make its medium when the catalogue keeps changing under it.
+const MEDIUM_ATTEMPTS: u32 = 5;
+
+/// Make this video's medium in the library.
+///
+/// **A catalogue changed meanwhile is read again, not a problem** (found on a real run,
+/// 2026-10-02). «Start» on a selection starts every video at once, and each makes its medium
+/// at the same moment: every one reads the catalogue at the same generation, the first write
+/// wins, and the rest were stopped on `MANIFEST_CONFLICT` with «Retry» although nothing was
+/// wrong. A conflict writes nothing (`manifest_io::write`), so trying again with the catalogue
+/// read afresh is exactly what «Retry» would do — done here, a few times, before a person is
+/// asked. A name that has become taken meanwhile is still `SLUG_TAKEN`, with its choice.
+async fn make_medium(state: &AppState, row: &VideoRow) -> Result<String> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match super::library::api::media_create(state, &row.server_id, &row.title, Some(&row.slug))
+            .await
+        {
+            Err(e) if e.code == ErrorCode::ManifestConflict && attempt < MEDIUM_ATTEMPTS => {
+                tracing::debug!(video = %row.id, attempt, "the catalogue changed while the medium was made; reading it again");
+                tokio::time::sleep(Duration::from_millis(150 * u64::from(attempt))).await;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The task that does this video's next stage: the measurement (chained on to the build), or
 /// the build itself.
 async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
@@ -1523,9 +1552,7 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
     // **The medium in the library, made before the first byte.** A taken name is a problem
     // with a choice — take that medium over, or another name — and never a quiet overwrite.
     let row = if row.media_id.is_none() {
-        let media_id =
-            super::library::api::media_create(state, &row.server_id, &row.title, Some(&row.slug))
-                .await?;
+        let media_id = make_medium(state, &row).await?;
         change(state, id, |r| {
             r.media_id = Some(media_id.clone());
             r.own_medium = true;

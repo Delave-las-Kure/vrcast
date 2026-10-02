@@ -129,8 +129,7 @@ fn open_one(path: &Path) -> Option<Reader<Vec<u8>>> {
 
 /// Where the tables live — beside the local database, in the person's own profile.
 pub fn dir() -> Option<PathBuf> {
-    directories::ProjectDirs::from("ru", "VRCast", "VRCast Studio")
-        .map(|d| d.data_dir().to_path_buf())
+    super::data_dir::root()
 }
 
 /// Which month the tables on disk are from.

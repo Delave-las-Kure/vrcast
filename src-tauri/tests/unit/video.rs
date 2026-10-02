@@ -755,3 +755,27 @@ fn a_video_says_its_medium_s_set_is_building_once_begun_and_stopped_while_it_wai
     assert_eq!(set_work_of(S::Problem, G::Planned, false), None);
     assert_eq!(set_work_of(S::Done, G::Done, true), None);
 }
+
+/// One bar for «encoding»: the encode fills it up to where the check takes over, and the
+/// check fills the rest — so the bar of one rung never goes back (found on a real film).
+#[test]
+fn the_encode_and_the_check_after_it_share_one_bar_that_only_goes_forward() {
+    use vrcast_studio_lib::domain::wording::DetailCode as D;
+    let mut last = 0.0;
+    for (code, share) in [
+        (D::StageConverting, 0.0),
+        (D::StageConverting, 0.5),
+        (D::StageConverting, 1.0),
+        (D::StageValidating, 0.0),
+        (D::StageValidating, 0.5),
+        (D::StageValidating, 1.0),
+    ] {
+        let bar = video::bar_of(code, share);
+        assert!(bar + 1e-12 >= last, "{code:?} {share}: {bar} < {last}");
+        last = bar;
+    }
+    assert!((last - 1.0).abs() < 1e-12);
+    // Everything else is shown as it is.
+    assert_eq!(video::bar_of(D::StageSendingVariant, 0.4), 0.4);
+    assert_eq!(video::bar_of(D::StageMeasuringQuality, 0.4), 0.4);
+}

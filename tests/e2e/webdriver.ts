@@ -144,6 +144,72 @@ export class Session {
     await call<null>(this.at(`/element/${handle}/click`), "POST", {});
   }
 
+  /** All elements matching this, right now. No waiting. */
+  async findAll(css: string): Promise<Element[]> {
+    const found = await call<Record<string, string>[]>(this.at("/elements"), "POST", {
+      using: "css selector",
+      value: css,
+    });
+    return found.map((v) => new Element(this, v[ELEMENT_KEY]));
+  }
+
+  /** Find one element by XPath, waiting for it to appear (for finding by visible text). */
+  async findX(xpath: string, patienceMs = PATIENCE_MS): Promise<Element> {
+    const until = Date.now() + patienceMs;
+    let last: unknown;
+    for (;;) {
+      try {
+        const value = await call<Record<string, string>>(this.at("/element"), "POST", {
+          using: "xpath",
+          value: xpath,
+        });
+        return new Element(this, value[ELEMENT_KEY]);
+      } catch (e) {
+        last = e;
+        if (Date.now() >= until) break;
+        await new Promise((r) => setTimeout(r, LOOK_EVERY_MS));
+      }
+    }
+    throw new Error(
+      `no element matched ${xpath} within ${patienceMs / 1000}s. Last: ${String(last)}`,
+    );
+  }
+
+  /** Run script in the page; `args` arrive as `arguments`. Async: the last argument is the
+   *  callback the script calls with its answer. */
+  async executeAsync<T>(script: string, args: unknown[] = []): Promise<T> {
+    return await call<T>(this.at("/execute/async"), "POST", { script, args });
+  }
+
+  async execute<T>(script: string, args: unknown[] = []): Promise<T> {
+    return await call<T>(this.at("/execute/sync"), "POST", { script, args });
+  }
+
+  /** The whole window, as a PNG (base64). */
+  async screenshot(): Promise<string> {
+    return await call<string>(this.at("/screenshot"), "GET");
+  }
+
+  async elementScreenshot(handle: string): Promise<string> {
+    return await call<string>(this.at(`/element/${handle}/screenshot`), "GET");
+  }
+
+  async clear(handle: string): Promise<void> {
+    await call<null>(this.at(`/element/${handle}/clear`), "POST", {});
+  }
+
+  async type(handle: string, text: string): Promise<void> {
+    await call<null>(this.at(`/element/${handle}/value`), "POST", { text });
+  }
+
+  async attribute(handle: string, name: string): Promise<string | null> {
+    return await call<string | null>(this.at(`/element/${handle}/attribute/${name}`), "GET");
+  }
+
+  async property(handle: string, name: string): Promise<unknown> {
+    return await call<unknown>(this.at(`/element/${handle}/property/${name}`), "GET");
+  }
+
   async close(): Promise<void> {
     await call<null>(this.at(""), "DELETE");
   }
@@ -161,5 +227,25 @@ export class Element {
 
   click() {
     return this.session.click(this.handle);
+  }
+
+  screenshot() {
+    return this.session.elementScreenshot(this.handle);
+  }
+
+  clear() {
+    return this.session.clear(this.handle);
+  }
+
+  type(text: string) {
+    return this.session.type(this.handle, text);
+  }
+
+  attribute(name: string) {
+    return this.session.attribute(this.handle, name);
+  }
+
+  property(name: string) {
+    return this.session.property(this.handle, name);
   }
 }

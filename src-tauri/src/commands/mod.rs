@@ -30,7 +30,7 @@ pub mod viewers;
 
 use crate::domain::wording::Detail;
 use crate::store::db::Db;
-use crate::store::secrets::{OsSecretStore, SecretStore};
+use crate::store::secrets::SecretStore;
 use crate::tasks::engine::TaskEngine;
 use crate::tasks::state::{LaneLimits, PauseKind};
 use crate::tasks::store::TaskRecord;
@@ -152,12 +152,36 @@ impl AppState {
         use crate::startup_failure::StartupFailure;
         let db =
             Arc::new(Db::open(&path).map_err(|e| StartupFailure::from_db(Some(path.clone()), &e))?);
-        let mut state = Self::with_db(db, Arc::new(OsSecretStore::new()))
+        let mut state = Self::with_db(db, Self::system_secrets(&path))
             .map_err(|e| StartupFailure::other(Some(path.clone()), &e))?;
         // The one place a real directory is handed over. Everything else — tests included —
         // gets `None` and can therefore delete nothing.
         state.data_dir = path.parent().map(|p| p.to_path_buf());
+        // The e2e build only: where the build's last check asks for the set (a throwaway
+        // container has no domain and no certificate). See `store::data_dir`.
+        #[cfg(feature = "e2e")]
+        {
+            state.verify_origin = crate::store::data_dir::e2e_verify_origin();
+        }
         Ok(state)
+    }
+
+    /// The secret store a real run uses: the operating system's.
+    ///
+    /// In the e2e build (Cargo feature `e2e`) — a file beside the database instead, so that a
+    /// harness on a working machine never writes into the person's own credential store
+    /// (`store::data_dir` says why). Without the feature this is exactly what it always was.
+    fn system_secrets(db_path: &std::path::Path) -> Arc<dyn SecretStore> {
+        #[cfg(feature = "e2e")]
+        {
+            let dir = db_path.parent().unwrap_or(std::path::Path::new("."));
+            Arc::new(crate::store::secrets::FileSecretStore::in_dir(dir))
+        }
+        #[cfg(not(feature = "e2e"))]
+        {
+            let _ = db_path;
+            Arc::new(crate::store::secrets::OsSecretStore::new())
+        }
     }
 
     /// The same, but with the stores given — for tests.

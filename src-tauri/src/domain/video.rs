@@ -528,6 +528,24 @@ pub const MODEL_PIXELS_PER_S_SOFTWARE: f64 = 1920.0 * 1080.0 * 12.0;
 /// The decode check after each encode, as a share of the encode's own time.
 pub const VALIDATE_SHARE: f64 = 0.15;
 
+/// Where the bar of a stage stands, out of what a task reported under `code`.
+///
+/// **«Encoding» is two pieces of work with one bar.** A rung is encoded (`STAGE_CONVERTING`,
+/// 0…1) and then decoded once to check it (`STAGE_VALIDATING`, 0…1 again). Both are the stage
+/// «encoding», rung k of n — so shown as they come, the bar of one rung ran to 100 % and
+/// started over at 0 % (found on a real film, 2026-10-02). The encode takes the first part of
+/// the bar and the check the rest, in the proportion the plan's time already assumes
+/// ([`VALIDATE_SHARE`]). Every other code is shown as it is.
+pub fn bar_of(code: DetailCode, progress: f64) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    let encode = 1.0 / (1.0 + VALIDATE_SHARE);
+    match code {
+        DetailCode::StageConverting => progress * encode,
+        DetailCode::StageValidating => encode + progress * (1.0 - encode),
+        _ => progress,
+    }
+}
+
 /// Pixels of output an encode of `rung` over `source` makes: the work an encoder's speed is
 /// counted against.
 pub fn pixels_of(rung: &Rung, source: &SourceFile) -> f64 {
