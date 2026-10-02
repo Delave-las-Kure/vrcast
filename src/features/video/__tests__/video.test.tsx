@@ -33,6 +33,7 @@ const mockVideoRemove = vi.fn();
 const mockVideoSetAudio = vi.fn();
 const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
+const mockLadderRecomputeRung = vi.fn();
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
@@ -61,6 +62,7 @@ vi.mock("../../../shared/ipc", async () => {
       videoSetName: (...a: unknown[]) => mockVideoSetName(...a),
       videoSetRungs: (...a: unknown[]) => mockVideoSetRungs(...a),
       ladderValidate: () => Promise.resolve({ objections: [], not_buildable: null }),
+      ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
       push = handler;
@@ -706,6 +708,50 @@ describe("a problem", () => {
 });
 
 describe("the rungs before Start", () => {
+  it("a rung retyped by hand is saved without an error and is marked to measure (T680)", async () => {
+    mockVideoList.mockResolvedValue([video()]);
+    const unmeasured = {
+      ...rung(1, 3, 720),
+      reasons: ["edited_by_hand"],
+      quality: { state: "not_measured" },
+    } as Rung;
+    mockLadderRecomputeRung.mockResolvedValue(unmeasured);
+    mockVideoSetRungs.mockImplementation(() =>
+      Promise.resolve(
+        video({
+          plan: plan({
+            rungs: [rung(0, 8, 1080), unmeasured],
+            from: "edited",
+            needs_measuring: true,
+            measure_s: 120,
+          }),
+        }),
+      ),
+    );
+    show();
+    fireEvent.click((await card()).getByRole("button", { name: ru.ui.video.rungs }));
+    const editor = await screen.findByRole("dialog", { name: ru.ui.video.rungs });
+    fireEvent.change(within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 2`), {
+      target: { value: "3" },
+    });
+    await waitFor(() => expect(mockLadderRecomputeRung).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(within(editor).getByTestId("rung-1")).toHaveTextContent(ru.ui.ladder.notMeasured),
+    );
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent[1].quality).toEqual({ state: "not_measured" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(mockVideoStart).not.toHaveBeenCalled();
+    // The plan says which rung is still to be measured.
+    const p = (await card()).getByTestId("plan");
+    expect(p).toHaveTextContent(`720p · 3 Мбит/с · ${ru.ui.video.rungToMeasure}`);
+    expect(p).not.toHaveTextContent(`1080p · 8 Мбит/с · ${ru.ui.video.rungToMeasure}`);
+  });
+
   it("are edited on this screen and saved to the video without starting it", async () => {
     mockVideoList.mockResolvedValue([video()]);
     show();

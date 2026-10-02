@@ -1088,6 +1088,7 @@ export const en: Catalogue = {
       planning: "Working out the plan…",
       startsAfterPlan: "Starts once planned",
       rungLine: "{height}p · {mbps} Mbit/s",
+      rungToMeasure: "to measure",
       onServer: "On the server ≈ {bytes|bytes}",
       aboutMinutes: "≈ {n} min",
       shortServer: "{bytes|bytes} short on the server",

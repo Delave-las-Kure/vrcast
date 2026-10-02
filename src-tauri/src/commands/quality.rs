@@ -52,6 +52,18 @@ pub struct MeasureRequest {
     pub batch: Option<crate::tasks::store::Batch>,
 }
 
+/// The record a film's edited rungs are measured into (T680): beside the grid's own, never
+/// in it. A handful of points chosen by a person is not a measurement of the film — read as
+/// one, the planner would choose a whole ladder off them.
+pub fn edited_codec(codec: &str) -> String {
+    format!("{codec}+edited")
+}
+
+/// Whether a record holds edited rungs' points rather than a measurement ([`edited_codec`]).
+pub fn is_edited_codec(codec: &str) -> bool {
+    codec.ends_with("+edited")
+}
+
 /// What the build after a measurement needs that the measurement does not already know.
 ///
 /// The rungs are deliberately absent: they are what the measurement is *for*, and carrying a
@@ -218,6 +230,28 @@ pub mod api {
         state: &super::super::AppState,
         request: MeasureRequest,
     ) -> Result<String> {
+        start(state, request, None).await
+    }
+
+    /// Measure only these points of the grid (T680) — the rungs a person edited by hand, or
+    /// chose out of a plan nobody measured yet — as a task, in `request.batch`. Points already
+    /// measured are skipped. Measured on this film into a record of its own
+    /// ([`edited_codec`]), so a few points are never taken for a measurement of the film
+    /// (`ladder_plan` reads the grid's record only). `then_build` is not followed: the build
+    /// comes from whoever asked, with the person's rungs.
+    pub async fn quality_measure_cells_start(
+        state: &super::super::AppState,
+        request: MeasureRequest,
+        cells: Vec<crate::domain::measure_grid::Cell>,
+    ) -> Result<String> {
+        start(state, request, Some(cells)).await
+    }
+
+    async fn start(
+        state: &super::super::AppState,
+        request: MeasureRequest,
+        cells: Option<Vec<crate::domain::measure_grid::Cell>>,
+    ) -> Result<String> {
         // Only what refuses in a moment is asked here (T661). Reading the whole film and
         // encoding three pieces of it used to happen here too, before the task existed:
         // minutes with nothing in the task list and nothing to stop.
@@ -244,6 +278,27 @@ pub mod api {
                     // for what they are, and a cancel reaches them (T661).
                     ctx.report_important(0.0, DetailCode::StagePreparingMeasurement);
                     let cancel = ctx.cancel_token();
+                    // **Only the points asked for** (T680): the edited rungs, into their own
+                    // record, without the probe the grid's anchor needs and without a chain.
+                    if let Some(cells) = cells {
+                        let run = cells_run(&db, &for_build, quick, Some(&cancel)).await?;
+                        let job = MeasureJob {
+                            source: Path::new(&source),
+                            run: &run,
+                            encoder: &encoder,
+                            db: &db,
+                        };
+                        let measured = quality_measure::run_cells(&job, &cells, &ctx)
+                            .await
+                            .map_err(to_error)?;
+                        ctx.report_important(1.0, DetailCode::StageDone);
+                        tracing::info!(
+                            measured,
+                            asked = cells.len(),
+                            "the edited rungs are measured"
+                        );
+                        return Ok(());
+                    }
                     let (run, _) = read_the_film(&for_build, quick, Some(&cancel)).await?;
                     let job = MeasureJob {
                         source: Path::new(&source),
@@ -407,8 +462,17 @@ pub mod api {
     }
 
     /// Every measurement kept — what the next episode can be offered.
+    ///
+    /// Not the records of edited rungs (T680, [`edited_codec`]): a few points a person chose
+    /// are not a measurement to lend.
     pub async fn quality_measurements(state: &super::super::AppState) -> Result<Vec<Run>> {
-        measurements::all(&state.db).map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))
+        measurements::all(&state.db)
+            .map(|all| {
+                all.into_iter()
+                    .filter(|r| !is_edited_codec(&r.codec))
+                    .collect()
+            })
+            .map_err(|e| AppError::new(ErrorCode::Internal).with_cause(e))
     }
 
     /// Lend the measurement of one film to another.
@@ -770,6 +834,72 @@ async fn read_the_film(
         },
         notices,
     ))
+}
+
+/// The record the edited rungs of a film are measured into (T680), [`edited_codec`].
+///
+/// **The same chunks as the film's own measurement**, when it has one — the points are then
+/// comparable with the grid's; otherwise the packets are read for them, as the grid's are.
+/// No complexity probe: that only finds the grid's anchor, and these points are not a grid.
+async fn cells_run(
+    db: &crate::store::db::Db,
+    request: &MeasureRequest,
+    quick: Quick,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<Run> {
+    let path = Path::new(&request.path);
+    let Quick {
+        source, source_key, ..
+    } = quick;
+    let codec = edited_codec(&request.codec);
+    let known = measurements::run(db, &source_key, &codec)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            measurements::run(db, &source_key, &request.codec)
+                .ok()
+                .flatten()
+        })
+        .filter(|r| !r.chunk_starts.is_empty());
+    let chunk_starts = match known {
+        Some(run) => run.chunk_starts,
+        None => {
+            let seconds = measure::seconds_of_until(path, cancel)
+                .await
+                .map_err(|e| match e {
+                    measure::PacketsError::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+                    measure::PacketsError::Ffmpeg(e) => {
+                        AppError::new(ErrorCode::FfmpegBroken).with_cause(e)
+                    }
+                })?;
+            reference_chunks(&seconds, CHUNK_S)
+        }
+    };
+    Ok(Run {
+        check_pending: false,
+        source_key,
+        codec,
+        source_path: request.path.clone(),
+        width: source.width,
+        height: source.height,
+        fps: source.fps,
+        source_bitrate_bps: source.bitrate_bps,
+        heavier_codec: source.video_codec.eq_ignore_ascii_case("hevc"),
+        native_height: request.native_height,
+        anchor_mbps: crate::domain::ladder::FALLBACK_MBPS,
+        chunk_starts,
+        chunk_s: CHUNK_S as u64,
+        material: Some(measurements::Material {
+            codec: source.video_codec.clone(),
+            pix_fmt: source.pix_fmt.clone(),
+            color_transfer: source.color_transfer.clone(),
+            duration_s: source.duration_s,
+            peak_bps: source.peak_bps,
+        }),
+        borrowed_from: None,
+        donor_anchor_mbps: None,
+        shape: None,
+    })
 }
 
 fn facts_of(run: &Run) -> SourceFacts {

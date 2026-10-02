@@ -334,6 +334,10 @@ function Plan({
         {plan.rungs.map((r) => (
           <li key={r.index}>
             {fill(w.rungLine, { height: r.height, mbps: megabits(r.bitrate_bps, lang) }, t, lang)}
+            {/* T680 — a rung not measured yet is measured first when «Start» is pressed. */}
+            {plan.from === "edited" &&
+              r.quality.state === "not_measured" &&
+              ` · ${w.rungToMeasure}`}
           </li>
         ))}
       </ul>

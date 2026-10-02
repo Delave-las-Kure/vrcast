@@ -1081,6 +1081,7 @@ const ui = {
     planning: "Считаю план…",
     startsAfterPlan: "Стартует после плана",
     rungLine: "{height}p · {mbps} Мбит/с",
+    rungToMeasure: "замерить",
     onServer: "На сервере ≈ {bytes|bytes}",
     aboutMinutes: "≈ {n} мин",
     shortServer: "Не хватает {bytes|bytes} на сервере",

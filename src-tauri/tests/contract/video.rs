@@ -296,7 +296,9 @@ async fn what_a_state_does_not_allow_is_refused_and_changes_nothing() {
         0
     );
 
-    // Rungs nobody measured are not built (FR-141), here as on the ladder screen.
+    // Rungs nobody measured are not built (FR-141) — they are measured first (T680, the
+    // owner's decision of 2026-10-02): saved, and the plan says they need measuring. Only a
+    // rung no measurement can answer — not a whole number of megabits — is refused.
     let unmeasured = vec![Rung {
         index: 0,
         bitrate_bps: 2_000_000,
@@ -308,7 +310,13 @@ async fn what_a_state_does_not_allow_is_refused_and_changes_nothing() {
         reasons: Vec::new(),
         quality: Quality::NotMeasured,
     }];
-    let err = video::video_set_rungs(&state, &id, Some(unmeasured.clone())).unwrap_err();
+    let saved = video::video_set_rungs(&state, &id, Some(unmeasured.clone())).unwrap();
+    let plan = saved.plan.unwrap();
+    assert!(plan.needs_measuring);
+    assert_eq!(plan.rungs[0].quality, Quality::NotMeasured);
+    let mut odd = unmeasured.clone();
+    odd[0].bitrate_bps = 2_500_000;
+    let err = video::video_set_rungs(&state, &id, Some(odd)).unwrap_err();
     assert_eq!(err.code, ErrorCode::LadderNotMeasured);
     // Measured ones are taken, and the plan says so; `None` goes back to the plan's own.
     let measured: Vec<Rung> = unmeasured
@@ -938,4 +946,162 @@ async fn a_build_that_finds_no_medium_to_file_its_set_under_is_a_problem_not_don
     assert_eq!(problem.error.code, ErrorCode::VideoMediumGone);
     assert_eq!(problem.actions, vec![VideoAction::Retry]);
     assert!(ended.link.is_none());
+}
+
+// ---------- a rung edited by hand is measured on the way, not refused (T680) ----------
+
+/// QA-25 №1: the rung editor's real path — `ladder_recompute_rung` for the new bitrate, then
+/// `video_set_rungs` — was refused with `LADDER_NOT_MEASURED`, and nothing measured the
+/// edited rung. The owner's decision of 2026-10-02: the pipeline measures the edited rungs
+/// itself and goes on. Saved as «needs measuring»; «Start» measures only what is missing —
+/// a rung already measured is not measured again — then the objection check and the build.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_edited_rung_is_saved_measured_on_start_and_the_build_follows() {
+    use vrcast_studio_lib::commands::ladder::{api as ladder, RecomputeRungRequest};
+    use vrcast_studio_lib::tasks::state::TaskKind;
+
+    if skipped() {
+        return;
+    }
+    if !ffmpeg::probe_self().await.unwrap().has_libvmaf {
+        eprintln!("SKIPPED: this FFmpeg cannot measure quality");
+        return;
+    }
+    let films = Films::new();
+    let film = films.film("edited.mp4", true).unwrap();
+    let state = state();
+    let server = server(&state);
+    let id = video::video_add(&state, &server, &[film], None)
+        .await
+        .unwrap()
+        .added[0]
+        .id
+        .clone();
+    let ready = until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    assert_eq!(ready.state, VideoState::Ready, "{:?}", ready.problem);
+    let source = ready.source.clone().unwrap();
+    let facts = vrcast_studio_lib::domain::ladder::SourceFacts {
+        width: source.width,
+        height: source.height,
+        fps: source.fps,
+        bitrate_bps: source.bitrate_bps,
+        heavier_codec: false,
+        native_height: None,
+    };
+
+    // One rung already measured (as if chosen by an earlier measurement), and one retyped by
+    // hand — exactly what the editor sends.
+    let mut kept = ladder::ladder_recompute_rung(&RecomputeRungRequest {
+        index: 0,
+        bitrate_bps: 3_000_000,
+        source: facts,
+    })
+    .await
+    .unwrap();
+    kept.quality = Quality::MeasuredHere { vmaf_x100: 9_123 };
+    let edited = ladder::ladder_recompute_rung(&RecomputeRungRequest {
+        index: 1,
+        bitrate_bps: 2_000_000,
+        source: facts,
+    })
+    .await
+    .unwrap();
+    assert_eq!(edited.quality, Quality::NotMeasured);
+
+    // **Saved, not refused**, and the plan says the rung is still to be measured.
+    let saved = video::video_set_rungs(&state, &id, Some(vec![kept.clone(), edited.clone()]))
+        .expect("an edited rung was refused");
+    let plan = saved.plan.expect("no plan");
+    assert_eq!(plan.from, PlanSource::Edited);
+    assert!(
+        plan.needs_measuring,
+        "the edited rung is not said to need measuring"
+    );
+    assert!(plan.measure_s > 0);
+    // The rung is not passed off as measured.
+    assert_eq!(plan.rungs[1].quality, Quality::NotMeasured);
+
+    // The medium is in place already (the server here never answers): the way from «Start»
+    // to the build is what is looked at.
+    let mut row = rows::get(&state.db, &id).unwrap().unwrap();
+    row.media_id = Some(String::from("m_edit"));
+    // Its own medium, made a moment ago: nobody can be watching it, so the build does not ask
+    // the server about viewers first and its task is put on the queue.
+    row.own_medium = true;
+    rows::save(&state.db, &row).unwrap();
+
+    let started = video::video_start(&state, std::slice::from_ref(&id));
+    assert!(started[0].error.is_none(), "{:?}", started[0].error);
+    let measuring = until(&state, &id, "measuring", Duration::from_secs(30), |v| {
+        v.stage == VideoStage::Measuring || v.state == VideoState::Problem
+    })
+    .await;
+    assert_eq!(
+        measuring.stage,
+        VideoStage::Measuring,
+        "{:?}",
+        measuring.problem
+    );
+
+    // It goes on to the build — which stops on the server that does not answer, not on the
+    // rungs.
+    let ended = until(&state, &id, "the build", Duration::from_secs(240), |v| {
+        v.state == VideoState::Problem
+    })
+    .await;
+    let problem = ended.problem.clone().unwrap();
+    assert_ne!(
+        problem.error.code,
+        ErrorCode::LadderNotMeasured,
+        "{problem:?}"
+    );
+    let plan = ended.plan.unwrap();
+    assert!(!plan.needs_measuring, "{plan:?}");
+    // The edited rung is measured now, here, for what it is; the measured one was not
+    // measured again.
+    assert!(
+        matches!(plan.rungs[1].quality, Quality::MeasuredHere { .. }),
+        "{:?}",
+        plan.rungs[1].quality
+    );
+    assert_eq!(plan.rungs[1].bitrate_bps, 2_000_000);
+    assert_eq!(plan.rungs[1].height, edited.height);
+    assert_eq!(
+        plan.rungs[0].quality,
+        Quality::MeasuredHere { vmaf_x100: 9_123 }
+    );
+    // And the build was asked for.
+    assert!(
+        state
+            .tasks
+            .list()
+            .unwrap()
+            .iter()
+            .any(|t| t.kind == TaskKind::BuildLadder),
+        "the build never came after the measurement: {problem:?}"
+    );
+
+    // Retry after the problem does not measure it again: nothing is missing.
+    let measures = |s: &AppState| {
+        s.tasks
+            .list()
+            .unwrap()
+            .iter()
+            .filter(|t| t.kind == TaskKind::MeasureQuality)
+            .count()
+    };
+    let before = measures(&state);
+    video::video_retry(&state, &id, false).unwrap();
+    until(&state, &id, "the retry", Duration::from_secs(60), |v| {
+        v.state == VideoState::Problem
+    })
+    .await;
+    assert_eq!(
+        measures(&state),
+        before,
+        "measured again with nothing missing"
+    );
 }
