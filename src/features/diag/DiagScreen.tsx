@@ -42,13 +42,31 @@ export function DiagScreen({ serverId }: { serverId: string }) {
   const [stalls, setStalls] = useState<Stalls | null>(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
-  // What `BitratePeaks` found about the chosen file, if anything (T500). Without it, every
-  // stalling viewer falls into the general "not enough channel" verdict — `Cause::TheFileItself`
-  // and `Cause::ThePlayer` both require `Some(file)` to be reached at all.
+  // What `BitratePeaks` found about the chosen file, if anything (T500), and which film on
+  // the server it is (T705): applied to that film's viewers only. What each viewer's rung
+  // needs comes from the server itself, so a verdict about a link no longer waits on this.
   const [fileShape, setFileShape] = useState<{
     average_mbit: number;
     peak_10s_mbit: number;
+    slug: string | null;
   } | null>(null);
+  // The films on the server: their names for the reading of the stalls, and the list the
+  // measured file is said to be one of (T705). A library that will not load leaves both
+  // plainer, never wrong.
+  const [films, setFilms] = useState<{ slug: string; title: string }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    ipc
+      .libraryList(serverId)
+      .then((view) => {
+        if (alive) setFilms(view.media.map((m) => ({ slug: m.slug, title: m.title })));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [serverId]);
+  const titles = Object.fromEntries(films.map((f) => [f.slug, f.title]));
   /**
    * T594 — a per-request generation token, the same pattern `DomainCheck`'s `genRef`
    * already uses (T592), and `LadderScreen`'s (T587) and `UploadScreen`'s `uploadGenRef`
@@ -126,9 +144,9 @@ export function DiagScreen({ serverId }: { serverId: string }) {
 
       {health && <HealthPanel health={health} />}
       {logs && <LogsPanel logs={logs} />}
-      {stalls && <StallsPanel stalls={stalls} />}
+      {stalls && <StallsPanel stalls={stalls} titles={titles} />}
 
-      <BitratePeaks onMeasured={setFileShape} />
+      <BitratePeaks films={films} onMeasured={setFileShape} />
     </div>
   );
 }

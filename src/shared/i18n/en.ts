@@ -663,7 +663,8 @@ export const en: Catalogue = {
     STALLS_THE_PLAYER:
       "The player, not the link: {in_download_mbit_s} Mbit/s against {average_mbit} needed; by the clock {mbit_s} Mbit/s, ratio {ratio}. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
-      "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}). Skipped: {skipped}, restarts: {restarts}.",
+      "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}), and this quality needs {need_mbit}. Skipped: {skipped}, restarts: {restarts}.",
+    STALLS_UNCLEAR: "Falling behind: {ratio}× real time. These figures do not say why.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
     RUNG_FILE_CLAIMED:
@@ -918,6 +919,7 @@ export const en: Catalogue = {
       stallsSkipped: "Segments skipped",
       stallsRestarts: "Player restarts",
       stallsWatching: "Watching",
+      stallsNeeds: "This quality needs",
       stallsLoad: "What the server was doing",
       stallsLoadCpu: "Processor",
       stallsLoadDisk: "Read off the disk",
@@ -928,6 +930,8 @@ export const en: Catalogue = {
 
       bitrateTitle: "The file's bitrate peaks",
       bitratePick: "Choose a file",
+      bitrateFilm: "This is the film",
+      bitrateFilmNone: "not said — the diagnosis leaves it out",
       bitrateAverage: "Average",
       bitrateMedian: "Median",
       bitratePeak1: "One-second peak",
@@ -999,6 +1003,8 @@ export const en: Catalogue = {
       speedNotYet: "Not measured yet.",
       needs: "needs",
       fine: "fine",
+      noData: "no data yet",
+      noDataHint: "The speed, or what this quality needs, is not known yet.",
       columnAddress: "Address",
       columnPlace: "From",
       columnWatching: "Watching",
@@ -1006,8 +1012,8 @@ export const en: Catalogue = {
       columnFor: "For",
       columnState: "State",
       problems: {
-        slowLink: "not enough link",
-        slowLinkHint: "The link is too slow for this quality — cap the quality.",
+        slowLink: "falling behind",
+        slowLinkHint: "Arriving slower than this quality needs — cap the quality.",
         retransmits: "a lossy link",
         retransmitsHint: "Poor connection on the viewer's side.",
         stalls: "the pulling has stopped",

@@ -83,6 +83,9 @@ export function ViewerRow({
       </td>
       <td>{formatDuration(watchingFor(viewer))}</td>
       <td>
+        {/* T705 (QA-26 №12): "fine" only for what is known to be in order — both the
+            speed and what the quality needs measured, and the speed enough. Nothing found is
+            not the same as nothing wrong: without the two figures it says so. */}
         {troubled ? (
           <ul className="viewers__problems">
             {viewer.problems.map((problem) => (
@@ -91,6 +94,10 @@ export function ViewerRow({
               </li>
             ))}
           </ul>
+        ) : viewer.delivery_bps === null || viewer.required_bps === null ? (
+          <span className="viewers__unknown" title={words.noDataHint} data-testid="viewer-no-data">
+            {words.noData}
+          </span>
         ) : (
           <span className="viewers__fine">{words.fine}</span>
         )}

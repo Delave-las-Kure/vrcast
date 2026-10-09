@@ -211,6 +211,25 @@ describe("the viewers screen", () => {
     expect(screen.getByText(ru.ui.viewers.watchingUnknown)).toBeInTheDocument();
   });
 
+  it("says «в порядке» only when both speeds are known, and «данных пока нет» otherwise (T705)", async () => {
+    // QA-26 №12: a viewer whose speed, need and film were all unknown was shown as fine.
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+    send?.(
+      update([
+        viewer({ ip: "203.0.113.1", delivery_bps: null }),
+        viewer({ ip: "203.0.113.2", required_bps: null }),
+        viewer({ ip: "203.0.113.3" }),
+        viewer({ ip: "203.0.113.4", delivery_bps: 1_000_000, problems: ["SlowLink"] }),
+      ]),
+    );
+    await waitFor(() => expect(screen.getAllByTestId("viewer-no-data")).toHaveLength(2));
+    expect(screen.getAllByText(ru.ui.viewers.noData)).toHaveLength(2);
+    expect(screen.getAllByText(ru.ui.viewers.fine)).toHaveLength(1);
+    expect(screen.getByText(ru.ui.viewers.problems.slowLink)).toBeInTheDocument();
+    expect(ru.ui.viewers.problems.slowLink).toBe("не успевает");
+  });
+
   it("marks a viewer in trouble with the reason rather than merely marking them", async () => {
     renderIn(<ViewersScreen />, "ru");
     await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());

@@ -30,7 +30,14 @@ function speed(value: number | null, lang: "ru" | "en", nothing: string): string
   return value === null ? nothing : formatBitrate(value * 1_000_000, lang);
 }
 
-export function StallsPanel({ stalls }: { stalls: Stalls }) {
+export function StallsPanel({
+  stalls,
+  titles = {},
+}: {
+  stalls: Stalls;
+  /** Films by their directory name, so a viewer reads the film's title, not its slug (T705). */
+  titles?: Record<string, string>;
+}) {
   const t = useT();
   const { lang } = useLang();
   const words = t.ui.diag;
@@ -72,7 +79,7 @@ export function StallsPanel({ stalls }: { stalls: Stalls }) {
                   {w.watching && (
                     <>
                       {" · "}
-                      {words.stallsWatching}: {w.watching}
+                      {words.stallsWatching}: {titles[w.watching] ?? w.watching}
                     </>
                   )}
                 </p>
@@ -99,6 +106,10 @@ export function StallsPanel({ stalls }: { stalls: Stalls }) {
                         {")"}
                       </>
                     )}
+                  </dd>
+                  <dt>{words.stallsNeeds}</dt>
+                  <dd data-testid={`needs-${w.client_ip}`}>
+                    {speed(w.need_mbit ?? null, lang, nothing)}
                   </dd>
                   <dt>{words.stallsSkipped}</dt>
                   <dd>{w.skipped.length}</dd>

@@ -555,9 +555,13 @@ detail_codes! {
     StallsDisk => "STALLS_DISK",
     /// `mbit_s`, `average_mbit`, `peak_10s_mbit`.
     StallsFilePeaks => "STALLS_FILE_PEAKS",
-    /// `ratio`, `mbit_s`, `in_download_mbit_s`, `skipped`, `restarts`.
+    /// `ratio`, `mbit_s`, `in_download_mbit_s`, `need_mbit`, `skipped`, `restarts`. Only with
+    /// what the viewer's rung needs, and their speed under it (T705).
     StallsViewerLink => "STALLS_VIEWER_LINK",
     StallsThePlayer => "STALLS_THE_PLAYER",
+    /// `ratio`, `mbit_s`, `need_mbit` (either may be absent). Behind real time, and nothing
+    /// measured says why (T705) — said instead of blaming the viewer's link without a number.
+    StallsUnclear => "STALLS_UNCLEAR",
 
     // --- videos in work (T672) ---
     /// This file is already on the list of videos for this server, and not finished.

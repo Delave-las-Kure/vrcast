@@ -137,10 +137,35 @@ pub mod api {
             log_reader::ACCESS_LOG_PATH,
         )
         .await;
-        opened.conn.close().await;
-
+        if live.is_err() || stretch.is_err() {
+            opened.conn.close().await;
+        }
         let live = live?;
-        let sifted = stalls::sift(&stretch?.requests, &live.addresses);
+        let mut sifted = stalls::sift(&stretch?.requests, &live.addresses);
+
+        // T705: what each viewer's rung of each viewer's film needs, read off that film's own
+        // set description on the server — the one figure a verdict about their link may stand
+        // on. Read on the same connection, once per film.
+        let mut slugs: Vec<String> = sifted
+            .watchers
+            .iter()
+            .filter(|w| w.rung.is_some())
+            .filter_map(|w| w.watching.clone())
+            .collect();
+        slugs.sort();
+        slugs.dedup();
+        let needs =
+            crate::server::viewers::rung_needs(&opened.conn, &profile.video_dir, &slugs).await;
+        opened.conn.close().await;
+        for w in &mut sifted.watchers {
+            if let (Some(slug), Some(rung)) = (&w.watching, &w.rung) {
+                w.need_mbit = needs
+                    .get(slug)
+                    .and_then(|rungs| rungs.get(rung))
+                    .map(|bps| *bps as f64 / 1_000_000.0);
+            }
+        }
+
         let verdicts = sifted
             .watchers
             .iter()

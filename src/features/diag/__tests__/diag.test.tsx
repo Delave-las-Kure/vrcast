@@ -22,6 +22,8 @@ const mockLogs = vi.fn<() => Promise<Logs>>();
 const mockStalls = vi.fn<(...a: unknown[]) => Promise<Stalls>>();
 const mockBitrate = vi.fn<() => Promise<Peaks>>();
 const mockOpen = vi.fn<() => Promise<string | null>>();
+// The films on the server (T705). Unset — an answer with no media, as the stub gives.
+const mockLibrary = vi.fn<() => Promise<unknown>>(async () => []);
 
 vi.mock("../../../shared/ipc", async () => {
   const actual = await vi.importActual<typeof import("../../../shared/ipc")>("../../../shared/ipc");
@@ -35,6 +37,7 @@ vi.mock("../../../shared/ipc", async () => {
       diagLogs: () => mockLogs(),
       diagExplainStalls: (...a: unknown[]) => mockStalls(...a),
       diagBitrate: () => mockBitrate(),
+      libraryList: () => mockLibrary(),
     }),
   };
 });
@@ -284,7 +287,7 @@ describe("the diagnosis screen", () => {
     expect(mockStalls.mock.calls[1]).toEqual([
       "s1",
       30,
-      { average_mbit: 8, peak_10s_mbit: 41 },
+      { average_mbit: 8, peak_10s_mbit: 41, slug: null },
     ]);
   });
 });
@@ -392,14 +395,14 @@ describe("T669 — a late measurement of an earlier file does not replace the cu
 
     b.resolve(peaks(2));
     await waitFor(() =>
-      expect(measured).toHaveBeenLastCalledWith({ average_mbit: 2, peak_10s_mbit: 2 }),
+      expect(measured).toHaveBeenLastCalledWith({ average_mbit: 2, peak_10s_mbit: 2, slug: null }),
     );
     a.resolve(peaks(50));
     await new Promise((r) => setTimeout(r, 0));
 
     expect(screen.getByText("F:/qa/b.mp4")).toBeInTheDocument();
-    expect(measured).toHaveBeenLastCalledWith({ average_mbit: 2, peak_10s_mbit: 2 });
-    expect(measured).not.toHaveBeenCalledWith({ average_mbit: 50, peak_10s_mbit: 50 });
+    expect(measured).toHaveBeenLastCalledWith({ average_mbit: 2, peak_10s_mbit: 2, slug: null });
+    expect(measured).not.toHaveBeenCalledWith({ average_mbit: 50, peak_10s_mbit: 50, slug: null });
     expect(screen.getByTestId("bitrate-average").textContent).not.toMatch(/50/);
   });
 
@@ -423,7 +426,7 @@ describe("T669 — a late measurement of an earlier file does not replace the cu
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByTestId("bitrate-average")).toBeInTheDocument();
-    expect(measured).toHaveBeenLastCalledWith({ average_mbit: 3, peak_10s_mbit: 3 });
+    expect(measured).toHaveBeenLastCalledWith({ average_mbit: 3, peak_10s_mbit: 3, slug: null });
   });
 
   it("while the current file is still being measured, an earlier answer says nothing at all", async () => {
@@ -443,6 +446,81 @@ describe("T669 — a late measurement of an earlier file does not replace the cu
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId("bitrate-average")).toBeNull();
     expect(screen.getByText(ru.ui.diag.asking)).toBeInTheDocument();
-    expect(measured).not.toHaveBeenCalledWith({ average_mbit: 50, peak_10s_mbit: 50 });
+    expect(measured).not.toHaveBeenCalledWith({ average_mbit: 50, peak_10s_mbit: 50, slug: null });
+  });
+});
+
+/**
+ * T705 (QA-26 №12) — conclusions tied to a particular film: a file measured on this computer
+ * is one film, said or guessed, and a viewer is named by the film they watch.
+ */
+describe("T705 — the diagnosis is about a particular film", () => {
+  const LIBRARY = {
+    server_id: "s1",
+    media: [
+      { id: "m1", title: "The Recorded Case", slug: "the-recorded-case", files: [], ladders: [] },
+      { id: "m2", title: "Another", slug: "another", files: [], ladders: [] },
+    ],
+    unrecognized: [],
+    disk: null,
+    stale: false,
+  };
+  const PEAKS: Peaks = {
+    average_bps: 8_000_000,
+    median_bps: 7_500_000,
+    one_second: { at_s: 10, length_s: 1, bitrate_bps: 20_000_000 },
+    wide: { at_s: 100, length_s: 10, bitrate_bps: 41_000_000 },
+    worst_wide: [],
+    seconds: 3600,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHealth.mockResolvedValue(HEALTH);
+    mockLogs.mockResolvedValue(LOGS);
+    mockStalls.mockResolvedValue({
+      ...STALLS,
+      watchers: [{ ...STALLS.watchers[0], rung: "v9", need_mbit: 10.7 }],
+    });
+    mockLibrary.mockResolvedValue(LIBRARY);
+    mockBitrate.mockResolvedValue(PEAKS);
+  });
+
+  it("names the viewer's film by its title, and what that quality needs", async () => {
+    renderIn(<DiagScreen serverId="s1" />, "ru");
+    await waitFor(() =>
+      expect(screen.getByTestId("watcher-203.0.113.24")).toHaveTextContent("The Recorded Case"),
+    );
+    expect(screen.getByTestId("needs-203.0.113.24")).toHaveTextContent("10,7 Мбит/с");
+  });
+
+  it("a file named like a film on the server is taken for that film", async () => {
+    mockOpen.mockResolvedValue("F:/films/The Recorded Case.mkv");
+    renderIn(<DiagScreen serverId="s1" />, "ru");
+    await waitFor(() => expect(mockStalls).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockLibrary).toHaveBeenCalled());
+    fireEvent.click(await screen.findByText(ru.ui.diag.bitratePick));
+    await waitFor(() => expect(mockStalls).toHaveBeenCalledTimes(2));
+    expect(mockStalls.mock.calls[1][2]).toEqual({
+      average_mbit: 8,
+      peak_10s_mbit: 41,
+      slug: "the-recorded-case",
+    });
+    expect((screen.getByTestId("bitrate-film") as HTMLSelectElement).value).toBe(
+      "the-recorded-case",
+    );
+  });
+
+  it("a file the name of no film judges nobody until the person says which film it is", async () => {
+    mockOpen.mockResolvedValue("F:/films/rip-1080p.mkv");
+    renderIn(<DiagScreen serverId="s1" />, "ru");
+    await waitFor(() => expect(mockLibrary).toHaveBeenCalled());
+    fireEvent.click(await screen.findByText(ru.ui.diag.bitratePick));
+    await waitFor(() => expect(mockStalls).toHaveBeenCalledTimes(2));
+    expect(mockStalls.mock.calls[1][2]).toMatchObject({ slug: null });
+
+    fireEvent.change(screen.getByTestId("bitrate-film"), { target: { value: "another" } });
+    await waitFor(() => expect(mockStalls).toHaveBeenCalledTimes(3));
+    expect(mockStalls.mock.calls[2][2]).toMatchObject({ slug: "another" });
   });
 });

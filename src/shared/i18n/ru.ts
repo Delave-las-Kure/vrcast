@@ -650,7 +650,8 @@ export const ruCore: CatalogueCore = {
     STALLS_THE_PLAYER:
       "Дело в плеере, не в канале: {in_download_mbit_s} Мбит/с при нужных {average_mbit}; по часам {mbit_s} Мбит/с, доля {ratio}. Перезапусков: {restarts}, пропусков: {skipped}.",
     STALLS_VIEWER_LINK:
-      "Не хватает канала зрителя: {ratio}× при {mbit_s} Мбит/с (в закачках {in_download_mbit_s}). Пропусков: {skipped}, перезапусков: {restarts}.",
+      "Не хватает канала зрителя: {ratio}× при {mbit_s} Мбит/с (в закачках {in_download_mbit_s}), а этому качеству нужно {need_mbit}. Пропусков: {skipped}, перезапусков: {restarts}.",
+    STALLS_UNCLEAR: "Отстаёт: {ratio}× реального времени. Причину по этим данным не назвать.",
     VIDEO_ALREADY_LISTED: "Это видео уже в списке",
     RUNG_FILE_CLAIMED:
       "Файл «{name}» принадлежит медиа и не перезаписывается. Смените ступени или имя.",
@@ -913,6 +914,7 @@ const ui = {
     stallsSkipped: "Пропущено отрезков",
     stallsRestarts: "Перезапусков плеера",
     stallsWatching: "Смотрит",
+    stallsNeeds: "Нужно этому качеству",
     stallsLoad: "Что делал сервер",
     stallsLoadCpu: "Процессор",
     stallsLoadDisk: "Чтение с диска",
@@ -922,6 +924,8 @@ const ui = {
 
     bitrateTitle: "Пики битрейта файла",
     bitratePick: "Выбрать файл",
+    bitrateFilm: "Это фильм",
+    bitrateFilmNone: "не указан — разбор его не учитывает",
     bitrateAverage: "Средний",
     bitrateMedian: "Медиана",
     bitratePeak1: "Пик 1 секунды",
@@ -995,6 +999,8 @@ const ui = {
     speedNotYet: "Ещё не посчитано.",
     needs: "нужно",
     fine: "в порядке",
+    noData: "данных пока нет",
+    noDataHint: "Скорость или то, сколько нужно этому качеству, ещё не известны.",
     columnAddress: "Адрес",
     columnPlace: "Откуда",
     columnWatching: "Смотрит",
@@ -1002,8 +1008,8 @@ const ui = {
     columnFor: "Длительность",
     columnState: "Состояние",
     problems: {
-      slowLink: "не хватает канала",
-      slowLinkHint: "Канала не хватает на это качество — ограничьте качество.",
+      slowLink: "не успевает",
+      slowLinkHint: "Приходит медленнее, чем нужно этому качеству — ограничьте качество.",
       retransmits: "потери в канале",
       retransmitsHint: "Плохая связь у зрителя.",
       stalls: "передача встала",
