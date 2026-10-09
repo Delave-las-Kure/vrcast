@@ -104,6 +104,124 @@ pub struct Watcher {
     /// with no number for what the link would have had to carry (QA-26 №12).
     #[serde(default)]
     pub need_mbit: Option<f64>,
+    /// What their own connection said while the diagnosis was asked (T711) — `None` when they
+    /// had none open in both readings, or the server could not be asked.
+    #[serde(default)]
+    pub live: Option<LiveLink>,
+}
+
+/// T711 — a viewer's link as their live connection shows it: the `ss -tin` the Viewers
+/// screen reads, taken twice, [`crate::server::health::SAMPLE_S`] apart.
+///
+/// **What the log cannot tell, this can.** The log says how fast the server put a piece into
+/// its socket buffers, not when the viewer had it — measured 2026-10-09, a viewer held to
+/// 0.4 Mbit/s showed 6.16 "inside the downloads". The connection itself says what the viewer's
+/// side confirmed, how long there was something on its way to them, and how much of that time
+/// their side was full and taking nothing more. A full side is the player not taking what
+/// arrived; a connection working all the time and carrying less than the film needs is the
+/// link.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LiveLink {
+    /// Seconds between the two readings.
+    pub span_s: f64,
+    /// What reached the viewer over the stretch, by what their side confirmed, Mbit/s.
+    pub mbit_s: f64,
+    /// What the connection carried while it had something to carry, Mbit/s. `None` when it
+    /// had nothing on its way at all, or `ss` did not say.
+    pub busy_mbit_s: Option<f64>,
+    /// Share of the stretch with something on its way to them, 0 to 1.
+    pub busy_share: Option<f64>,
+    /// Share of that busy time their side was full, 0 to 1.
+    pub held_share: Option<f64>,
+    /// Share of what was sent in the stretch that had to be sent again, 0 to 1.
+    pub resent_share: Option<f64>,
+}
+
+/// Above this share of the stretch with something on its way, the connection was working,
+/// and what it carried is an answer about the link (T711). **A choice**: below it the viewer
+/// was mostly not asking — a full buffer now, perhaps, while the log's minutes say behind —
+/// and the live reading says nothing either way; the log's reasoning stands.
+pub const LIVE_BUSY: f64 = 0.5;
+
+/// Below this share of the stretch with something on its way, the connection hardly sent at
+/// all, and how much of its sending time the viewer's side was full is too little to go on
+/// (T711). **A choice**: half a second in the five.
+pub const LIVE_SENDING: f64 = 0.1;
+
+/// Above this share of the busy time with the viewer's side full, it is the player that is
+/// not taking what arrives. The Viewers screen's own threshold for the same field.
+pub const LIVE_HELD: f64 = 0.5;
+
+/// Each address's [`LiveLink`] from two readings of the connection table (T711).
+///
+/// Only connections present in **both** are counted, matched by address and port: a
+/// connection opened or closed in between has no difference to take, and summing what the
+/// two readings saw would count a new connection's whole life as five seconds' delivery.
+pub fn live_links(
+    before: &super::connections::Poll,
+    after: &super::connections::Poll,
+) -> BTreeMap<String, LiveLink> {
+    let span_s = (after.at - before.at).as_seconds_f64();
+    let mut out = BTreeMap::new();
+    if span_s < 1.0 {
+        return out;
+    }
+    #[derive(Default)]
+    struct Sum {
+        bytes: u64,
+        segs: u64,
+        resent: u64,
+        busy_ms: Option<u64>,
+        held_ms: Option<u64>,
+        unknown_busy: bool,
+    }
+    let mut sums: BTreeMap<&str, Sum> = BTreeMap::new();
+    for now in &after.rows {
+        let Some(then) = before
+            .rows
+            .iter()
+            .find(|r| r.peer_ip == now.peer_ip && r.peer_port == now.peer_port)
+        else {
+            continue;
+        };
+        let sum = sums.entry(now.peer_ip.as_str()).or_default();
+        sum.bytes += now.bytes_acked.saturating_sub(then.bytes_acked);
+        sum.segs += now.segs_out.saturating_sub(then.segs_out);
+        sum.resent += now.retrans_total.saturating_sub(then.retrans_total);
+        match (then.busy_ms, now.busy_ms) {
+            (Some(a), Some(b)) => {
+                *sum.busy_ms.get_or_insert(0) += b.saturating_sub(a);
+                let held = now
+                    .rwnd_limited_ms
+                    .unwrap_or(0)
+                    .saturating_sub(then.rwnd_limited_ms.unwrap_or(0));
+                *sum.held_ms.get_or_insert(0) += held;
+            }
+            _ => sum.unknown_busy = true,
+        }
+    }
+    for (ip, sum) in sums {
+        let busy_ms = sum.busy_ms.filter(|_| !sum.unknown_busy);
+        let busy_s = busy_ms.map(|ms| ms as f64 / 1000.0);
+        out.insert(
+            ip.to_owned(),
+            LiveLink {
+                span_s,
+                mbit_s: sum.bytes as f64 * 8.0 / span_s / 1_000_000.0,
+                busy_mbit_s: busy_s
+                    .filter(|s| *s > 0.0)
+                    .map(|s| sum.bytes as f64 * 8.0 / s / 1_000_000.0),
+                // Several connections may each be busy at once; the stretch is not longer
+                // for it.
+                busy_share: busy_s.map(|s| (s / span_s).min(1.0)),
+                held_share: busy_ms
+                    .filter(|ms| *ms > 0)
+                    .map(|ms| (sum.held_ms.unwrap_or(0) as f64 / ms as f64).min(1.0)),
+                resent_share: (sum.segs > 0).then(|| sum.resent as f64 / sum.segs as f64),
+            },
+        );
+    }
+    out
 }
 
 impl Watcher {
@@ -340,6 +458,7 @@ fn assemble(client_ip: &str, mine: &[&Request]) -> Watcher {
             .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
             .map(|(rung, _)| rung),
         need_mbit: None,
+        live: None,
     }
 }
 
@@ -421,6 +540,36 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
         }
     }
 
+    // T711 — the player, seen on the viewer's own connection: whenever it had something on
+    // its way to them, their side was full and taking nothing for most of it. What arrived
+    // was not taken, so neither the link nor the file's peaks are what holds them up. Before
+    // the file: the peaks verdict presumes the link is the narrow place.
+    //
+    // Asked of any connection that sent at all ([`LIVE_SENDING`]), not only of a busy one:
+    // measured 2026-10-09, a slow reader's connection was busy a fifth of the stretch and
+    // held for nine tenths of that — a full side stops the sending, which is why it is
+    // rarely busy.
+    let sending = watcher
+        .live
+        .as_ref()
+        .filter(|l| l.busy_share.is_some_and(|b| b >= LIVE_SENDING));
+    if let Some(held) = sending
+        .and_then(|l| l.held_share)
+        .filter(|h| *h > LIVE_HELD)
+    {
+        return Verdict {
+            cause: Cause::ThePlayer,
+            say: Detail::new(DetailCode::StallsPlayerLive)
+                .with("ratio", round2(ratio))
+                .with("held_pct", (held * 100.0).round() as u64)
+                .with("live_mbit", sending.map(|l| round2(l.mbit_s))),
+        };
+    }
+    let live = watcher
+        .live
+        .as_ref()
+        .filter(|l| l.busy_share.is_some_and(|b| b >= LIVE_BUSY));
+
     // From here on only a measurement **of the film this viewer is watching** may be used
     // (T705): a file measured on this computer is applied to the viewers of that film and to
     // nobody else.
@@ -445,6 +594,36 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
     // there is no number for what their link would have to carry, and no verdict about the
     // link or the player can stand.
     let need = watcher.need_mbit.or(file.map(|f| f.average_mbit));
+
+    // T711 — the link, seen on the viewer's own connection: it had something on its way most
+    // of the stretch and their side was not the one holding it, so what it carried while
+    // busy is what their link carries. Against what the rung needs, that settles the
+    // question the log could only put as "the player, or a link slower than we can see".
+    if let (Some(live), Some(need)) = (live, need) {
+        if let Some(carried) = live.busy_mbit_s {
+            let say = |code| {
+                Detail::new(code)
+                    .with("ratio", round2(ratio))
+                    .with("live_mbit", round2(carried))
+                    .with("need_mbit", round2(need))
+            };
+            return if carried >= need {
+                Verdict {
+                    cause: Cause::ThePlayer,
+                    say: say(DetailCode::StallsLinkFineLive),
+                }
+            } else {
+                Verdict {
+                    cause: Cause::ViewerLink,
+                    say: say(DetailCode::StallsViewerLinkLive).with(
+                        "resent_pct",
+                        // Nothing sent in the stretch is nothing sent again.
+                        round2(live.resent_share.unwrap_or(0.0) * 100.0),
+                    ),
+                }
+            };
+        }
+    }
 
     // ⚠ **Not the link, when the link demonstrably carries it.** Measured on the stand
     // 2026-09-04: a viewer at a ratio of 0.39 was told their link was too thin while the

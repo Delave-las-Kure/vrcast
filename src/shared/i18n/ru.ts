@@ -670,6 +670,12 @@ export const ruCore: CatalogueCore = {
       "Сервер отдаёт куски быстрее нужного: {in_download_mbit_s|mbit} при нужных {average_mbit|mbit}, а по часам выходит {mbit_s|mbit}, доля {ratio|num}. Плеер не просит дальше или канал зрителя медленнее, чем видно серверу. Перезапусков: {restarts}, пропусков: {skipped}.",
     STALLS_VIEWER_LINK:
       "Не хватает канала зрителя: {ratio|num}× при {mbit_s|mbit} (в закачках {in_download_mbit_s|mbit}), а этому качеству нужно {need_mbit|mbit}. Пропусков: {skipped}, перезапусков: {restarts}.",
+    STALLS_PLAYER_LIVE:
+      "Канал ни при чём: до зрителя доходит, но плеер не забирает — {held_pct}% времени. Сейчас {live_mbit|mbit}, получено {ratio|num}× реального времени.",
+    STALLS_LINK_FINE_LIVE:
+      "Канал ни при чём: сейчас несёт {live_mbit|mbit} при нужных {need_mbit|mbit}. Отстаёт плеер — {ratio|num}× реального времени.",
+    STALLS_VIEWER_LINK_LIVE:
+      "Не хватает канала зрителя: сейчас несёт {live_mbit|mbit} при нужных {need_mbit|mbit}, {ratio|num}× реального времени. Отправлено повторно: {resent_pct|num}%.",
     STALLS_UNCLEAR: "Отстаёт: {ratio|num}× реального времени. Причину по этим данным не назвать.",
     VIDEO_ALREADY_LISTED: "Это видео уже в списке",
     RUNG_FILE_CLAIMED:
@@ -944,6 +950,7 @@ const ui = {
     stallsRestarts: "Перезапусков плеера",
     stallsWatching: "Смотрит",
     stallsNeeds: "Нужно этому качеству",
+    stallsLive: "Сейчас по соединению",
     stallsLoad: "Что делал сервер",
     stallsLoadCpu: "Процессор",
     stallsLoadDisk: "Чтение с диска",

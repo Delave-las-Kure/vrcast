@@ -168,6 +168,43 @@ impl Viewer {
         Ok(())
     }
 
+    /// Watch a set the way a player with a kept-open connection does (T711): many segments
+    /// over **one** connection, as one curl asking for several addresses reuses it. The
+    /// connection is what the diagnosis reads live, and one that is replaced every few
+    /// seconds is never seen in both of its readings.
+    pub fn start_watching_a_set_on_one_connection(
+        &self,
+        slug: &str,
+        rung: &str,
+        segments: usize,
+        rate: Option<&str>,
+    ) -> Result<(), String> {
+        let asks: Vec<String> = (0..segments * 8)
+            .map(|i| {
+                format!(
+                    "-o /dev/null http://{SERVER_ALIAS}/videos/{slug}/{rung}/seg{}.ts",
+                    i % segments
+                )
+            })
+            .collect();
+        let limit = rate
+            .map(|r| format!(" --limit-rate {r}"))
+            .unwrap_or_default();
+        let command = format!(
+            "while true; do curl -sS{limit} {} || sleep 1; done",
+            asks.join(" ")
+        );
+        let out = docker(&["exec", "-d", &self.id, "sh", "-c", &command])
+            .map_err(|e| format!("could not start the watching: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "the watching of the set would not start:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        Ok(())
+    }
+
     /// Ask for something once and look only at what the answer was.
     ///
     /// Good for anything whose body is not text: a segment is a few megabytes of bytes, and

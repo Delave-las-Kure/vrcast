@@ -583,6 +583,16 @@ detail_codes! {
     /// what the viewer's rung needs, and their speed under it (T705).
     StallsViewerLink => "STALLS_VIEWER_LINK",
     StallsThePlayer => "STALLS_THE_PLAYER",
+    /// `ratio`, `held_pct`, `live_mbit`. T711, from the viewer's live connection: what was
+    /// sent reached them, and their side was full and taking nothing for `held_pct` per cent
+    /// of the time — the player, not the link.
+    StallsPlayerLive => "STALLS_PLAYER_LIVE",
+    /// `ratio`, `live_mbit`, `need_mbit`. T711: the live connection carries what the rung
+    /// needs right now — not the link.
+    StallsLinkFineLive => "STALLS_LINK_FINE_LIVE",
+    /// `ratio`, `live_mbit`, `need_mbit`, `resent_pct`. T711: the live connection had
+    /// something on its way most of the time and carried less than the rung needs.
+    StallsViewerLinkLive => "STALLS_VIEWER_LINK_LIVE",
     /// `ratio`, `mbit_s`, `need_mbit` (either may be absent). Behind real time, and nothing
     /// measured says why (T705) — said instead of blaming the viewer's link without a number.
     StallsUnclear => "STALLS_UNCLEAR",

@@ -685,6 +685,12 @@ export const en: Catalogue = {
       "The server hands pieces out faster than needed: {in_download_mbit_s|mbit} against {average_mbit|mbit}, yet by the clock it comes to {mbit_s|mbit}, ratio {ratio|num}. The player stops asking, or the viewer's link is slower than the server can see. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
       "The viewer's link is short: {ratio|num}× at {mbit_s|mbit} (in downloads {in_download_mbit_s|mbit}), and this quality needs {need_mbit|mbit}. Skipped: {skipped}, restarts: {restarts}.",
+    STALLS_PLAYER_LIVE:
+      "Not the link: it reaches the viewer, but the player is not taking it — {held_pct}% of the time. Now {live_mbit|mbit}, {ratio|num}× real time received.",
+    STALLS_LINK_FINE_LIVE:
+      "Not the link: it carries {live_mbit|mbit} now against {need_mbit|mbit} needed. The player is behind — {ratio|num}× real time.",
+    STALLS_VIEWER_LINK_LIVE:
+      "The viewer's link is short: it carries {live_mbit|mbit} now against {need_mbit|mbit} needed, {ratio|num}× real time. Sent again: {resent_pct|num}%.",
     STALLS_UNCLEAR: "Falling behind: {ratio|num}× real time. These figures do not say why.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
@@ -951,6 +957,7 @@ export const en: Catalogue = {
       stallsRestarts: "Player restarts",
       stallsWatching: "Watching",
       stallsNeeds: "This quality needs",
+      stallsLive: "Now, on the connection",
       stallsLoad: "What the server was doing",
       stallsLoadCpu: "Processor",
       stallsLoadDisk: "Read off the disk",

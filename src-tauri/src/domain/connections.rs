@@ -96,6 +96,14 @@ pub struct ConnectionRow {
     /// its own: a player that has filled its buffer and paused looks the same. So it goes
     /// in as evidence and the judgement is made in `viewers`.
     pub receiver_limited_share: Option<f64>,
+    /// How long, over the connection's life, the server has had something on its way to the
+    /// viewer, in milliseconds (`busy:`). With [`Self::rwnd_limited_ms`] and two readings it
+    /// says, for a stretch rather than for all time, whether the connection was working and
+    /// who held it up (T711). `None` when `ss` did not say.
+    pub busy_ms: Option<u64>,
+    /// Of that, how long the viewer's side was full and taking nothing more
+    /// (`rwnd_limited:`), in milliseconds.
+    pub rwnd_limited_ms: Option<u64>,
 }
 
 /// Parse what `ss -tin` printed.
@@ -153,6 +161,11 @@ pub fn parse(output: &str) -> Vec<ConnectionRow> {
                 .unwrap_or(0),
             delivery_rate_bps: rate(details, "delivery_rate"),
             receiver_limited_share: share(details, "rwnd_limited"),
+            busy_ms: millis(details, "busy"),
+            // Absent when it never happened: `ss` writes the field only once it is non-zero,
+            // and a busy connection with no such field was never held up by the viewer.
+            rwnd_limited_ms: millis(details, "rwnd_limited")
+                .or_else(|| millis(details, "busy").map(|_| 0)),
         });
     }
     rows
@@ -213,6 +226,11 @@ fn pair(details: &str, key: &str) -> Option<(u64, u64)> {
 /// `delivery_rate 19402370368bps` — a number with a unit stuck to it.
 fn rate(details: &str, key: &str) -> Option<u64> {
     field(details, key)?.trim_end_matches("bps").parse().ok()
+}
+
+/// `busy:1234ms` or `rwnd_limited:4070ms(98.5%)` — the milliseconds, whatever follows them.
+fn millis(details: &str, key: &str) -> Option<u64> {
+    field(details, key)?.split("ms").next()?.parse().ok()
 }
 
 /// `rwnd_limited:4070ms(98.5%)` — a duration and the share of the busy time it makes up.

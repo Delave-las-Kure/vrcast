@@ -172,6 +172,25 @@ fn a_real_connection_table_is_read_whole() {
     );
     assert_eq!(row.delivery_rate_bps, Some(19_402_370_368));
     assert_eq!(row.receiver_limited_share, Some(0.985));
+    // T711: the milliseconds behind that share, so two readings give a stretch's own share.
+    assert_eq!(row.busy_ms, Some(4130));
+    assert_eq!(row.rwnd_limited_ms, Some(4070));
+}
+
+#[test]
+fn a_busy_connection_never_held_up_by_the_viewer_reads_as_held_for_none_of_it() {
+    // `ss` writes `rwnd_limited` only once it is non-zero.
+    let rows = connections::parse(&REAL_SS.replace(" rwnd_limited:4070ms(98.5%)", ""));
+    assert_eq!(rows[0].busy_ms, Some(4130));
+    assert_eq!(rows[0].rwnd_limited_ms, Some(0));
+    // And with no `busy` either, nothing is claimed about either.
+    let rows = connections::parse(
+        &REAL_SS
+            .replace(" rwnd_limited:4070ms(98.5%)", "")
+            .replace(" busy:4130ms", ""),
+    );
+    assert_eq!(rows[0].busy_ms, None);
+    assert_eq!(rows[0].rwnd_limited_ms, None);
 }
 
 #[test]
@@ -230,6 +249,8 @@ fn row(
         retrans_total: retrans,
         delivery_rate_bps: None,
         receiver_limited_share: limited,
+        busy_ms: None,
+        rwnd_limited_ms: None,
     }
 }
 

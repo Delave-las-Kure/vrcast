@@ -386,6 +386,10 @@ export type DetailCode =
   | "STALLS_FILE_PEAKS"
   | "STALLS_VIEWER_LINK"
   | "STALLS_THE_PLAYER"
+  // T711 — from the viewer's own connection, read live (`ss -tin`).
+  | "STALLS_PLAYER_LIVE"
+  | "STALLS_LINK_FINE_LIVE"
+  | "STALLS_VIEWER_LINK_LIVE"
   | "STALLS_UNCLEAR"
   // Videos in work (T672).
   | "VIDEO_ALREADY_LISTED"
@@ -915,6 +919,23 @@ export interface Watcher {
   rung?: string | null;
   /** T705 — what that rung of that film needs, Mbit/s, from the set on the server. */
   need_mbit?: number | null;
+  /** T711 — their own connection while the diagnosis was asked; null when none was open. */
+  live?: LiveLink | null;
+}
+
+/** T711 — a viewer's connection read twice, five seconds apart (`ss -tin`). */
+export interface LiveLink {
+  span_s: number;
+  /** What reached the viewer over the stretch, Mbit/s. */
+  mbit_s: number;
+  /** What it carried while it had something to carry, Mbit/s. */
+  busy_mbit_s: number | null;
+  /** Share of the stretch with something on its way, 0..1. */
+  busy_share: number | null;
+  /** Share of that time their side was full, 0..1. */
+  held_share: number | null;
+  /** Share of what was sent that went again, 0..1. */
+  resent_share: number | null;
 }
 
 export type StallCause =

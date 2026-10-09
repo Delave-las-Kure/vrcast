@@ -129,7 +129,7 @@ pub mod api {
         // The live readings first and the log second, on the same connection: what the server
         // was doing has to be measured while the complaint is still happening, and the log is
         // written down and will keep.
-        let live = health::load(&opened.conn).await;
+        let live = health::load_with_connections(&opened.conn).await;
         let stretch = log_reader::over(
             &opened.conn,
             since(minutes),
@@ -140,8 +140,17 @@ pub mod api {
         if live.is_err() || stretch.is_err() {
             opened.conn.close().await;
         }
-        let live = live?;
+        let (live, polls) = live?;
         let mut sifted = stalls::sift(&stretch?.requests, &live.addresses);
+
+        // T711: each viewer's own connection, read before and after the load's five seconds —
+        // what tells their link from their player where the log cannot.
+        if let Some((before, after)) = &polls {
+            let links = stalls::live_links(before, after);
+            for w in &mut sifted.watchers {
+                w.live = links.get(&w.client_ip).copied();
+            }
+        }
 
         // T705: what each viewer's rung of each viewer's film needs, read off that film's own
         // set description on the server — the one figure a verdict about their link may stand

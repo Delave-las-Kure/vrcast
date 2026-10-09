@@ -586,3 +586,66 @@ describe("T706 — the diagnosis in plain units, and nothing about seeking from 
     expect(en.ui.diag.title).toBe(en.ui.sections.diagnostics);
   });
 });
+
+/** T711 — the viewer's own connection, read live, tells their link from their player. */
+describe("T711 — the link and the player told apart on the live connection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHealth.mockResolvedValue(HEALTH);
+    mockLogs.mockResolvedValue(LOGS);
+    mockLibrary.mockResolvedValue([]);
+  });
+
+  it("shows what the connection carries now, and the verdict made from it", async () => {
+    mockStalls.mockResolvedValue({
+      ...STALLS,
+      watchers: [
+        {
+          ...STALLS.watchers[0],
+          need_mbit: 2,
+          live: {
+            span_s: 5,
+            mbit_s: 0.4,
+            busy_mbit_s: 0.4,
+            busy_share: 1,
+            held_share: 0,
+            resent_share: 0.15,
+          },
+        },
+      ],
+      verdicts: [
+        {
+          cause: "viewer_link",
+          say: {
+            key: "STALLS_VIEWER_LINK_LIVE",
+            params: { ratio: 0.4, live_mbit: 0.4, need_mbit: 2, resent_pct: 15 },
+          },
+        },
+      ],
+    });
+    renderIn(<DiagScreen serverId="s1" />, "ru");
+    await waitFor(() => expect(screen.getByTestId("live-203.0.113.24")).toBeInTheDocument());
+    expect(screen.getByTestId("live-203.0.113.24")).toHaveTextContent("400 кбит/с");
+    const verdict = screen.getByTestId("verdict-203.0.113.24");
+    expect(verdict).toHaveTextContent("сейчас несёт 400 кбит/с при нужных 2,0 Мбит/с");
+    expect(verdict).toHaveTextContent("Отправлено повторно: 15%");
+    expect(verdict.textContent).not.toMatch(/\{\w+/);
+  });
+
+  it("without a live connection there is no live figure at all", async () => {
+    mockStalls.mockResolvedValue(STALLS);
+    renderIn(<DiagScreen serverId="s1" />, "ru");
+    await waitFor(() => expect(screen.getByTestId("verdict-203.0.113.24")).toBeInTheDocument());
+    expect(screen.queryByTestId("live-203.0.113.24")).toBeNull();
+  });
+
+  it("every live verdict is said in both languages with the same figures", () => {
+    for (const key of ["STALLS_PLAYER_LIVE", "STALLS_LINK_FINE_LIVE", "STALLS_VIEWER_LINK_LIVE"]) {
+      const names = (s: string) => [...s.matchAll(/\{(\w+)/g)].map((m) => m[1]).sort();
+      const r = (ru.details as Record<string, string>)[key];
+      const e = (en.details as Record<string, string>)[key];
+      expect(r, key).toBeTruthy();
+      expect(names(r)).toEqual(names(e));
+    }
+  });
+});

@@ -32,6 +32,7 @@ use vrcast_studio_lib::domain::deploy_steps::StepId;
 use vrcast_studio_lib::domain::dns_verdict::{Ipv6Choice, ServerAddresses};
 use vrcast_studio_lib::domain::health::{self, Rating, Reading};
 use vrcast_studio_lib::domain::stalls::{self, Cause};
+use vrcast_studio_lib::domain::wording::DetailCode;
 use vrcast_studio_lib::server::deploy::{self, machine, Context, Proofs};
 use vrcast_studio_lib::server::health as server_health;
 use vrcast_studio_lib::ssh::keygen;
@@ -342,5 +343,140 @@ async fn a_viewer_with_a_full_buffer_is_left_alone() {
     );
 
     fast.stop_watching().expect("the watching would not stop");
+    conn.close().await;
+}
+
+/// Hold everything the server sends to `ip` to `rate` (tc's notation, `"800kbit"`) — a viewer
+/// whose **link** is short, on the server's way out to them. Not curl's `--limit-rate`: that
+/// is a viewer that reads slowly, which from the connection is the player not taking what
+/// arrives, the other half of the question (T711).
+fn shape_the_way_to(server: &TestServer, ip: &str, rate: &str) {
+    let script = format!(
+        "set -e
+dev=$(ip -o route get {ip} | awk '{{for (i = 1; i < NF; i++) if ($i == \"dev\") print $(i + 1)}}')
+tc qdisc add dev \"$dev\" root handle 1: prio priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+tc qdisc add dev \"$dev\" parent 1:3 handle 30: netem rate {rate}
+tc filter add dev \"$dev\" parent 1: protocol ip prio 1 u32 match ip dst {ip}/32 flowid 1:3
+echo shaped $dev"
+    );
+    let out = std::process::Command::new("docker")
+        .args([
+            "exec",
+            "--privileged",
+            server.container_id(),
+            "sh",
+            "-c",
+            &script,
+        ])
+        .output()
+        .expect("docker would not run");
+    assert!(
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("shaped"),
+        "the way to {ip} could not be narrowed: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// T711 — the owner's decision: look at the live connection. Two viewers fall behind the same
+/// film at about the same speed, and the log alone cannot tell them apart (measured
+/// 2026-10-09: it saw 6.16 Mbit/s "inside the downloads" of a viewer getting 0.4). One has a
+/// short link; the other's player reads slowly. Their connections, read as the «Зрители»
+/// screen reads them, tell which is which.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_live_connection_tells_a_short_link_from_a_player_not_taking() {
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let short_link = Viewer::attach(&server).expect("the first viewer would not attach");
+    let slow_player = Viewer::attach(&server).expect("the second viewer would not attach");
+    shape_the_way_to(&server, short_link.ip(), "800kbit");
+    let conn = connect(&server).await;
+
+    short_link
+        .start_watching_a_set_on_one_connection("demo", "v3", 3, None)
+        .expect("the first watching would not start");
+    slow_player
+        .start_watching_a_set_on_one_connection("demo", "v3", 3, Some("100k"))
+        .expect("the second watching would not start");
+    std::thread::sleep(Duration::from_secs(50));
+
+    let (live, polls) = server_health::load_with_connections(&conn)
+        .await
+        .expect("the live readings would not come");
+    let (before, after) = polls.expect("the connection table was not read around the load");
+    let links = stalls::live_links(&before, &after);
+    println!("live links: {links:#?}");
+
+    let log = server.access_log().expect("the access log would not read");
+    let requests: Vec<_> = log.lines().filter_map(|l| parse_line(l).ok()).collect();
+    let sifted = stalls::sift(&requests, &live.addresses);
+    let needs =
+        vrcast_studio_lib::server::viewers::rung_needs(&conn, VIDEO_DIR, &[String::from("demo")])
+            .await;
+    println!("needs: {needs:?}");
+    assert!(
+        needs.get("demo").is_some_and(|r| r.contains_key("v3")),
+        "the rung's need was not read off the set on the server: {needs:?}"
+    );
+
+    let verdict_for = |ip: &str| {
+        let mut w = sifted
+            .watchers
+            .iter()
+            .find(|w| w.client_ip == ip)
+            .unwrap_or_else(|| panic!("{ip} is not in the report: {:?}", sifted.set_aside))
+            .clone();
+        w.need_mbit = needs
+            .get("demo")
+            .and_then(|rungs| rungs.get("v3"))
+            .map(|bps| *bps as f64 / 1_000_000.0);
+        w.live = links.get(ip).copied();
+        assert!(w.starving(), "{ip} is keeping up: {w:?}");
+        assert!(w.live.is_some(), "{ip}'s connection was not read live");
+        let verdict = stalls::explain(&w, Some(&live.load), None);
+        println!(
+            "{ip}: rung {:?}, need {:?}: {:?} {:?}",
+            w.rung, w.need_mbit, verdict.cause, verdict.say
+        );
+        verdict
+    };
+
+    let link = verdict_for(short_link.ip());
+    assert_eq!(
+        link.cause,
+        Cause::ViewerLink,
+        "a viewer whose way in is 0.8 Mbit/s was not told their link is short: {:?}",
+        link.say
+    );
+    assert_eq!(link.say.key, DetailCode::StallsViewerLinkLive);
+
+    let player = verdict_for(slow_player.ip());
+    assert_eq!(
+        player.cause,
+        Cause::ThePlayer,
+        "a viewer reading slowly on a wide link was blamed on the link: {:?}",
+        player.say
+    );
+    // ⚠ **Either way of saying it, and that is measured, not lenient.** In four runs here
+    // (2026-10-09) the slow reader's side was twice full for most of the sending (88%, 90%)
+    // — said from the connection — and twice the connection stood idle 98% of the stretch,
+    // a whole segment already in the reader's own buffers: nothing on the connection to go
+    // on, and the log's reasoning (the server hands pieces out faster than needed) says it
+    // instead. What may never happen is the link taking the blame.
+    assert!(
+        matches!(
+            player.say.key,
+            DetailCode::StallsPlayerLive | DetailCode::StallsThePlayer
+        ),
+        "{:?}",
+        player.say
+    );
+
+    short_link
+        .stop_watching()
+        .expect("the watching would not stop");
+    slow_player
+        .stop_watching()
+        .expect("the watching would not stop");
     conn.close().await;
 }
