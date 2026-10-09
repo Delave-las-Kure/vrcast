@@ -120,6 +120,8 @@ pub struct BuildJob<'a> {
     pub rungs: &'a [Rung],
     pub encoder: &'a Encoder,
     pub audio_track: usize,
+    /// The subtitle track drawn into every rung (T696); `None` — none.
+    pub subtitle_track: Option<usize>,
     /// Where a viewer would open the finished set.
     pub master_url: &'a str,
     /// Where these rungs came from, for the description (T433). A code, never the donor's
@@ -135,8 +137,14 @@ pub struct Built {
     pub master_path: String,
     pub variants: Vec<String>,
     /// Every rung's prepared file, by the name it was made or found under (T678) — what the
-    /// catalogue records under the medium as the set's own.
+    /// catalogue records under the medium as the set's own. **Only those still on the server**
+    /// (T693): a checked set's prepared files are removed, and what is left here is what the
+    /// removal could not take.
     pub files: Vec<String>,
+    /// The prepared files removed once the set was checked (T693) — taken out of the
+    /// catalogue's record of the set's files with the same write that files the set.
+    #[serde(default)]
+    pub removed: Vec<String>,
     /// How many variants were prepared here, as against found already done.
     pub prepared: usize,
     pub reused: usize,
@@ -161,6 +169,14 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         spacing,
         SEGMENT_SECONDS,
     );
+    // T696: the chosen subtitles go into every rung. Checked by the command before the task
+    // started; a track that is not there now is not drawn rather than guessed at.
+    if let Some(burn) = job
+        .subtitle_track
+        .and_then(|t| ladder_build::subtitle_burn(job.source, t))
+    {
+        ladder_build::burn_subtitles(&mut work, burn);
+    }
 
     // ⚠ **Said to the task as it happens, not gathered up and handed over at the end**
     // (T524). This used to be a local `Vec` that reached the outside world only through
@@ -216,8 +232,11 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         // source, at this height and bitrate, with this sound track — and the server says the
         // file is still there, whole (T681). A file under the rung's name proves nothing by
         // itself: a medium's single file of the same length is not this film.
+        //
+        // **Or its segments are, cut whole** (T693): once a set is checked its prepared files
+        // are removed, and a set carried on after that has only the segments to show.
         if ladder_build::made_here(&made, variant, job.source, job.audio_track)
-            && rung_file_whole(
+            && (rung_file_whole(
                 job.conn,
                 job.video_dir,
                 &variant.file,
@@ -225,6 +244,15 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
                 variant.rung.height,
             )
             .await?
+                || rung_cut_whole(
+                    job.conn,
+                    job.video_dir,
+                    job.slug,
+                    &variant.sub,
+                    job.source.duration_s,
+                    variant.rung.height,
+                )
+                .await?)
         {
             reused += 1;
             continue;
@@ -353,6 +381,18 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         return Err(BuildError::Incomplete(verdict.broken()));
     }
 
+    // **The prepared files go once the set is checked** (T693, the owner's decision A1 of
+    // 2026-10-09): only the set stays on the server. Not a moment earlier — before the check
+    // they are what a carrying on cuts from — and only the ones this set's own record says it
+    // made and no medium claims. A removal that fails is not a failed build: the set is
+    // served, and what is left is shown in «Library» as extra mp4 files to remove by hand.
+    let removed = remove_prepared(job, &work, &made).await;
+    let files: Vec<String> = work
+        .iter()
+        .map(|w| w.file.clone())
+        .filter(|f| !removed.contains(f))
+        .collect();
+
     if reused > 0 {
         ctx.add_notice(Detail::new(DetailCode::NoticeVariantsReused).with("count", reused as u64));
     }
@@ -361,11 +401,83 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
     Ok(Built {
         master_path,
         variants: work.iter().map(|w| w.sub.clone()).collect(),
-        files: work.iter().map(|w| w.file.clone()).collect(),
+        files,
+        removed,
         prepared,
         reused,
         verdict,
     })
+}
+
+/// Remove the prepared files of a checked set (T693); the names removed.
+///
+/// The catalogue is read again first: between the start of a build and its end another copy
+/// of the application may have filed one of these names under a medium, and a claimed file
+/// is never removed (T577, part b). A catalogue that cannot be read, or a removal that fails,
+/// removes nothing and is said in the log — the files stay, and «Library» offers them.
+async fn remove_prepared(
+    job: &BuildJob<'_>,
+    work: &[VariantWork],
+    made: &[ladder_build::MadeRung],
+) -> Vec<String> {
+    let manifest = match crate::server::manifest_io::read(job.conn, job.video_dir).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "the catalogue could not be read: the prepared files stay");
+            return Vec::new();
+        }
+    };
+    let names = ladder_build::removable_files(work, made, &manifest.all_claimed_paths());
+    if names.is_empty() {
+        return names;
+    }
+    let dir = job.video_dir.trim_end_matches('/');
+    let paths: Vec<String> = names
+        .iter()
+        .flat_map(|n| [format!("{dir}/{n}"), format!("{dir}/{n}.part")])
+        .map(|p| crate::server::shell_quote(&p))
+        .collect();
+    match job
+        .conn
+        .exec(&format!("rm -f -- {}", paths.join(" ")))
+        .await
+    {
+        Ok(out) if out.ok() => {
+            tracing::info!(files = %names.join(", "), "the checked set's prepared files were removed");
+            names
+        }
+        Ok(out) => {
+            tracing::warn!(stderr = %out.stderr.trim(), "the prepared files could not be removed");
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "the prepared files could not be removed");
+            Vec::new()
+        }
+    }
+}
+
+/// Whether a rung's segments are on the server, cut whole (T693): see
+/// `domain::ladder_build::cut_is_whole`. Asked only of a rung the set's own record says it
+/// made.
+pub async fn rung_cut_whole(
+    conn: &Connection,
+    video_dir: &str,
+    slug: &str,
+    sub: &str,
+    expected_s: f64,
+    height: u32,
+) -> Result<bool, crate::ssh::SshError> {
+    let dir = format!("{}/{}/{}", video_dir.trim_end_matches('/'), slug, sub);
+    let out = conn
+        .exec(&format!(
+            "cat {p} 2>/dev/null; echo; echo {mark}; cat {f} 2>/dev/null; true",
+            p = crate::server::shell_quote(&format!("{dir}/stream.m3u8")),
+            f = crate::server::shell_quote(&format!("{dir}/.facts")),
+            mark = ladder_build::CUT_FACTS_MARK,
+        ))
+        .await?;
+    Ok(ladder_build::cut_is_whole(&out.stdout, expected_s, height))
 }
 
 /// How the cutting's own ending reads as the build's.
@@ -457,16 +569,14 @@ async fn left_behind(job: &BuildJob<'_>, work: &[VariantWork]) -> Option<Detail>
 /// `Ok(None)` — it fits. `Ok(Some(notice))` — could not be worked out, and the notice says so
 /// rather than passing for a check that ran. `Err` — it will not fit.
 pub fn room_here(job: &BuildJob<'_>, work: &[VariantWork]) -> Result<Option<Detail>, BuildError> {
-    let audio_bps = job
-        .source
-        .audio_tracks
-        .get(job.audio_track)
-        .and_then(|t| t.bitrate_bps)
-        .unwrap_or(ladder_size::AUDIO_BUDGET_BPS)
-        .max(ladder_size::AUDIO_BUDGET_BPS);
-
-    let heaviest = work.iter().map(|w| w.rung.bitrate_bps).max().unwrap_or(0);
-    let needed = ladder_size::bytes_for_rung(heaviest, audio_bps, job.source.duration_s);
+    // T699 — the heaviest prepared file with the sound it will carry out, and nothing more:
+    // the segments are cut on the server, not here.
+    let audio_bps = ladder_size::audio_out_bps(job.source, job.audio_track);
+    let ceilings: Vec<u64> = work
+        .iter()
+        .map(|w| w.rung.maxrate_bps.max(w.rung.bitrate_bps))
+        .collect();
+    let needed = ladder_size::local_peak_bytes(&ceilings, audio_bps, job.source.duration_s);
     if needed == 0 {
         return Ok(Some(Detail::new(DetailCode::LadderSpaceUnknown)));
     }
@@ -514,17 +624,10 @@ pub async fn room_for_the_set(
     job: &BuildJob<'_>,
     work: &[VariantWork],
 ) -> Result<Option<Detail>, BuildError> {
-    // What the audio will weigh. A re-encoded track is held to the budget; a copied one is
-    // whatever the source carries, and a multichannel track carries far more. Where the
-    // source does not say, the budget is the floor rather than the answer — guessing low
-    // here is guessing in the one direction this check exists to avoid.
-    let audio_bps = job
-        .source
-        .audio_tracks
-        .get(job.audio_track)
-        .and_then(|t| t.bitrate_bps)
-        .unwrap_or(ladder_size::AUDIO_BUDGET_BPS)
-        .max(ladder_size::AUDIO_BUDGET_BPS);
+    // What the audio will weigh: the output's (T699). A re-encoded track is held to the
+    // budget whatever it came in as; a copied one is what the source carries, with the
+    // budget as the floor where the source does not say.
+    let audio_bps = ladder_size::audio_out_bps(job.source, job.audio_track);
 
     let bitrates: Vec<u64> = work.iter().map(|w| w.rung.bitrate_bps).collect();
     let needed = ladder_size::bytes_for_set(&bitrates, audio_bps, job.source.duration_s);

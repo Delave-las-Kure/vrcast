@@ -60,10 +60,68 @@ pub struct SourceFile {
     /// brought down to the ordinary range or a viewer's picture comes out washed out.
     pub color_transfer: Option<String>,
     pub audio_tracks: Vec<AudioTrack>,
+    /// The subtitle tracks (T696). Absent in a source examined before they were looked for:
+    /// such a video offers none until it is examined again.
+    #[serde(default)]
+    pub subtitle_tracks: Vec<SubtitleTrack>,
+}
+
+/// How a subtitle track is drawn into the picture (T696, owner's decision B3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubtitleKind {
+    /// Text (SubRip, ASS/SSA, WebVTT, MP4 text): laid out and drawn by libass.
+    Text,
+    /// Pictures (Blu-ray PGS, DVD VobSub, DVB): laid over the frame as they are.
+    Picture,
+    /// Anything else (closed captions inside the video, TTML…): not offered.
+    Other,
+}
+
+impl SubtitleKind {
+    /// The kind of a codec, as ffprobe names it.
+    pub fn of_codec(codec: &str) -> Self {
+        match codec.to_ascii_lowercase().as_str() {
+            "subrip" | "srt" | "ass" | "ssa" | "webvtt" | "mov_text" | "text" => Self::Text,
+            "hdmv_pgs_subtitle" | "dvd_subtitle" | "dvb_subtitle" | "xsub" => Self::Picture,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A subtitle track of the source (T696).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubtitleTrack {
+    /// The index among subtitle tracks, from zero: what ffmpeg understands in `0:s:<N>` and
+    /// in the `subtitles` filter's `si`. A person is shown it counting from one.
+    pub index: usize,
+    pub codec: String,
+    pub kind: SubtitleKind,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    /// Marked forced: only the lines meant for everybody (signs, a foreign-language scene).
+    pub forced: bool,
+    pub is_default: bool,
+}
+
+impl SubtitleTrack {
+    /// Whether this track can be drawn into the picture at all.
+    pub fn burnable(&self) -> bool {
+        self.kind != SubtitleKind::Other
+    }
 }
 
 /// The marks of HDR in a colour transfer characteristic.
 const HDR_TRANSFERS: [&str; 4] = ["smpte2084", "arib-std-b67", "smpte428", "bt2020-10"];
+
+/// Whether a colour transfer characteristic is one of HDR's (T697: asked of a measurement's
+/// stored material as well as of a source). Not knowing is not HDR.
+pub fn is_hdr_transfer(transfer: Option<&str>) -> bool {
+    transfer.is_some_and(|t| {
+        let t = t.to_ascii_lowercase();
+        HDR_TRANSFERS.iter().any(|h| t == *h)
+    })
+}
 
 impl SourceFile {
     /// The track worth offering by default.
@@ -82,18 +140,17 @@ impl SourceFile {
         self.audio_tracks.iter().find(|t| t.index == index)
     }
 
+    /// The subtitle track with this index (T696).
+    pub fn subtitle(&self, index: usize) -> Option<&SubtitleTrack> {
+        self.subtitle_tracks.iter().find(|t| t.index == index)
+    }
+
     /// Whether the source was recorded in high dynamic range.
     ///
     /// Not important in itself: such a picture has to be brought down to the ordinary
     /// range, and that means the stream can no longer be copied without re-encoding.
     pub fn is_hdr(&self) -> bool {
-        match &self.color_transfer {
-            Some(t) => {
-                let t = t.to_ascii_lowercase();
-                HDR_TRANSFERS.iter().any(|h| t == *h)
-            }
-            None => false,
-        }
+        is_hdr_transfer(self.color_transfer.as_deref())
     }
 
     /// How many pixels there are in a frame.

@@ -154,6 +154,20 @@ pub(crate) fn the_set_is_served(server: &TestServer, slug: &str) {
     assert!(master.contains("#EXT-X-STREAM-INF"), "{master}");
 }
 
+/// T693 (the owner's decision A1) — once a set is checked only the set stays on the server:
+/// no prepared rung file of it is left, nor a staged one.
+pub(crate) fn no_prepared_files(server: &TestServer, slug: &str) {
+    let left = server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && ls -1 | grep -E '^{slug}_[0-9]+(v[0-9]*)?[.]mp4([.]part)?$' || true"
+        ))
+        .unwrap_or_default();
+    assert!(
+        left.trim().is_empty(),
+        "prepared files outlived the checked set: {left}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
     super::fixture::logging_if_requested();
@@ -228,6 +242,18 @@ async fn a_video_goes_the_whole_way_from_a_plan_to_a_link() {
         link.origin
     );
     the_set_is_served(&server, &done.slug);
+    // Only the set stays on the server (T693): the prepared files went once it was checked,
+    // and the library records none under the medium.
+    no_prepared_files(&server, &done.slug);
+    let library = vrcast_studio_lib::commands::library::api::library_list(&state, &server_id, true)
+        .await
+        .unwrap();
+    let m = library
+        .media
+        .iter()
+        .find(|m| Some(&m.id) == done.media_id.as_ref())
+        .expect("the medium is not in the library");
+    assert!(m.set_files.is_empty(), "{:?}", m.set_files);
     // The plan now says what was measured.
     assert_eq!(done.plan.expect("the plan went").from, PlanSource::Measured);
 
@@ -331,12 +357,12 @@ fn digest(server: &TestServer, path: &str) -> String {
         .to_owned()
 }
 
-/// Every file of the set `slug` on the server, by its bytes: the prepared rungs, the cut
-/// segments, their playlists and the master.
+/// Every file of the set `slug` on the server, by its bytes: the prepared rungs (none, once
+/// the set is checked — T693), the cut segments, their playlists and the master.
 pub(crate) fn the_set(server: &TestServer, slug: &str) -> Vec<(String, String)> {
     let names = server
         .exec_inside(&format!(
-            "cd '{VIDEO_DIR}' && ls -1 {slug}_*.mp4 && find '{slug}' -type f \\( -name '*.ts' -o -name '*.m3u8' \\) | sort"
+            "cd '{VIDEO_DIR}' && {{ ls -1 {slug}_*.mp4 2>/dev/null; true; }} && find '{slug}' -type f \\( -name '*.ts' -o -name '*.m3u8' \\) | sort"
         ))
         .expect("the set could not be listed");
     names
@@ -401,9 +427,11 @@ async fn replace_under_a_taken_name_builds_every_rung_anew_for_another_film_of_t
     assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
     let slug = done.slug.clone();
     let before = the_set(&server, &slug);
+    // Only the set is on the server (T693): no prepared rung is left beside it.
     assert!(
-        before.iter().any(|(n, _)| n.ends_with("_2.mp4"))
-            && before.iter().any(|(n, _)| n.ends_with("master.m3u8")),
+        before.iter().any(|(n, _)| n.ends_with("master.m3u8"))
+            && before.iter().any(|(n, _)| n.ends_with(".ts"))
+            && !before.iter().any(|(n, _)| n.ends_with(".mp4")),
         "{before:?}"
     );
 
@@ -433,26 +461,23 @@ async fn replace_under_a_taken_name_builds_every_rung_anew_for_another_film_of_t
     assert_eq!(replaced.media_id, done.media_id, "not the same medium");
     the_set_is_served(&server, &slug);
 
-    // **Every rung is new**: no prepared file, no segment and no playlist of the first film
-    // is left under the name — each was made again from the second film.
+    // **Every rung is new**: no segment and no playlist of the first film is left under the
+    // name — each was made again from the second film — and no prepared file either (T693).
     let after = the_set(&server, &slug);
-    let rungs_after: Vec<&String> = after
-        .iter()
-        .filter(|(n, _)| n.ends_with(".mp4"))
-        .map(|(n, _)| n)
-        .collect();
-    assert_eq!(rungs_after.len(), 2, "{after:?}");
+    no_prepared_files(&server, &slug);
+    let mut compared = 0;
     for (name, old) in &before {
         if let Some((_, new)) = after.iter().find(|(n, _)| n == name) {
-            if name.ends_with(".ts") || name.ends_with(".mp4") {
+            if name.ends_with(".ts") {
                 assert_ne!(new, old, "{name} is still the first film's");
+                compared += 1;
             }
         }
     }
-    for (name, _) in after.iter().filter(|(n, _)| n.ends_with(".mp4")) {
-        let had = before.iter().find(|(n, _)| n == name).map(|(_, d)| d);
-        assert!(had.is_some(), "{name} was not there before");
-    }
+    assert!(
+        compared > 0,
+        "no segment was compared: {before:?} {after:?}"
+    );
     drop(scratch);
 }
 
@@ -562,14 +587,21 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
         digest(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")),
         single
     );
-    // The rung went under the next free name, and the set says so for carrying on.
+    // The rung went under the next free name, and the set says so for carrying on. Once the
+    // set was checked its prepared files went (T693): the record stays, the files do not.
     let renamed = format!("{VIDEO_DIR}/old-film_9v.mp4");
-    let made = identity(&server, &renamed).expect("the rung was not made as old-film_9v.mp4");
+    for gone in [renamed.clone(), format!("{VIDEO_DIR}/old-film_1.mp4")] {
+        assert!(
+            identity(&server, &gone).is_none(),
+            "the checked set's prepared file {gone} is still there"
+        );
+    }
     let record = server
         .exec_inside(&format!("cat '{VIDEO_DIR}/old-film/.prepared'"))
         .expect("the set has no record of its prepared files");
     assert!(record.contains("v9=old-film_9v.mp4"), "{record}");
     assert!(record.contains("v1=old-film_1.mp4"), "{record}");
+    assert!(record.contains("made v9 old-film_9v.mp4"), "{record}");
 
     // **The set is served by its master.m3u8**, which names the rungs' own playlists — the
     // check a viewer's player would make, every rung, every first segment.
@@ -582,7 +614,8 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
     assert_eq!(verdict.variants_in_master, 2);
 
     // The library: the medium has its file and its set; the renamed rung is not taken for
-    // the medium's file. Both rungs are the set's own (T678), not «not recognised».
+    // the medium's file. No prepared rung is left to show (T693), and none is «not
+    // recognised».
     let view = library::library_list(&state, &server_id, true)
         .await
         .unwrap();
@@ -596,14 +629,7 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
         m.ladders.iter().any(|l| l.path == "old-film/master.m3u8"),
         "{m:?}"
     );
-    assert_eq!(
-        m.set_files
-            .iter()
-            .map(|f| f.path.as_str())
-            .collect::<Vec<_>>(),
-        vec!["old-film_1.mp4", "old-film_9v.mp4"],
-        "{m:?}"
-    );
+    assert!(m.set_files.is_empty(), "{m:?}");
     let loose = |name: &str| view.unrecognized.iter().any(|f| f.path == name);
     assert!(
         !loose("old-film_9v.mp4") && !loose("old-film_1.mp4"),
@@ -629,12 +655,14 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
     .expect_err("a second set was taken for a medium that has one");
     assert_eq!(err.code, ErrorCode::MediaHasSet);
 
-    // **Carrying on finds the rung under the name it was given**, even once the medium's
-    // file is gone and the first name is free again: built again, the 9 Mbit/s rung is found
-    // done as old-film_9v.mp4 — not made a second time as old-film_9.mp4.
+    // **Carrying on finds the rungs done by their segments** once the prepared files are gone
+    // (T693), even once the medium's file is gone and the first name is free again: built
+    // again, nothing is made a second time — not as old-film_9v.mp4, not as old-film_9.mp4 —
+    // and the segments stay byte for byte.
     library::file_delete(&state, &server_id, "old-film_9.mp4", true)
         .await
         .expect("the single file was not deleted");
+    let cut_before = the_set(&server, "old-film");
     let task = vrcast_studio_lib::commands::ladder::api::ladder_build(
         &state,
         vrcast_studio_lib::commands::ladder::BuildRequest {
@@ -643,6 +671,7 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
             slug: String::from("old-film"),
             rungs: nine,
             audio_track: 0,
+            subtitle_track: None,
             prefer_hardware: true,
             batch: None,
             confirmed: true,
@@ -665,19 +694,27 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
         "{:?}",
         ended.error
     );
-    assert_eq!(
-        identity(&server, &renamed).as_deref(),
-        Some(made.as_str()),
-        "the renamed rung was made again"
-    );
+    let reused = ended
+        .notices
+        .iter()
+        .find(|d| d.key == vrcast_studio_lib::domain::wording::DetailCode::NoticeVariantsReused)
+        .and_then(|d| d.params.get("count").and_then(|v| v.as_u64()));
+    assert_eq!(reused, Some(2), "{:?}", ended.notices);
+    let cut_after = the_set(&server, "old-film");
+    for (name, was) in cut_before.iter().filter(|(n, _)| n.ends_with(".ts")) {
+        let now = cut_after.iter().find(|(n, _)| n == name).map(|(_, d)| d);
+        assert_eq!(now, Some(was), "{name} was cut again");
+    }
+    no_prepared_files(&server, "old-film");
     assert!(
-        identity(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")).is_none(),
-        "the rung was made again under its first name"
+        identity(&server, &renamed).is_none()
+            && identity(&server, &format!("{VIDEO_DIR}/old-film_9.mp4")).is_none(),
+        "a rung was made again"
     );
 
-    // **Deleting the medium** takes its set with it — the directory, the record inside it,
-    // and the set's prepared rung files (T678) — and nothing that is not the medium's: another
-    // medium's single file, and a loose file named like a rung the set does not serve.
+    // **Deleting the medium** takes its set with it — the directory and the record inside
+    // it — and nothing that is not the medium's: another medium's single file, and a loose
+    // file named like a rung the set does not serve.
     let other = library::media_create(&state, &server_id, "Other", Some("other"))
         .await
         .expect("the other medium was not made");
@@ -693,18 +730,15 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
     let others = digest(&server, &format!("{VIDEO_DIR}/other_9.mp4"));
     let loose_one = digest(&server, &format!("{VIDEO_DIR}/old-film_7.mp4"));
 
-    // The confirmation names them.
+    // The confirmation names no prepared rung files: there are none left (T693).
     let asked = library::media_delete(&state, &server_id, &medium, false)
         .await
         .expect_err("deleted without confirmation");
-    let named = asked
-        .details
-        .iter()
-        .find(|d| d.key.as_str() == "CONFIRM_DELETE_SET_FILES")
-        .unwrap_or_else(|| panic!("the set's rung files are not named: {asked:?}"));
-    assert_eq!(
-        named.params.get("names").and_then(|v| v.as_str()),
-        Some("old-film_1.mp4, old-film_9v.mp4"),
+    assert!(
+        !asked
+            .details
+            .iter()
+            .any(|d| d.key.as_str() == "CONFIRM_DELETE_SET_FILES"),
         "{asked:?}"
     );
 
@@ -800,9 +834,12 @@ async fn a_single_file_of_the_same_length_named_like_a_rung_stays_and_the_rung_i
 
     // The single file is untouched and still the medium's own.
     assert_eq!(digest(&server, &format!("{VIDEO_DIR}/same_2.mp4")), single);
-    // The rung was made from this film, under the next free name.
-    let made = identity(&server, &format!("{VIDEO_DIR}/same_2v.mp4"));
-    assert!(made.is_some(), "the rung was not made as same_2v.mp4");
+    // The rung was made from this film, under the next free name — its record says so — and
+    // the prepared file went once the set was checked (T693).
+    assert!(
+        identity(&server, &format!("{VIDEO_DIR}/same_2v.mp4")).is_none(),
+        "the checked set's prepared file is still there"
+    );
     let record = server
         .exec_inside(&format!("cat '{VIDEO_DIR}/same/.prepared'"))
         .expect("the set has no record of its prepared files");
@@ -817,11 +854,84 @@ async fn a_single_file_of_the_same_length_named_like_a_rung_stays_and_the_rung_i
         m.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
         vec!["same_2.mp4"]
     );
-    assert!(m.set_files.iter().any(|f| f.path == "same_2v.mp4"), "{m:?}");
+    assert!(m.set_files.is_empty(), "{m:?}");
     drop(scratch);
 }
 
 // ---------- killed, and carried on ----------
+
+/// T693 — a run killed after the set was checked and its prepared files removed, but before
+/// the video was written down as done: carried on, it finds every rung done by its segments
+/// and makes nothing again. Made by hand, as the restart left it: the video still going, at
+/// the check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_video_carried_on_after_its_prepared_files_went_makes_nothing_again() {
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t693-after-check");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+    let film = scratch.0.join("After Check.mp4");
+    make_film(&film, "1280x720", 12);
+    let done = build_one(&state, &server_id, &film).await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    no_prepared_files(&server, &done.slug);
+    let before = the_set(&server, &done.slug);
+
+    let mut row = vrcast_studio_lib::store::videos::get(&state.db, &done.id)
+        .unwrap()
+        .unwrap();
+    row.state = VideoState::Working;
+    row.stage = VideoStage::Verifying;
+    row.task_id = None;
+    vrcast_studio_lib::store::videos::save(&state.db, &row).unwrap();
+
+    assert_eq!(video::restore_videos(&state).unwrap(), 1);
+    let again = until(
+        &state,
+        &done.id,
+        "carrying on",
+        Duration::from_secs(300),
+        |v| {
+            matches!(
+                v.state,
+                VideoState::Done | VideoState::Problem | VideoState::Cancelled
+            )
+        },
+    )
+    .await;
+    assert_eq!(again.state, VideoState::Done, "{:?}", again.problem);
+    the_set_is_served(&server, &done.slug);
+    no_prepared_files(&server, &done.slug);
+    // Both rungs found done, not made again.
+    let builds: Vec<_> = state
+        .tasks
+        .list()
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.kind == vrcast_studio_lib::tasks::state::TaskKind::BuildLadder)
+        .collect();
+    let last = builds
+        .iter()
+        .max_by_key(|t| t.created_at.clone())
+        .expect("no build ran");
+    let reused = last
+        .notices
+        .iter()
+        .find(|d| d.key == vrcast_studio_lib::domain::wording::DetailCode::NoticeVariantsReused)
+        .and_then(|d| d.params.get("count").and_then(|v| v.as_u64()));
+    assert_eq!(reused, Some(2), "{:?}", last.notices);
+    let after = the_set(&server, &done.slug);
+    for (name, was) in before.iter().filter(|(n, _)| n.ends_with(".ts")) {
+        let now = after.iter().find(|(n, _)| n == name).map(|(_, d)| d);
+        assert_eq!(now, Some(was), "{name} was cut again");
+    }
+    drop(scratch);
+}
 
 mod env_names {
     pub const DB: &str = "VRCAST_T672_DB";
@@ -1007,29 +1117,49 @@ async fn a_video_killed_mid_build_carries_on_by_itself_from_its_stage() {
 
     // What the application does at start-up — nobody presses anything.
     assert_eq!(video::restore_videos(&state).unwrap(), 1);
-    let done = until(
-        &state,
-        &killed.id,
-        "carrying on",
-        Duration::from_secs(480),
-        |v| {
-            matches!(
-                v.state,
-                VideoState::Done | VideoState::Problem | VideoState::Cancelled
-            )
-        },
-    )
-    .await;
+    let done = until_done_watching(&state, &killed, "carrying on").await;
     assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
     assert!(done.link.is_some());
     the_set_is_served(&killed.server, &done.slug);
-    // The rung already on the server was found done, not made and sent again.
-    assert_eq!(
-        identity(&killed.server, &first_rung_file(&done.slug)).as_deref(),
-        Some(killed.first_rung.as_str()),
-        "the first rung was sent again after the restart"
-    );
+    // The checked set keeps only its segments (T693).
+    no_prepared_files(&killed.server, &done.slug);
     drop(killed.scratch);
+}
+
+/// Wait until the video stops, **watching the first rung's prepared file all the while**:
+/// carried on, the rung already on the server is found done, and its file is never put in
+/// place again — sent again, it would be (a new file under the name). It is looked at while
+/// it lasts: once the set is checked it is removed (T693), and that is not a resend.
+async fn until_done_watching(state: &AppState, killed: &Killed, what: &str) -> VideoView {
+    let deadline = Instant::now() + Duration::from_secs(480);
+    let mut seen_gone = false;
+    loop {
+        let now = video::video_get(state, &killed.id).expect("the video went missing");
+        match identity(&killed.server, &first_rung_file(&now.slug)) {
+            Some(there) => {
+                assert!(!seen_gone, "the first rung came back after it was removed");
+                assert_eq!(
+                    there, killed.first_rung,
+                    "the first rung was sent again ({what})"
+                );
+            }
+            None => seen_gone = true,
+        }
+        if matches!(
+            now.state,
+            VideoState::Done | VideoState::Problem | VideoState::Cancelled
+        ) {
+            return now;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{what}: never got there; the video is {:?} at {:?}, problem {:?}",
+            now.state,
+            now.stage,
+            now.problem
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1065,26 +1195,10 @@ async fn a_pause_a_person_pressed_is_still_a_pause_after_a_restart() {
 
     // «Continue» carries on from where it was.
     video::video_resume(&state, &killed.id).expect("continue was refused");
-    let done = until(
-        &state,
-        &killed.id,
-        "continuing",
-        Duration::from_secs(480),
-        |v| {
-            matches!(
-                v.state,
-                VideoState::Done | VideoState::Problem | VideoState::Cancelled
-            )
-        },
-    )
-    .await;
+    let done = until_done_watching(&state, &killed, "continuing").await;
     assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
     the_set_is_served(&killed.server, &done.slug);
-    assert_eq!(
-        identity(&killed.server, &first_rung_file(&done.slug)).as_deref(),
-        Some(killed.first_rung.as_str()),
-        "the first rung was sent again after continuing"
-    );
+    no_prepared_files(&killed.server, &done.slug);
     drop(killed.scratch);
 }
 // ---------- found here: «Start» on several videos at once ----------
@@ -1184,4 +1298,139 @@ async fn several_videos_started_at_once_each_get_their_medium() {
             v.title
         );
     }
+}
+
+/// The brightest pixel in the bottom fifth of the frame at `at_s` of a served rung, read the
+/// way a player reads it: over HTTP, through the rung's playlist.
+fn brightest_at_the_bottom(url: &str, at_s: f64) -> u8 {
+    let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg");
+    let out = std::process::Command::new(ff)
+        .args(["-nostdin", "-v", "error", "-ss"])
+        .arg(at_s.to_string())
+        .args(["-i", url, "-frames:v", "1", "-vf"])
+        .arg("crop=iw:ih/5:0:ih*4/5,format=gray")
+        .args(["-f", "rawvideo", "pipe:1"])
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(
+        out.status.success() && !out.stdout.is_empty(),
+        "{url} at {at_s}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout.iter().copied().max().unwrap_or(0)
+}
+
+/// T696 (owner's decision B3) — subtitles chosen for a video are burned into every rung on the
+/// real server, the top one included (a copy of the source otherwise), and the set's record
+/// says so: a line is on screen while it should be and gone after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_subtitles_chosen_are_burned_into_every_rung() {
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t696-subtitles");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+
+    // A black film — nothing bright anywhere but the line — with one SubRip track. Padded to
+    // a steady 1.5 Mbit/s: over the megabit a ladder needs, and under the top rung's 2, so
+    // without subtitles the top rung would be the source carried across.
+    let srt = scratch.0.join("lines.srt");
+    std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:10,000\nПривет, мир\n").unwrap();
+    let film = scratch.0.join("With Lines.mkv");
+    let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg");
+    let made = std::process::Command::new(ff)
+        .args(["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i"])
+        .arg("color=c=black:size=1280x720:rate=24:duration=12")
+        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=12", "-i"])
+        .arg(&srt)
+        .args(["-map", "0:v", "-map", "1:a", "-map", "2:s"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-b:v", "1500k"])
+        .args([
+            "-minrate", "1500k", "-maxrate", "1500k", "-bufsize", "1500k",
+        ])
+        .args(["-x264-params", "nal-hrd=cbr", "-g", "24"])
+        .args(["-keyint_min", "24", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+        .args(["-c:s", "srt"])
+        .arg(&film)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+
+    let added = video::video_add(
+        &state,
+        &server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .expect("adding failed");
+    assert!(added.refused.is_empty(), "{:?}", added.refused);
+    let id = added.added[0].id.clone();
+    let planned = until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    assert_eq!(planned.state, VideoState::Ready, "{:?}", planned.problem);
+    let tracks = &planned.source.as_ref().expect("no source").subtitle_tracks;
+    assert_eq!(tracks.len(), 1, "{tracks:?}");
+    video::video_set_rungs(&state, &id, Some(two_rungs())).unwrap();
+    let chosen = video::video_set_subtitles(&state, &id, Some(0)).expect("refused");
+    assert_eq!(chosen.subtitle_track, Some(0));
+    let started = video::video_start(&state, std::slice::from_ref(&id));
+    assert!(started[0].error.is_none(), "{:?}", started[0].error);
+    let done = until(&state, &id, "the build", Duration::from_secs(400), |v| {
+        matches!(
+            v.state,
+            VideoState::Done | VideoState::Problem | VideoState::Cancelled
+        )
+    })
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    the_set_is_served(&server, &done.slug);
+    no_prepared_files(&server, &done.slug);
+
+    // The set's own record: every rung made with subtitle track 0.
+    let record = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/{}/.prepared'", done.slug))
+        .expect("no record of the set");
+    let made: Vec<&str> = record.lines().filter(|l| l.starts_with("made ")).collect();
+    assert_eq!(made.len(), 2, "{record}");
+    assert!(made.iter().all(|l| l.ends_with(" t=0")), "{record}");
+
+    // Every rung, as a player gets it: the line at 3 s, nothing at 11.5 s.
+    let master = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/{}/master.m3u8'", done.slug))
+        .unwrap();
+    let rungs: Vec<&str> = master
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .collect();
+    assert_eq!(rungs.len(), 2, "{master}");
+    for rung in rungs {
+        let url = format!(
+            "{}/videos/{}/{}",
+            origin_of(&server),
+            done.slug,
+            rung.trim()
+        );
+        let with_line = brightest_at_the_bottom(&url, 3.0);
+        let after = brightest_at_the_bottom(&url, 11.5);
+        assert!(
+            with_line > 150,
+            "{rung}: no line drawn (brightest {with_line})"
+        );
+        assert!(
+            after < 60,
+            "{rung}: something drawn after the line (brightest {after})"
+        );
+    }
+    drop(scratch);
 }

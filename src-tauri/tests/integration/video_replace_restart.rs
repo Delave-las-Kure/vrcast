@@ -19,8 +19,8 @@ use vrcast_studio_lib::store::videos as rows;
 use super::fixture::TestServer;
 use super::upload_live::add_profile;
 use super::video_pipeline::{
-    build_one, make_film, make_film_from, origin_of, state_on, the_set, the_set_is_served, until,
-    Scratch, VIDEO_DIR,
+    build_one, make_film, make_film_from, no_prepared_files, origin_of, state_on, the_set,
+    the_set_is_served, until, Scratch, VIDEO_DIR,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -50,7 +50,8 @@ async fn a_replace_killed_between_removing_and_building_carries_on_after_a_resta
     assert_eq!(stopped.state, VideoState::Problem);
 
     // «Replace» confirmed, and the run killed half way through the removal: the note is
-    // there, the set's directory is gone, its prepared rungs are not.
+    // there, the set's directory is gone, its prepared rungs are not. (A set checked since
+    // T693 keeps none; one built before it does — they are laid here by hand.)
     let mut row = rows::get(&state.db, &stopped.id).unwrap().unwrap();
     row.replacing_json = Some(
         serde_json::json!({
@@ -64,7 +65,9 @@ async fn a_replace_killed_between_removing_and_building_carries_on_after_a_resta
     rows::save(&state.db, &row).unwrap();
     server
         .exec_inside(&format!(
-            "find '{VIDEO_DIR}/{slug}' -depth -delete && test ! -e '{VIDEO_DIR}/{slug}' && echo gone"
+            "find '{VIDEO_DIR}/{slug}' -depth -delete && test ! -e '{VIDEO_DIR}/{slug}' && \
+             head -c 4000 /dev/urandom > '{VIDEO_DIR}/{slug}_2.mp4' && \
+             head -c 4000 /dev/urandom > '{VIDEO_DIR}/{slug}_1.mp4' && echo gone"
         ))
         .expect("the directory would not go");
     drop(state);
@@ -117,6 +120,8 @@ async fn a_replace_killed_between_removing_and_building_carries_on_after_a_resta
         .replacing_json
         .is_none());
     the_set_is_served(&server, &slug);
+    // The old prepared rungs went with the rest, and the new set keeps none (T693).
+    no_prepared_files(&server, &slug);
 
     // Every rung is the second film's: nothing of the first was taken for done.
     let after = the_set(&server, &slug);

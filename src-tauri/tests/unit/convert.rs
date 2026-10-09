@@ -37,6 +37,7 @@ fn compatible() -> SourceFile {
         video_codec: String::from("h264"),
         pix_fmt: String::from("yuv420p"),
         color_transfer: Some(String::from("bt709")),
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![track("aac", 2)],
     }
 }
@@ -493,4 +494,319 @@ fn the_command_is_one_ffmpeg_accepts() {
     assert!(out.exists(), "FFmpeg reported success but produced no file");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------- T696: subtitles drawn into the picture ----------
+
+fn burned(
+    kind: vrcast_studio_lib::domain::source::SubtitleKind,
+    index: usize,
+    height: Option<u32>,
+    path: &str,
+) -> Vec<String> {
+    let mut source = compatible();
+    source.path = path.to_owned();
+    let mut plan = plan::plan(
+        &source,
+        &ConvertRequest {
+            audio_track: 0,
+            target_kbps: Some(3000),
+            height,
+        },
+    )
+    .unwrap();
+    plan.subtitles = Some(plan::SubtitleBurn { index, kind });
+    convert::build_args(&ConvertJob {
+        source: &source,
+        plan: &plan,
+        encoder: &Encoder::Software,
+        out_path: "/video/ready.mp4",
+    })
+}
+
+#[test]
+fn text_subtitles_are_drawn_by_libass_before_the_height_changes() {
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    let args = burned(
+        SubtitleKind::Text,
+        2,
+        Some(720),
+        r"C:\Films\It's, a film [x].mkv",
+    );
+    let vf = value_of(&args, "-vf").expect("no -vf").to_owned();
+    assert_eq!(
+        vf,
+        concat!(
+            r"subtitles=filename=C\\:/Films/It\\\'s\, a film \[x\].mkv:si=2,",
+            "scale=-2:720,format=yuv420p"
+        )
+    );
+    assert!(has_pair(&args, "-map", "0:v:0"));
+    assert!(!has(&args, "-filter_complex"));
+    // Drawn, never carried as a stream.
+    assert!(!args.iter().any(|a| a.starts_with("0:s")));
+}
+
+#[test]
+fn picture_subtitles_are_scaled_to_the_frame_and_laid_over_it() {
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    let args = burned(SubtitleKind::Picture, 1, Some(720), "C:/f.mkv");
+    let graph = value_of(&args, "-filter_complex")
+        .expect("no graph")
+        .to_owned();
+    assert_eq!(
+        graph,
+        "[0:v:0]null[film];[0:s:1]scale=1920:1080[lines];\
+         [film][lines]overlay=eof_action=pass,scale=-2:720,format=yuv420p[picture]"
+    );
+    assert!(has_pair(&args, "-map", "[picture]"));
+    assert!(!has_pair(&args, "-map", "0:v:0"), "two video streams");
+    assert!(!has(&args, "-vf"), "-vf beside a graph");
+    // The sound is mapped as ever.
+    assert!(has_pair(&args, "-map", "0:a:0"));
+}
+
+#[test]
+fn hdr_is_brought_down_before_subtitles_are_drawn() {
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    let mut source = compatible();
+    source.color_transfer = Some(String::from("smpte2084"));
+    let mut p = plan::plan(&source, &as_is()).unwrap();
+    assert!(p.tonemap);
+    p.subtitles = Some(plan::SubtitleBurn {
+        index: 0,
+        kind: SubtitleKind::Picture,
+    });
+    let args = convert::build_args(&ConvertJob {
+        source: &source,
+        plan: &p,
+        encoder: &Encoder::Software,
+        out_path: "/o.mp4",
+    });
+    let graph = value_of(&args, "-filter_complex").unwrap();
+    assert!(
+        graph.starts_with(&format!("[0:v:0]{}[film];", convert::TONEMAP_CHAIN)),
+        "{graph}"
+    );
+    p.subtitles = Some(plan::SubtitleBurn {
+        index: 0,
+        kind: SubtitleKind::Text,
+    });
+    let args = convert::build_args(&ConvertJob {
+        source: &source,
+        plan: &p,
+        encoder: &Encoder::Software,
+        out_path: "/o.mp4",
+    });
+    let vf = value_of(&args, "-vf").unwrap();
+    assert!(
+        vf.starts_with(&format!("{},subtitles=", convert::TONEMAP_CHAIN)),
+        "{vf}"
+    );
+}
+
+#[test]
+fn a_copied_picture_is_not_drawn_on() {
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    let source = compatible();
+    let mut p = plan::plan(&source, &as_is()).unwrap();
+    assert_eq!(p.video, plan::VideoAction::Copy);
+    p.subtitles = Some(plan::SubtitleBurn {
+        index: 0,
+        kind: SubtitleKind::Text,
+    });
+    let args = convert::build_args(&ConvertJob {
+        source: &source,
+        plan: &p,
+        encoder: &Encoder::Software,
+        out_path: "/o.mp4",
+    });
+    assert!(!has(&args, "-vf") && !has(&args, "-filter_complex"));
+    assert!(has_pair(&args, "-c:v", "copy"));
+}
+
+#[test]
+fn a_file_name_survives_both_levels_of_filter_quoting() {
+    assert_eq!(convert::filter_path("/plain/name.mkv"), "/plain/name.mkv");
+    assert_eq!(convert::filter_path(r"D:\a b\c.mkv"), r"D\\:/a b/c.mkv");
+    assert_eq!(
+        convert::filter_path("x;y[1],z'.mkv"),
+        r"x\;y\[1\]\,z\\\'.mkv"
+    );
+}
+
+/// T696 — the command line as built, run by the bundled FFmpeg: text subtitles from a film
+/// whose name has every character the filter quoting is about, and — when a sample with a
+/// PGS or VobSub track is named in `VRCAST_PICTURE_SUBS_SAMPLE` — picture ones. Each is drawn:
+/// a frame where a line is on screen differs from the same frame encoded without it.
+/// Skipped where there is no bundled FFmpeg.
+#[test]
+fn subtitles_are_really_drawn_by_the_bundled_ffmpeg() {
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    use vrcast_studio_lib::media::{ffmpeg, probe};
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    };
+    let Ok(fp) = ffmpeg::locate("ffprobe") else {
+        eprintln!("SKIPPED: no bundled ffprobe");
+        return;
+    };
+    let run = |args: &[String]| {
+        std::process::Command::new(&ff)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .output()
+            .map(|o| {
+                (
+                    o.status.success(),
+                    String::from_utf8_lossy(&o.stderr).into_owned(),
+                )
+            })
+            .unwrap()
+    };
+    let root = std::env::temp_dir().join(format!(
+        "vrcast-t696-{} [x], it's",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let srt = root.join("lines.srt");
+    std::fs::write(
+        &srt,
+        "1\n00:00:00,500 --> 00:00:03,500\nПривет, мир! [x] it's: a test\n",
+    )
+    .unwrap();
+    let film = root.join("It's, a film [1080p].mkv");
+    let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    let (ok, err) = run(&[
+        "-hide_banner".into(),
+        "-v".into(),
+        "error".into(),
+        "-y".into(),
+        "-f".into(),
+        "lavfi".into(),
+        "-i".into(),
+        "color=c=0x204060:size=640x360:rate=24:duration=4".into(),
+        "-f".into(),
+        "lavfi".into(),
+        "-i".into(),
+        "sine=duration=4".into(),
+        "-i".into(),
+        s(&srt),
+        "-map".into(),
+        "0:v".into(),
+        "-map".into(),
+        "1:a".into(),
+        "-map".into(),
+        "2:s".into(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-c:s".into(),
+        "srt".into(),
+        s(&film),
+    ]);
+    assert!(ok, "the film was not made: {err}");
+
+    let probed = std::process::Command::new(&fp)
+        .args([
+            "-v",
+            "error",
+            "-show_format",
+            "-show_streams",
+            "-of",
+            "json",
+        ])
+        .arg(&film)
+        .output()
+        .unwrap();
+    let mut picture_sample = std::env::var("VRCAST_PICTURE_SUBS_SAMPLE").ok();
+    let mut checked = 0;
+    let mut cases = vec![(
+        s(&film),
+        String::from_utf8_lossy(&probed.stdout).into_owned(),
+    )];
+    if let Some(sample) = picture_sample.take() {
+        let out = std::process::Command::new(&fp)
+            .args([
+                "-v",
+                "error",
+                "-show_format",
+                "-show_streams",
+                "-of",
+                "json",
+            ])
+            .arg(&sample)
+            .output()
+            .unwrap();
+        cases.push((sample, String::from_utf8_lossy(&out.stdout).into_owned()));
+    }
+    for (path, json) in cases {
+        let source = probe::parse(&json, &path).unwrap();
+        let track = source
+            .subtitle_tracks
+            .iter()
+            .find(|t| t.burnable())
+            .expect("no subtitle track found")
+            .clone();
+        // The first line on screen, a little in.
+        let at = if track.kind == SubtitleKind::Text {
+            1.0
+        } else {
+            3.0
+        };
+        let mut frames = Vec::new();
+        for burn in [None, Some(track.index)] {
+            let mut p = plan::plan(
+                &source,
+                &ConvertRequest {
+                    audio_track: 0,
+                    target_kbps: Some(((source.bitrate_bps / 1000) as u32 / 2).max(1)),
+                    height: Some(source.height.min(360)),
+                },
+            )
+            .unwrap();
+            p.subtitles = burn.map(|index| plan::SubtitleBurn {
+                index,
+                kind: track.kind,
+            });
+            let out = root.join(format!("out-{}.mp4", burn.is_some()));
+            let mut args = convert::build_args(&ConvertJob {
+                source: &source,
+                plan: &p,
+                encoder: &Encoder::Software,
+                out_path: &s(&out),
+            });
+            // Long samples: the first seconds are enough.
+            let at_out = args.len() - 1;
+            args.insert(at_out, "-t".into());
+            args.insert(at_out + 1, "6".into());
+            let (ok, err) = run(&args);
+            assert!(ok, "{:?} would not encode: {err}\n{args:?}", track.kind);
+            let frame = root.join(format!("frame-{}.png", burn.is_some()));
+            let (ok, err) = run(&[
+                "-v".into(),
+                "error".into(),
+                "-y".into(),
+                "-ss".into(),
+                at.to_string(),
+                "-i".into(),
+                s(&out),
+                "-frames:v".into(),
+                "1".into(),
+                s(&frame),
+            ]);
+            assert!(ok, "{err}");
+            frames.push(std::fs::read(&frame).unwrap());
+        }
+        assert_ne!(frames[0], frames[1], "{:?}: nothing was drawn", track.kind);
+        checked += 1;
+    }
+    eprintln!("checked {checked} kind(s) of subtitles");
+    if std::env::var("VRCAST_KEEP_SUBS_FRAMES").is_ok() {
+        eprintln!("frames kept in {}", root.display());
+        return;
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }

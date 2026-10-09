@@ -171,6 +171,19 @@ pub fn record_built(next: &mut Manifest, slug: &str, built: &[String]) -> bool {
     true
 }
 
+/// Take rung files removed from the server out of every medium's record of its set files
+/// (T693: a checked set's prepared files are removed), in a catalogue already prepared for
+/// writing. Returns whether anything was taken out.
+pub fn forget_removed(next: &mut Manifest, removed: &[String]) -> bool {
+    let mut changed = false;
+    for m in &mut next.media {
+        let before = m.set_files.len();
+        m.set_files.retain(|f| !removed.contains(f));
+        changed |= m.set_files.len() != before;
+    }
+    changed
+}
+
 /// The catalogue to write so that it records what reading it attributed (T679), or `None`
 /// when there is nothing to add.
 ///

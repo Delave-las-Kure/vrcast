@@ -61,6 +61,9 @@ pub struct BuildRequest {
     /// Which audio track to keep.
     #[serde(default)]
     pub audio_track: usize,
+    /// The subtitle track drawn into every rung (T696, owner's decision B3); `None` — none.
+    #[serde(default)]
+    pub subtitle_track: Option<usize>,
     #[serde(default = "yes")]
     pub prefer_hardware: bool,
     /// Which batch this build belongs to (T445). `None` for a build a person started.
@@ -492,6 +495,14 @@ pub mod api {
         }
 
         let source = super::super::api::source_probe(&request.path).await?;
+        // T696: subtitles asked for that cannot be drawn are refused before anything starts.
+        if let Some(track) = request.subtitle_track {
+            if crate::domain::ladder_build::subtitle_burn(&source, track).is_none() {
+                return Err(AppError::new(ErrorCode::InvalidInput).with_detail(
+                    Detail::new(DetailCode::PlanNoSuchSubtitles).with("number", track + 1),
+                ));
+            }
+        }
         let (encoder, _) = pick_encoder(request.prefer_hardware).await?;
         // Where these rungs came from, so the description can say it (T433). Asked of the
         // same planner the screen asked, rather than guessed from the rungs: a rung carries
@@ -580,6 +591,7 @@ pub mod api {
                         rungs: &request.rungs,
                         encoder: &encoder,
                         audio_track: request.audio_track,
+                        subtitle_track: request.subtitle_track,
                         master_url: &master_url,
                         provenance,
                         work_dir: &work_dir,
@@ -622,9 +634,14 @@ pub mod api {
                     // slug T528 has not finished tidying up — and a result that pointed
                     // at nothing would be worse than none.
                     if let Ok(built) = &outcome {
-                        if let Some(media_id) =
-                            attach_built_set(&conn, &profile.video_dir, &request.slug, &built.files)
-                                .await
+                        if let Some(media_id) = attach_built_set(
+                            &conn,
+                            &profile.video_dir,
+                            &request.slug,
+                            &built.files,
+                            &built.removed,
+                        )
+                        .await
                         {
                             ctx.set_result(crate::tasks::store::TaskResult { media_id });
                         }
@@ -744,11 +761,16 @@ pub mod api {
 /// `set_files` — the build's own names for them — are recorded under the medium as the set's
 /// (`Media::set_files`), in the same write, so that deleting the medium removes them with the
 /// set. A file the medium has as its own single file stays one (`domain::set_files`).
+///
+/// **And `removed` taken out of it** (T693): the prepared files the build removed once the
+/// set was checked are no longer on the server, and a record of them would be a file forever
+/// missing.
 pub async fn attach_built_set(
     conn: &crate::ssh::Connection,
     video_dir: &str,
     slug: &str,
     set_files: &[String],
+    removed: &[String],
 ) -> Option<String> {
     let manifest = match crate::server::manifest_io::read(conn, video_dir).await {
         Ok(m) => m,
@@ -765,6 +787,7 @@ pub async fn attach_built_set(
     let ladder_path = format!("{slug}/master.m3u8");
     if let Some(mut next) = manifest.with_file_under(&media_id, &ladder_path, true) {
         crate::domain::set_files::record_built(&mut next, slug, set_files);
+        crate::domain::set_files::forget_removed(&mut next, removed);
         if let Err(e) =
             crate::server::manifest_io::write(conn, video_dir, &next, manifest.generation).await
         {

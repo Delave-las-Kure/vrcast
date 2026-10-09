@@ -75,6 +75,9 @@ pub struct ThenBuild {
     pub slug: String,
     #[serde(default)]
     pub audio_track: usize,
+    /// The subtitle track drawn into every rung (T696), as `BuildRequest.subtitle_track`.
+    #[serde(default)]
+    pub subtitle_track: Option<usize>,
     /// Build although somebody is watching something on the server (T571), as
     /// `BuildRequest.confirmed`. The video pipeline (T672) sets it for a medium it made itself
     /// a moment ago: nobody can be watching a set that does not exist yet, and the guard
@@ -397,6 +400,7 @@ pub mod api {
                 slug: onward.slug.clone(),
                 rungs: plan.plan.rungs.clone(),
                 audio_track: onward.audio_track,
+                subtitle_track: onward.subtitle_track,
                 prefer_hardware: measured.prefer_hardware,
                 // The same batch as the measurement that started it. A build outside its
                 // batch would go on encoding for hours after somebody pressed stop.
@@ -654,6 +658,8 @@ pub async fn held(
         borrowed.chunk_s,
         cell,
         encoder,
+        // The recipe of the borrower's own material — what its rungs will be made by (T697).
+        &crate::media::vmaf::Recipe::of_run(borrowed),
         &ctx.cancel_token(),
     )
     .await

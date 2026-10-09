@@ -507,12 +507,15 @@ pub fn default_audio(source: &SourceFile) -> usize {
     source.default_track().map(|t| t.index).unwrap_or(0)
 }
 
-/// Whether a rung is carried across without encoding (the same test `ladder_build::work_for`
-/// makes — a rung that *is* the source asks for nothing).
+/// Whether a rung is carried across without encoding: the same test `ladder_build::work_for`
+/// makes — a rung that *is* the source asks for nothing — **and a stream that can be carried
+/// across at all** (T698): the top rung of an HEVC or HDR source has the source's numbers and
+/// is re-encoded all the same, and its time belongs in the plan.
 pub fn is_copy(rung: &Rung, source: &SourceFile) -> bool {
     rung.height == source.height
         && rung.width == source.width
         && rung.bitrate_bps >= source.bitrate_bps
+        && super::convert_plan::stream_copyable(source)
 }
 
 /// How fast an encoder makes pictures, when nothing has been timed on this machine yet: in
@@ -560,12 +563,23 @@ pub fn pixels_of(rung: &Rung, source: &SourceFile) -> f64 {
 /// Rungs carried across untouched cost nothing here. `None` when the film's length is not
 /// known — a number made up for that case would look like an estimate and be a guess.
 pub fn encode_seconds(rungs: &[Rung], source: &SourceFile, pixels_per_s: f64) -> Option<u64> {
+    encode_seconds_with(rungs, source, pixels_per_s, false)
+}
+
+/// [`encode_seconds`], with subtitles drawn into the picture or not (T696): drawn, no rung is
+/// carried across — every one is encoded and its time counts.
+pub fn encode_seconds_with(
+    rungs: &[Rung],
+    source: &SourceFile,
+    pixels_per_s: f64,
+    subtitles: bool,
+) -> Option<u64> {
     if source.duration_s <= 0.0 || pixels_per_s <= 0.0 {
         return None;
     }
     let pixels: f64 = rungs
         .iter()
-        .filter(|r| !is_copy(r, source))
+        .filter(|r| subtitles || !is_copy(r, source))
         .map(|r| pixels_of(r, source))
         .sum();
     Some((pixels / pixels_per_s * (1.0 + VALIDATE_SHARE)).round() as u64)

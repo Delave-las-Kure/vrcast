@@ -436,11 +436,12 @@ fn audio_of(url: &str) -> (f64, String) {
     (hz, String::from_utf8_lossy(&probe.stdout).trim().to_owned())
 }
 
-/// What the set takes on the server, in bytes: its prepared rungs and its directory.
+/// What the set takes on the server, in bytes: its directory, and any prepared rung left
+/// (none once the set is checked — T693).
 fn bytes_on_server(server: &TestServer, slug: &str) -> u64 {
     server
         .exec_inside(&format!(
-            "cd '{VIDEO_DIR}' && du -cb {slug}_*.mp4 '{slug}' | tail -1 | cut -f1"
+            "cd '{VIDEO_DIR}' && du -cb '{slug}' $(ls {slug}_*.mp4 2>/dev/null) | tail -1 | cut -f1"
         ))
         .ok()
         .and_then(|s| s.trim().parse().ok())
@@ -699,7 +700,8 @@ async fn a_real_film_goes_the_whole_way_with_a_real_measurement_on_the_second_au
             .any(|l| l.path == format!("{}/master.m3u8", done.slug)),
         "{m:?}"
     );
-    assert_eq!(m.set_files.len(), rungs.len(), "{m:?}");
+    // The checked set keeps no prepared rung on the server (T693).
+    assert!(m.set_files.is_empty(), "{m:?}");
     assert!(view.unrecognized.is_empty(), "{:?}", view.unrecognized);
 
     // Checked last so that every number above is printed for the report first.
@@ -1141,24 +1143,34 @@ async fn cancelled_while_encoding_leaves_no_program_no_part_and_no_half_set() {
         t.stages
     );
 
-    // «Retry» carries on and finishes, finding the first rung on the server done.
+    // «Retry» carries on and finishes, finding the first rung on the server done: its file
+    // is never put in place again while it lasts — once the set is checked it is removed
+    // (T693), and that is not a resend.
     video::video_retry(&state, &id, false).expect("retry was refused");
-    let done = until(
-        &state,
-        &id,
-        "after retry",
-        Duration::from_secs(300),
-        finished,
-    )
-    .await;
-    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
-    let first_after = server
-        .exec_inside(&format!("stat -c '%i %s %Y' '{VIDEO_DIR}/{slug}_8.mp4'"))
-        .ok();
-    eprintln!("ACCEPTANCE cancel: first rung before {first_rung:?}, after retry {first_after:?}");
     assert!(
         first_rung.is_some(),
         "the first rung was not on the server when stopped"
     );
-    assert_eq!(first_after, first_rung, "the first rung was sent again");
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut seen_gone = false;
+    let done = loop {
+        let now = video::video_get(&state, &id).expect("the video went missing");
+        let there = server
+            .exec_inside(&format!("stat -c '%i %s %Y' '{VIDEO_DIR}/{slug}_8.mp4'"))
+            .ok();
+        match there {
+            Some(_) => {
+                assert!(!seen_gone, "the first rung came back after it was removed");
+                assert_eq!(there, first_rung, "the first rung was sent again");
+            }
+            None => seen_gone = true,
+        }
+        if finished(&now) {
+            break now;
+        }
+        assert!(Instant::now() < deadline, "after retry: never got there");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    assert!(seen_gone, "the checked set's prepared file is still there");
 }

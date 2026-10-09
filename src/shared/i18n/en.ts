@@ -428,6 +428,8 @@ export const en: Catalogue = {
       "The file has no audio track at all. Check that this is the right file: video without sound does not go into service.",
     PLAN_NO_SUCH_TRACK:
       "There is no audio track {number} in the file — there are {available} in all.",
+    PLAN_NO_SUCH_SUBTITLES:
+      "There are no subtitles {number} in the file, or they cannot be burned into the picture.",
     PLAN_HEIGHT_ZERO: "The frame height cannot be zero.",
     PLAN_HEIGHT_ABOVE_SOURCE: "Height {asked} is above the source ({source}).",
     PLAN_BITRATE_ZERO: "The target bitrate cannot be zero.",
@@ -511,6 +513,7 @@ export const en: Catalogue = {
     REASON_KEYFRAMES_UNALIGNED:
       "The source's keyframes do not fall where the segment boundaries will",
     REASON_TARGET_BITRATE: "a target bitrate was set",
+    REASON_SUBTITLES_BURNED: "subtitles are burned into the picture",
     REASON_AUDIO_NOT_AAC: "audio is {codec} — the target format is AAC",
     REASON_AUDIO_PROFILE:
       "the audio is AAC but the profile is {profile} — the target is AAC-LC, and other profiles do not play for everyone",
@@ -1157,6 +1160,10 @@ export const en: Catalogue = {
       channels: "{n} ch.",
       trackDefault: " (default)",
       trackLine: "{base}, {channels}{main}",
+      subtitles: "Subtitles",
+      subtitlesNone: "no subtitles",
+      subtitlesForced: " (signs only)",
+      subtitlesLine: "{base}{forced}",
       title: "Title",
       editTitle: "Change title",
       saveTitle: "Save",
@@ -1218,6 +1225,8 @@ export const en: Catalogue = {
       ladders: "Quality ladders: {list}",
       laddersHeading: "Quality ladders",
       setFilesHeading: "The set's rung files",
+      leftoverMp4: "Extra mp4 files — {bytes|bytes}",
+      leftoverRemove: "Remove",
       renameMedia: "Rename",
       buildSet: "Build a set",
       setBuilding: "Set is building",

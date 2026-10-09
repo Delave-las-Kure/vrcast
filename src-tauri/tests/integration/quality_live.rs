@@ -153,6 +153,7 @@ async fn how_long_a_point_takes() {
             chunks::CHUNK_S as u64,
             *cell,
             &encoder,
+            &vmaf::Recipe::for_material(probe.fps, probe.color_transfer.as_deref()),
             &cancel,
         )
         .await;

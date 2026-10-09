@@ -148,6 +148,7 @@ fn build_request(server_id: &str, path: &str, slug: &str, confirmed: bool) -> Bu
         slug: slug.to_owned(),
         rungs: rungs(),
         audio_track: 0,
+        subtitle_track: None,
         // Software: what is being checked here holds on a machine with no graphics card,
         // which is most machines this will ever run on — the same reasoning `seams.rs`
         // gives for the same choice.

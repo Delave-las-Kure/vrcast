@@ -99,7 +99,9 @@ pub struct VideoPlan {
     pub encode_estimate: EncodeEstimate,
     /// The encoder that will do it, as FFmpeg names it.
     pub encoder: String,
-    /// What the set will take on the server, in bytes.
+    /// What the set will take on the server once checked, in bytes: the segments alone
+    /// (T693 — the prepared files are removed then). `server_space` asks for more: while the
+    /// set is built the prepared files are there too.
     pub server_bytes: u64,
     /// What one rung takes here while it is made, in bytes (one at a time).
     pub local_bytes: u64,
@@ -150,6 +152,9 @@ pub struct VideoView {
     /// until a person picks one: «Start» is refused meanwhile, and `audio_track` is only what
     /// the plan's sizes are reckoned with.
     pub audio_chosen: bool,
+    /// The subtitle track drawn into every rung (T696, owner's decision B3); `null` — none,
+    /// the default. The tracks themselves are in `source.subtitle_tracks`.
+    pub subtitle_track: Option<usize>,
     pub stage: VideoStage,
     pub state: VideoState,
     /// Paused by a person — stays paused across a restart.
@@ -713,7 +718,7 @@ fn space(disk: Option<DiskUsage>, needed: u64) -> SpaceCheck {
 /// The plan as it stands with this video's own choices — its audio track, its edited rungs —
 /// applied. Worked out every time, from the basis and the source.
 fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> VideoPlan {
-    use crate::domain::ladder_size::{bytes_for_rung, bytes_for_set, AUDIO_BUDGET_BPS};
+    use crate::domain::ladder_size::bytes_for_set;
 
     let custom = custom_rungs(row);
     let edited = custom.is_some();
@@ -734,25 +739,34 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
             3,
         ))
     .round() as u64;
-    let audio_bps = source
-        .audio_tracks
-        .get(row.audio_track)
-        .and_then(|t| t.bitrate_bps)
-        .unwrap_or(AUDIO_BUDGET_BPS)
-        .max(AUDIO_BUDGET_BPS);
+    // The sound the prepared files will carry — the output's, not the source's (T699).
+    let audio_bps = crate::domain::ladder_size::audio_out_bps(source, row.audio_track);
     let bitrates: Vec<u64> = rungs.iter().map(|r| r.bitrate_bps).collect();
-    let server_bytes = bytes_for_set(&bitrates, audio_bps, source.duration_s);
-    let local_bytes = bytes_for_rung(
-        bitrates.iter().copied().max().unwrap_or(0),
-        audio_bps,
-        source.duration_s,
-    );
+    // What the set leaves on the server once checked — the segments alone (T693) — and what
+    // the build needs there while it runs: the prepared files too, until the check.
+    let server_bytes =
+        crate::domain::ladder_size::served_bytes_for_set(&bitrates, audio_bps, source.duration_s);
+    let server_peak = bytes_for_set(&bitrates, audio_bps, source.duration_s);
+    // What this computer holds at its fullest: one prepared file, the heaviest (T699). The
+    // segments are cut on the server.
+    let ceilings: Vec<u64> = rungs
+        .iter()
+        .map(|r| r.maxrate_bps.max(r.bitrate_bps))
+        .collect();
+    let local_bytes =
+        crate::domain::ladder_size::local_peak_bytes(&ceilings, audio_bps, source.duration_s);
     let objections = crate::domain::ladder::validate(&rungs, &facts_of(source), source.fps)
         .iter()
         .map(|o| o.detail())
         .collect();
     VideoPlan {
-        encode_s: video::encode_seconds(&rungs, source, basis.pixels_per_s),
+        // T696: subtitles drawn in make every rung an encode, the top one included.
+        encode_s: video::encode_seconds_with(
+            &rungs,
+            source,
+            basis.pixels_per_s,
+            row.subtitle_track.is_some(),
+        ),
         from: if edited {
             PlanSource::Edited
         } else {
@@ -772,7 +786,7 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
         },
         encode_estimate: basis.encode_estimate,
         encoder: basis.encoder.clone(),
-        server_space: space(basis.server_disk, server_bytes),
+        server_space: space(basis.server_disk, server_peak),
         local_space: space(basis.local_disk, local_bytes),
         server_bytes,
         local_bytes,
@@ -875,6 +889,7 @@ fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
         slug: row.slug.clone(),
         audio_track: row.audio_track,
         audio_chosen: row.audio_chosen,
+        subtitle_track: row.subtitle_track,
         stage: row.stage,
         state: row.state,
         paused_by_person: row.paused_by_person,
@@ -1817,6 +1832,7 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
                     server_id: row.server_id.clone(),
                     slug: row.slug.clone(),
                     audio_track: row.audio_track,
+                    subtitle_track: row.subtitle_track,
                     confirmed: past_viewers,
                     accept_objections: row.confirmed,
                 }),
@@ -1890,6 +1906,7 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
             slug: row.slug.clone(),
             rungs,
             audio_track: row.audio_track,
+            subtitle_track: row.subtitle_track,
             prefer_hardware: true,
             batch: Some(batch_of(&row)),
             confirmed: past_viewers,
@@ -2285,6 +2302,34 @@ pub mod api {
             }
             row.audio_track = track;
             row.audio_chosen = true;
+            Ok(())
+        })?;
+        video_get(state, id)
+    }
+
+    /// Choose the subtitles drawn into the picture (T696, owner's decision B3): a track of the
+    /// source that can be drawn, or `None` for none. At the same moments as the audio track —
+    /// before anything is encoded — because the choice changes every frame of every rung.
+    pub fn video_set_subtitles(
+        state: &AppState,
+        id: &str,
+        track: Option<usize>,
+    ) -> Result<VideoView> {
+        change(state, id, |row| {
+            if !video::allowed(Act::SetAudio, row.state, row.stage, row.media_id.is_some()) {
+                return Err(not_now(row));
+            }
+            if let Some(track) = track {
+                let drawable = source_of(row).is_some_and(|s| {
+                    crate::domain::ladder_build::subtitle_burn(&s, track).is_some()
+                });
+                if !drawable {
+                    return Err(AppError::new(ErrorCode::InvalidInput).with_detail(
+                        Detail::new(DetailCode::PlanNoSuchSubtitles).with("number", track + 1),
+                    ));
+                }
+            }
+            row.subtitle_track = track;
             Ok(())
         })?;
         video_get(state, id)
@@ -2927,6 +2972,15 @@ pub mod ipc {
         track: usize,
     ) -> Result<VideoView> {
         api::video_set_audio(&state, &id, track)
+    }
+
+    #[tauri::command]
+    pub fn video_set_subtitles(
+        state: State<'_, AppState>,
+        id: String,
+        track: Option<usize>,
+    ) -> Result<VideoView> {
+        api::video_set_subtitles(&state, &id, track)
     }
 
     #[tauri::command]

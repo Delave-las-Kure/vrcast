@@ -150,7 +150,9 @@ const MADE_PREFIX: &str = "made ";
 /// and the file is still whole. Written into [`PREPARED_RECORD`] in the same command that puts
 /// the file in place, so the record never names a file that is not there.
 ///
-/// Line: `made v9 film_9v.mp4 h=1080 b=9000000 a=0 s=4000000000 d=3600000`.
+/// Line: `made v9 film_9v.mp4 h=1080 b=9000000 a=0 s=4000000000 d=3600000`, and ` t=2` at
+/// the end when subtitle track 2 is drawn into the picture (T696) — a line without it is a
+/// rung made without subtitles, which is every line written before they could be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MadeRung {
     pub sub: String,
@@ -162,6 +164,8 @@ pub struct MadeRung {
     pub source_bytes: u64,
     /// The source's length, in milliseconds.
     pub duration_ms: u64,
+    /// The subtitle track drawn into it (T696); `None` — none.
+    pub subtitles: Option<usize>,
 }
 
 impl MadeRung {
@@ -175,11 +179,12 @@ impl MadeRung {
             audio_track,
             source_bytes: source.size_bytes,
             duration_ms: duration_ms(source.duration_s),
+            subtitles: variant.plan.subtitles.map(|s| s.index),
         }
     }
 
     pub fn line(&self) -> String {
-        format!(
+        let mut line = format!(
             "{MADE_PREFIX}{} {} h={} b={} a={} s={} d={}",
             self.sub,
             self.file,
@@ -188,7 +193,11 @@ impl MadeRung {
             self.audio_track,
             self.source_bytes,
             self.duration_ms
-        )
+        );
+        if let Some(t) = self.subtitles {
+            line.push_str(&format!(" t={t}"));
+        }
+        line
     }
 
     fn parse(line: &str) -> Option<Self> {
@@ -203,21 +212,34 @@ impl MadeRung {
                 .parse()
                 .ok()
         };
+        let height = u32::try_from(field("h")?).ok()?;
+        let bitrate_bps = field("b")?;
+        let audio_track = usize::try_from(field("a")?).ok()?;
+        let source_bytes = field("s")?;
+        let duration_ms = field("d")?;
+        // Optional, and last: a line without it was made without subtitles. A `t` that is
+        // there and unreadable makes the line unreadable — not «without subtitles».
+        let subtitles = match parts.next() {
+            None => None,
+            Some(t) => Some(usize::try_from(t.strip_prefix("t=")?.parse::<u64>().ok()?).ok()?),
+        };
         Some(Self {
             sub,
             file,
-            height: u32::try_from(field("h")?).ok()?,
-            bitrate_bps: field("b")?,
-            audio_track: usize::try_from(field("a")?).ok()?,
-            source_bytes: field("s")?,
-            duration_ms: field("d")?,
+            height,
+            bitrate_bps,
+            audio_track,
+            source_bytes,
+            duration_ms,
+            subtitles,
         })
     }
 
     /// Whether this record says that `variant` of `source` with `audio_track` is made.
     ///
     /// The same rung directory and file, the same height, the bitrate within a tenth, the
-    /// same sound track and the same source (size, and length within a second).
+    /// same sound track, the same subtitles drawn in (T696) and the same source (size, and
+    /// length within a second).
     pub fn is(&self, variant: &VariantWork, source: &SourceFile, audio_track: usize) -> bool {
         let want = variant.rung.bitrate_bps;
         self.sub == variant.sub
@@ -225,6 +247,7 @@ impl MadeRung {
             && self.height == variant.rung.height
             && self.bitrate_bps.abs_diff(want) * 10 <= want
             && self.audio_track == audio_track
+            && self.subtitles == variant.plan.subtitles.map(|s| s.index)
             && self.source_bytes == source.size_bytes
             && self.duration_ms.abs_diff(duration_ms(source.duration_s)) < 1000
     }
@@ -267,6 +290,53 @@ pub fn parse_rung_facts(text: &str) -> (Option<f64>, Option<u32>) {
         }
     }
     (duration, height)
+}
+
+/// The line that separates a rung's playlist from its `.facts` in one reading of both (T693).
+pub const CUT_FACTS_MARK: &str = "VRCAST_RUNG_FACTS";
+
+/// Whether a rung's segments are on the server, cut whole (T693): its playlist is finished
+/// (`#EXT-X-ENDLIST`), its `.facts` read, the picture of the rung's height, and the segments
+/// together as long as the source (within a second and a half: a playlist's durations are
+/// rounded segment by segment).
+///
+/// `text` is the playlist, a line [`CUT_FACTS_MARK`], then the `.facts`.
+///
+/// **Why it is asked at all.** Once a set is checked its prepared files are removed (the
+/// owner's decision A1 of 2026-10-09): only the segments stay. A set carried on after that —
+/// a restart between the removal and the video's «Done», a rebuild to change one rung — must
+/// find its rungs done by their segments, or it would make every rung again. Asked only of a
+/// rung the set's own record says it made ([`made_here`]); on its own it proves nothing.
+pub fn cut_is_whole(text: &str, expected_s: f64, height: u32) -> bool {
+    let Some((playlist, facts)) = text.split_once(CUT_FACTS_MARK) else {
+        return false;
+    };
+    if !playlist.contains("#EXT-X-ENDLIST") {
+        return false;
+    }
+    let Ok(facts) = super::hls_package::read_facts(facts) else {
+        return false;
+    };
+    let total: f64 = facts.segments.iter().map(|s| s.duration_s).sum();
+    facts.height == height
+        && !facts.segments.is_empty()
+        && expected_s > 0.0
+        && (total - expected_s).abs() < 1.5
+}
+
+/// The prepared files a checked set may remove (T693, the owner's decision A1): every
+/// rung's, when the set's own record says it made it under that name and no medium claims
+/// it. In the order of `work`.
+///
+/// A file not in the record — a rung that was not made by this set, a record lost — stays:
+/// removing what is not certainly ours is the one mistake here that cannot be undone, and a
+/// file left behind is shown in «Library» as an extra mp4 to remove by hand.
+pub fn removable_files(work: &[VariantWork], made: &[MadeRung], claimed: &[&str]) -> Vec<String> {
+    work.iter()
+        .filter(|w| made.iter().any(|m| m.sub == w.sub && m.file == w.file))
+        .filter(|w| !claimed.contains(&w.file.as_str()))
+        .map(|w| w.file.clone())
+        .collect()
 }
 
 /// Which prepared file each rung is made into (T677, T681), in the order of `work`.
@@ -381,8 +451,18 @@ pub fn work_for(
                 // A rung that will not plan is not a reason to lose the others: it is
                 // re-encoded on the ordinary path and the checker has already had its say
                 // about whether it should exist at all.
-                fallback_plan(source, &request)
+                fallback_plan(source, &request, rung)
             });
+
+            // **A rung that has to be re-encoded is held to its own bitrate** (T698, QA-26
+            // no. 8). The top rung of an HEVC or HDR source is the source by its numbers and so
+            // asks for nothing — and the stream cannot be carried across, so it used to be
+            // re-encoded at a pinned quality, landing wherever it landed: not the bitrate the
+            // plan showed, nor the ceiling a viewer's connection was sized for. Re-encoded, it
+            // is made like every other rung: to the rung's target, under its ceiling.
+            if let VideoAction::Reencode { reason, .. } = &plan.video {
+                plan.video = capped_to(rung, reason.clone());
+            }
 
             let mut notices = Vec::new();
             // The one place a copy is taken away for a reason that has nothing to do with
@@ -393,13 +473,7 @@ pub fn work_for(
                     .map(|spacing| keyframes_line_up(spacing, source.fps, segment_s))
                     .unwrap_or(false)
             {
-                plan.video = VideoAction::ReencodeCapped {
-                    reason: Detail::new(DetailCode::ReasonKeyframesUnaligned),
-                    target_kbps: (rung.bitrate_bps / 1000).max(1) as u32,
-                    maxrate_kbps: (rung.maxrate_bps / 1000).max(1) as u32,
-                    bufsize_kbps: (rung.bufsize_bps / 1000).max(1) as u32,
-                    level: rung.level.clone(),
-                };
+                plan.video = capped_to(rung, Detail::new(DetailCode::ReasonKeyframesUnaligned));
                 notices.push(Detail::new(DetailCode::NoticeReencodedForKeyframes));
             }
 
@@ -416,6 +490,49 @@ pub fn work_for(
         .collect()
 }
 
+/// The subtitle track `index` of `source` as a burn (T696): `None` when there is no such
+/// track or it cannot be drawn into the picture — a choice like that is refused, never
+/// silently dropped: the owner asked for the lines to be there.
+pub fn subtitle_burn(
+    source: &SourceFile,
+    index: usize,
+) -> Option<super::convert_plan::SubtitleBurn> {
+    source
+        .subtitle(index)
+        .filter(|t| t.burnable())
+        .map(|t| super::convert_plan::SubtitleBurn {
+            index: t.index,
+            kind: t.kind,
+        })
+}
+
+/// Draw the subtitle track `burn` into every rung (T696, owner's decision B3).
+///
+/// Drawing changes every frame, so no rung is carried across any longer: a copy becomes a
+/// re-encode to the rung's own target under its ceiling, said as the reason. The notice
+/// about keyframes goes with the copy it explained — the rung is re-encoded for the
+/// subtitles whatever the keyframes do.
+pub fn burn_subtitles(work: &mut [VariantWork], burn: super::convert_plan::SubtitleBurn) {
+    for variant in work.iter_mut() {
+        variant.plan.subtitles = Some(burn);
+        let keyframes = matches!(
+            &variant.plan.video,
+            VideoAction::ReencodeCapped { reason, .. }
+                if reason.key == DetailCode::ReasonKeyframesUnaligned
+        );
+        if variant.plan.video == VideoAction::Copy || keyframes {
+            variant.plan.video = capped_to(
+                &variant.rung,
+                Detail::new(DetailCode::ReasonSubtitlesBurned),
+            );
+            variant
+                .notices
+                .retain(|n| n.key != DetailCode::NoticeReencodedForKeyframes);
+        }
+        variant.lossless = variant.plan.lossless();
+    }
+}
+
 /// Every variant is prepared with the **same** keyframe spacing.
 ///
 /// One per second of film, at whatever the frame rate is — the same rule as for a single
@@ -426,23 +543,34 @@ pub fn shared_gop(source: &SourceFile) -> u32 {
     source.fps.max(1)
 }
 
-fn fallback_plan(source: &SourceFile, request: &ConvertRequest) -> ConvertPlan {
+/// Re-encode a rung to its own target under its own ceiling — the one way every re-encoded
+/// rung is made (T698).
+fn capped_to(rung: &Rung, reason: Detail) -> VideoAction {
+    VideoAction::ReencodeCapped {
+        reason,
+        target_kbps: (rung.bitrate_bps / 1000).max(1) as u32,
+        maxrate_kbps: (rung.maxrate_bps / 1000).max(1) as u32,
+        bufsize_kbps: (rung.bufsize_bps / 1000).max(1) as u32,
+        level: rung.level.clone(),
+    }
+}
+
+fn fallback_plan(source: &SourceFile, request: &ConvertRequest, rung: &Rung) -> ConvertPlan {
     ConvertPlan {
-        video: VideoAction::Reencode {
-            reason: Detail::new(DetailCode::ReasonTargetBitrate),
-            level: super::convert_plan::h264_level(
-                source.width,
-                request.height.unwrap_or(source.height),
-                source.fps,
-            )
-            .to_owned(),
-        },
-        audio: super::convert_plan::AudioAction::Copy,
+        video: capped_to(rung, Detail::new(DetailCode::ReasonTargetBitrate)),
+        // The sound and the HDR treatment the ordinary plan would give it (T698): a rung that
+        // would not plan used to copy any sound across and leave HDR as it was — a 5.1 track
+        // or a washed-out picture in the one rung nobody looked at.
+        audio: source
+            .track(request.audio_track)
+            .map(super::convert_plan::audio_for)
+            .unwrap_or(super::convert_plan::AudioAction::Copy),
         audio_track: request.audio_track,
         gop: shared_gop(source),
-        tonemap: false,
+        tonemap: source.is_hdr(),
         requested_height: request.height,
         faststart: true,
+        subtitles: None,
     }
 }
 

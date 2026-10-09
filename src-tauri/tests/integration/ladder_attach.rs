@@ -113,7 +113,7 @@ async fn a_built_set_is_filed_under_its_medium_as_a_nested_ladder_with_real_part
     // The step this task added: what `ladder_build::run` calls once the set is on the
     // server, over the same connection a real build would still be holding.
     let conn = connect(&server).await;
-    let attached = attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+    let attached = attach_built_set(&conn, VIDEO_DIR, "backrooms", &[], &[])
         .await
         .expect("the set was not attached to any medium");
     assert_eq!(
@@ -193,7 +193,7 @@ async fn a_slug_matching_no_medium_is_left_unattached_rather_than_invented() {
         .expect("the quality set was not laid out");
 
     let conn = connect(&server).await;
-    let attached = attach_built_set(&conn, VIDEO_DIR, "nobody-owns-this", &[]).await;
+    let attached = attach_built_set(&conn, VIDEO_DIR, "nobody-owns-this", &[], &[]).await;
     conn.close().await;
     assert!(
         attached.is_none(),
@@ -243,7 +243,7 @@ async fn a_set_built_before_t678_has_its_rung_files_found_by_its_master_and_dele
         ))
         .unwrap();
     let conn = connect(&server).await;
-    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[], &[])
         .await
         .expect("the set was not attached");
     conn.close().await;
@@ -362,7 +362,7 @@ async fn a_build_records_its_rung_files_under_the_medium_in_the_catalogue() {
         String::from("backrooms_2v.mp4"),
         String::from("backrooms_3.mp4"),
     ];
-    let attached = attach_built_set(&conn, VIDEO_DIR, "backrooms", &built).await;
+    let attached = attach_built_set(&conn, VIDEO_DIR, "backrooms", &built, &[]).await;
     conn.close().await;
     assert_eq!(attached.as_deref(), Some(media_id.as_str()));
 
@@ -390,7 +390,7 @@ async fn renaming_a_medium_moves_an_older_set_s_rung_files_and_records_them() {
         ))
         .unwrap();
     let conn = connect(&server).await;
-    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[], &[])
         .await
         .expect("the set was not attached");
     conn.close().await;
@@ -440,7 +440,7 @@ async fn an_older_set_s_rung_files_are_recorded_once_at_the_first_read_and_delet
         ))
         .unwrap();
     let conn = connect(&server).await;
-    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[])
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[], &[])
         .await
         .expect("the set was not attached");
     conn.close().await;
@@ -541,4 +541,92 @@ async fn a_read_on_a_server_without_the_application_s_catalogue_writes_none() {
         ))
         .unwrap();
     assert_eq!(there.trim(), "no", "a read created the catalogue");
+}
+
+// ---------- T693: an older set's leftover prepared files, removed on a press ----------
+
+/// A set built before T693 kept its prepared rung files for good. «Remove» beside «Extra mp4
+/// files» takes them — and only them: the set stays served, another medium's file and a loose
+/// file named like a rung the set does not serve stay byte for byte, and the catalogue
+/// forgets them. Nothing removes them without the press: reading the library twice leaves
+/// them where they are.
+#[tokio::test]
+async fn an_older_sets_leftover_mp4_files_go_on_a_press_and_nothing_else_does() {
+    let (server, state, server_id) = setup().await;
+    let media_id = library::media_create(&state, &server_id, "Задние комнаты", Some("backrooms"))
+        .await
+        .expect("the medium was not created");
+    let other = library::media_create(&state, &server_id, "Другое", Some("other"))
+        .await
+        .expect("the other medium was not created");
+    hls_fixture::lay_out_ladder(&server, "backrooms").expect("the quality set was not laid out");
+    server
+        .exec_inside(&format!(
+            "cd '{VIDEO_DIR}' && for f in backrooms_1.mp4 backrooms_2.mp4 backrooms_3.mp4 \
+             backrooms_7.mp4 other_1.mp4; do head -c 5000 /dev/urandom > \"$f\"; done"
+        ))
+        .unwrap();
+    let conn = connect(&server).await;
+    attach_built_set(&conn, VIDEO_DIR, "backrooms", &[], &[])
+        .await
+        .expect("the set was not attached");
+    conn.close().await;
+    library::file_move(&state, &server_id, "other_1.mp4", &other, true)
+        .await
+        .expect("the other medium's file was not filed");
+    let md5 = |name: &str| {
+        server
+            .exec_inside(&format!("md5sum '{VIDEO_DIR}/{name}'"))
+            .unwrap()
+    };
+    let others = md5("other_1.mp4");
+    let loose_one = md5("backrooms_7.mp4");
+    let master = md5("backrooms/master.m3u8");
+
+    // Read twice: shown, and nothing removed by reading.
+    for _ in 0..2 {
+        let view = library::library_list(&state, &server_id, true)
+            .await
+            .expect("the library would not read");
+        let m = view.media.iter().find(|m| m.id == media_id).unwrap();
+        assert_eq!(m.set_files.len(), 3, "{m:?}");
+    }
+
+    let freed = library::media_remove_set_files(&state, &server_id, &media_id)
+        .await
+        .expect("the leftovers were not removed");
+    assert_eq!(freed, 3 * 5000);
+
+    let left = server
+        .exec_inside(&format!("cd '{VIDEO_DIR}' && ls -1"))
+        .unwrap();
+    let left: Vec<&str> = left.lines().map(str::trim).collect();
+    for gone in ["backrooms_1.mp4", "backrooms_2.mp4", "backrooms_3.mp4"] {
+        assert!(!left.contains(&gone), "{gone} is still there: {left:?}");
+    }
+    assert_eq!(md5("other_1.mp4"), others);
+    assert_eq!(md5("backrooms_7.mp4"), loose_one);
+    assert_eq!(md5("backrooms/master.m3u8"), master);
+    assert!(
+        !catalogue_text(&server).contains("backrooms_1.mp4"),
+        "{}",
+        catalogue_text(&server)
+    );
+    let view = library::library_list(&state, &server_id, true)
+        .await
+        .expect("the library would not read");
+    let m = view.media.iter().find(|m| m.id == media_id).unwrap();
+    assert!(m.set_files.is_empty(), "{m:?}");
+    assert!(
+        m.ladders.iter().any(|l| l.path == "backrooms/master.m3u8"),
+        "{m:?}"
+    );
+
+    // Nothing left: a second press frees nothing and changes nothing.
+    assert_eq!(
+        library::media_remove_set_files(&state, &server_id, &media_id)
+            .await
+            .expect("a second press was refused"),
+        0
+    );
 }

@@ -27,6 +27,7 @@ import { ErrorNotice } from "../shared/ErrorNotice";
 import { NoServer } from "../shared/NoServer";
 import { SetLinks } from "../video/SetLinks";
 import { FileRow } from "./FileRow";
+import { LeftoverRungFiles } from "./LeftoverRungFiles";
 import { StaleBanner } from "./StaleBanner";
 import { UnrecognizedGroup } from "./UnrecognizedGroup";
 import { ConfirmDeleteDialog, CreateMediaDialog, RenameMediaDialog } from "./dialogs/MediaDialogs";
@@ -383,6 +384,8 @@ export function LibraryScreen() {
               onRename={() => setDialog({ kind: "rename", media: m })}
               onDelete={() => void askBeforeDelete(m)}
               onDeleteFile={(path) => void askBeforeDeleteFile(path)}
+              serverId={active.id}
+              onChanged={() => void load(true)}
               onMoveFile={(path, mediaId) =>
                 void act(() => ipc.fileMove(active.id, path, mediaId, true))
               }
@@ -420,8 +423,13 @@ function MediaCard({
   watching,
   t,
   lang,
+  serverId,
+  onChanged,
 }: {
   media: MediaView;
+  /** T693 — for the leftover mp4 files' «Remove», and the reading again after it. */
+  serverId: string;
+  onChanged: () => void;
   /** How many are watching it right now (FR-056). Zero shows nothing at all. */
   watching: number;
   disabled?: boolean;
@@ -482,6 +490,14 @@ function MediaCard({
           </Link>
         </p>
       )}
+
+      {/* T693 — a set's leftover mp4 files, removed only on a press. */}
+      <LeftoverRungFiles
+        serverId={serverId}
+        media={media}
+        disabled={disabled}
+        onRemoved={onChanged}
+      />
 
       {open && (
         <>

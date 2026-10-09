@@ -15,9 +15,11 @@
 //!
 //! ## Why doubled
 //!
-//! A set leaves **two** copies of every variant on the server. The prepared MP4 stays in the
-//! serving directory for good — `tidy_up` removes the cutting script and its log, nothing
-//! else — and the HLS segments sit beside it in `{slug}/v{mbit}/`.
+//! While a set is built the server holds **two** copies of every variant: the prepared MP4
+//! and the HLS segments cut from it in `{slug}/v{mbit}/`. The MP4 is removed only once the
+//! set is checked (T693, the owner's decision A1 of 2026-10-09) — so the room asked for
+//! before a build is both, and what the set leaves for good is the segments alone
+//! ([`served_bytes_for_set`]).
 //!
 //! The segments are slightly heavier than the MP4 they came from, because MPEG-TS carries a
 //! header every 188 bytes where MP4 carries an index once. Measured on 2026-08-28 with the
@@ -57,7 +59,8 @@ pub const SEGMENTS_OVER_MP4: f64 = 1.046;
 /// what it actually is.
 pub const AUDIO_BUDGET_BPS: u64 = convert_plan::AUDIO_KBPS as u64 * 1000;
 
-/// What one variant leaves on the server, in bytes.
+/// What one variant needs on the server while the set is built, in bytes: the prepared MP4
+/// and the segments cut from it.
 ///
 /// `audio_bps` is what the audio will actually weigh: [`AUDIO_BUDGET_BPS`] when it is being
 /// re-encoded, the source track's own bitrate when it is copied.
@@ -66,14 +69,61 @@ pub fn bytes_for_rung(bitrate_bps: u64, audio_bps: u64, duration_s: f64) -> u64 
         return 0;
     }
     let nominal = (bitrate_bps + audio_bps) as f64 * duration_s / 8.0;
-    // The MP4 that stays, plus the segments cut from it.
+    // The MP4 kept until the set is checked, plus the segments cut from it.
     (nominal * (1.0 + SEGMENTS_OVER_MP4)).ceil() as u64
 }
 
-/// What a whole set leaves on the server, in bytes.
+/// What a whole set needs on the server while it is built, in bytes.
 pub fn bytes_for_set(bitrates_bps: &[u64], audio_bps: u64, duration_s: f64) -> u64 {
     bitrates_bps
         .iter()
         .map(|b| bytes_for_rung(*b, audio_bps, duration_s))
         .sum()
+}
+
+/// What a whole set leaves on the server once it is checked, in bytes: the segments alone
+/// (T693 — the prepared MP4s are removed). What «On the server ≈» says.
+pub fn served_bytes_for_set(bitrates_bps: &[u64], audio_bps: u64, duration_s: f64) -> u64 {
+    if duration_s <= 0.0 {
+        return 0;
+    }
+    bitrates_bps
+        .iter()
+        .map(|b| ((*b + audio_bps) as f64 * duration_s / 8.0 * SEGMENTS_OVER_MP4).ceil() as u64)
+        .sum()
+}
+
+/// The sound the prepared files will carry, in bits per second (T699): **the output's, not
+/// the source's.** A track that is re-encoded goes out at the budget whatever it came in as
+/// — a 4.6 Mbit/s TrueHD track reckoned at its own rate asked for nearly twice the room.
+/// A copied track weighs what it weighs, with the budget as the floor where the source does
+/// not say (guessing low is the one direction these checks exist to avoid).
+pub fn audio_out_bps(source: &super::source::SourceFile, track: usize) -> u64 {
+    let Some(t) = source.audio_tracks.get(track) else {
+        return AUDIO_BUDGET_BPS;
+    };
+    match convert_plan::audio_for(t) {
+        convert_plan::AudioAction::Copy => t
+            .bitrate_bps
+            .unwrap_or(AUDIO_BUDGET_BPS)
+            .max(AUDIO_BUDGET_BPS),
+        convert_plan::AudioAction::Reencode { bitrate_kbps, .. } => u64::from(bitrate_kbps) * 1000,
+    }
+}
+
+/// What this computer holds at its fullest while a set is built, in bytes (T699): **one**
+/// prepared MP4 — the heaviest — with its output sound. The segments are cut on the server,
+/// not here, and each prepared file is removed once it is sent.
+///
+/// Reckoned at the rung's ceiling (`maxrate`) rather than its average: an encode held to a
+/// ceiling cannot average above it, so this is never low, and it is one file — not a hidden
+/// second copy. The margin is the disk check's own, said as a margin.
+pub fn local_peak_bytes(ceilings_bps: &[u64], audio_bps: u64, duration_s: f64) -> u64 {
+    if duration_s <= 0.0 {
+        return 0;
+    }
+    let Some(top) = ceilings_bps.iter().copied().max() else {
+        return 0;
+    };
+    ((top + audio_bps) as f64 * duration_s / 8.0).ceil() as u64
 }

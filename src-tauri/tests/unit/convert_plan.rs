@@ -47,6 +47,7 @@ fn compatible() -> SourceFile {
         video_codec: String::from("h264"),
         pix_fmt: String::from("yuv420p"),
         color_transfer: Some(String::from("bt709")),
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![track("aac", 2)],
     }
 }
@@ -148,6 +149,7 @@ fn changing_the_frame_size_rules_out_carrying_across() {
 #[test]
 fn high_efficiency_aac_is_not_carried_across_despite_the_codec() {
     let src = SourceFile {
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![track_with_profile("aac", 2, Some("HE-AAC"))],
         ..compatible()
     };
@@ -174,6 +176,7 @@ fn high_efficiency_aac_is_not_carried_across_despite_the_codec() {
 #[test]
 fn an_undeclared_audio_profile_is_re_encoded_rather_than_assumed() {
     let src = SourceFile {
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![track_with_profile("aac", 2, None)],
         ..compatible()
     };
@@ -191,6 +194,7 @@ fn an_undeclared_audio_profile_is_re_encoded_rather_than_assumed() {
 #[test]
 fn plain_stereo_aac_lc_is_still_carried_across_untouched() {
     let src = SourceFile {
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![track_with_profile("aac", 2, Some("LC"))],
         ..compatible()
     };

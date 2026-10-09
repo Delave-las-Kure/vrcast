@@ -168,12 +168,27 @@ pub struct ConvertPlan {
     /// The housekeeping data at the front of the file — otherwise a viewer waits for the
     /// tail to download (FR-023).
     pub faststart: bool,
+    /// The subtitle track drawn into the picture (T696, owner's decision B3): `None` — no
+    /// subtitles, which is what an ordinary plan has. Drawing them is a change to every
+    /// frame, so a plan carrying them never copies the picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitles: Option<SubtitleBurn>,
+}
+
+/// A subtitle track to draw into the picture, and how it is drawn (T696).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubtitleBurn {
+    /// The index among the source's subtitle tracks (`0:s:<N>`).
+    pub index: usize,
+    pub kind: super::source::SubtitleKind,
 }
 
 impl ConvertPlan {
     /// Whether the quality will be left untouched.
     pub fn lossless(&self) -> bool {
-        self.video == VideoAction::Copy && self.audio == AudioAction::Copy
+        self.video == VideoAction::Copy
+            && self.audio == AudioAction::Copy
+            && self.subtitles.is_none()
     }
 }
 
@@ -345,7 +360,22 @@ pub fn plan(
         tonemap,
         requested_height: request.height,
         faststart: true,
+        subtitles: None,
     })
+}
+
+/// Whether the source's picture can be carried across as it is at all (T698): H.264, eight-bit
+/// 4:2:0, not HDR — the same three reasons [`plan`] gives for re-encoding a stream nobody
+/// asked to change. Geometry and bitrate are the caller's: this is the stream alone.
+///
+/// **What a «copy» rung has to be.** A top rung of a source's own size and bitrate looks like
+/// a copy by its numbers alone, and an HEVC or HDR source is then re-encoded anyway — taken
+/// for minutes in the plan and costing hours (QA-26 no. 8). Asked wherever a rung is called a
+/// copy, so the plan's time and the build agree.
+pub fn stream_copyable(source: &SourceFile) -> bool {
+    source.video_codec.eq_ignore_ascii_case("h264")
+        && source.pix_fmt.eq_ignore_ascii_case("yuv420p")
+        && !source.is_hdr()
 }
 
 fn video_action(
@@ -398,6 +428,14 @@ fn video_action(
 /// The module's opening line names it — "AAC-LC stereo audio" — and until 2026-09-06 nothing
 /// checked it. ffprobe writes it as `LC`.
 const TARGET_AUDIO_PROFILE: &str = "lc";
+
+/// What becomes of a sound track in a prepared file — carried across, or made AAC-LC stereo
+/// at [`AUDIO_KBPS`] — the same decision [`plan`] makes. For working out sizes (T699): a
+/// 4.6 Mbit/s TrueHD track goes out at 256 kbit/s, and reckoning room with the source's
+/// number asked for nearly twice the room the set needs.
+pub fn audio_for(track: &AudioTrack) -> AudioAction {
+    audio_action(track)
+}
 
 fn audio_action(track: &AudioTrack) -> AudioAction {
     // **Four conditions, and every one of them was added after something got through.**

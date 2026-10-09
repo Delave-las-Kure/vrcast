@@ -288,7 +288,6 @@ async fn the_plan_comes_back_with_its_rungs_sizes_time_and_room() {
     assert!(plan.needs_measuring);
     assert!(plan.measure_s > 0);
     assert!(plan.server_bytes > 0 && plan.local_bytes > 0);
-    assert!(plan.server_bytes >= plan.local_bytes);
     assert!(plan.encode_s.is_some());
     assert!(!plan.encoder.is_empty());
     // The server did not answer: not a refusal, an unknown.
@@ -1417,4 +1416,82 @@ async fn the_encoding_bar_of_one_rung_does_not_go_back_when_the_check_after_the_
             );
         }
     }
+}
+
+/// T696 (owner's decision B3) — a film's subtitle tracks are found; «no subtitles» is the
+/// default; a track is chosen, checked against the film, kept, and taken off again; and the
+/// plan's time grows with it, every rung being encoded once the lines are burned in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subtitles_are_found_chosen_checked_and_counted_in_the_time() {
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        return;
+    };
+    let srt = films.0.join("lines.srt");
+    std::fs::write(&srt, "1\n00:00:00,500 --> 00:00:02,500\nПривет\n").unwrap();
+    let film = films.path("subs.mkv");
+    let made = std::process::Command::new(ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+        ])
+        .arg("testsrc2=size=1280x720:rate=24:duration=3")
+        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-i"])
+        .arg(&srt)
+        .args(["-map", "0:v", "-map", "1:a", "-map", "2:s"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-b:v", "4000k"])
+        .args(["-pix_fmt", "yuv420p", "-c:a", "aac", "-c:s", "srt"])
+        .arg(&film)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+
+    let state = state();
+    let server = server(&state);
+    let id = video::video_add(&state, &server, &[film], None)
+        .await
+        .unwrap()
+        .added[0]
+        .id
+        .clone();
+    let ready = until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state == VideoState::Ready
+    })
+    .await;
+    let source = ready.source.clone().expect("no source");
+    assert_eq!(source.subtitle_tracks.len(), 1);
+    assert_eq!(source.subtitle_tracks[0].codec, "subrip");
+    assert_eq!(ready.subtitle_track, None, "no subtitles is the default");
+    let plain_s = ready.plan.as_ref().and_then(|p| p.encode_s);
+
+    let err = video::video_set_subtitles(&state, &id, Some(3)).unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert_eq!(err.details[0].key, DetailCode::PlanNoSuchSubtitles);
+    assert_eq!(video::video_get(&state, &id).unwrap().subtitle_track, None);
+
+    let chosen = video::video_set_subtitles(&state, &id, Some(0)).unwrap();
+    assert_eq!(chosen.subtitle_track, Some(0));
+    assert_eq!(
+        rows::get(&state.db, &id).unwrap().unwrap().subtitle_track,
+        Some(0)
+    );
+    let burned_s = chosen.plan.as_ref().and_then(|p| p.encode_s);
+    if let (Some(plain), Some(burned)) = (plain_s, burned_s) {
+        assert!(burned >= plain, "{burned} < {plain}");
+    }
+
+    let off = video::video_set_subtitles(&state, &id, None).unwrap();
+    assert_eq!(off.subtitle_track, None);
 }

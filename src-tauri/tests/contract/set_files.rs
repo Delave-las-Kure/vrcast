@@ -454,3 +454,21 @@ mod recorded_once {
         assert!(to_record(&recorded, &other).is_none());
     }
 }
+
+/// T693 — the prepared files a checked set removed leave every medium's record, and nothing
+/// else does.
+#[test]
+fn removed_set_files_leave_the_catalogue() {
+    use vrcast_studio_lib::domain::set_files::forget_removed;
+    let mut film = medium("m1", "film", &["film_2.mp4"], &["film/master.m3u8"]);
+    film.set_files = vec!["film_4.mp4".into(), "film_9.mp4".into()];
+    let mut next = catalogue(vec![film, medium("m2", "other", &["other_9.mp4"], &[])]);
+    assert!(forget_removed(
+        &mut next,
+        &["film_9.mp4".into(), "other_9.mp4".into()]
+    ));
+    assert_eq!(next.media[0].set_files, vec!["film_4.mp4"]);
+    assert_eq!(next.media[0].files, vec!["film_2.mp4"]);
+    assert_eq!(next.media[1].files, vec!["other_9.mp4"]);
+    assert!(!forget_removed(&mut next, &["nothing.mp4".into()]));
+}

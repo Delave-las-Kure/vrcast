@@ -131,6 +131,7 @@ fn source_of(path: &str, duration_s: f64) -> SourceFile {
         video_codec: String::from("h264"),
         pix_fmt: String::from("yuv420p"),
         color_transfer: Some(String::from("bt709")),
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![AudioTrack {
             index: 0,
             codec: String::from("aac"),
@@ -157,6 +158,7 @@ fn a_plan() -> ConvertPlan {
         gop: 24,
         tonemap: false,
         faststart: true,
+        subtitles: None,
         audio_track: 0,
     }
 }
@@ -168,8 +170,7 @@ async fn ffmpeg_failing_partway_through_a_broken_source_is_reported_and_leaves_n
         return;
     };
 
-    let dir =
-        std::env::temp_dir().join(format!("vrcast-broken-{}", uuid::Uuid::new_v4().simple()));
+    let dir = std::env::temp_dir().join(format!("vrcast-broken-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&dir).expect("could not make a working directory");
     let good = dir.join("good.mp4");
     if !make_film(&ff, &good) {

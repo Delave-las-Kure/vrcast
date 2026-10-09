@@ -84,6 +84,7 @@ async fn second_build(state: &AppState) -> Result<String, AppError> {
                 quality: Quality::MeasuredHere { vmaf_x100: 9200 },
             }],
             audio_track: 0,
+            subtitle_track: None,
             prefer_hardware: false,
             batch: None,
             confirmed: true,

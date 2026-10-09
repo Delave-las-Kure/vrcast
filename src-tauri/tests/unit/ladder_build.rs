@@ -22,6 +22,7 @@ fn source(width: u32, height: u32, fps: u32, bitrate_bps: u64, codec: &str) -> S
         video_codec: codec.to_owned(),
         pix_fmt: String::from("yuv420p"),
         color_transfer: None,
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![AudioTrack {
             index: 0,
             codec: String::from("aac"),
@@ -838,4 +839,293 @@ fn the_cutting_and_the_check_begin_at_their_own_beginning() {
             && code.contains("share_of(p.cut.len(), work.len())"),
         "the cutting is not reported by the rungs it has cut"
     );
+}
+
+// ---------- T693: a checked set keeps only its segments ----------
+
+const FINISHED: &str = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.000,\nseg_00000.ts\n\
+    #EXTINF:4.000,\nseg_00001.ts\n#EXT-X-ENDLIST\n";
+
+fn facts(height: u32, segs: &[f64]) -> String {
+    let mut out = format!(
+        "sub=v9\nwidth={}\nheight={height}\nfps=24.000\nlevel=40\ncodec=h264\n",
+        height * 16 / 9
+    );
+    for s in segs {
+        out.push_str(&format!("seg {s} 1000\n"));
+    }
+    out
+}
+
+fn read_both(playlist: &str, facts: &str) -> String {
+    format!(
+        "{playlist}\n{}\n{facts}",
+        vrcast_studio_lib::domain::ladder_build::CUT_FACTS_MARK
+    )
+}
+
+#[test]
+fn a_rung_cut_whole_is_known_by_its_segments_once_its_prepared_file_is_gone() {
+    use vrcast_studio_lib::domain::ladder_build::cut_is_whole;
+    // Two segments of four seconds, a film of eight: cut whole.
+    assert!(cut_is_whole(
+        &read_both(FINISHED, &facts(1080, &[4.0, 4.0])),
+        8.0,
+        1080
+    ));
+    // A playlist that is not finished — a cutting stopped halfway — is not.
+    assert!(!cut_is_whole(
+        &read_both(
+            &FINISHED.replace("#EXT-X-ENDLIST\n", ""),
+            &facts(1080, &[4.0, 4.0])
+        ),
+        8.0,
+        1080
+    ));
+    // Another height: a rung cut from something else.
+    assert!(!cut_is_whole(
+        &read_both(FINISHED, &facts(720, &[4.0, 4.0])),
+        8.0,
+        1080
+    ));
+    // Shorter than the film by more than a second and a half: cut short.
+    assert!(!cut_is_whole(
+        &read_both(FINISHED, &facts(1080, &[4.0])),
+        8.0,
+        1080
+    ));
+    // No facts at all, nothing on the server, a film of unknown length.
+    assert!(!cut_is_whole(&read_both(FINISHED, ""), 8.0, 1080));
+    assert!(!cut_is_whole("", 8.0, 1080));
+    assert!(!cut_is_whole(
+        &read_both(FINISHED, &facts(1080, &[4.0, 4.0])),
+        0.0,
+        1080
+    ));
+}
+
+#[test]
+fn only_prepared_files_the_set_made_and_nobody_claims_are_removed() {
+    use vrcast_studio_lib::domain::ladder_build::{removable_files, MadeRung};
+    let src = source(1920, 1080, 24, 30_000_000, "h264");
+    let work = two_rung_work();
+    let made: Vec<MadeRung> = work.iter().map(|w| MadeRung::of(w, &src, 0)).collect();
+    assert_eq!(
+        removable_files(&work, &made, &[]),
+        vec!["film_9.mp4", "film_4.mp4"]
+    );
+    // A rung the record does not say it made stays: not certainly ours.
+    assert_eq!(removable_files(&work, &made[..1], &[]), vec!["film_9.mp4"]);
+    // A name a medium claims meanwhile stays (T577, part b).
+    assert_eq!(
+        removable_files(&work, &made, &["film_9.mp4"]),
+        vec!["film_4.mp4"]
+    );
+    // A record of another name under the same rung is not this file.
+    let mut other = made.clone();
+    other[1].file = String::from("film_4v.mp4");
+    assert_eq!(removable_files(&work, &other, &[]), vec!["film_9.mp4"]);
+}
+
+/// The build asks a rung's segments only after the record (T693) and removes the prepared
+/// files only after the check — never before: before it they are what carrying on cuts from.
+#[test]
+fn the_prepared_files_go_only_after_the_set_is_checked() {
+    let code = include_str!("../../src/tasks/ladder_build.rs");
+    let check = code
+        .find("hls_verify::verify(job.master_url")
+        .expect("the build no longer checks the set");
+    let removal = code
+        .find("remove_prepared(job, &work, &made)")
+        .expect("the build no longer removes its prepared files");
+    let refusal = code
+        .find("return Err(BuildError::Incomplete(verdict.broken()));")
+        .expect("the build no longer refuses an incomplete set");
+    assert!(check < refusal && refusal < removal);
+    // And the cutting does not stop on a missing prepared file of a rung already cut whole.
+    let script = vrcast_studio_lib::domain::hls_package::script_text();
+    let cut_whole = script.find("grep -q ENDLIST").unwrap();
+    let no_such = script.find("no such file").unwrap();
+    assert!(cut_whole < no_such, "{script}");
+}
+
+// ---------- T698: the top rung of an HEVC or HDR source ----------
+
+/// QA-26 no. 8 — the top rung of an HEVC source has the source's numbers and is re-encoded
+/// all the same: to the rung's own bitrate, under its ceiling — not at a pinned quality that
+/// lands wherever it lands.
+#[test]
+fn a_top_rung_that_cannot_be_carried_across_is_held_to_its_own_bitrate() {
+    for (codec, pix_fmt, transfer) in [
+        ("hevc", "yuv420p10le", None),
+        ("h264", "yuv420p10le", None),
+        ("h264", "yuv420p", Some("smpte2084")),
+    ] {
+        let mut src = source(3840, 2160, 24, 22_000_000, codec);
+        src.pix_fmt = pix_fmt.to_owned();
+        src.color_transfer = transfer.map(str::to_owned);
+        let top = rung(0, 22_000_000, 2160);
+        let work = work_for("film", std::slice::from_ref(&top), &src, 0, Some(1.0), 4);
+        match &work[0].plan.video {
+            VideoAction::ReencodeCapped {
+                target_kbps,
+                maxrate_kbps,
+                bufsize_kbps,
+                ..
+            } => {
+                assert_eq!(*target_kbps, 22_000, "{codec} {pix_fmt}");
+                assert_eq!(*maxrate_kbps as u64, top.maxrate_bps / 1000);
+                assert_eq!(*bufsize_kbps as u64, top.bufsize_bps / 1000);
+            }
+            other => panic!("{codec} {pix_fmt} {transfer:?}: {other:?}"),
+        }
+        assert!(!work[0].lossless);
+        // HDR is brought down to the ordinary range on the way.
+        assert_eq!(work[0].plan.tonemap, transfer.is_some());
+        // And the plan's time counts it.
+        assert!(!vrcast_studio_lib::domain::video::is_copy(&top, &src));
+    }
+    // A plain H.264 source of the same numbers is still carried across.
+    let src = source(3840, 2160, 24, 22_000_000, "h264");
+    let top = rung(0, 22_000_000, 2160);
+    assert!(vrcast_studio_lib::domain::video::is_copy(&top, &src));
+    let work = work_for("film", &[top], &src, 0, Some(1.0), 4);
+    assert_eq!(work[0].plan.video, VideoAction::Copy);
+}
+
+/// What a rung is called a copy for and what the build carries across are one test.
+#[test]
+fn a_stream_is_copyable_exactly_when_the_plan_would_carry_it_across() {
+    use vrcast_studio_lib::domain::convert_plan::{plan, stream_copyable, ConvertRequest};
+    for (codec, pix_fmt, transfer) in [
+        ("h264", "yuv420p", None),
+        ("hevc", "yuv420p", None),
+        ("h264", "yuv420p10le", None),
+        ("h264", "yuv420p", Some("arib-std-b67")),
+        ("av1", "yuv420p", None),
+    ] {
+        let mut src = source(1920, 1080, 24, 8_000_000, codec);
+        src.pix_fmt = pix_fmt.to_owned();
+        src.color_transfer = transfer.map(str::to_owned);
+        let carried = plan(
+            &src,
+            &ConvertRequest {
+                audio_track: 0,
+                target_kbps: None,
+                height: None,
+            },
+        )
+        .unwrap()
+        .video
+            == VideoAction::Copy;
+        assert_eq!(
+            stream_copyable(&src),
+            carried,
+            "{codec} {pix_fmt} {transfer:?}"
+        );
+    }
+}
+
+// ---------- T696: the chosen subtitles, drawn into every rung ----------
+
+fn with_subtitles(mut src: SourceFile) -> SourceFile {
+    use vrcast_studio_lib::domain::source::{SubtitleKind, SubtitleTrack};
+    let track = |index: usize, codec: &str| SubtitleTrack {
+        index,
+        codec: codec.to_owned(),
+        kind: SubtitleKind::of_codec(codec),
+        language: Some(String::from("rus")),
+        title: None,
+        forced: false,
+        is_default: false,
+    };
+    src.subtitle_tracks = vec![
+        track(0, "subrip"),
+        track(1, "hdmv_pgs_subtitle"),
+        track(2, "eia_608"),
+    ];
+    src
+}
+
+#[test]
+fn drawn_subtitles_make_every_rung_an_encode_to_its_own_bitrate() {
+    use vrcast_studio_lib::domain::ladder_build::{burn_subtitles, subtitle_burn};
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    let src = with_subtitles(source(1920, 1080, 24, 8_000_000, "h264"));
+    let rungs = [rung(0, 8_000_000, 1080), rung(1, 3_000_000, 720)];
+    // Keyframes that line up: the top rung would be a copy.
+    let mut work = work_for("film", &rungs, &src, 0, Some(1.0), 4);
+    assert_eq!(work[0].plan.video, VideoAction::Copy);
+    assert!(work[0].lossless);
+
+    let burn = subtitle_burn(&src, 1).expect("a PGS track can be drawn");
+    assert_eq!(burn.kind, SubtitleKind::Picture);
+    burn_subtitles(&mut work, burn);
+    for v in &work {
+        assert_eq!(v.plan.subtitles, Some(burn));
+        assert!(!v.lossless);
+        match &v.plan.video {
+            VideoAction::ReencodeCapped { target_kbps, .. } => {
+                assert_eq!(u64::from(*target_kbps), v.rung.bitrate_bps / 1000)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    match &work[0].plan.video {
+        VideoAction::ReencodeCapped { reason, .. } => {
+            assert_eq!(reason.key, DetailCode::ReasonSubtitlesBurned)
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // A top rung whose copy was refused for its keyframes: re-encoded for the subtitles now,
+    // and the notice about keyframes no longer stands.
+    let mut work = work_for("film", &rungs, &src, 0, None, 4);
+    assert!(work[0]
+        .notices
+        .iter()
+        .any(|n| n.key == DetailCode::NoticeReencodedForKeyframes));
+    burn_subtitles(&mut work, subtitle_burn(&src, 0).unwrap());
+    assert!(work[0].notices.is_empty(), "{:?}", work[0].notices);
+
+    // A track that is not there, or cannot be drawn, is no burn at all.
+    assert!(
+        subtitle_burn(&src, 2).is_none(),
+        "closed captions cannot be drawn"
+    );
+    assert!(subtitle_burn(&src, 9).is_none());
+}
+
+#[test]
+fn the_sets_record_says_which_subtitles_a_rung_was_made_with() {
+    use vrcast_studio_lib::domain::ladder_build::{
+        burn_subtitles, made_here, parse_made, subtitle_burn, MadeRung,
+    };
+    let src = with_subtitles(source(1920, 1080, 24, 8_000_000, "h264"));
+    let rungs = [rung(1, 3_000_000, 720)];
+    let plain = work_for("film", &rungs, &src, 0, Some(1.0), 4);
+    let mut drawn = plain.clone();
+    burn_subtitles(&mut drawn, subtitle_burn(&src, 0).unwrap());
+
+    // Written and read back.
+    let line = MadeRung::of(&drawn[0], &src, 0).line();
+    assert!(line.ends_with(" t=0"), "{line}");
+    let read = parse_made(&line);
+    assert_eq!(read, vec![MadeRung::of(&drawn[0], &src, 0)]);
+    // A line from before subtitles is a rung without them, and still reads.
+    let old = MadeRung::of(&plain[0], &src, 0).line();
+    assert!(!old.contains(" t="), "{old}");
+    assert_eq!(parse_made(&old)[0].subtitles, None);
+    // A `t` that cannot be read makes the line unreadable, not «without subtitles».
+    assert!(parse_made(&format!("{old} t=x")).is_empty());
+
+    // Made with subtitles is not made without them, and the other way round — a change of
+    // choice makes the rungs again.
+    assert!(made_here(&read, &drawn[0], &src, 0));
+    assert!(!made_here(&read, &plain[0], &src, 0));
+    assert!(!made_here(&parse_made(&old), &drawn[0], &src, 0));
+    assert!(made_here(&parse_made(&old), &plain[0], &src, 0));
+    let mut other = plain.clone();
+    burn_subtitles(&mut other, subtitle_burn(&src, 1).unwrap());
+    assert!(!made_here(&read, &other[0], &src, 0));
 }

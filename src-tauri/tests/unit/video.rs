@@ -302,6 +302,7 @@ fn source(duration_s: f64) -> SourceFile {
         video_codec: String::from("h264"),
         pix_fmt: String::from("yuv420p"),
         color_transfer: None,
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![
             AudioTrack {
                 index: 0,
@@ -778,4 +779,36 @@ fn the_encode_and_the_check_after_it_share_one_bar_that_only_goes_forward() {
     // Everything else is shown as it is.
     assert_eq!(video::bar_of(D::StageSendingVariant, 0.4), 0.4);
     assert_eq!(video::bar_of(D::StageMeasuringQuality, 0.4), 0.4);
+}
+
+/// T698 — the top rung of an HEVC source is re-encoded, and its time is in the plan.
+#[test]
+fn a_rung_of_the_sources_numbers_that_cannot_be_copied_is_counted_in_the_time() {
+    let mut film = source(100.0);
+    film.video_codec = String::from("hevc");
+    let speed = 1920.0 * 1080.0 * 24.0;
+    let top = rung(20_000_000, 1920, 1080);
+    assert!(!video::is_copy(&top, &film));
+    assert_eq!(
+        video::encode_seconds(&[top], &film, speed),
+        Some((100.0 * (1.0 + video::VALIDATE_SHARE)).round() as u64)
+    );
+}
+
+/// T696 — with subtitles drawn in, a rung that would be carried across is encoded, and its
+/// time is in the plan.
+#[test]
+fn drawn_subtitles_put_every_rungs_time_in_the_plan() {
+    let film = source(100.0);
+    let speed = 1920.0 * 1080.0 * 24.0;
+    let copy = rung(20_000_000, 1920, 1080);
+    assert!(video::is_copy(&copy, &film));
+    assert_eq!(
+        video::encode_seconds_with(std::slice::from_ref(&copy), &film, speed, false),
+        Some(0)
+    );
+    assert_eq!(
+        video::encode_seconds_with(&[copy], &film, speed, true),
+        Some((100.0 * (1.0 + video::VALIDATE_SHARE)).round() as u64)
+    );
 }

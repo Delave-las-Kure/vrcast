@@ -109,3 +109,102 @@ fn the_estimate_never_comes_out_under_the_nominal_bytes() {
         }
     }
 }
+
+/// T693 — what «On the server ≈» says is the set alone: the prepared files are removed once
+/// the set is checked. The room asked for before a build is still both.
+#[test]
+fn a_checked_set_leaves_its_segments_alone_on_the_server() {
+    use vrcast_studio_lib::domain::ladder_size::served_bytes_for_set;
+    let rungs = [9_000_000u64, 4_000_000];
+    let served = served_bytes_for_set(&rungs, AUDIO_BUDGET_BPS, 3600.0);
+    let peak = bytes_for_set(&rungs, AUDIO_BUDGET_BPS, 3600.0);
+    let nominal: f64 = rungs
+        .iter()
+        .map(|b| (b + AUDIO_BUDGET_BPS) as f64 * 3600.0 / 8.0)
+        .sum();
+    assert!(served as f64 >= nominal * SEGMENTS_OVER_MP4 - 2.0);
+    assert!(served < peak);
+    assert!(peak as f64 >= nominal * 2.0);
+    assert_eq!(served_bytes_for_set(&rungs, AUDIO_BUDGET_BPS, 0.0), 0);
+}
+
+fn source_with(
+    track: vrcast_studio_lib::domain::source::AudioTrack,
+) -> vrcast_studio_lib::domain::source::SourceFile {
+    vrcast_studio_lib::domain::source::SourceFile {
+        path: String::from("F:/films/film.mkv"),
+        size_bytes: 40_000_000_000,
+        duration_s: 7200.0,
+        width: 1920,
+        height: 1080,
+        fps: 24,
+        bitrate_bps: 30_000_000,
+        peak_bps: None,
+        video_codec: String::from("h264"),
+        pix_fmt: String::from("yuv420p"),
+        color_transfer: None,
+        subtitle_tracks: Vec::new(),
+        audio_tracks: vec![track],
+    }
+}
+
+fn track(
+    codec: &str,
+    channels: u16,
+    bitrate_bps: Option<u64>,
+) -> vrcast_studio_lib::domain::source::AudioTrack {
+    vrcast_studio_lib::domain::source::AudioTrack {
+        index: 0,
+        codec: codec.to_owned(),
+        profile: Some(String::from("LC")),
+        channels,
+        bitrate_bps,
+        language: None,
+        title: None,
+        is_default: true,
+    }
+}
+
+/// T699 (QA-26 №9) — the sound in every size is the output's: a TrueHD track at 4.6 Mbit/s
+/// goes out as AAC stereo at the budget, and was reckoned at 4.6 — nearly twice the room.
+#[test]
+fn the_sound_is_reckoned_as_it_goes_out_not_as_it_came_in() {
+    use vrcast_studio_lib::domain::ladder_size::audio_out_bps;
+    assert_eq!(
+        audio_out_bps(&source_with(track("truehd", 8, Some(4_600_000))), 0),
+        AUDIO_BUDGET_BPS
+    );
+    assert_eq!(
+        audio_out_bps(&source_with(track("aac", 6, Some(640_000))), 0),
+        AUDIO_BUDGET_BPS
+    );
+    // Copied as it is: what it weighs, never under the budget.
+    assert_eq!(
+        audio_out_bps(&source_with(track("aac", 2, Some(192_000))), 0),
+        AUDIO_BUDGET_BPS
+    );
+    assert_eq!(
+        audio_out_bps(&source_with(track("aac", 2, Some(270_000))), 0),
+        270_000
+    );
+    // No such track: the budget, not nothing.
+    assert_eq!(
+        audio_out_bps(&source_with(track("aac", 2, Some(192_000))), 5),
+        AUDIO_BUDGET_BPS
+    );
+}
+
+/// T699 — this computer holds one prepared file at a time, the heaviest, and no segments:
+/// those are cut on the server. Reckoned at the rung's ceiling, never under the file.
+#[test]
+fn this_computer_is_asked_for_the_heaviest_prepared_file_alone() {
+    use vrcast_studio_lib::domain::ladder_size::local_peak_bytes;
+    let ceilings = [9_900_000u64, 4_400_000, 1_100_000];
+    let here = local_peak_bytes(&ceilings, AUDIO_BUDGET_BPS, 7200.0);
+    let file = (9_900_000 + AUDIO_BUDGET_BPS) as f64 * 7200.0 / 8.0;
+    assert_eq!(here, file.ceil() as u64);
+    // Not the old reckoning of the file plus its segments.
+    assert!(here < bytes_for_rung(9_000_000, AUDIO_BUDGET_BPS, 7200.0));
+    assert_eq!(local_peak_bytes(&[], AUDIO_BUDGET_BPS, 7200.0), 0);
+    assert_eq!(local_peak_bytes(&ceilings, AUDIO_BUDGET_BPS, 0.0), 0);
+}

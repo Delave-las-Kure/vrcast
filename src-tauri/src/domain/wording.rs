@@ -177,6 +177,9 @@ detail_codes! {
     PlanNoAudioTracks => "PLAN_NO_AUDIO_TRACKS",
     /// `number` — as a human counts, from one; `available` — how many there are.
     PlanNoSuchTrack => "PLAN_NO_SUCH_TRACK",
+    /// T696 — `number` (from one): no subtitle track by that number that can be drawn into
+    /// the picture.
+    PlanNoSuchSubtitles => "PLAN_NO_SUCH_SUBTITLES",
     PlanHeightZero => "PLAN_HEIGHT_ZERO",
     /// `asked`, `source` — heights, in lines.
     PlanHeightAboveSource => "PLAN_HEIGHT_ABOVE_SOURCE",
@@ -306,6 +309,8 @@ detail_codes! {
     ReasonTargetBitrate => "REASON_TARGET_BITRATE",
     /// The source's own keyframes do not fall where the segments will be cut.
     ReasonKeyframesUnaligned => "REASON_KEYFRAMES_UNALIGNED",
+    /// T696: a subtitle track is drawn into the picture, so every frame changes.
+    ReasonSubtitlesBurned => "REASON_SUBTITLES_BURNED",
     /// `codec` — what the track is in.
     ReasonAudioNotAac => "REASON_AUDIO_NOT_AAC",
     /// `profile` — AAC, but not the profile the target format admits (T508). HE-AAC is the

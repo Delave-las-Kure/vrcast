@@ -191,6 +191,7 @@ export type DetailCode =
   | "CONVERT_NO_ENCODER"
   | "PLAN_NO_AUDIO_TRACKS"
   | "PLAN_NO_SUCH_TRACK"
+  | "PLAN_NO_SUCH_SUBTITLES"
   | "PLAN_HEIGHT_ZERO"
   | "PLAN_HEIGHT_ABOVE_SOURCE"
   | "PLAN_BITRATE_ZERO"
@@ -260,6 +261,7 @@ export type DetailCode =
   | "REASON_RESIZE"
   | "REASON_TARGET_BITRATE"
   | "REASON_KEYFRAMES_UNALIGNED"
+  | "REASON_SUBTITLES_BURNED"
   | "REASON_AUDIO_NOT_AAC"
   | "REASON_AUDIO_PROFILE"
   | "REASON_AUDIO_PROFILE_UNKNOWN"
@@ -1189,6 +1191,8 @@ export interface LadderBuildRequest {
   /** The rungs as the person has them on screen — measured or edited. */
   rungs: Rung[];
   audio_track?: number;
+  /** T696: the subtitle track burned into every rung; absent or null — none. */
+  subtitle_track?: number | null;
   prefer_hardware?: boolean;
   /**
    * Agreement to the consequences named in the previous refusal (T571, T574).
@@ -1226,6 +1230,8 @@ export interface ThenBuild {
   /** The medium's own directory on the server. */
   slug: string;
   audio_track?: number;
+  /** T696: as `LadderBuildRequest.subtitle_track`. */
+  subtitle_track?: number | null;
 }
 
 /** Cap one viewer on one medium. */
@@ -1664,6 +1670,30 @@ export interface SourceFile {
   pix_fmt: string;
   color_transfer: string | null;
   audio_tracks: AudioTrack[];
+  /** T696. Empty for a source examined before subtitles were looked for. */
+  subtitle_tracks: SubtitleTrack[];
+}
+
+/** How a subtitle track is drawn into the picture (T696). `other` cannot be drawn. */
+export type SubtitleKind = "text" | "picture" | "other";
+
+/** A subtitle track of the source (T696). */
+export interface SubtitleTrack {
+  /** The index among subtitle tracks, from zero (`0:s:<N>`). */
+  index: number;
+  codec: string;
+  kind: SubtitleKind;
+  language: string | null;
+  title: string | null;
+  /** Only the lines meant for everybody (signs, a foreign-language scene). */
+  forced: boolean;
+  is_default: boolean;
+}
+
+/** A subtitle track drawn into the picture (T696). */
+export interface SubtitleBurn {
+  index: number;
+  kind: SubtitleKind;
 }
 
 /** What to do with the video stream (FR-022). */
@@ -1693,6 +1723,8 @@ export interface ConvertPlan {
   tonemap: boolean;
   requested_height: number | null;
   faststart: boolean;
+  /** T696: the subtitles drawn into the picture; absent — none. */
+  subtitles?: SubtitleBurn;
 }
 
 /** What to encode with. */
@@ -1829,6 +1861,9 @@ export interface VideoView {
    * `audio_track` is only what the plan's sizes are reckoned with.
    */
   audio_chosen: boolean;
+  /** T696: the subtitle track burned into every rung, as `SourceFile.subtitle_tracks[].index`;
+   *  null — none (the default). */
+  subtitle_track: number | null;
   stage: VideoStage;
   state: VideoState;
   paused_by_person: boolean;

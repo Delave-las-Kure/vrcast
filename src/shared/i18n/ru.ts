@@ -421,6 +421,7 @@ export const ruCore: CatalogueCore = {
     PLAN_NO_AUDIO_TRACKS:
       "В файле нет ни одной звуковой дорожки. Проверьте, тот ли это файл: без звука видео в раздачу не идёт.",
     PLAN_NO_SUCH_TRACK: "Звуковой дорожки {number} в файле нет — всего их {available}.",
+    PLAN_NO_SUCH_SUBTITLES: "Субтитров {number} в файле нет или их нельзя вжечь в картинку.",
     PLAN_HEIGHT_ZERO: "Высота кадра не может быть нулевой.",
     PLAN_HEIGHT_ABOVE_SOURCE: "Высота {asked} больше исходника ({source}).",
     PLAN_BITRATE_ZERO: "Целевой битрейт не может быть нулевым.",
@@ -503,6 +504,7 @@ export const ruCore: CatalogueCore = {
     REASON_KEYFRAMES_UNALIGNED:
       "Опорные кадры исходника стоят не там, где пройдут границы отрезков",
     REASON_TARGET_BITRATE: "задан целевой битрейт",
+    REASON_SUBTITLES_BURNED: "в картинку вжигаются субтитры",
     REASON_AUDIO_NOT_AAC: "звук в {codec} — целевой формат AAC",
     REASON_AUDIO_PROFILE:
       "звук в AAC, но профиль {profile} — целевой AAC-LC, и другие профили воспроизводятся не у всех",
@@ -1152,6 +1154,10 @@ const ui = {
     channels: "{n} кан.",
     trackDefault: " (основная)",
     trackLine: "{base}, {channels}{main}",
+    subtitles: "Субтитры",
+    subtitlesNone: "без субтитров",
+    subtitlesForced: " (только надписи)",
+    subtitlesLine: "{base}{forced}",
     title: "Название",
     editTitle: "Изменить название",
     saveTitle: "Сохранить",
@@ -1213,6 +1219,8 @@ const ui = {
     ladders: "Наборы качеств: {list}",
     laddersHeading: "Наборы качеств",
     setFilesHeading: "Файлы ступеней набора",
+    leftoverMp4: "Лишние файлы mp4 — {bytes|bytes}",
+    leftoverRemove: "Удалить",
     renameMedia: "Переименовать",
     buildSet: "Собрать набор",
     setBuilding: "Набор собирается",

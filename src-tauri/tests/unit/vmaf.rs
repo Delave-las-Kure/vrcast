@@ -93,6 +93,8 @@ fn args_for_a_chunk() -> Vec<String> {
         &vrcast_studio_lib::media::encoders::Encoder::Hardware {
             name: String::from("h264_nvenc"),
         },
+        (3840, 2160),
+        &vrcast_studio_lib::media::vmaf::Recipe::for_material(24, None),
     )
 }
 
@@ -163,6 +165,7 @@ fn args_for_a_score() -> Vec<String> {
         10,
         SOURCE_W,
         SOURCE_H,
+        &vrcast_studio_lib::media::vmaf::Recipe::for_material(24, None),
     )
 }
 
@@ -292,4 +295,183 @@ fn the_report_is_asked_for_in_the_shape_it_is_read_in() {
         graph.contains("log_path=score.json"),
         "the report is written somewhere other than where it is read from:\n{graph}"
     );
+}
+
+// ---------- the production recipe (T697, QA-26 no. 5) ----------
+
+fn value_after(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .map(|i| args[i + 1].clone())
+}
+
+fn chunk_with(bitrate_mbps: u64, recipe: vrcast_studio_lib::media::vmaf::Recipe) -> Vec<String> {
+    vrcast_studio_lib::media::vmaf::chunk_args(
+        std::path::Path::new("film.mkv"),
+        0,
+        10,
+        vrcast_studio_lib::domain::measure_grid::Cell {
+            bitrate_mbps,
+            height: 720,
+        },
+        &vrcast_studio_lib::media::encoders::Encoder::Software,
+        (1920, 1080),
+        &recipe,
+    )
+}
+
+#[test]
+fn a_point_is_encoded_with_the_keyframes_and_the_ceiling_a_rung_is_made_with() {
+    use vrcast_studio_lib::domain::convert_plan::peak_control;
+    use vrcast_studio_lib::media::vmaf::Recipe;
+    // One keyframe a second at the material's own rate — not 48 whatever the rate.
+    for fps in [24u32, 25, 30, 48, 60] {
+        let args = chunk_with(6, Recipe::for_material(fps, None));
+        assert_eq!(value_after(&args, "-g"), Some(fps.to_string()));
+        assert_eq!(value_after(&args, "-keyint_min"), Some(fps.to_string()));
+    }
+    // The ceiling in kilobits, +10 %: at 1 Mbit/s that is 1100k, not the script's 2M.
+    let args = chunk_with(1, Recipe::for_material(24, None));
+    let (maxrate, bufsize) = peak_control(1000);
+    assert_eq!(maxrate, 1100);
+    let joined = args.join(" ");
+    assert!(joined.contains(&format!("{maxrate}k")), "{joined}");
+    assert!(joined.contains(&format!("{bufsize}k")), "{joined}");
+    assert!(
+        !joined.contains("2000k") && !joined.contains("2M"),
+        "{joined}"
+    );
+    // The picture production writes: eight-bit 4:2:0 at the High profile.
+    assert_eq!(value_after(&args, "-pix_fmt").as_deref(), Some("yuv420p"));
+    assert_eq!(value_after(&args, "-profile:v").as_deref(), Some("high"));
+    assert!(value_after(&args, "-level").is_some());
+}
+
+#[test]
+fn an_hdr_point_is_brought_down_the_same_way_on_both_sides_of_the_comparison() {
+    use vrcast_studio_lib::media::convert::TONEMAP_CHAIN;
+    use vrcast_studio_lib::media::vmaf::{score_args, Recipe};
+    let hdr = Recipe::for_material(24, Some("smpte2084"));
+    assert!(hdr.tonemap);
+    assert!(!Recipe::for_material(24, Some("bt709")).tonemap);
+    assert!(!Recipe::for_material(24, None).tonemap);
+
+    // The encode: tonemapped first, then the height, then eight-bit.
+    let filter = value_after(&chunk_with(6, hdr), "-vf").unwrap();
+    assert!(filter.starts_with(TONEMAP_CHAIN), "{filter}");
+    assert!(filter.ends_with("scale=-2:720,format=yuv420p"), "{filter}");
+    // An ordinary source is not tonemapped.
+    let plain = value_after(&chunk_with(6, Recipe::for_material(24, None)), "-vf").unwrap();
+    assert!(!plain.contains("tonemap"), "{plain}");
+
+    // The comparison: the reference through the very same chain, never resized.
+    let graph = graph_of(&score_args(
+        std::path::Path::new(SOURCE),
+        611,
+        10,
+        SOURCE_W,
+        SOURCE_H,
+        &hdr,
+    ));
+    let reference = branch(&graph, "[0:v]");
+    assert!(reference.contains(TONEMAP_CHAIN), "{reference}");
+    assert!(reference.contains("format=yuv420p"), "{reference}");
+    assert!(
+        !reference.contains("scale=-2") && !reference.contains(&format!("scale={SOURCE_W}")),
+        "the reference is resized: {reference}"
+    );
+    let distorted = branch(&graph, "[1:v]");
+    assert!(distorted.contains("format=yuv420p"), "{distorted}");
+    assert!(
+        !distorted.contains("tonemap"),
+        "tonemapped twice: {distorted}"
+    );
+}
+
+/// T697 — the recipe runs, with the bundled FFmpeg, on an ordinary clip and on an HDR one
+/// (ten-bit HEVC marked PQ): a point is measured and its score is a real one. Skipped where
+/// there is no bundled FFmpeg.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_point_is_measured_by_the_production_recipe_on_ordinary_and_hdr_material() {
+    use vrcast_studio_lib::media::{encoders::Encoder, ffmpeg, vmaf};
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    };
+    if !vmaf::available().await.unwrap_or(false) {
+        eprintln!("SKIPPED: the bundled FFmpeg has no libvmaf");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("vrcast-t697-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sdr = dir.join("sdr.mkv");
+    let hdr = dir.join("hdr.mkv");
+    let make = |out: &std::path::Path, extra: &[&str]| {
+        let mut args: Vec<String> = [
+            "-hide_banner",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x360:rate=24",
+            "-t",
+            "4",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        args.extend(extra.iter().map(|s| (*s).to_owned()));
+        args.push(out.to_string_lossy().into_owned());
+        std::process::Command::new(&ff)
+            .args(&args)
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    assert!(make(&sdr, &["-c:v", "libx264", "-pix_fmt", "yuv420p"]));
+    assert!(make(
+        &hdr,
+        &[
+            "-vf",
+            "format=yuv420p10le",
+            "-c:v",
+            "libx265",
+            "-x265-params",
+            // x265 writes the colour marks only from its own parameters.
+            "log-level=error:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
+            "-color_primaries",
+            "bt2020",
+            "-color_trc",
+            "smpte2084",
+            "-colorspace",
+            "bt2020nc"
+        ]
+    ));
+    let cell = vrcast_studio_lib::domain::measure_grid::Cell {
+        bitrate_mbps: 1,
+        height: 360,
+    };
+    for (clip, transfer) in [(&sdr, None), (&hdr, Some("smpte2084"))] {
+        let recipe = vmaf::Recipe::for_material(24, transfer);
+        let point = vmaf::measure_point(
+            clip,
+            640,
+            360,
+            &[0],
+            3,
+            cell,
+            &Encoder::Software,
+            &recipe,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{transfer:?}: {e}"));
+        assert!(point.whole(), "{transfer:?}: {point:?}");
+        assert!(
+            point.point.vmaf > 50.0 && point.point.vmaf <= 100.0,
+            "{transfer:?}: {point:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

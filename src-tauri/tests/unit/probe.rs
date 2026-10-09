@@ -177,3 +177,52 @@ fn answer_with_tracks(tracks: &str) -> String {
            "format":{{"duration":"100.0","size":"1000","bit_rate":"9000000"}}}}"#
     )
 }
+
+/// T696 — the subtitle tracks are found, numbered among the subtitle ones (`0:s:<N>`), with
+/// what a person chooses by: language, title, forced; and what can be drawn is told apart.
+#[test]
+fn subtitle_tracks_are_found_numbered_among_their_own_and_told_apart_by_kind() {
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    let json = answer_with_tracks(
+        r#"
+        {"index":1,"codec_type":"audio","codec_name":"aac","channels":2,
+         "disposition":{"default":1}},
+        {"index":2,"codec_type":"subtitle","codec_name":"subrip",
+         "tags":{"language":"rus","title":"Полные"},"disposition":{"default":1,"forced":0}},
+        {"index":3,"codec_type":"subtitle","codec_name":"hdmv_pgs_subtitle",
+         "tags":{"language":"eng"},"disposition":{"default":0,"forced":1}},
+        {"index":4,"codec_type":"subtitle","codec_name":"dvd_subtitle",
+         "tags":{"language":"und"}},
+        {"index":5,"codec_type":"subtitle","codec_name":"eia_608"}
+    "#,
+    );
+    let src = probe::parse(&json, "x").unwrap();
+    assert_eq!(src.audio_tracks.len(), 1);
+    let subs = &src.subtitle_tracks;
+    assert_eq!(subs.len(), 4);
+    assert_eq!(
+        subs.iter().map(|s| s.index).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+    assert_eq!(subs[0].kind, SubtitleKind::Text);
+    assert_eq!(subs[0].language.as_deref(), Some("rus"));
+    assert_eq!(subs[0].title.as_deref(), Some("Полные"));
+    assert!(subs[0].is_default && !subs[0].forced);
+    assert_eq!(subs[1].kind, SubtitleKind::Picture);
+    assert!(subs[1].forced);
+    assert_eq!(subs[2].kind, SubtitleKind::Picture);
+    assert_eq!(subs[2].language, None, "und is no language");
+    assert_eq!(subs[3].kind, SubtitleKind::Other);
+    assert!(!subs[3].burnable());
+    assert!(subs[..3].iter().all(|s| s.burnable()));
+}
+
+/// A source examined before subtitles were looked for still reads — with none.
+#[test]
+fn a_source_stored_before_subtitles_reads_with_none() {
+    let stored = r#"{"path":"x","size_bytes":1,"duration_s":1.0,"width":2,"height":2,"fps":24,
+        "bitrate_bps":1,"peak_bps":null,"video_codec":"h264","pix_fmt":"yuv420p",
+        "color_transfer":null,"audio_tracks":[]}"#;
+    let src: vrcast_studio_lib::domain::source::SourceFile = serde_json::from_str(stored).unwrap();
+    assert!(src.subtitle_tracks.is_empty());
+}
