@@ -29,6 +29,15 @@ export function canStart(v: VideoView): boolean {
   return v.state === "ready" || (v.state === "planning" && !v.start_requested);
 }
 
+/**
+ * T695 (Б2) — a film with several sound tracks waits for a person to choose one: «Start» is
+ * there but not pressable, and «Start all» leaves it be. `=== false`, not `!`: a view from a
+ * core that does not send the field yet is one whose sound was chosen as before.
+ */
+export function audioMissing(v: VideoView): boolean {
+  return v.audio_chosen === false;
+}
+
 export function canPause(v: VideoView): boolean {
   return v.state === "working";
 }

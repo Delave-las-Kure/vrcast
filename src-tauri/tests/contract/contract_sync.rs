@@ -1748,6 +1748,7 @@ fn a_video_s_shape_matches_both_ways() {
         title: String::from("t"),
         slug: String::from("t"),
         audio_track: 0,
+        audio_chosen: true,
         stage: VideoStage::Encoding,
         state: VideoState::Working,
         paused_by_person: false,

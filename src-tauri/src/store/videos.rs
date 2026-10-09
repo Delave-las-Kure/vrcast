@@ -16,6 +16,11 @@ pub struct VideoRow {
     pub title: String,
     pub slug: String,
     pub audio_track: usize,
+    /// Whether a person has chosen the sound (T695, the owner's decision Б2): a film with more
+    /// than one track waits for the choice, and `audio_track` is then only what the plan's
+    /// sizes are reckoned with. Kept in the same column — a track not chosen is written as
+    /// `-(track + 1)` — so no migration is needed and an older build reads it as track 0.
+    pub audio_chosen: bool,
     pub stage: VideoStage,
     pub state: VideoState,
     pub paused_by_person: bool,
@@ -49,6 +54,7 @@ impl VideoRow {
             title: title.to_owned(),
             slug: slug.to_owned(),
             audio_track: 0,
+            audio_chosen: true,
             stage: VideoStage::Planned,
             state: VideoState::Planning,
             paused_by_person: false,
@@ -70,6 +76,25 @@ impl VideoRow {
     }
 }
 
+/// The audio column as stored: the track, negative while it is not chosen (T695).
+fn stored_track(track: usize, chosen: bool) -> i64 {
+    let track = track as i64;
+    if chosen {
+        track
+    } else {
+        -(track + 1)
+    }
+}
+
+/// The audio column read back: the track, and whether it was chosen.
+fn track_of(stored: i64) -> (usize, bool) {
+    if stored < 0 {
+        ((-stored - 1) as usize, false)
+    } else {
+        (stored as usize, true)
+    }
+}
+
 fn row_to_video(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoRow> {
     let stage: String = row.get("stage")?;
     let state: String = row.get("state")?;
@@ -79,7 +104,8 @@ fn row_to_video(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoRow> {
         source_path: row.get("source_path")?,
         title: row.get("title")?,
         slug: row.get("slug")?,
-        audio_track: row.get::<_, i64>("audio_track")?.max(0) as usize,
+        audio_track: track_of(row.get::<_, i64>("audio_track")?).0,
+        audio_chosen: track_of(row.get::<_, i64>("audio_track")?).1,
         // A stage or a state this build does not know was written by a newer one. The safest
         // reading is the start, standing still: nothing runs by itself from there.
         stage: VideoStage::parse(&stage).unwrap_or(VideoStage::Planned),
@@ -143,7 +169,7 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 v.source_path,
                 v.title,
                 v.slug,
-                v.audio_track as i64,
+                stored_track(v.audio_track, v.audio_chosen),
                 v.stage.as_str(),
                 v.state.as_str(),
                 v.paused_by_person as i64,

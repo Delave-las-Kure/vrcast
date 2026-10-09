@@ -172,6 +172,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     title: "Фильм",
     slug: "film",
     audio_track: 0,
+    audio_chosen: true,
     stage: "planned",
     state: "ready",
     paused_by_person: false,
@@ -570,6 +571,38 @@ describe("the plan before Start", () => {
     fireEvent.change(select, { target: { value: "1" } });
     await waitFor(() => expect(mockVideoSetAudio).toHaveBeenCalledWith("v1", 1));
     expect((await card("v2")).queryByRole("combobox")).toBeNull();
+  });
+
+  it("with several tracks none is chosen beforehand, and «Start» waits for one (T695)", async () => {
+    const asking = video({ id: "a", source: source(2), audio_chosen: false });
+    mockVideoList.mockResolvedValue([asking, video({ id: "b" })]);
+    mockVideoSetAudio.mockImplementation((_id: string, track: number) =>
+      Promise.resolve({ ...asking, audio_track: track, audio_chosen: true, rev: 2 }),
+    );
+    show();
+    const a = await card("a");
+    const select = a.getByRole("combobox");
+    expect(select).toHaveValue("");
+    expect(within(select).getByRole("option", { name: ru.ui.video.chooseAudio })).toBeDisabled();
+    expect(a.getByRole("button", { name: ru.ui.video.start })).toBeDisabled();
+
+    // «Start all» starts the others and leaves this one asking.
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.video.startAll }));
+    await waitFor(() => expect(mockVideoStart).toHaveBeenCalledWith(["b"]));
+    expect((await card("a")).getByRole("combobox")).toHaveValue("");
+
+    fireEvent.change(select, { target: { value: "1" } });
+    await waitFor(() => expect(mockVideoSetAudio).toHaveBeenCalledWith("a", 1));
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("video-a")).getByRole("button", { name: ru.ui.video.start }),
+      ).toBeEnabled(),
+    );
+    expect(
+      within(screen.getByTestId("video-a")).queryByRole("option", {
+        name: ru.ui.video.chooseAudio,
+      }),
+    ).toBeNull();
   });
 
   it("starts one video, and «Start all» starts every ready one", async () => {

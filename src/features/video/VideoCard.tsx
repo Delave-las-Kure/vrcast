@@ -23,6 +23,7 @@ import { ErrorFolded } from "../shared/ErrorNotice";
 import { basename } from "../shared/names";
 import {
   STAGES,
+  audioMissing,
   canCancel,
   canPause,
   canRemove,
@@ -117,6 +118,7 @@ export function VideoCard({
   const planShown = showsPlan(video);
   const fileName = basename(video.source_path);
   const tracks = video.source?.audio_tracks ?? [];
+  const noAudio = audioMissing(video);
   const problemActions = video.state === "problem" ? (video.problem?.actions ?? []) : [];
   // «Rename» puts the name field up and its own «Retry» beside it; the field is the action.
   const renameOffered = problemActions.includes("rename") && canSetName(video);
@@ -179,11 +181,17 @@ export function VideoCard({
       {planShown && tracks.length > 1 && (
         <label className="video__audio">
           <span>{w.audio}</span>
+          {/* T695 (Б2): none is taken for the person — the field asks until one is chosen. */}
           <select
-            value={video.audio_track}
+            value={noAudio ? "" : video.audio_track}
             disabled={busy || !canSetAudio(video)}
             onChange={(e) => void run(() => ipc.videoSetAudio(id, Number(e.target.value)))}
           >
+            {noAudio && (
+              <option value="" disabled>
+                {w.chooseAudio}
+              </option>
+            )}
             {tracks.map((track) => (
               <option key={track.index} value={track.index}>
                 {trackLabel(track, t, lang)}
@@ -232,7 +240,8 @@ export function VideoCard({
             <button
               type="button"
               className="button--primary"
-              disabled={busy}
+              disabled={busy || noAudio}
+              title={noAudio ? w.chooseAudio : undefined}
               onClick={() =>
                 void run(async () => {
                   const [answer] = await ipc.videoStart([id]);

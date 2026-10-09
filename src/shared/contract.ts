@@ -378,7 +378,9 @@ export type DetailCode =
   | "RUNG_FILE_CLAIMED"
   | "OLD_SET_UNRECOGNIZED"
   // Removing a server with work alive on it (T683): `count`.
-  | "CONFIRM_STOP_SERVER_WORK";
+  | "CONFIRM_STOP_SERVER_WORK"
+  // A film with several sound tracks waits for a person to choose one (T695).
+  | "AUDIO_NOT_CHOSEN";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {
@@ -1776,6 +1778,12 @@ export interface VideoView {
   slug: string;
   /** From zero, as `SourceFile.audio_tracks[].index`. */
   audio_track: number;
+  /**
+   * T695 (Б2) — whether the sound is chosen. `false` for a film with several tracks until a
+   * person picks one: «Start» is refused (`INVALID_INPUT` + `AUDIO_NOT_CHOSEN`) meanwhile, and
+   * `audio_track` is only what the plan's sizes are reckoned with.
+   */
+  audio_chosen: boolean;
   stage: VideoStage;
   state: VideoState;
   paused_by_person: boolean;

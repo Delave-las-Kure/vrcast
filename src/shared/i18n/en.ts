@@ -667,6 +667,7 @@ export const en: Catalogue = {
     OLD_SET_UNRECOGNIZED:
       "“{name}” is on the server — a set nobody owns under this name. “Replace” removes it.",
     CONFIRM_STOP_SERVER_WORK: "Stop {count} {count|plural:taskAcc} on this server and delete it?",
+    AUDIO_NOT_CHOSEN: "Choose the sound first",
   },
 
   plurals: {
@@ -1101,6 +1102,7 @@ export const en: Catalogue = {
       nameTaken: "The name “{slug}” is taken",
       objections: "Objections to the rungs: {n}",
       audio: "Audio",
+      chooseAudio: "Choose the sound",
       trackFallback: "Track {n}",
       mono: "mono",
       stereo: "stereo",

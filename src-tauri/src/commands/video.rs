@@ -146,6 +146,10 @@ pub struct VideoView {
     pub title: String,
     pub slug: String,
     pub audio_track: usize,
+    /// T695 (Б2) — whether the sound is chosen. `false` for a film with more than one track
+    /// until a person picks one: «Start» is refused meanwhile, and `audio_track` is only what
+    /// the plan's sizes are reckoned with.
+    pub audio_chosen: bool,
     pub stage: VideoStage,
     pub state: VideoState,
     /// Paused by a person — stays paused across a restart.
@@ -305,6 +309,17 @@ fn not_now(row: &VideoRow) -> AppError {
 
 fn storage(e: crate::store::db::DbError) -> AppError {
     AppError::new(ErrorCode::StorageFailed).with_cause(e)
+}
+
+/// T695 (Б2) — nothing goes ahead on a sound nobody chose: a film with more than one track
+/// waits for the person to pick one, and is refused, changed in nothing, meanwhile.
+fn audio_not_chosen(row: &VideoRow) -> Result<()> {
+    if row.audio_chosen {
+        return Ok(());
+    }
+    Err(AppError::new(ErrorCode::InvalidInput)
+        .detail(DetailCode::AudioNotChosen)
+        .with_cause(&row.id))
 }
 
 fn load(state: &AppState, id: &str) -> Result<VideoRow> {
@@ -773,6 +788,7 @@ fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
         title: row.title.clone(),
         slug: row.slug.clone(),
         audio_track: row.audio_track,
+        audio_chosen: row.audio_chosen,
         stage: row.stage,
         state: row.state,
         paused_by_person: row.paused_by_person,
@@ -2026,6 +2042,8 @@ pub mod api {
                 }
             };
             row.audio_track = video::default_audio(&source);
+            // T695 (Б2): with more than one track the person chooses; none is taken for them.
+            row.audio_chosen = source.audio_tracks.len() <= 1;
             row.source_json = serde_json::to_string(&source).ok();
             // A set of the medium's name nobody claims (T677): added stopped on it, with
             // «Replace». The plan is still made meanwhile, so «Replace» starts at once.
@@ -2161,6 +2179,7 @@ pub mod api {
                 ));
             }
             row.audio_track = track;
+            row.audio_chosen = true;
             Ok(())
         })?;
         video_get(state, id)
@@ -2258,6 +2277,7 @@ pub mod api {
                     if !video::allowed(Act::Start, row.state, row.stage, row.media_id.is_some()) {
                         return Err(not_now(row));
                     }
+                    audio_not_chosen(row)?;
                     row.start_requested = true;
                     if row.state == VideoState::Ready {
                         row.state = VideoState::Working;
@@ -2362,6 +2382,7 @@ pub mod api {
             if !video::allowed(Act::Retry, row.state, row.stage, row.media_id.is_some()) {
                 return Err(not_now(row));
             }
+            audio_not_chosen(row)?;
             // Waiting on a set of the medium's name nobody claims (T677): going on would build
             // over it, taking its rungs for this film's. «Retry» puts the video back on that
             // problem, where «Replace» is what goes on.
@@ -2443,6 +2464,7 @@ pub mod api {
         if !may(&row) {
             return Err(not_now(&row));
         }
+        audio_not_chosen(&row)?;
         let into_medium = held_for_replace(&row);
         // One replace at a time for a video: a second click must not remove what the first
         // has just begun to build.

@@ -654,6 +654,7 @@ export const ruCore: CatalogueCore = {
       "На сервере лежит «{name}» — ничей набор под этим именем. «Заменить» удалит его.",
     CONFIRM_STOP_SERVER_WORK:
       "Остановить {count} {count|plural:taskAcc} на этом сервере и удалить его?",
+    AUDIO_NOT_CHOSEN: "Сначала выберите звук",
   },
 
   plurals: {
@@ -1095,6 +1096,7 @@ const ui = {
     nameTaken: "Имя «{slug}» занято",
     objections: "Замечаний к ступеням: {n}",
     audio: "Звук",
+    chooseAudio: "Выберите звук",
     trackFallback: "Дорожка {n}",
     mono: "моно",
     stereo: "стерео",
