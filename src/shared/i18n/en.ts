@@ -1029,6 +1029,8 @@ export const en: Catalogue = {
       staleNever: "No list has come from the server yet.",
       stopped: "Watching stopped: cannot sign in to the server. Check the server.",
       restart: "Start again",
+      retry: "Try again",
+      retryIn: "Trying again by itself in {n} s.",
       ageSeconds: "{n} s",
       ageMinutes: "{n} min",
     },

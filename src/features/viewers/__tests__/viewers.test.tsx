@@ -338,6 +338,70 @@ describe("when the connection to the server is lost", () => {
   });
 });
 
+/**
+ * T707 (tour I04–I05) — a server that could not be reached. It used to be one line, "could not
+ * reach the server", a minute later as much as at once; closing it left "starting…" for good.
+ */
+describe("when the server cannot be reached at all", () => {
+  const unreachable = { code: "SSH_UNREACHABLE", details: [] };
+
+  it("offers to try again, and trying again starts the watching again", async () => {
+    mockWatchStart.mockRejectedValueOnce(unreachable);
+    renderIn(<ViewersScreen />, "ru");
+    const retry = await screen.findByRole("button", { name: ru.ui.viewers.retry });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    // The notice cannot be closed into an empty "starting…".
+    expect(screen.queryByLabelText(ru.ui.common.dismiss)).toBeNull();
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(2));
+    send?.(update([]));
+    await screen.findByText(ru.ui.viewers.nobody);
+    expect(screen.queryByTestId("viewers-retry")).toBeNull();
+  });
+
+  it("tries again by itself, waiting longer each time, and says when", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockWatchStart.mockRejectedValueOnce(unreachable).mockRejectedValueOnce(unreachable);
+      renderIn(<ViewersScreen />, "ru");
+      await screen.findByTestId("viewers-retry-in");
+      expect(screen.getByTestId("viewers-retry-in").textContent).toMatch(/через [45] с/);
+      expect(mockWatchStart).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(2));
+      // The second failure in a row waits longer.
+      await waitFor(() =>
+        expect(screen.getByTestId("viewers-retry-in").textContent).toMatch(/через (9|10) с/),
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(3));
+      // The third try succeeded: the screen is back to its ordinary self.
+      send?.(update([]));
+      await screen.findByText(ru.ui.viewers.nobody);
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not try a refused sign-in again by itself — only when asked", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockWatchStart.mockRejectedValueOnce({ code: "SSH_AUTH_FAILED", details: [] });
+      renderIn(<ViewersScreen />, "en");
+      await screen.findByRole("button", { name: en.ui.viewers.retry });
+      expect(screen.queryByTestId("viewers-retry-in")).toBeNull();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockWatchStart).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("the tables of places", () => {
   it("says nothing while they are there and current", async () => {
     // The ordinary state. A line reporting it on every visit is noise, and noise in a corner
