@@ -20,7 +20,9 @@ use futures::future::BoxFuture;
 use vrcast_studio_lib::domain::deploy_steps::{Status, StepId};
 use vrcast_studio_lib::domain::dns_verdict::{Ipv6Choice, ServerAddresses};
 use vrcast_studio_lib::domain::server_state::{self, Compat, Kind, APP_EXPECTS};
-use vrcast_studio_lib::server::deploy::{self, machine, references, Context, Proofs};
+use vrcast_studio_lib::server::deploy::{
+    self, machine, packages, references, updates, Context, Proofs,
+};
 use vrcast_studio_lib::server::gate::{allowed, Intent};
 use vrcast_studio_lib::server::{detect, upgrade};
 use vrcast_studio_lib::ssh::keygen;
@@ -32,6 +34,10 @@ use super::deploy_fixture::{DeployTarget, Flavour};
 /// spot, so the serving can be asked over HTTPS inside the container. A name that wanted a
 /// public certificate would get none here, and nothing could be asked at all.
 const DOMAIN: &str = "vrcast-upgrade.localhost";
+
+/// The Caddy version 1's server is given here: older than the pin, so the upgrade has to
+/// bring it up (T713).
+const OLD_CADDY: &str = "2.11.4";
 
 /// What the serving answers for one address, headers and body, asked from inside.
 fn ask(target: &DeployTarget, path: &str, extra: &str) -> String {
@@ -102,31 +108,43 @@ async fn an_upgrade_from_version_1_puts_the_new_caching_rules_in_force() {
     // service and the state file. The hardening steps are checked elsewhere and change
     // nothing about what is served.
     //
-    // ⚠ **Caddy is put on by hand, from Caddy's own release package, and not by the
-    // `packages` step** — found running this (2026-10-09): Caddy's apt repository at
-    // dl.cloudsmith.io answers `402 Payment Required`, so the step cannot be run at all. What
-    // is checked here is the upgrade from version 1, and nothing in it is about packages;
-    // the same Caddy, packaged the same way (systemd unit, `caddy` user, the package's own
-    // Caddyfile as a dpkg conffile), lands where the step would have put it.
+    // ⚠ **Version 1's packages are put on by hand, the way version 1 put them** (T713): the
+    // distribution's packages, Caddy older than the pin from Caddy's own release package
+    // (the repository answers 402, so it cannot be had from there), and Caddy's apt list and
+    // key left behind — the list that now fails every `apt-get update` on the owner's server.
     target
-        .exec_inside(
-            "curl -fsSL -o /tmp/caddy.deb \
-             https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.deb \
-             && DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/caddy.deb >/dev/null \
-             && echo installed",
-        )
-        .expect("could not put Caddy on the stand");
-    let steps: Vec<_> = deploy::all()
-        .into_iter()
-        .filter(|s| {
-            matches!(
-                s.id,
-                StepId::UserDirs | StepId::Configs | StepId::Services | StepId::State
-            )
-        })
-        .collect();
+        .exec_inside(&format!(
+            "set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get -o Acquire::Retries=5 update -qq
+apt-get -o Acquire::Retries=5 install -y -qq {names} {updates} >/dev/null
+curl -fsSL -o /tmp/caddy.deb \
+  https://github.com/caddyserver/caddy/releases/download/v{OLD_CADDY}/caddy_{OLD_CADDY}_linux_amd64.deb
+dpkg -i /tmp/caddy.deb >/dev/null
+echo installed",
+            names = packages::FROM_APT.join(" "),
+            updates = updates::PACKAGE,
+        ))
+        .expect("could not put version 1's packages on the stand");
+    let pick = |with_packages: bool| -> Vec<_> {
+        deploy::all()
+            .into_iter()
+            .filter(|s| {
+                (with_packages && s.id == StepId::Packages)
+                    || matches!(
+                        s.id,
+                        StepId::UserDirs
+                            | StepId::Configs
+                            | StepId::Services
+                            | StepId::UnattendedUpgrades
+                            | StepId::State
+                    )
+            })
+            .collect()
+    };
+    let steps = pick(true);
     let never = || false;
-    deploy::run(&ctx, &steps, &never, &mut |_| {})
+    deploy::run(&ctx, &pick(false), &never, &mut |_| {})
         .await
         .expect("laying the serving down failed");
 
@@ -154,6 +172,27 @@ async fn an_upgrade_from_version_1_puts_the_new_caching_rules_in_force() {
              && chown -R caddy:caddy {VIDEO_DIR}/film"
         ))
         .expect("could not make the server a version-1 one");
+    // Caddy's apt list and key, by version 1's own two lines (T713). Both addresses still
+    // answer; it is the repository behind them that answers 402.
+    target
+        .exec_inside(&format!(
+            "set -e
+curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --batch --yes --dearmor -o {keyring}
+curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > {list}
+grep -q cloudsmith {list}
+echo listed",
+            keyring = packages::KEYRING,
+            list = packages::OLD_LIST,
+        ))
+        .expect("could not put version 1's Caddy list on the stand");
+    let broken = target
+        .exec_inside("apt-get update -qq 2>&1; echo \"exit=$?\"")
+        .expect("could not ask apt");
+    println!("apt-get update on the version-1 stand:\n{broken}");
+    assert!(
+        !broken.contains("exit=0") && broken.contains("cloudsmith"),
+        "the stand does not have the owner's trouble — apt-get update does not fail on the list:\n{broken}"
+    );
     let limits_before = target
         .exec_inside("sha256sum /etc/caddy/vrcast-limits.conf | cut -d' ' -f1")
         .expect("could not read the rules file's sum");
@@ -200,13 +239,52 @@ async fn an_upgrade_from_version_1_puts_the_new_caching_rules_in_force() {
     assert_eq!(plan.to, APP_EXPECTS);
     assert_eq!(
         to_do,
-        vec![StepId::Configs, StepId::State],
-        "the upgrade from version 1 is the Caddyfile and the state file"
+        vec![StepId::Packages, StepId::Configs, StepId::State],
+        "the upgrade from version 1 is Caddy's list and package, the Caddyfile and the state file"
     );
 
     upgrade::run(&ctx, &steps, &never, &mut |_| {})
         .await
-        .expect("the upgrade failed — version 1's Caddyfile refused as edited by hand?");
+        .expect("the upgrade failed — on Caddy's dead list, or version 1's Caddyfile refused?");
+
+    // ---- T713: the list and its key are gone, apt works again, Caddy is the pinned one —
+    // and the program running is the new one, not the old one still in memory.
+    let after_apt = target
+        .exec_inside(&format!(
+            "ls {list} {keyring} 2>&1 | grep -v 'No such file' ; \
+             apt-get update -qq 2>&1; echo \"exit=$?\"; \
+             echo \"version=$(dpkg-query -W -f='${{Version}}' caddy)\"; \
+             echo \"exe=$(readlink /proc/$(systemctl show -p MainPID --value caddy)/exe)\"",
+            list = packages::OLD_LIST,
+            keyring = packages::KEYRING,
+        ))
+        .expect("could not ask apt after the upgrade");
+    println!("after the upgrade:\n{after_apt}");
+    assert!(
+        after_apt.contains("exit=0") && !after_apt.contains("cloudsmith"),
+        "apt still fails after the upgrade:\n{after_apt}"
+    );
+    assert!(
+        !after_apt.contains(packages::OLD_LIST) && !after_apt.contains(packages::KEYRING),
+        "the old list or its key is still there:\n{after_apt}"
+    );
+    assert!(
+        after_apt.contains(&format!("version={}", packages::CADDY_VERSION)),
+        "Caddy is not the pinned version:\n{after_apt}"
+    );
+    assert!(
+        after_apt.contains("exe=/usr/bin/caddy") && !after_apt.contains("(deleted)"),
+        "the old Caddy is still the one running:\n{after_apt}"
+    );
+    // A second run finds nothing to do in the packages: the check sees what the apply did.
+    let again = upgrade::plan(&ctx, APP_EXPECTS, &steps)
+        .await
+        .expect("the plan after the upgrade failed");
+    assert!(
+        !again.has_work(),
+        "the upgrade left work behind: {:?}",
+        again.steps
+    );
 
     // ---- On disk, in the state file, and IN FORCE.
     let now = state_of(&target);

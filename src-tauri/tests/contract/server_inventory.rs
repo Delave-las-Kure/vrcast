@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 use vrcast_studio_lib::domain::deploy_steps::ORDER;
 use vrcast_studio_lib::domain::server_state::APP_EXPECTS;
-use vrcast_studio_lib::server::deploy::packages::FROM_APT;
+use vrcast_studio_lib::server::deploy::packages::{self, FROM_APT};
 use vrcast_studio_lib::server::deploy::{fail2ban, updates};
 
 const INVENTORY: &str = include_str!("../../resources/server/versions.json");
@@ -98,6 +98,37 @@ fn the_packages_of_the_inventory_are_the_packages_installed() {
             "{stays} is installed on somebody's server and the inventory does not mention it"
         );
     }
+}
+
+#[test]
+fn caddy_is_the_pinned_release_package_the_step_installs() {
+    // T713: опись называет версию и суммы пакета Caddy — те же, что ставит шаг `packages`.
+    // Разъедутся — и опись обещает один Caddy, а на сервер ляжет другой (или не ляжет вовсе:
+    // сумма не сойдётся, и шаг упадёт).
+    let it = inventory();
+    let caddy = it["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "caddy")
+        .expect("the inventory has no caddy");
+    assert_eq!(caddy["source"], "github-release");
+    assert_eq!(caddy["version"].as_str(), Some(packages::CADDY_VERSION));
+    let sums = caddy["sha256"]
+        .as_object()
+        .expect("caddy has no sha256 per machine");
+    assert_eq!(sums.len(), packages::CADDY_DEBS.len());
+    for (arch, sum) in packages::CADDY_DEBS {
+        assert_eq!(sums[arch].as_str(), Some(sum), "the sum for {arch}");
+        assert_eq!(sum.len(), 64, "{arch}: not a SHA-256");
+    }
+    let url = caddy["url"].as_str().expect("caddy has no url");
+    assert!(url.starts_with(packages::CADDY_RELEASES), "{url}");
+    // Мёртвый репозиторий (402 с 2026-10-09) не возвращается в состав мимоходом.
+    assert!(
+        !INVENTORY.contains("\"repository\""),
+        "the inventory names an apt repository for Caddy again"
+    );
 }
 
 #[test]

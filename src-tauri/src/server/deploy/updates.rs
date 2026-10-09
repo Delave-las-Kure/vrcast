@@ -4,9 +4,9 @@
 //! a deployment that reinstalls what is present is slow on every repeat and, worse, teaches
 //! nobody anything about the difference between "done" and "done again".
 //!
-//! This is also what pays for taking Caddy from a repository instead of a pinned archive
-//! (T252): the repository is covered by these updates, and an archive would be cut off from
-//! them.
+//! This used to be what paid for taking Caddy from a repository instead of a pinned archive
+//! (T252). Since T713 Caddy is a pinned release package (its repository answers 402), and
+//! these updates cover the distribution's packages only.
 
 use futures::future::BoxFuture;
 
