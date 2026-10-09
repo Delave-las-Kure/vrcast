@@ -559,16 +559,14 @@ async fn left_behind(job: &BuildJob<'_>, work: &[VariantWork]) -> Option<Detail>
 /// `Ok(None)` — it fits. `Ok(Some(notice))` — could not be worked out, and the notice says so
 /// rather than passing for a check that ran. `Err` — it will not fit.
 pub fn room_here(job: &BuildJob<'_>, work: &[VariantWork]) -> Result<Option<Detail>, BuildError> {
-    let audio_bps = job
-        .source
-        .audio_tracks
-        .get(job.audio_track)
-        .and_then(|t| t.bitrate_bps)
-        .unwrap_or(ladder_size::AUDIO_BUDGET_BPS)
-        .max(ladder_size::AUDIO_BUDGET_BPS);
-
-    let heaviest = work.iter().map(|w| w.rung.bitrate_bps).max().unwrap_or(0);
-    let needed = ladder_size::bytes_for_rung(heaviest, audio_bps, job.source.duration_s);
+    // T699 — the heaviest prepared file with the sound it will carry out, and nothing more:
+    // the segments are cut on the server, not here.
+    let audio_bps = ladder_size::audio_out_bps(job.source, job.audio_track);
+    let ceilings: Vec<u64> = work
+        .iter()
+        .map(|w| w.rung.maxrate_bps.max(w.rung.bitrate_bps))
+        .collect();
+    let needed = ladder_size::local_peak_bytes(&ceilings, audio_bps, job.source.duration_s);
     if needed == 0 {
         return Ok(Some(Detail::new(DetailCode::LadderSpaceUnknown)));
     }
@@ -616,17 +614,10 @@ pub async fn room_for_the_set(
     job: &BuildJob<'_>,
     work: &[VariantWork],
 ) -> Result<Option<Detail>, BuildError> {
-    // What the audio will weigh. A re-encoded track is held to the budget; a copied one is
-    // whatever the source carries, and a multichannel track carries far more. Where the
-    // source does not say, the budget is the floor rather than the answer — guessing low
-    // here is guessing in the one direction this check exists to avoid.
-    let audio_bps = job
-        .source
-        .audio_tracks
-        .get(job.audio_track)
-        .and_then(|t| t.bitrate_bps)
-        .unwrap_or(ladder_size::AUDIO_BUDGET_BPS)
-        .max(ladder_size::AUDIO_BUDGET_BPS);
+    // What the audio will weigh: the output's (T699). A re-encoded track is held to the
+    // budget whatever it came in as; a copied one is what the source carries, with the
+    // budget as the floor where the source does not say.
+    let audio_bps = ladder_size::audio_out_bps(job.source, job.audio_track);
 
     let bitrates: Vec<u64> = work.iter().map(|w| w.rung.bitrate_bps).collect();
     let needed = ladder_size::bytes_for_set(&bitrates, audio_bps, job.source.duration_s);

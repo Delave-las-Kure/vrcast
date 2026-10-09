@@ -399,6 +399,14 @@ fn video_action(
 /// checked it. ffprobe writes it as `LC`.
 const TARGET_AUDIO_PROFILE: &str = "lc";
 
+/// What becomes of a sound track in a prepared file — carried across, or made AAC-LC stereo
+/// at [`AUDIO_KBPS`] — the same decision [`plan`] makes. For working out sizes (T699): a
+/// 4.6 Mbit/s TrueHD track goes out at 256 kbit/s, and reckoning room with the source's
+/// number asked for nearly twice the room the set needs.
+pub fn audio_for(track: &AudioTrack) -> AudioAction {
+    audio_action(track)
+}
+
 fn audio_action(track: &AudioTrack) -> AudioAction {
     // **Four conditions, and every one of them was added after something got through.**
     // Checking only the codec let a six-channel track past — given AAC 5.1 on the way in, the

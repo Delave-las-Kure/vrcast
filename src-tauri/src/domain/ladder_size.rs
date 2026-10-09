@@ -92,3 +92,38 @@ pub fn served_bytes_for_set(bitrates_bps: &[u64], audio_bps: u64, duration_s: f6
         .map(|b| ((*b + audio_bps) as f64 * duration_s / 8.0 * SEGMENTS_OVER_MP4).ceil() as u64)
         .sum()
 }
+
+/// The sound the prepared files will carry, in bits per second (T699): **the output's, not
+/// the source's.** A track that is re-encoded goes out at the budget whatever it came in as
+/// — a 4.6 Mbit/s TrueHD track reckoned at its own rate asked for nearly twice the room.
+/// A copied track weighs what it weighs, with the budget as the floor where the source does
+/// not say (guessing low is the one direction these checks exist to avoid).
+pub fn audio_out_bps(source: &super::source::SourceFile, track: usize) -> u64 {
+    let Some(t) = source.audio_tracks.get(track) else {
+        return AUDIO_BUDGET_BPS;
+    };
+    match convert_plan::audio_for(t) {
+        convert_plan::AudioAction::Copy => t
+            .bitrate_bps
+            .unwrap_or(AUDIO_BUDGET_BPS)
+            .max(AUDIO_BUDGET_BPS),
+        convert_plan::AudioAction::Reencode { bitrate_kbps, .. } => u64::from(bitrate_kbps) * 1000,
+    }
+}
+
+/// What this computer holds at its fullest while a set is built, in bytes (T699): **one**
+/// prepared MP4 — the heaviest — with its output sound. The segments are cut on the server,
+/// not here, and each prepared file is removed once it is sent.
+///
+/// Reckoned at the rung's ceiling (`maxrate`) rather than its average: an encode held to a
+/// ceiling cannot average above it, so this is never low, and it is one file — not a hidden
+/// second copy. The margin is the disk check's own, said as a margin.
+pub fn local_peak_bytes(ceilings_bps: &[u64], audio_bps: u64, duration_s: f64) -> u64 {
+    if duration_s <= 0.0 {
+        return 0;
+    }
+    let Some(top) = ceilings_bps.iter().copied().max() else {
+        return 0;
+    };
+    ((top + audio_bps) as f64 * duration_s / 8.0).ceil() as u64
+}

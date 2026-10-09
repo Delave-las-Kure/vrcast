@@ -653,7 +653,7 @@ fn space(disk: Option<DiskUsage>, needed: u64) -> SpaceCheck {
 /// The plan as it stands with this video's own choices — its audio track, its edited rungs —
 /// applied. Worked out every time, from the basis and the source.
 fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> VideoPlan {
-    use crate::domain::ladder_size::{bytes_for_rung, bytes_for_set, AUDIO_BUDGET_BPS};
+    use crate::domain::ladder_size::bytes_for_set;
 
     let custom = custom_rungs(row);
     let edited = custom.is_some();
@@ -674,23 +674,22 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
             3,
         ))
     .round() as u64;
-    let audio_bps = source
-        .audio_tracks
-        .get(row.audio_track)
-        .and_then(|t| t.bitrate_bps)
-        .unwrap_or(AUDIO_BUDGET_BPS)
-        .max(AUDIO_BUDGET_BPS);
+    // The sound the prepared files will carry — the output's, not the source's (T699).
+    let audio_bps = crate::domain::ladder_size::audio_out_bps(source, row.audio_track);
     let bitrates: Vec<u64> = rungs.iter().map(|r| r.bitrate_bps).collect();
     // What the set leaves on the server once checked — the segments alone (T693) — and what
     // the build needs there while it runs: the prepared files too, until the check.
     let server_bytes =
         crate::domain::ladder_size::served_bytes_for_set(&bitrates, audio_bps, source.duration_s);
     let server_peak = bytes_for_set(&bitrates, audio_bps, source.duration_s);
-    let local_bytes = bytes_for_rung(
-        bitrates.iter().copied().max().unwrap_or(0),
-        audio_bps,
-        source.duration_s,
-    );
+    // What this computer holds at its fullest: one prepared file, the heaviest (T699). The
+    // segments are cut on the server.
+    let ceilings: Vec<u64> = rungs
+        .iter()
+        .map(|r| r.maxrate_bps.max(r.bitrate_bps))
+        .collect();
+    let local_bytes =
+        crate::domain::ladder_size::local_peak_bytes(&ceilings, audio_bps, source.duration_s);
     let objections = crate::domain::ladder::validate(&rungs, &facts_of(source), source.fps)
         .iter()
         .map(|o| o.detail())
