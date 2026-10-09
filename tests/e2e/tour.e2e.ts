@@ -89,7 +89,8 @@ const SECTIONS: Record<string, string> = {
   A: "Первый запуск, каждый раздел пустым",
   B: "Мастер добавления сервера",
   C: "Карточка сервера: состояние, обновление, развёртывание",
-  D: "«Видео»: от файла до ссылки",
+  D: "«Видео»: от файла до ссылки — начало",
+  D2: "«Видео»: после перезапуска приложения — до ссылки; занятое имя",
   E: "Библиотека",
   F: "Зрители и ограничения качества",
   G: "Диагностика",
@@ -100,10 +101,10 @@ const SECTIONS: Record<string, string> = {
 };
 
 const wanted = new Set(
-  (process.env.VRCAST_TOUR ?? Object.keys(SECTIONS).join(""))
+  (process.env.VRCAST_TOUR ?? Object.keys(SECTIONS).join(","))
     .toUpperCase()
-    .replace(/[^A-Z]/g, "")
-    .split(""),
+    .split(/[^A-Z0-9]+/)
+    .filter(Boolean),
 );
 
 // ---------- what is needed, and whether it is here ----------
@@ -187,6 +188,11 @@ function logPath(letter: string) {
   return join(SHOTS, "log", `${letter}.json`);
 }
 
+/** «A» pictures are A01-…, «D2» ones D2-01-… — so no section's names run into another's. */
+function prefix(letter: string): string {
+  return letter.length > 1 ? `${letter}-` : letter;
+}
+
 function readLog(letter: string): SectionLog | null {
   if (logs[letter]) return logs[letter];
   try {
@@ -201,7 +207,7 @@ function beginSection(letter: string) {
   sec = letter;
   mkdirSync(join(SHOTS, "log"), { recursive: true });
   for (const f of readdirSync(SHOTS)) {
-    if (new RegExp(`^${letter}\\d\\d-`).test(f)) rmSync(join(SHOTS, f), { force: true });
+    if (new RegExp(`^${prefix(letter)}\\d\\d-`).test(f)) rmSync(join(SHOTS, f), { force: true });
   }
   logs[letter] = { shots: [], notes: [] };
   shotNo[letter] = 0;
@@ -417,7 +423,7 @@ async function go(route: string) {
 /** A button or a link by its words, waiting for it to be there and enabled. */
 async function press(label: string, scope = "", ms = 15_000) {
   const el = await s().findX(
-    `${scope}//*[self::button or self::a][normalize-space()=${xq(label)} and not(@disabled)]`,
+    `${scope}//*[self::button or self::a or self::summary][normalize-space()=${xq(label)} and not(@disabled)]`,
     ms,
   );
   await el.click();
@@ -448,7 +454,7 @@ const shotNo: Record<string, number> = {};
 
 async function snap(step: string, did: string) {
   shotNo[sec] = (shotNo[sec] ?? 0) + 1;
-  const file = `${sec}${String(shotNo[sec]).padStart(2, "0")}-${step}`;
+  const file = `${prefix(sec)}${String(shotNo[sec]).padStart(2, "0")}-${step}`;
   let pages = 0;
   let text = "";
   try {
@@ -614,6 +620,9 @@ function ensureFilms() {
       ...["-c:a", "aac", "-b:a", "160k"],
       ...["-metadata:s:a:0", "language=eng", "-metadata:s:a:0", "title=English"],
       ...["-metadata:s:a:1", "language=rus", "-metadata:s:a:1", "title=Русский"],
+      // Different every time it is made: a film measured once is not measured again, and
+      // the tour wants to show «Measuring».
+      ...["-metadata", `comment=tour-${Date.now()}`],
       FILM1,
     ]);
   }
@@ -696,6 +705,212 @@ async function activeServerId(): Promise<string> {
   return active.id;
 }
 
+// ---------- what one part of the tour leaves for the next ----------
+
+interface TourState {
+  id1: string;
+  id2: string;
+  caught: string[];
+  paused: boolean;
+  tasksShot: boolean;
+  secondDone: boolean;
+}
+
+function saveTour(t: TourState) {
+  writeFileSync(join(STATE, "tour.json"), JSON.stringify(t, null, 2));
+}
+
+function readTour(): TourState | null {
+  try {
+    return JSON.parse(readFileSync(join(STATE, "tour.json"), "utf8")) as TourState;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The system's file dialog answered by the test: its next `open` gives back `paths`.
+ *
+ * The dialog is a window of the system, not of the page, and WebDriver cannot press it. The
+ * page asks for it through `__TAURI_INTERNALS__.invoke('plugin:dialog|open')`, so that one
+ * call is answered here and every other goes through untouched — the button, the screen and
+ * what it does with the answer are the application's own. Returns false where the page
+ * would not take the substitute (then the caller says so and falls back to the command).
+ */
+async function answerDialog(paths: string[] | string): Promise<string> {
+  const how = await s().execute<string>(
+    `const I = window.__TAURI_INTERNALS__;
+     window.__tourPick = arguments[0];
+     if (window.__tourHow) return window.__tourHow;
+     const take = () => { const p = window.__tourPick; window.__tourPick = undefined; return p; };
+     const orig = I.invoke;
+     const wrapped = function (cmd, args, opts) {
+       if (cmd === 'tour|probe') return Promise.resolve('ok');
+       if (cmd === 'plugin:dialog|open' && window.__tourPick !== undefined) return Promise.resolve(take());
+       return orig.apply(this, arguments);
+     };
+     try { I.invoke = wrapped; } catch (e) {}
+     if (I.invoke === wrapped) return (window.__tourHow = 'assign');
+     try { Object.defineProperty(I, 'invoke', { value: wrapped, configurable: true, writable: true }); } catch (e) {}
+     if (I.invoke === wrapped) return (window.__tourHow = 'define');
+     // The IPC itself: on Windows every call is a POST to http://ipc.localhost/<command>.
+     const f = window.fetch;
+     const answer = (v) => Promise.resolve(new Response(JSON.stringify(v), {
+       status: 200,
+       headers: { 'Content-Type': 'application/json', 'Tauri-Response': 'ok' },
+     }));
+     window.fetch = function (input, init) {
+       const url = String(input && input.url ? input.url : input);
+       if (/tour(%7C|\\|)probe/i.test(url)) return answer('ok');
+       if (window.__tourPick !== undefined && /plugin(%3A|:)dialog(%7C|\\|)open/i.test(url)) {
+         return answer(take());
+       }
+       return f.apply(this, arguments);
+     };
+     return (window.__tourHow = 'fetch');`,
+    [paths],
+  );
+  // Proved before anything is pressed: a substitute that does not work would let the real
+  // dialog open, and a system window nobody can press holds the tour up for good.
+  try {
+    const said = await s().executeAsync<string>(
+      `const done = arguments[arguments.length - 1];
+       window.__TAURI_INTERNALS__.invoke('tour|probe', {}).then(done, () => done('no'));
+       setTimeout(() => done('timeout'), 3000);`,
+    );
+    return said === "ok" ? how : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Errors the page throws or logs from now on — for a screen that goes blank. */
+async function catchErrors() {
+  await s().execute(
+    `window.__tourErrors = [];
+     if (!window.__tourCatching) {
+       window.__tourCatching = true;
+       window.addEventListener('error', (e) => window.__tourErrors.push('error: ' + e.message));
+       window.addEventListener('unhandledrejection', (e) => window.__tourErrors.push('rejection: ' + String(e.reason)));
+       const was = console.error;
+       console.error = function (...a) { window.__tourErrors.push('console: ' + a.map(String).join(' ')); return was.apply(this, a); };
+     }`,
+  );
+}
+
+async function caughtErrors(): Promise<string[]> {
+  try {
+    return await s().execute<string[]>("return window.__tourErrors || []");
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Watch the first video's card until it is done (or `deadline`): a picture of every stage as
+ * it begins, «Pause»/«Resume» once during encoding, «Tasks» and the leave question once while
+ * work is going on, and the second video cancelled in the middle of its work and removed.
+ */
+async function watchVideos(tour: TourState, deadline: number) {
+  const { id1, id2 } = tour;
+  const caught = new Set(tour.caught);
+  const keep = () => {
+    tour.caught = [...caught];
+    saveTour(tour);
+  };
+  for (;;) {
+    const c1 = await card(id1);
+    const c2 = await card(id2);
+    if (c1?.state === "done") break;
+    if (c1?.state === "problem") {
+      await snap("first-problem", "Первая карточка встала на проблеме");
+      note(`первая карточка — проблема: ${c1.text.replace(/\n/g, " / ").slice(0, 300)}`);
+      break;
+    }
+    if (Date.now() > deadline) {
+      note(
+        `к концу этого прогона первое видео ещё в работе: ${c1?.state}/${c1?.stage} — продолжение в следующей части`,
+      );
+      break;
+    }
+    if (c1?.state === "working" && c1.stage && !caught.has(c1.stage)) {
+      caught.add(c1.stage);
+      keep();
+      if (c1.stage === "encoding") {
+        // «rung k of n» comes with the first progress of the encode.
+        try {
+          await cardUntil(
+            id1,
+            "rung k of n",
+            (c) => /ступень \d+ из \d+/.test(c.text) || c.stage !== "encoding",
+            20_000,
+          );
+        } catch {
+          // pictured without it
+        }
+      }
+      await snap(`stage-${c1.stage}`, `Первая карточка: начался этап «${c1.stage}»`);
+      continue;
+    }
+    if (c1?.state === "working" && c1.stage === "encoding" && !tour.paused) {
+      tour.paused = true;
+      keep();
+      await step("paused", "«Пауза» во время кодирования", async () => {
+        await press("Пауза", inCard(id1));
+        await cardUntil(id1, "paused", (c) => c.state === "paused", 20_000);
+      });
+      await step("resumed", "«Продолжить»", async () => {
+        await press("Продолжить", inCard(id1));
+        await cardUntil(id1, "going again", (c) => c.state === "working", 20_000);
+      });
+      continue;
+    }
+    if (c1?.state === "working" && caught.size > 0 && !tour.tasksShot) {
+      tour.tasksShot = true;
+      keep();
+      await step("tasks-during-work", "(раздел H) «Задачи», пока видео в работе", async () => {
+        await go("tasks");
+        await sleep(800);
+      });
+      await step(
+        "leave-confirm",
+        "(раздел H) Вопрос при выходе с идущей задачей — вызван событием app:quit-requested из теста (то же, что «Выйти» в меню значка в трее)",
+        async () => {
+          await invoke("plugin:event|emit", { event: "app:quit-requested", payload: null });
+          await s().find('[data-testid="leave-confirm"]');
+          await sleep(1000);
+        },
+      );
+      try {
+        await (await s().find('[data-testid="leave-no"]')).click();
+      } catch (e) {
+        note(`«Остаться» не нажалось: ${message(e)}`);
+      }
+      await go("video");
+      continue;
+    }
+    if (!tour.secondDone && c2 && c2.state === "working" && c2.stage) {
+      tour.secondDone = true;
+      keep();
+      await sleep(2500);
+      const at = (await card(id2))?.stage ?? c2.stage;
+      await step("second-working", `Второе видео в работе (этап «${at}»)`, async () => {});
+      await step("second-cancel", "«Отмена» у второго видео", async () => {
+        await press("Отмена", inCard(id2));
+        await cardUntil(id2, "cancelled", (c) => c.state === "cancelled", 60_000);
+      });
+      await step("second-removed", "«Убрать» у отменённого второго видео", async () => {
+        await press("Убрать", inCard(id2));
+        await until("the card to go", async () => !(await card(id2)), 30_000);
+      });
+      continue;
+    }
+    await sleep(150);
+  }
+  keep();
+  note(`этапы первой карточки, снятые к этому моменту: ${[...caught].join(", ") || "ни одного"}`);
+}
+
 // ---------- the tour ----------
 
 describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => {
@@ -703,6 +918,8 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
     mkdirSync(SHOTS, { recursive: true });
     mkdirSync(STATE, { recursive: true });
     nativeDriver = await ensureDriver();
+    // Made once and kept in the state folder: the first run spends a minute on them.
+    ensureFilms();
     // Nothing of an earlier run of the e2e build may hold the driver's port or the data.
     killOurs();
     await driverDown();
@@ -1056,13 +1273,28 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           await sleep(1500);
         },
       );
+      await step(
+        "deploy-domain-answered",
+        "Ждём ответа проверки домена (до 2 мин); список «Что будет сделано» появляется только при верном домене",
+        async () => {
+          await until(
+            "the domain check",
+            async () =>
+              !/Спрашиваю у серверов зоны…/.test(await pageText()) &&
+              ((await has("//button[normalize-space()='Согласен, разворачивать']")) ||
+                (await has("//button[normalize-space()='Спросить снова']"))),
+            120_000,
+            1000,
+          );
+        },
+      );
       const canDeploy = await has(
         "//button[normalize-space()='Согласен, разворачивать' and not(@disabled)]",
       );
       note(
         canDeploy
           ? "кнопка «Согласен, разворачивать» доступна; развёртывание не запускалось (на контейнере не дойдёт до конца: домен clean.example.com не ведёт на него)"
-          : "кнопка «Согласен, разворачивать» недоступна (домен clean.example.com не ведёт на контейнер) — развёртывание до конца не доводилось",
+          : "кнопки «Согласен, разворачивать» нет вовсе: список «Что будет сделано» и кнопка появляются только когда домен уже ведёт на сервер (clean.example.com на контейнер не ведёт) — развёртывание не запускалось",
       );
       await go("servers");
       await sleep(2000);
@@ -1093,47 +1325,84 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
   );
 
   it.skipIf(!wanted.has("D"))(
-    "D — «Video»: three files, the plan, the rungs, every stage, the link",
+    "D — «Video»: three files, the plan, the rungs, «Start all», the first stages",
     async () => {
+      const t0 = Date.now();
       beginSection("D");
-      ensureFilms();
       await ensureServer();
       await ensureApp();
       await setLanguage("ru");
+      // Nothing left on «Video» from an earlier run, and nothing on the server either: a set of
+      // the same film left there would make the first plan say «name taken».
+      docker(["exec", NAME, "sh", "-c", "find /var/lib/vrcast/videos -mindepth 1 -delete"]);
+      rmSync(FILM1, { force: true });
+      ensureFilms();
+      for (const v of await invoke<{ id: string }[]>("video_list")) {
+        try {
+          await invoke("video_remove", { id: v.id });
+        } catch {
+          // shown as it is
+        }
+      }
       await go("video");
       await snap("video-empty", "«Видео» при активном сервере, файлов нет");
-      const serverId = await activeServerId();
-      let id1 = "";
-      let id2 = "";
+      const viaButton = await answerDialog([FILM1, FILM2, BROKEN]);
       await step(
         "added-three",
-        "Добавлены 3 файла через invoke('video_add') (системный диалог WebDriver не нажмёт): «Фильм с двумя дорожками.mkv» (1080p, 60 с, eng+rus, rus — вторая), «Короткий 720p.mp4» (20 с), «Битый файл.mp4»",
+        `«Добавить видео»${viaButton ? "" : " (кнопка недоступна для подмены диалога — через invoke('video_add'))"}: в системном диалоге «выбраны» 3 файла — «Фильм с двумя дорожками.mkv» (1080p, 60 с, eng+rus, rus — вторая), «Короткий 720p.mp4» (20 с), «Битый файл.mp4». Ответ диалога подставлен тестом — WebDriver системное окно не нажмёт`,
         async () => {
-          const added = await invoke<Added>("video_add", {
-            serverId,
-            paths: [FILM1, FILM2, BROKEN],
-            mediaId: null,
-          });
-          id1 = added.added.find((a) => a.source_path.endsWith(".mkv"))?.id ?? "";
-          id2 = added.added.find((a) => a.source_path.includes("720p"))?.id ?? "";
-          note(`video_add: принято ${added.added.length}, отказано ${added.refused.length}`);
-          await sleep(1200);
+          if (viaButton) {
+            await press("Добавить видео");
+            try {
+              await until(
+                "cards from the button",
+                async () => (await invoke<unknown[]>("video_list")).length >= 2,
+                10_000,
+              );
+              note(`«Добавить видео» нажата, ответ диалога подставлен (${viaButton})`);
+            } catch {
+              note(
+                `подмена ответа диалога (${viaButton}) не сработала — файлы поданы invoke('video_add'), отказ битого на экране не виден`,
+              );
+              await invoke<Added>("video_add", {
+                serverId: await activeServerId(),
+                paths: [FILM1, FILM2, BROKEN],
+                mediaId: null,
+              });
+            }
+          } else {
+            await invoke<Added>("video_add", {
+              serverId: await activeServerId(),
+              paths: [FILM1, FILM2, BROKEN],
+              mediaId: null,
+            });
+          }
+          await sleep(1500);
         },
       );
-      if (!id1 || !id2) throw new Error("the two good films were not taken");
-      await step(
-        "plans-ready",
-        "Ждём планы обеих карточек (отказ битого файла — вверху)",
-        async () => {
-          await cardUntil(id1, "the first plan", (c) => c.state === "ready", 240_000);
-          await cardUntil(id2, "the second plan", (c) => c.state === "ready", 240_000);
-        },
-      );
-      await step("refused-details", "У отказа битого файла раскрыто «Подробнее»", async () => {
-        const more = await s().findX("//*[@data-testid='refused']//summary", 5_000);
-        await more.click();
-        await sleep(300);
+      const list = await invoke<{ id: string; source_path: string }[]>("video_list");
+      const tour: TourState = {
+        id1: list.find((a) => a.source_path.endsWith(".mkv"))?.id ?? "",
+        id2: list.find((a) => a.source_path.includes("720p"))?.id ?? "",
+        caught: [],
+        paused: false,
+        tasksShot: false,
+        secondDone: false,
+      };
+      saveTour(tour);
+      note(`на экране «Видео» карточек: ${list.length} (битый файл — отказ)`);
+      if (!tour.id1 || !tour.id2) throw new Error("the two good films were not taken");
+      const { id1, id2 } = tour;
+      await step("plans-ready", "Ждём планы обеих карточек", async () => {
+        await cardUntil(id1, "the first plan", (c) => c.state === "ready", 240_000);
+        await cardUntil(id2, "the second plan", (c) => c.state === "ready", 240_000);
       });
+      if (await s().has('[data-testid="refused"]')) {
+        await step("refused-details", "У отказа битого файла раскрыто «Подробнее»", async () => {
+          await press("Подробнее", "//*[@data-testid='refused']", 5_000);
+          await sleep(300);
+        });
+      }
       await step(
         "audio-second",
         "У первой карточки в «Звук» выбрана вторая дорожка (rus)",
@@ -1147,171 +1416,160 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           );
         },
       );
-      await step("rungs-open", "«Ступени» у первой карточки — редактор открыт", async () => {
+      let edited = "";
+      /** The window after a rung editor action: alive, or gone blank (then said and reloaded). */
+      const editorOutcome = async (what: string): Promise<boolean> => {
+        if (await s().has(".video__rungs")) return true;
+        const errors = (await caughtErrors()).join(" | ").slice(0, 600);
+        note(
+          `${what}: ОКНО ОПУСТЕЛО — интерфейс упал (снимок выше). Ошибки страницы: ${errors || "не пойманы"}`,
+        );
+        await s().execute("location.reload()");
+        await s().findFilled(".content");
+        await go("video");
+        return false;
+      };
+      const openEditor = async () => {
         await press("Ступени", inCard(id1));
         await s().find(".video__rungs");
+        await catchErrors();
+      };
+      await step("rungs-open", "«Ступени» у первой карточки — редактор открыт", openEditor);
+      await step("rungs-idle", "Редактор открыт, ничего не трогаем 4 с", async () => {
+        await sleep(4000);
       });
-      let edited = "";
-      await step(
-        "rungs-edited",
-        "В редакторе изменён битрейт нижней ступени (на 1 Мбит/с)",
-        async () => {
-          const inputs = await s().findAll(".video__rungs input[type=number]");
-          const last = inputs[inputs.length - 1];
-          const was = Number(await last.property("value"));
-          const now = was > 1 ? was - 1 : was + 1;
-          await last.clear();
-          await last.type(String(now));
-          edited = `${was} → ${now}`;
-          await sleep(400);
-        },
-      );
-      await step(
-        "rungs-saved",
-        `«Сохранить» в редакторе (${edited}) — план с «замерить»`,
-        async () => {
-          await press("Сохранить", "//div[contains(@class,'video__rungs')]");
-          await cardUntil(id1, "the plan again", (c) => c.state === "ready", 120_000);
-          await sleep(500);
-        },
-      );
+      let alive = await editorOutcome("редактор ступеней сам по себе через 4 с после открытия");
+      const attempts: [string, string, () => Promise<void>][] = [
+        [
+          "rungs-cleared",
+          "Поле битрейта нижней ступени очищено (как Backspace до пустого) и введено новое число",
+          async () => {
+            const inputs = await s().findAll(".video__rungs input[type=number]");
+            const last = inputs[inputs.length - 1];
+            const was = Number(await last.property("value"));
+            const now = was > 1 ? was - 1 : was + 1;
+            await last.clear();
+            await sleep(300);
+            await last.type(String(now));
+            edited = `битрейт нижней ступени ${was} → ${now}`;
+            await sleep(1000);
+          },
+        ],
+        [
+          "rungs-select-type",
+          "Значение битрейта нижней ступени заменено выделением (Ctrl+A) и вводом — без пустого поля",
+          async () => {
+            const inputs = await s().findAll(".video__rungs input[type=number]");
+            const last = inputs[inputs.length - 1];
+            const was = Number(await last.property("value"));
+            const now = was > 1 ? was - 1 : was + 1;
+            await last.click();
+            await last.type(`\uE009a\uE000${now}`);
+            edited = `битрейт нижней ступени ${was} → ${now}`;
+            await sleep(1000);
+          },
+        ],
+        [
+          "rungs-left-out",
+          "Снята галочка «Собирать» у средней ступени (битрейт не трогаем)",
+          async () => {
+            const boxes = await s().findAll(".video__rungs input[type=checkbox]");
+            await boxes[Math.floor(boxes.length / 2)].click();
+            edited = "средняя ступень не собирается";
+            await sleep(1000);
+          },
+        ],
+      ];
+      for (const [name, did, act] of attempts) {
+        if (alive) break;
+        // The window was reloaded: the editor is opened again for the next way of editing.
+        try {
+          await openEditor();
+        } catch (e) {
+          note(`«Ступени» не открылись снова: ${message(e)}`);
+          break;
+        }
+        await step(name, `Окно перезагружено, «Ступени» снова. ${did}`, act);
+        alive = await editorOutcome(did);
+      }
+      if (alive && edited === "") {
+        // The editor lived through being left alone: now an edit in it, the ordinary way.
+        const [name, did, act] = attempts[0];
+        await step(name, did, act);
+        alive = await editorOutcome(did);
+        for (const [n2, d2, a2] of attempts.slice(1)) {
+          if (alive) break;
+          await openEditor();
+          await step(n2, `Окно перезагружено, «Ступени» снова. ${d2}`, a2);
+          alive = await editorOutcome(d2);
+        }
+      }
+      if (!alive) note("ни одной правки ступеней сохранить не удалось — план остался исходным");
+      if (await s().has(".video__rungs")) {
+        await step(
+          "rungs-saved",
+          `«Сохранить» в редакторе (${edited}) — план после правки`,
+          async () => {
+            await press("Сохранить", "//div[contains(@class,'video__rungs')]");
+            await cardUntil(id1, "the plan again", (c) => c.state === "ready", 120_000);
+            await sleep(500);
+          },
+        );
+      }
       await step("start-all", "«Старт всех»", async () => {
         await press("Старт всех");
         await sleep(1200);
       });
+      await watchVideos(tour, t0 + 370_000);
+    },
+    400_000,
+  );
 
-      const caught = new Set<string>();
-      let paused = false;
-      let tasksShot = false;
-      let second = "";
-      const stop = Date.now() + 480_000;
-      for (;;) {
-        const c1 = await card(id1);
-        const c2 = await card(id2);
-        if (c1?.state === "done") break;
-        if (c1?.state === "problem") {
-          await snap("first-problem", "Первая карточка встала на проблеме");
-          note(`первая карточка — проблема: ${c1.text.replace(/\n/g, " / ").slice(0, 200)}`);
-          break;
-        }
-        if (Date.now() > stop) {
-          note(
-            `первое видео не дошло до «Готово» за 8 минут: ${JSON.stringify(c1)?.slice(0, 200)}`,
-          );
-          break;
-        }
-        if (c1?.state === "working" && c1.stage && !caught.has(c1.stage)) {
-          caught.add(c1.stage);
-          if (c1.stage === "encoding") {
-            // «rung k of n» comes with the first progress of the encode.
-            try {
-              await cardUntil(
-                id1,
-                "rung k of n",
-                (c) => /ступень \d+ из \d+/.test(c.text) || c.stage !== "encoding",
-                20_000,
-              );
-            } catch {
-              // pictured without it
-            }
-          }
-          await snap(`stage-${c1.stage}`, `Первая карточка: этап «${c1.stage}» начался`);
-        }
-        if (c1?.state === "working" && c1.stage === "encoding" && !paused) {
-          paused = true;
-          await step("paused", "«Пауза» во время кодирования", async () => {
-            await press("Пауза", inCard(id1));
-            await cardUntil(id1, "paused", (c) => c.state === "paused", 20_000);
-          });
-          await step("resumed", "«Продолжить»", async () => {
-            await press("Продолжить", inCard(id1));
-            await cardUntil(id1, "going again", (c) => c.state === "working", 20_000);
-          });
-        }
-        if (c1?.state === "working" && caught.has("measuring") && !tasksShot) {
-          tasksShot = true;
-          await step("tasks-during-work", "(раздел H) «Задачи», пока видео в работе", async () => {
-            await go("tasks");
-            await sleep(800);
-          });
-          await step(
-            "leave-confirm",
-            "(раздел H) Вопрос при выходе с идущей задачей — вызван событием app:quit-requested из теста (то же, что «Выйти» в меню трея)",
-            async () => {
-              await invoke("plugin:event|emit", { event: "app:quit-requested", payload: null });
-              await s().find('[data-testid="leave-confirm"]');
-              await sleep(800);
-            },
-          );
-          try {
-            await (await s().find('[data-testid="leave-no"]')).click();
-          } catch (e) {
-            note(`«Остаться» не нажалось: ${message(e)}`);
-          }
-          await go("video");
-          continue;
-        }
-        if (!second && c2 && (c2.state === "working" || c2.state === "paused") && c2.stage) {
-          second = c2.stage;
-          await sleep(2500);
-          await step("second-cancel", `Второе видео на этапе «${second}» → «Отмена»`, async () => {
-            await press("Отмена", inCard(id2));
-            await cardUntil(id2, "cancelled", (c) => c.state === "cancelled", 60_000);
-          });
-          await step("second-removed", "«Убрать» у отменённого второго видео", async () => {
-            await press("Убрать", inCard(id2));
-            await until("the card to go", async () => !(await card(id2)), 30_000);
-          });
-        }
-        await sleep(150);
-      }
-      note(`этапы первой карточки, пойманные на снимок: ${[...caught].join(", ") || "ни одного"}`);
+  it.skipIf(!wanted.has("D2"))(
+    "D2 — «Video» after a restart: the rest of the stages, the link, a taken name",
+    async () => {
+      const t0 = Date.now();
+      beginSection("D2");
+      await ensureServer();
+      await ensureApp();
+      await setLanguage("ru");
+      const tour = readTour();
+      if (!tour) throw new Error("no state from section D");
+      await go("video");
+      await snap(
+        "after-restart",
+        "Приложение запущено заново (новый прогон теста, та же папка данных) — «Видео»",
+      );
+      await watchVideos(tour, t0 + 250_000);
+      const { id1 } = tour;
       if ((await card(id1))?.state === "done") {
         await snap("done", "Первое видео — «Готово», ссылка");
         await step("copied", "«Копировать»", async () => {
           await press("Копировать", inCard(id1));
           await s().findX(`${inCard(id1)}//span[@role='status']`, 5_000);
         });
-      }
-      if (!second && (await card(id2))) {
-        await step(
-          "second-late",
-          "Второе видео до отмены в работу так и не пошло — как оно выглядит",
-          async () => {
-            await cardUntil(
-              id2,
-              "the second at work",
-              (c) => c.state === "working" || c.state === "done",
-              120_000,
-            );
-          },
+      } else {
+        note(
+          `первое видео не дошло до «Готово»: ${JSON.stringify(await card(id1))?.slice(0, 300)}`,
         );
-        const c2 = await card(id2);
-        if (c2?.state === "working") {
-          await step("second-cancel", "Второе видео → «Отмена»", async () => {
-            await press("Отмена", inCard(id2));
-            await cardUntil(id2, "cancelled", (c) => c.state === "cancelled", 60_000);
-          });
-        }
-        await step("second-removed", "«Убрать» у второго видео", async () => {
-          await press("Убрать", inCard(id2));
-          await until("the card to go", async () => !(await card(id2)), 30_000);
-        });
       }
-
       // The same film once more: its name is taken by the first one's set.
       let id3 = "";
       await step(
         "name-taken-plan",
         "Тот же фильм добавлен ещё раз — план с «Имя занято»",
         async () => {
-          const again = await invoke<Added>("video_add", {
-            serverId,
-            paths: [FILM1],
-            mediaId: null,
-          });
-          id3 = again.added[0]?.id ?? "";
-          await cardUntil(id3, "the plan", (c) => c.state === "ready", 240_000);
+          if (await answerDialog([FILM1])) await press("Добавить видео");
+          else
+            await invoke<Added>("video_add", {
+              serverId: await activeServerId(),
+              paths: [FILM1],
+              mediaId: null,
+            });
+          await sleep(1500);
+          const all = await invoke<{ id: string; source_path: string }[]>("video_list");
+          id3 = all.filter((v) => v.source_path.endsWith(".mkv") && v.id !== id1).pop()?.id ?? "";
+          await cardUntil(id3, "the plan", (c) => c.state === "ready", 120_000);
         },
       );
       if (id3) {
@@ -1320,7 +1578,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           await cardUntil(id3, "the problem", (c) => c.state === "problem", 120_000);
         });
         await step("name-taken-details", "У проблемы раскрыто «Подробнее»", async () => {
-          await (await s().findX(`${inCard(id3)}//summary`, 5_000)).click();
+          await press("Подробнее", inCard(id3), 5_000);
           await sleep(300);
         });
         await step("name-taken-removed", "«Убрать» у повторного", async () => {
@@ -1329,7 +1587,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         });
       }
     },
-    590_000,
+    400_000,
   );
 
   it.skipIf(!wanted.has("E"))(
@@ -1340,6 +1598,28 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       await ensureServer();
       await ensureApp();
       await setLanguage("ru");
+      // What an earlier run of this section made goes first: the medium, the cards, the files.
+      {
+        const serverId = await activeServerId();
+        const lib = await invoke<{ media: { id: string; title: string }[] }>("library_list", {
+          serverId,
+          refresh: true,
+        });
+        for (const m of lib.media.filter((x) => x.title === "Одиночный клип")) {
+          await invoke("media_delete", { serverId, mediaId: m.id, confirmed: true });
+        }
+        for (const v of await invoke<{ id: string; title: string; state: string }[]>(
+          "video_list",
+        )) {
+          if (v.state !== "done") await invoke("video_remove", { id: v.id }).catch(() => null);
+        }
+        docker([
+          ...["exec", NAME, "rm", "-f"],
+          "/var/lib/vrcast/videos/single-clip.mp4",
+          "/var/lib/vrcast/videos/stray-file.mp4",
+        ]);
+        await invoke("library_list", { serverId, refresh: true });
+      }
       await go("library");
       await sleep(1500);
       await snap("library-list", "«Библиотека»: список (свёрнуто)");
@@ -1408,38 +1688,69 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           await sleep(600);
         },
       );
-      // «Build a set» opens the system file dialog, which WebDriver cannot press: the answer
-      // is given to the same command the dialog's answer goes to.
-      let mediaId = "";
-      try {
-        const lib = await invoke<{ media: { id: string; title: string }[] }>("library_list", {
-          serverId: await activeServerId(),
-          refresh: false,
-        });
-        mediaId = lib.media.find((m) => m.title === "Одиночный клип")?.id ?? "";
-      } catch (e) {
-        note(`library_list: ${message(e)}`);
-      }
+      // «Build a set» opens the system file dialog, which WebDriver cannot press: its answer
+      // is put in by the test (answerDialog), the link and the screen are the application's.
       let buildId = "";
+      const how = await answerDialog([FILM2]);
       await step(
         "build-set-video",
-        "«Собрать набор» для «Одиночный клип»: файл подан через invoke('video_add', mediaId) — системный диалог не нажать; экран «Видео»",
+        `«Собрать набор» у «Одиночный клип»; в системном диалоге «выбран» «Короткий 720p.mp4» (ответ подставлен тестом${how ? "" : " — НЕ удалось, файл подан через invoke"}) — экран «Видео»`,
         async () => {
-          if (!mediaId) throw new Error("the medium was not found");
-          const added = await invoke<Added>("video_add", {
-            serverId: await activeServerId(),
-            paths: [FILM2],
-            mediaId,
-          });
-          buildId = added.added[0]?.id ?? "";
-          await go("video");
-          if (buildId) await cardUntil(buildId, "the plan", (c) => c.state === "ready", 180_000);
+          const before = new Set((await invoke<{ id: string }[]>("video_list")).map((v) => v.id));
+          if (how) {
+            await press("Собрать набор", single);
+          } else {
+            const lib = await invoke<{ media: { id: string; title: string }[] }>("library_list", {
+              serverId: await activeServerId(),
+              refresh: false,
+            });
+            const mediaId = lib.media.find((m) => m.title === "Одиночный клип")?.id;
+            if (!mediaId) throw new Error("the medium was not found");
+            await invoke<Added>("video_add", {
+              serverId: await activeServerId(),
+              paths: [FILM2],
+              mediaId,
+            });
+            await go("video");
+          }
+          await until(
+            "the new card",
+            async () => {
+              const now = await invoke<{ id: string }[]>("video_list");
+              buildId = now.find((v) => !before.has(v.id))?.id ?? "";
+              return buildId;
+            },
+            15_000,
+          );
+          await cardUntil(buildId, "the plan", (c) => c.state === "ready", 180_000);
         },
       );
       if (buildId) {
-        await step("build-set-removed", "Эта карточка «Убрать» (не собираем)", async () => {
-          await press("Убрать", inCard(buildId));
-          await until("the card to go", async () => !(await card(buildId)), 30_000);
+        await step("build-set-started", "«Старт» у этой карточки", async () => {
+          await press("Старт", inCard(buildId));
+          await cardUntil(buildId, "at work", (c) => c.state === "working", 60_000);
+          await sleep(1500);
+        });
+        await step(
+          "build-set-in-library",
+          "Пока набор собирается — «Библиотека», карточка «Одиночный клип»",
+          async () => {
+            await go("library");
+            await sleep(1500);
+            if (!(await has(`${single}//ul[contains(@class,'file-list')]`))) {
+              await (await s().findX(`${single}/button[contains(@class,'media__head')]`)).click();
+            }
+            await sleep(600);
+          },
+        );
+        await go("video");
+        await step("build-set-done", "Набор для «Одиночный клип» — ждём «Готово»", async () => {
+          await cardUntil(
+            buildId,
+            "done",
+            (c) => c.state === "done" || c.state === "problem",
+            150_000,
+          );
         });
       }
       await go("library");
