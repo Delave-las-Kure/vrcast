@@ -862,6 +862,15 @@ async fn start(
     // Refused before a task exists: the door, the key, and the domain. Each of them costs one
     // question now and hours of somebody's evening later.
     let opened = gate::open(state.secrets.as_ref(), &profile, intent).await?;
+    // T703: `Setup` now opens on a current server of ours that has a newer server side to
+    // upgrade to — for the upgrade. A *fresh* deployment over it is still refused, as it was
+    // when `Setup` refused every current server of ours.
+    if kind == crate::tasks::deploy::Kind::Fresh
+        && opened.state.kind == crate::domain::server_state::Kind::Managed
+    {
+        opened.conn.close().await;
+        return Err(gate::Refusal::AlreadyDeployed.into());
+    }
     // Asked before the connection is let go: the domain cannot be judged without knowing
     // whether this machine has an IPv6 address of its own (T332).
     let facts = machine::look(&opened.conn).await?;

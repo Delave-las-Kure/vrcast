@@ -12,15 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use super::error::{AppError, DetailCode, ErrorCode, Result};
 use crate::domain::hls_master::{self, Variant};
-use crate::domain::limits_conf::Limit;
+use crate::domain::limits_conf::{Limit, SERVING_PREFIX};
 use crate::domain::slow_master::shorten;
 use crate::domain::wording::Detail;
 use crate::server::gate::{self, Intent};
 use crate::server::limits::{LimitError, Serving};
 use crate::server::shell_quote;
-
-/// Where the media sit in an address on this project's servers.
-const SERVING_PREFIX: &str = "/videos";
 
 /// The file this application owns, and the one it only reads.
 const LIMITS_CONF: &str = "/etc/caddy/vrcast-limits.conf";
