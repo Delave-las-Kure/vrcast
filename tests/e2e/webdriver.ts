@@ -190,6 +190,11 @@ export class Session {
     return await call<string>(this.at("/screenshot"), "GET");
   }
 
+  /** Size the window (the tour shoots every screen at one size). */
+  async setWindowRect(width: number, height: number): Promise<void> {
+    await call<unknown>(this.at("/window/rect"), "POST", { width, height });
+  }
+
   async elementScreenshot(handle: string): Promise<string> {
     return await call<string>(this.at(`/element/${handle}/screenshot`), "GET");
   }
