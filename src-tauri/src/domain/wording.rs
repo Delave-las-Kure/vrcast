@@ -331,6 +331,12 @@ detail_codes! {
     /// `LIMITS_ROLLBACK_FAILED`: putting back was not started — a command of this change may
     /// still be running on the server (T635). The serving is most likely working.
     LimitsRollbackNotStarted => "LIMITS_ROLLBACK_NOT_STARTED",
+    /// `DOMAIN_NOT_SERVING` (T704): the serving did not answer this machine **before** the
+    /// change, so nothing was touched — a check after it could not have told anything.
+    LimitsNotCheckable => "LIMITS_NOT_CHECKABLE",
+    /// `DOMAIN_NOT_SERVING` (T704): the change went in, the serving stopped answering, and
+    /// the previous limits are back in force.
+    LimitsRolledBack => "LIMITS_ROLLED_BACK",
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 

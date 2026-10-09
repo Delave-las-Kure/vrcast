@@ -10,21 +10,43 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
-import { useT } from "../../shared/i18n";
+import { useLang, useT } from "../../shared/i18n";
+import { formatBitrate } from "../../shared/i18n/format";
 import { ipc } from "../../shared/ipc";
 import type { AppError, QualityLimit } from "../../shared/contract";
 
-function mbps(bps: number): string {
-  return `${(bps / 1_000_000).toFixed(1)} Mbit/s`;
+/** «2026-08-26 13:00», in this machine's time — not the raw stamp the rule carries (T704). */
+function when(stamp: string): string {
+  const at = new Date(stamp);
+  if (Number.isNaN(at.getTime())) return stamp;
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
 }
 
 export function LimitsList({ serverId }: { serverId: string }) {
   const t = useT();
+  const { lang } = useLang();
   const words = t.ui.limits;
 
   const [limits, setLimits] = useState<QualityLimit[] | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [lifting, setLifting] = useState<string | null>(null);
+  // The films' own names, so a rule reads «Фильм с двумя дорожками» and not its directory.
+  // A library that will not load leaves the directory names: still true, just plainer.
+  const [titles, setTitles] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let alive = true;
+    ipc
+      .libraryList(serverId)
+      .then((view) => {
+        if (alive) setTitles(Object.fromEntries(view.media.map((m) => [m.slug, m.title])));
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [serverId]);
 
   const reload = useCallback(() => {
     ipc
@@ -38,6 +60,9 @@ export function LimitsList({ serverId }: { serverId: string }) {
   return (
     <section aria-label={words.listTitle}>
       <h3>{words.listTitle}</h3>
+      <p className="hint" data-testid="limits-when">
+        {words.listHint}
+      </p>
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
@@ -60,9 +85,9 @@ export function LimitsList({ serverId }: { serverId: string }) {
               return (
                 <tr key={key} data-testid={`limit-${key}`}>
                   <td>{limit.ip}</td>
-                  <td>{limit.slug}</td>
-                  <td>{mbps(limit.cap_bps)}</td>
-                  <td>{limit.set_at}</td>
+                  <td>{titles[limit.slug] ?? limit.slug}</td>
+                  <td>{formatBitrate(limit.cap_bps, lang)}</td>
+                  <td>{when(limit.set_at)}</td>
                   <td>
                     <button
                       type="button"

@@ -110,7 +110,7 @@ describe("before the cap goes on", () => {
       below_lightest: true,
     });
     renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "ru");
-    await waitFor(() => expect(screen.getByTestId("kept")).toHaveTextContent("3.0"));
+    await waitFor(() => expect(screen.getByTestId("kept")).toHaveTextContent("3,0 Мбит/с"));
     // Asked of the catalogue rather than copied out of it: a sentence written into a test
     // breaks the day somebody improves the wording, and then says nothing about what is
     // actually wrong.
@@ -312,5 +312,107 @@ describe("when the previous limits did not come back (T640)", () => {
     await waitFor(() =>
       expect(screen.getByText(ru.errors.LIMITS_ROLLBACK_FAILED.message)).toBeInTheDocument(),
     );
+  });
+});
+
+/**
+ * T704 (the owner's decision Г2, QA-26 №2) — a cap that is honest about when it works, opened
+ * on the right film, in the person's units, over the screen.
+ */
+describe("honest about when it works (T704)", () => {
+  const TWO = [
+    { slug: "film-a", title: "Film A" },
+    { slug: "film-b", title: "Film B" },
+  ];
+
+  it("says the cap takes effect when the viewer restarts the video, before the button", async () => {
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "ru");
+    expect(screen.getByTestId("limit-when")).toHaveTextContent(ru.ui.limits.whenEffective);
+  });
+
+  it("speaks the person's units: no raw bits per second anywhere", async () => {
+    mockPreview.mockResolvedValue({
+      kept: [variant(3_771_280, 1080)],
+      warnings: [{ key: "WARN_CAP_BELOW_LIGHTEST", params: { lightest_bps: 3_771_280 } }],
+      below_lightest: true,
+    });
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "ru");
+    await waitFor(() => expect(screen.getByTestId("kept")).toHaveTextContent("3,8 Мбит/с"));
+    expect(screen.getByTestId("warnings")).toHaveTextContent("3,8 Мбит/с");
+    expect(screen.getByTestId("warnings")).not.toHaveTextContent("3771280");
+    expect(screen.getByTestId("limit-dialog")).not.toHaveTextContent("Mbit/s");
+  });
+
+  it("opens over the screen, and Escape is Cancel", async () => {
+    const onCancel = vi.fn();
+    renderIn(
+      <LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} onCancel={onCancel} />,
+      "en",
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("with the viewer's film unknown, opens on no film rather than on the first of several", async () => {
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={TWO} />, "ru");
+    expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("");
+    expect(screen.getByTestId("watching-unknown")).toHaveTextContent(ru.ui.limits.watchingUnknown);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockPreview).not.toHaveBeenCalled();
+    expect(screen.getByTestId("confirm")).toBeDisabled();
+  });
+
+  it("moves to the viewer's film by itself once it becomes known", async () => {
+    const view = renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={TWO} />, "en");
+    view.rerender(<LimitDialog serverId="s1" ip="203.0.113.10" media={TWO} initialSlug="film-b" />);
+    await waitFor(() => expect(mockPreview).toHaveBeenCalled());
+    expect(mockPreviewArgs()[0].slug).toBe("film-b");
+  });
+
+  it("offers only films with a set of qualities", async () => {
+    renderIn(
+      <LimitDialog
+        serverId="s1"
+        ip="203.0.113.10"
+        media={[
+          { slug: "single", title: "One file", hasSet: false },
+          { slug: "film-b", title: "Film B", hasSet: true },
+        ]}
+      />,
+      "en",
+    );
+    const options = Array.from(screen.getByRole("combobox").querySelectorAll("option"));
+    expect(options.map((o) => o.textContent)).toEqual(["Film B"]);
+    // The only one there is: chosen without asking.
+    await waitFor(() => expect(mockPreviewArgs()[0]?.slug).toBe("film-b"));
+  });
+
+  it("a serving this computer cannot reach is said plainly, not as a broken serving", async () => {
+    mockSet.mockRejectedValue({
+      code: "DOMAIN_NOT_SERVING",
+      details: [{ key: "LIMITS_NOT_CHECKABLE", params: {} }],
+      cause: "the serving does not answer https://stream.example.com/… from here",
+    });
+    renderIn(<LimitDialog serverId="s1" ip="203.0.113.10" media={MEDIA} />, "ru");
+    await waitFor(() => expect(screen.getByTestId("confirm")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("confirm"));
+    await waitFor(() =>
+      expect(screen.getByText(ru.errors.DOMAIN_NOT_SERVING.message)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(ru.details.LIMITS_ROLLBACK_UNSUCCESSFUL)).not.toBeInTheDocument();
+  });
+
+  it("the list speaks the person's units and the film's own name, and says when changes work", async () => {
+    mockList.mockResolvedValue([
+      { ip: "203.0.113.10", slug: "demo", cap_bps: 6_000_000, set_at: "2026-08-26T10:00:00Z" },
+    ]);
+    renderIn(<LimitsList serverId="s1" />, "ru");
+    await waitFor(() =>
+      expect(screen.getByTestId("limit-203.0.113.10/demo")).toHaveTextContent("6,0 Мбит/с"),
+    );
+    expect(screen.getByTestId("limit-203.0.113.10/demo")).not.toHaveTextContent("2026-08-26T");
+    expect(screen.getByTestId("limits-when")).toHaveTextContent(ru.ui.limits.listHint);
   });
 });

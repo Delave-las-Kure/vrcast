@@ -292,6 +292,15 @@ pub fn to_error(e: LimitError) -> AppError {
         LimitError::RollbackNotStarted(_) => AppError::new(ErrorCode::LimitsRollbackFailed)
             .detail(DetailCode::LimitsRollbackNotStarted)
             .with_cause(e),
+        // T704: two answers that used to come out as "internal error" or as "the serving may
+        // be broken", while the serving was as it had been. Said as what they are: the domain
+        // does not serve (from here), and what that meant for the limits.
+        LimitError::NotCheckable(_) => AppError::new(ErrorCode::DomainNotServing)
+            .detail(DetailCode::LimitsNotCheckable)
+            .with_cause(e),
+        LimitError::ServingStopped => AppError::new(ErrorCode::DomainNotServing)
+            .detail(DetailCode::LimitsRolledBack)
+            .with_cause(e),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }
 }

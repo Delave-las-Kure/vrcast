@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
 import type {
   GeoStatus,
+  LadderSetView,
   ServerProfile,
   Viewer,
   ViewersUpdateEvent,
@@ -100,6 +101,21 @@ const server: ServerProfile = {
   is_active: true,
 };
 
+/** A quality set on the server, as the library reports one (T704: only these can be capped). */
+function aSet(slug: string): LadderSetView {
+  return {
+    path: `${slug}/master.m3u8`,
+    size_bytes: 1,
+    width: 1920,
+    height: 1080,
+    bitrate_bps: 6_000_000,
+    duration_s: 60,
+    exists_on_server: true,
+    origin_url: `https://stream.example.com/videos/${slug}/master.m3u8`,
+    cdn_url: null,
+  };
+}
+
 function viewer(over: Partial<Viewer> = {}): Viewer {
   return {
     ip: "203.0.113.9",
@@ -147,7 +163,7 @@ beforeEach(() => {
         title: "Backrooms",
         slug: "backrooms",
         files: [],
-        ladders: [],
+        ladders: [aSet("backrooms")],
         total_bytes: 0,
         created_at: "",
       },
@@ -374,7 +390,7 @@ describe("the tables of places", () => {
           title: "Film A",
           slug: "film-a",
           files: [],
-          ladders: [],
+          ladders: [aSet("film-a")],
           total_bytes: 0,
           created_at: "",
         },
@@ -383,7 +399,7 @@ describe("the tables of places", () => {
           title: "Film B",
           slug: "film-b",
           files: [],
-          ladders: [],
+          ladders: [aSet("film-b")],
           total_bytes: 0,
           created_at: "",
         },
@@ -412,5 +428,10 @@ describe("the tables of places", () => {
       slug: "film-b",
       cap_bps: 3_000_000,
     });
+    // T704: the screen says the rule is written, and when it takes effect — not "done".
+    expect(await screen.findByTestId("limit-applied")).toHaveTextContent(
+      ru.ui.limits.applied.replace("{ip}", "203.0.113.9"),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

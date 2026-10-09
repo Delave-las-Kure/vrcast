@@ -516,11 +516,15 @@ export const en: Catalogue = {
     WARN_LIMIT_FOLLOWS_THE_ADDRESS: "The limit is put on an address, not on a person.",
     WARN_ADDRESS_SHARED: "{count} viewers are on this address — the limit reaches all of them.",
     WARN_CAP_BELOW_LIGHTEST:
-      "The cap is below the lightest rung ({lightest_bps} bit/s) — the viewer gets that rung.",
+      "The cap is below the lightest rung ({lightest_bps|bitrate}) — the viewer gets that rung.",
     LIMITS_ROLLBACK_UNSUCCESSFUL:
       "Putting the previous limits back failed — the serving may not be working. Check Diagnostics.",
     LIMITS_ROLLBACK_NOT_STARTED:
       "The previous limits were not put back: the end of the previous command was not confirmed. Reload the list in a minute. If the change got as far as replacing the file, the new rules may have stayed.",
+    LIMITS_NOT_CHECKABLE:
+      "The limits were not changed: the serving's address does not answer this computer, so a change could not be checked.",
+    LIMITS_ROLLED_BACK:
+      "The serving stopped answering after the change — the previous limits are back in force.",
     NOTICE_NO_HARDWARE_FOUND:
       "No acceleration — the processor encodes. Quality will not suffer, but it takes several times longer.",
     NOTICE_SOFTWARE_AS_ASKED: "The processor encodes, as you asked.",
@@ -963,8 +967,15 @@ export const en: Catalogue = {
       noLadder: "This medium has no quality set.",
       previewing: "Working out what the viewer would be left with…",
       applying: "Capping…",
+      whenEffective: "Takes effect when the viewer restarts the video.",
+      applied: "Limit for {ip} saved — it takes effect when the viewer restarts the video.",
+      pickPlaceholder: "Choose a film",
+      watchingUnknown: "What this viewer is watching is not known yet.",
+      noSets: "No film on the server has a set of qualities.",
+      variant: "{rate} — {size}",
 
       listTitle: "Limits in force",
+      listHint: "Setting and lifting take effect when the viewer restarts the video.",
       listEmpty: "Nothing is capped.",
       columnWho: "Address",
       columnMedia: "Medium",

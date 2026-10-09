@@ -270,6 +270,8 @@ export type DetailCode =
   // a change of the limits whose previous rules did not come back (T640)
   | "LIMITS_ROLLBACK_UNSUCCESSFUL"
   | "LIMITS_ROLLBACK_NOT_STARTED"
+  | "LIMITS_NOT_CHECKABLE"
+  | "LIMITS_ROLLED_BACK"
   | "NOTICE_NO_HARDWARE_FOUND"
   | "NOTICE_SOFTWARE_AS_ASKED"
   | "NOTICE_HARDWARE_FAILED"

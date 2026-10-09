@@ -57,8 +57,18 @@ function ageLine(
   return fill(words.staleAge, { age }, t, lang);
 }
 
-/** A medium, in the two forms this screen needs it in. */
-type Named = { id: string; slug: string; title: string };
+/** A medium, in the forms this screen needs it in. `hasSet` — it has a set of qualities. */
+type Named = { id: string; slug: string; title: string; hasSet: boolean };
+
+/** The set the viewer at `ip` is watching now, by the current list (T668, T704). */
+function watchingSlug(
+  viewers: Viewer[] | null,
+  ip: string,
+  slugById: Record<string, string>,
+): string | null {
+  const viewer = viewers?.find((v) => v.ip === ip);
+  return viewer?.media_id ? (slugById[viewer.media_id] ?? null) : null;
+}
 
 /**
  * The media of this server, so the list can name what is being watched and the cap dialog
@@ -86,7 +96,14 @@ function useMedia(serverId: string | null): Named[] {
       .libraryList(serverId)
       .then((view: LibraryView) => {
         if (!alive) return;
-        setMedia(view.media.map((m) => ({ id: m.id, slug: m.slug, title: m.title })));
+        setMedia(
+          view.media.map((m) => ({
+            id: m.id,
+            slug: m.slug,
+            title: m.title,
+            hasSet: (m.ladders ?? []).some((l) => l.exists_on_server),
+          })),
+        );
       })
       // A library that will not load is not a reason to hide the viewers: they are still
       // there, and their addresses and speeds are the point. They simply show up under
@@ -132,13 +149,15 @@ export function ViewersScreen() {
   });
   // Bumped by "start again" after the watching has given up: the effect below runs afresh.
   const [restarts, setRestarts] = useState(0);
-  // Whom the person is about to cap, if anybody, and what they are watching. The dialogue is
-  // opened from the row rather than from a screen of its own: capping is something done
-  // **to a viewer you are looking at**, and making somebody go elsewhere and retype an
-  // address would be three actions where SC-006 allows three altogether. The medium goes
-  // with the address (T668, QA-24B-09): the dialog used to open on the first film of the
-  // catalogue, whatever the viewer was watching.
-  const [capping, setCapping] = useState<{ ip: string; slug: string | null } | null>(null);
+  // Whom the person is about to cap, if anybody. The dialogue is opened from the row rather
+  // than from a screen of its own: capping is something done **to a viewer you are looking
+  // at**, and making somebody go elsewhere and retype an address would be three actions
+  // where SC-006 allows three altogether. The medium goes with the address (T668,
+  // QA-24B-09) — and is read from the current list on every render rather than frozen at
+  // the click (T704): a viewer's film is often learnt a little after they appear.
+  const [capping, setCapping] = useState<string | null>(null);
+  // The address a cap was just written for (T704): said once, with when it takes effect.
+  const [capped, setCapped] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
 
   useEffect(() => {
@@ -264,12 +283,10 @@ export function ViewersScreen() {
                 key={viewer.ip}
                 viewer={viewer}
                 mediaTitle={viewer.media_id ? titleById[viewer.media_id] : undefined}
-                onLimit={() =>
-                  setCapping({
-                    ip: viewer.ip,
-                    slug: viewer.media_id ? (slugById[viewer.media_id] ?? null) : null,
-                  })
-                }
+                onLimit={() => {
+                  setCapped(null);
+                  setCapping(viewer.ip);
+                }}
                 limitLabel={t.ui.limits.title}
               />
             ))}
@@ -277,14 +294,32 @@ export function ViewersScreen() {
         </table>
       )}
 
+      {capped && (
+        <div className="notice notice--ok" role="status" data-testid="limit-applied">
+          <div className="notice__body">
+            <p className="notice__message">{fill(t.ui.limits.applied, { ip: capped }, t, lang)}</p>
+          </div>
+          <button
+            className="notice__close"
+            onClick={() => setCapped(null)}
+            aria-label={t.ui.common.dismiss}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {capping && serverId && (
         <LimitDialog
-          key={`${capping.ip}/${capping.slug ?? ""}`}
+          key={capping}
           serverId={serverId}
-          ip={capping.ip}
-          initialSlug={capping.slug}
+          ip={capping}
+          initialSlug={watchingSlug(viewers, capping, slugById)}
           media={media}
-          onDone={() => setCapping(null)}
+          onDone={() => {
+            setCapped(capping);
+            setCapping(null);
+          }}
           onCancel={() => setCapping(null)}
         />
       )}
