@@ -20,8 +20,10 @@
 # becomes both the release body and the text the update screen shows under "what is in it". One
 # place, written by the person who knows what changed.
 #
-# The runners and the container are the same as in `build.yml`, and for the same reasons: these
-# are real machines, and jobs do not install things on them.
+# **Runs on GitHub's own machines** (owner's decision 2026-10-09). The repository is public, so
+# these minutes cost nothing, and nothing has to stay switched on at home for a release to come
+# out. The Linux installers are still made inside `rust:bookworm` — the image the self-hosted
+# check container was built from — so what was known to bundle keeps bundling.
 
 name: release
 
@@ -41,9 +43,7 @@ jobs:
   preflight:
     name: Before anything is built
     timeout-minutes: 15
-    runs-on: [self-hosted, vrcast-linux]
-    container:
-      image: localhost:5000/vrcast-linux-check:3
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,14 +119,30 @@ jobs:
         include:
           # A string rather than an `image:` field, for the reason spelled out in build.yml: an
           # empty `image` is rejected and takes the whole run with it.
-          - os: vrcast-win
+          # The build goes to C: on Windows: the workspace drive of a hosted Windows machine is
+          # the small one, and a release build plus the key check's test build fill it.
+          - os: windows
+            runner: windows-latest
             container: ""
-          - os: vrcast-linux
-            container: localhost:5000/vrcast-linux-check:3
-    runs-on: [self-hosted, '${{ matrix.os }}']
+            target: C:/_cargo-target
+          - os: linux
+            runner: ubuntu-22.04
+            container: rust:bookworm
+            target: /__w/_cargo-target
+    runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
+    env:
+      CARGO_TARGET_DIR: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
+
+      # What `scripts/linux-check/Dockerfile` puts in the self-hosted check image, minus what only
+      # the tests need; `file` and `xdg-utils` for the AppImage bundler.
+      - name: Linux libraries the bundle links against
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf pkg-config             file xdg-utils git python3 curl unzip xz-utils
 
       - name: The Rust toolchain is here
         shell: bash
@@ -185,7 +201,9 @@ jobs:
           # The key is read from the environment, never from the command line: an argument
           # lands in the run's log, and a signing key in a log is a signing key given away.
           npx --no-install tauri signer sign "$scratch/payload.bin"
-          VRCAST_RELEASE_SIG="$(cat "$scratch/payload.bin.sig")" \
+          # No debug info for this one test build: it only has to run, and the hosted machine's
+          # disk is not the self-hosted one's.
+          CARGO_PROFILE_DEV_DEBUG=0 VRCAST_RELEASE_SIG="$(cat "$scratch/payload.bin.sig")" \
             cargo test --manifest-path src-tauri/Cargo.toml --test unit -- \
             --ignored --exact \
             forged_update::the_shipped_key_verifies_what_the_signing_key_signed
@@ -237,13 +255,16 @@ jobs:
     name: The release itself
     timeout-minutes: 30
     needs: bundle
-    runs-on: [self-hosted, vrcast-linux]
-    container:
-      image: localhost:5000/vrcast-linux-check:3
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # A tag push can leave the triggering tag checked out as a lightweight one, and the notes
+      # are read from the annotated tag's message.
+      - name: The tags as they are on the server
+        run: git fetch --force --tags origin
 
       - uses: actions/download-artifact@v4
         with:
@@ -251,7 +272,7 @@ jobs:
           merge-multiple: true
 
       - name: Assemble the file installed copies read
-        # `sh` в задании-контейнере не знает `pipefail` — оболочка названа явно.
+        # Оболочка названа явно: `pipefail` нужен.
         shell: bash
         run: |
           set -euo pipefail
@@ -270,7 +291,7 @@ jobs:
           cat latest.json
 
       - name: Publish, with everything owed alongside
-        # `sh` в задании-контейнере не знает `pipefail` — оболочка названа явно.
+        # Оболочка названа явно: `pipefail` нужен.
         shell: bash
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
