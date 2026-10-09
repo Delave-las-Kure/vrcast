@@ -45,9 +45,17 @@ export function formatBytes(bytes: number | null | undefined, lang: Lang): strin
   return `${decimal(value, lang)} ${units[unit]}`;
 }
 
-/** Duration: 3725 → «1:02:05». Under an hour, no leading hours. Language-neutral. */
+/**
+ * Duration: 3725 → «1:02:05». Under an hour, no leading hours. Language-neutral.
+ *
+ * **Zero is a time, not a gap** (T718): «0:00» — a viewer who has just come in, a window at
+ * the very start of the film. Only what is not known (`null`, `undefined`, not a number, a
+ * negative left by clocks that disagree) is the dash.
+ */
 export function formatDuration(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined || seconds <= 0) return NOTHING;
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) {
+    return NOTHING;
+  }
 
   const total = Math.round(seconds);
   const h = Math.floor(total / 3600);

@@ -38,11 +38,11 @@ function Where({ window: w }: { window: BitrateWindow | null }) {
 }
 
 /**
- * A point in the film. The very start is «0:00», a moment like any other — `formatDuration`
- * shows nothing for zero, and the heaviest window starting there read «— — 7,0 Мбит/с» (T706).
+ * A point in the film. The very start is «0:00», a moment like any other (T706; since T718
+ * `formatDuration` says so itself). Never before the start.
  */
 function moment(seconds: number): string {
-  return seconds <= 0 ? "0:00" : formatDuration(seconds);
+  return formatDuration(Math.max(0, seconds));
 }
 
 /** What `diagExplainStalls` is told about a measured file, and which film it is (T705). */

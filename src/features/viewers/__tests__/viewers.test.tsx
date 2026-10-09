@@ -211,6 +211,19 @@ describe("the viewers screen", () => {
     expect(screen.getByText(ru.ui.viewers.watchingUnknown)).toBeInTheDocument();
   });
 
+  it("shows a viewer who has just come in as watching for «0:00», not as unknown (T718)", async () => {
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+
+    send?.(
+      update([
+        viewer({ started_at: "2026-08-26T10:00:00Z", last_seen_at: "2026-08-26T10:00:00Z" }),
+      ]),
+    );
+
+    await waitFor(() => expect(screen.getByText("0:00")).toBeInTheDocument());
+  });
+
   it("says «в порядке» only when both speeds are known, and «данных пока нет» otherwise (T705)", async () => {
     // QA-26 №12: a viewer whose speed, need and film were all unknown was shown as fine.
     renderIn(<ViewersScreen />, "ru");

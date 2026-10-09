@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { ru } from "../ru";
 import { en } from "../en";
 import { fill, renderDetail, renderError } from "../render";
-import { formatBytes, plural } from "../format";
+import { formatBytes, formatDuration, plural } from "../format";
 import type { Catalogue, Lang } from "../catalogue";
 
 const CATALOGUES: Array<[Lang, Catalogue]> = [
@@ -74,6 +74,17 @@ describe("catalogues", () => {
   it("writes sizes in the units and separator of each language", () => {
     expect(formatBytes(4096, "ru")).toBe("4,0 КБ");
     expect(formatBytes(4096, "en")).toBe("4.0 KB");
+  });
+
+  it("writes zero seconds as a time and only what is not known as the dash (T718)", () => {
+    expect(formatDuration(0)).toBe("0:00");
+    expect(formatDuration(0.4)).toBe("0:00");
+    expect(formatDuration(65)).toBe("1:05");
+    expect(formatDuration(3725)).toBe("1:02:05");
+    expect(formatDuration(null)).toBe("—");
+    expect(formatDuration(undefined)).toBe("—");
+    expect(formatDuration(Number.NaN)).toBe("—");
+    expect(formatDuration(-3)).toBe("—");
   });
 });
 
