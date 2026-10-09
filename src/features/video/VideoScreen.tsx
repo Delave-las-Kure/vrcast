@@ -25,6 +25,7 @@ import { useT } from "../../shared/i18n";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
 import { basename } from "../shared/names";
+import { SendSpeed } from "./SendSpeed";
 import { VideoCard } from "./VideoCard";
 import {
   VIDEO_EXTENSIONS,
@@ -206,6 +207,7 @@ export function VideoScreen() {
           >
             {w.startAll}
           </button>
+          <SendSpeed />
         </div>
       </div>
 

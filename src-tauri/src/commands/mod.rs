@@ -203,6 +203,11 @@ impl AppState {
             network: settings.concurrent_heavy_tasks as usize,
             light: LaneLimits::default().light,
         });
+        // T701 — the sending cap the person chose, kept across a restart. Only a chosen one:
+        // the cap is one for the process, and «none» is where it starts.
+        if settings.send_limit_bps.is_some() {
+            crate::domain::rate_limit::SENDING.set(settings.send_limit_bps);
+        }
 
         // The order matters. First the programs that survived the previous run are
         // finished off, and only then are the tasks sorted out: otherwise a task would be

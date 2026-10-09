@@ -1647,6 +1647,13 @@ button.danger:disabled {
   margin: 4px 0 0;
 }
 
+/* T701 — the sending speed, beside «Start all». */
+.video__send-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .video__actions {
   display: flex;
   gap: 8px;

@@ -1490,6 +1490,9 @@ export interface Settings {
    *  source": the disk a film is on certainly fits a film, which no other default can
    *  promise. */
   work_dir: string | null;
+  /** T701 — the cap on sending a video's rungs, **bytes** per second; null — no cap. Chosen on
+   *  the «Video» screen and applied to a send already on its way. Absent from an older core. */
+  send_limit_bps?: number | null;
 }
 
 export const EVENTS = {

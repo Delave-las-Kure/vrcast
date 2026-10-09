@@ -974,6 +974,10 @@ async fn send_file_then(
 /// that a 20 GB rung costs the machine what a small image does.
 pub const SEND_BLOCK: usize = 1024 * 1024;
 
+/// How long one step of waiting under the sending cap lasts (T701): a cancel is looked at
+/// between steps.
+const CAP_WAIT_STEP: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// Why a variant's sending stopped (T660).
 #[derive(Debug, thiserror::Error)]
 pub enum StreamError {
@@ -1065,6 +1069,19 @@ where
         let n = from.read(&mut block).await.map_err(StreamError::Read)?;
         if n == 0 {
             return Ok(sent);
+        }
+        // T701 — the cap the person chose on the «Video» screen, asked before every block so
+        // that a change reaches this send at once. Waited in short steps: a cancel during a
+        // long wait under a low cap is not kept waiting for it.
+        let mut wait =
+            crate::domain::rate_limit::SENDING.delay_for(n as u64, std::time::Instant::now());
+        while !wait.is_zero() {
+            if ctx.is_cancelled() {
+                return Err(StreamError::Cancelled);
+            }
+            let step = wait.min(CAP_WAIT_STEP);
+            tokio::time::sleep(step).await;
+            wait -= step;
         }
         into.write_all(&block[..n])
             .await

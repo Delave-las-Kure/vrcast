@@ -102,6 +102,9 @@ fn what_is_set_is_what_comes_back() {
         close_to_tray: false,
         tray_notice_seen: true,
         work_dir: Some(String::from("E:/scratch")),
+        // T701 — a cap so high it holds nothing back: the setting is one for the process, and
+        // this binary's other tests send through it.
+        send_limit_bps: Some(125_000_000_000),
     };
 
     let saved = settings_api::settings_set(&state, &wanted).expect("the settings would not save");
@@ -123,6 +126,7 @@ fn a_value_out_of_its_range_is_brought_back_into_it_rather_than_refused() {
         &Settings {
             viewer_activity_threshold_s: 0,
             concurrent_heavy_tasks: 999,
+            send_limit_bps: Some(0),
             ..Settings::default()
         },
     )
@@ -130,6 +134,8 @@ fn a_value_out_of_its_range_is_brought_back_into_it_rather_than_refused() {
 
     assert_eq!(saved.viewer_activity_threshold_s, MIN_THRESHOLD_S);
     assert_eq!(saved.concurrent_heavy_tasks, MAX_HEAVY_TASKS);
+    // T701 — a cap of zero would never send: it is no cap.
+    assert_eq!(saved.send_limit_bps, None);
 
     let saved = settings_api::settings_set(
         &state,

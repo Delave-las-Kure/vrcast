@@ -446,3 +446,38 @@ fn the_serving_s_housekeeping_names_cannot_be_taken() {
         NameVerdict::Empty
     );
 }
+
+/// T701 — the one cap on sending a video's rungs: shared, changed while a send is on its way,
+/// and «none» or zero holding nothing back. On its own instance: the application's one
+/// (`SENDING`) is the process's, and the other tests here send through it.
+#[test]
+fn the_sending_cap_is_one_for_all_and_changes_at_once() {
+    use vrcast_studio_lib::domain::rate_limit::SharedLimit;
+    let cap = SharedLimit::default();
+    let t0 = Instant::now();
+    assert_eq!(cap.limit_bps(), None);
+    assert_eq!(cap.delay_for(10_000_000, t0), Duration::ZERO);
+
+    // 1000 bytes a second: a second's allowance, then waiting.
+    cap.set(Some(1000));
+    assert_eq!(cap.limit_bps(), Some(1000));
+    assert_eq!(cap.delay_for(1000, t0), Duration::ZERO);
+    // A second sender shares it: no fresh allowance of its own.
+    assert_eq!(cap.delay_for(1000, t0), Duration::from_secs(1));
+
+    // The same cap set again keeps what was earned and owed.
+    cap.set(Some(1000));
+    assert_eq!(cap.delay_for(1000, t0), Duration::from_secs(1));
+
+    // A change holds from the next block.
+    cap.set(Some(4000));
+    assert_eq!(cap.limit_bps(), Some(4000));
+    assert_eq!(cap.delay_for(4000, t0), Duration::ZERO);
+    assert_eq!(cap.delay_for(2000, t0), Duration::from_millis(500));
+
+    for none in [None, Some(0)] {
+        cap.set(none);
+        assert_eq!(cap.limit_bps(), None);
+        assert_eq!(cap.delay_for(10_000_000, t0), Duration::ZERO);
+    }
+}

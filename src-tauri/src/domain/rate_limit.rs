@@ -89,3 +89,53 @@ impl RateLimiter {
         self.last = None;
     }
 }
+
+/// T701 — one cap on what the «Video» screen sends, shared by every rung being sent and
+/// changed while they are being sent.
+///
+/// The person picks it on the «Video» screen («no limit» / N Mbit/s) to leave the channel to
+/// friends watching, rather than pausing the preparation outright. **One for all**: two rungs
+/// sent at once share the cap, so «5 Mbit/s» is what leaves the computer, not five per rung.
+/// **At once**: a send asks for the current cap before every block, so a change reaches the
+/// rung already on its way, not only the next one.
+#[derive(Debug, Default)]
+pub struct SharedLimit {
+    inner: std::sync::Mutex<Option<RateLimiter>>,
+}
+
+impl SharedLimit {
+    /// Change the cap (`None` or zero — no cap). The allowance earned under the old one goes:
+    /// a lowered cap holds from the next block, not after the old allowance is spent.
+    pub fn set(&self, limit_bps: Option<u64>) {
+        let limiter = RateLimiter::new(limit_bps);
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if inner.as_ref().and_then(RateLimiter::limit_bps) != limiter.limit_bps() {
+            *inner = limiter.limit_bps().map(|_| limiter);
+        }
+    }
+
+    pub fn limit_bps(&self) -> Option<u64> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .and_then(RateLimiter::limit_bps)
+    }
+
+    /// How long to wait before sending `bytes` bytes, under whatever the cap is now.
+    pub fn delay_for(&self, bytes: u64, now: Instant) -> Duration {
+        match self
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_mut()
+        {
+            Some(limiter) => limiter.delay_for(bytes, now),
+            None => Duration::ZERO,
+        }
+    }
+}
+
+/// The cap on sending a video's rungs (T701): set from the settings when the application
+/// starts and on every `settings_set`; asked by `tasks::ladder_build` before every block.
+pub static SENDING: std::sync::LazyLock<SharedLimit> = std::sync::LazyLock::new(Default::default);
