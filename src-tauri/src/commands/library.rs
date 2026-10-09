@@ -63,6 +63,10 @@ pub struct LadderSetView {
     pub exists_on_server: bool,
     pub origin_url: String,
     pub cdn_url: Option<String>,
+    /// T694 — a link per quality, the heaviest first, from what the set's master names.
+    /// Empty when the master could not be read (and in a cache written before T694).
+    #[serde(default)]
+    pub qualities: Vec<crate::domain::links::QualityLink>,
 }
 
 /// A medium with all of its files.
@@ -301,12 +305,23 @@ async fn ladder_view(
     exists_on_server: bool,
 ) -> LadderSetView {
     let links = crate::domain::links::for_path(&profile.domain, profile.cdn_base.as_deref(), path);
+    let slug = path.split('/').next().unwrap_or(path);
     let top = if exists_on_server {
-        let slug = path.split('/').next().unwrap_or(path);
         crate::server::ladder_probe::top_rung(conn, &profile.video_dir, slug).await
     } else {
         None
     };
+    let qualities = top
+        .as_ref()
+        .map(|t| {
+            crate::domain::links::qualities_of(
+                &profile.domain,
+                profile.cdn_base.as_deref(),
+                slug,
+                &t.variants,
+            )
+        })
+        .unwrap_or_default();
     LadderSetView {
         path: path.to_owned(),
         size_bytes,
@@ -317,6 +332,7 @@ async fn ladder_view(
         exists_on_server,
         origin_url: links.origin,
         cdn_url: links.cdn,
+        qualities,
     }
 }
 

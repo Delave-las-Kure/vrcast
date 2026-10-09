@@ -212,7 +212,7 @@ describe("the library", () => {
 
     // Opened, the set being rebuilt is not «not on the server», and no second set is offered.
     fireEvent.click(screen.getByText("Название фильма"));
-    expect(await screen.findByText("nazvanie-filma/master.m3u8")).toBeInTheDocument();
+    expect(await screen.findByTestId("ladder-set")).toBeInTheDocument();
     expect(screen.queryByText(ru.ui.library.missingWarning)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Остановленный/ }));
     expect(screen.queryAllByRole("link", { name: ru.ui.library.buildSet })).toHaveLength(0);
@@ -352,18 +352,74 @@ describe("a medium's built quality sets (T529)", () => {
     expect(screen.queryByTestId("set-files-m1")).toBeNull();
   });
 
-  it("shows every parameter known about a set, and offers to copy its link", async () => {
-    mockLibraryList.mockResolvedValue(view({ media: [media({ ladders: [ladderSet()] })] }));
+  it("offers «Auto» and a link per quality, each copied, and says what friends must do (T694)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    mockLibraryList.mockResolvedValue(
+      view({
+        media: [
+          media({
+            ladders: [
+              ladderSet({
+                cdn_url: "https://cdn.example.net/videos/nazvanie-filma/master.m3u8",
+                qualities: [
+                  {
+                    width: 1920,
+                    height: 1080,
+                    bitrate_bps: 9_000_000,
+                    origin: "https://stream.example.com/videos/nazvanie-filma/v9/stream.m3u8",
+                    cdn: "https://cdn.example.net/videos/nazvanie-filma/v9/stream.m3u8",
+                  },
+                  {
+                    width: 1280,
+                    height: 720,
+                    bitrate_bps: 3_000_000,
+                    origin: "https://stream.example.com/videos/nazvanie-filma/v3/stream.m3u8",
+                    cdn: null,
+                  },
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
     draw();
     fireEvent.click(await screen.findByText("Название фильма"));
 
     const list = await screen.findByTestId("ladder-sets-m1");
-    expect(list).toHaveTextContent("nazvanie-filma/master.m3u8");
-    expect(list).toHaveTextContent("1920×1080");
+    // No description file, no address on view: the length, the room, the links.
+    expect(list).not.toHaveTextContent("master.m3u8");
     expect(list).toHaveTextContent("1:02:05");
-    expect(list).toHaveTextContent("5,0 Мбит/с");
-    expect(list.querySelector(`.copy-link`)).toBeTruthy();
-    expect(within(list).getByText(ru.ui.library.linkCopy)).toBeInTheDocument();
+    const rows = within(list).getAllByTestId("set-link");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining(ru.ui.video.linkAuto),
+      expect.stringContaining("1080p · 9 Мбит/с"),
+      expect.stringContaining("720p · 3 Мбит/с"),
+    ]);
+    fireEvent.click(within(rows[0]).getByRole("button", { name: ru.ui.video.copy }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenLastCalledWith(
+        "https://stream.example.com/videos/nazvanie-filma/master.m3u8",
+      ),
+    );
+    fireEvent.click(within(rows[2]).getByRole("button", { name: ru.ui.video.copy }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenLastCalledWith(
+        "https://stream.example.com/videos/nazvanie-filma/v3/stream.m3u8",
+      ),
+    );
+    fireEvent.click(within(rows[1]).getByRole("button", { name: ru.ui.video.linkViaCdn }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenLastCalledWith(
+        "https://cdn.example.net/videos/nazvanie-filma/v9/stream.m3u8",
+      ),
+    );
+    expect(list).toHaveTextContent(ru.ui.video.cdnBlind);
+    const help = within(list).getByText(ru.ui.video.friendsHow).closest("details");
+    expect(help).not.toBeNull();
+    expect(help!.open).toBe(false);
+    expect(help).toHaveTextContent("Allow Untrusted URLs");
   });
 
   it("does not show a placeholder where a set's parameters are unknown", async () => {
@@ -386,8 +442,9 @@ describe("a medium's built quality sets (T529)", () => {
     const list = await screen.findByTestId("ladder-sets-m1");
     expect(list).not.toHaveTextContent("×");
     expect(list).not.toHaveTextContent("Мбит/с");
-    // The link is still offered: an unmeasured set is still a real, servable file.
-    expect(within(list).getByText(ru.ui.library.linkCopy)).toBeInTheDocument();
+    // The link is still offered: an unmeasured set is still a real, servable one.
+    expect(within(list).getByText(ru.ui.video.linkAuto)).toBeInTheDocument();
+    expect(within(list).getByRole("button", { name: ru.ui.video.copy })).toBeInTheDocument();
   });
 
   it("marks a set missing on the server the same way a file is marked", async () => {

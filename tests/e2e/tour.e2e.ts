@@ -1588,10 +1588,14 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       const { id1 } = tour;
       if ((await card(id1))?.state === "done") {
         await snap("done", "Первое видео — «Готово», ссылка");
-        await step("copied", "«Копировать»", async () => {
-          await press("Копировать", inCard(id1));
-          await s().findX(`${inCard(id1)}//span[@role='status']`, 5_000);
-        });
+        await step(
+          "copied",
+          "«Копировать» у ссылки «Авто» (T694: «Авто» и по ссылке на каждое качество)",
+          async () => {
+            await press("Копировать", inCard(id1));
+            await s().findX(`${inCard(id1)}//*[@role='status']`, 5_000);
+          },
+        );
       } else {
         note(
           `первое видео не дошло до «Готово»: ${JSON.stringify(await card(id1))?.slice(0, 300)}`,

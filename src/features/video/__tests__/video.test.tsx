@@ -184,6 +184,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     media_id: null,
     problem: null,
     link: null,
+    quality_links: [],
     created_at: "2026-10-01T10:00:00Z",
     updated_at: "2026-10-01T10:00:00Z",
     rev: 1,
@@ -312,7 +313,9 @@ describe("the list", () => {
     ).toHaveAttribute("data-mark", "current");
 
     const c = await card("c");
-    expect(c.getByText("https://stream.example.com/c/master.m3u8")).toBeInTheDocument();
+    // T694 — the links, not an address on view: «Auto» first, with its «Copy».
+    expect(c.getAllByTestId("set-link")[0]).toHaveTextContent(ru.ui.video.linkAuto);
+    expect(c.queryByText("https://stream.example.com/c/master.m3u8")).toBeNull();
     expect(mockVideoList).toHaveBeenCalledTimes(1);
   });
 
@@ -796,6 +799,22 @@ describe("the stages after Start", () => {
         state: "done",
         media_id: "m1",
         link: { origin: "https://s/x/master.m3u8", cdn: null },
+        quality_links: [
+          {
+            width: 1920,
+            height: 1080,
+            bitrate_bps: 8_000_000,
+            origin: "https://s/x/v8/stream.m3u8",
+            cdn: null,
+          },
+          {
+            width: 1280,
+            height: 720,
+            bitrate_bps: 4_000_000,
+            origin: "https://s/x/v4/stream.m3u8",
+            cdn: null,
+          },
+        ],
       }),
     ]);
     show();
@@ -803,9 +822,19 @@ describe("the stages after Start", () => {
     expect(
       within(c.getByRole("list", { name: ru.ui.video.stagesLabel })).getByText(/Готово/),
     ).toHaveAttribute("data-mark", "passed");
-    fireEvent.click(c.getByRole("button", { name: ru.ui.video.copy }));
+    // T694 — «Auto» and one per quality, each with «Copy»; the same as in the library.
+    const rows = c.getAllByTestId("set-link");
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toHaveTextContent("1080p · 8 Мбит/с");
+    expect(rows[2]).toHaveTextContent("720p · 4 Мбит/с");
+    fireEvent.click(within(rows[0]).getByRole("button", { name: ru.ui.video.copy }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://s/x/master.m3u8"));
     expect(await c.findByText(ru.ui.video.copied)).toBeInTheDocument();
+    fireEvent.click(within(rows[2]).getByRole("button", { name: ru.ui.video.copy }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("https://s/x/v4/stream.m3u8"));
+    // No CDN, no word about one; the note for friends is there, folded.
+    expect(c.queryByText(ru.ui.video.cdnBlind)).toBeNull();
+    expect(c.getByText(ru.ui.video.friendsHow).closest("details")!.open).toBe(false);
   });
 });
 

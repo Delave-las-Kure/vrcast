@@ -28,6 +28,59 @@ impl Links {
     }
 }
 
+/// T694 (the owner's decision of 2026-10-09) — a link to one quality of a set, held steady:
+/// the rung's own HLS playlist (`{slug}/v9/stream.m3u8`). For when everybody's connection is
+/// slow and a steady low bitrate serves better than the player's own choosing. Nothing new
+/// is made on the server for it: the playlist is the one the set's master already names.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QualityLink {
+    pub width: u32,
+    pub height: u32,
+    /// The rung's own bitrate, as its plan and its directory name it (`v9` → 9 Mbit/s).
+    pub bitrate_bps: u64,
+    pub origin: String,
+    pub cdn: Option<String>,
+}
+
+/// The whole megabits a rung's playlist path names (`v9/stream.m3u8` → 9), if it does.
+pub fn mbit_of_playlist(path: &str) -> Option<u64> {
+    let sub = path.split('/').next()?;
+    let n = sub.strip_prefix('v')?;
+    if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    n.parse().ok()
+}
+
+/// A link per quality of the set `slug`, from what its master names (T694), the heaviest
+/// first. A path the master writes absolute or as a full address is not a rung of this set
+/// served beside its master, and is left out rather than linked wrongly.
+pub fn qualities_of(
+    domain: &str,
+    cdn_base: Option<&str>,
+    slug: &str,
+    variants: &[super::hls_master::Variant],
+) -> Vec<QualityLink> {
+    let mut out: Vec<QualityLink> = variants
+        .iter()
+        .filter(|v| !v.path.starts_with('/') && !v.path.contains("://"))
+        .map(|v| {
+            let links = for_path(domain, cdn_base, &format!("{slug}/{}", v.path));
+            QualityLink {
+                width: v.width,
+                height: v.height,
+                bitrate_bps: mbit_of_playlist(&v.path)
+                    .map(|m| m * 1_000_000)
+                    .unwrap_or(v.average_bandwidth),
+                origin: links.origin,
+                cdn: links.cdn,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.bitrate_bps.cmp(&a.bitrate_bps));
+    out
+}
+
 /// Build the links for a served file.
 ///
 /// `rel_path` is relative to the video directory: `Backrooms_22.mp4` or

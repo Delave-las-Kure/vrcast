@@ -68,6 +68,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     media_id: "m",
     problem: null,
     link: null,
+    quality_links: [],
     created_at: "2026-10-02T01:00:00.000000000Z",
     updated_at: "2026-10-02T01:00:00.000000001Z",
     rev: 10,

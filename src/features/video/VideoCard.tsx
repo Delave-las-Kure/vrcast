@@ -6,15 +6,9 @@
  * Short labels only (T674): whatever needs explaining lives in the error's «Details».
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-import type {
-  AppError,
-  Links,
-  VideoPlan,
-  VideoProblemAction,
-  VideoView,
-} from "../../shared/contract";
+import type { AppError, VideoPlan, VideoProblemAction, VideoView } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
 import { formatDuration } from "../../shared/i18n/format";
@@ -37,6 +31,7 @@ import {
   showsPlan,
   trackLabel,
 } from "./rules";
+import { SetLinks } from "./SetLinks";
 import { VideoRungs } from "./VideoRungs";
 
 export function VideoCard({
@@ -210,7 +205,9 @@ export function VideoCard({
 
       {!planShown && <StageBar video={video} t={t} lang={lang} />}
 
-      {video.state === "done" && video.link && <LinkCopy link={video.link} />}
+      {video.state === "done" && video.link && (
+        <SetLinks auto={video.link} qualities={video.quality_links ?? []} />
+      )}
 
       {video.state === "problem" && video.problem && (
         <div className="video__problem" role="alert">
@@ -485,48 +482,6 @@ function StageBar({ video, t, lang }: { video: VideoView; t: Catalogue; lang: La
           ))}
         </p>
       )}
-    </div>
-  );
-}
-
-/** The link to the finished set, and a button that copies it. */
-function LinkCopy({ link }: { link: Links }) {
-  const t = useT();
-  const w = t.ui.video;
-  const [said, setSaid] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-
-  const copy = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setSaid(w.copied);
-    } catch {
-      setSaid(w.copyFailed);
-    }
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setSaid(null), 2000);
-  };
-
-  return (
-    <div className="video__link">
-      <a href={link.origin} target="_blank" rel="noreferrer">
-        {link.origin}
-      </a>
-      <button type="button" onClick={() => void copy(link.origin)}>
-        {w.copy}
-      </button>
-      {link.cdn && (
-        <button type="button" onClick={() => void copy(link.cdn!)}>
-          {w.copyCdn}
-        </button>
-      )}
-      {said && <span role="status">{said}</span>}
     </div>
   );
 }

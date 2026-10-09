@@ -165,6 +165,8 @@ pub struct VideoView {
     pub problem: Option<VideoProblem>,
     /// The link to the set — once it is served (`done`).
     pub link: Option<Links>,
+    /// T694 — a link per quality of the set, the heaviest first; empty until `done`.
+    pub quality_links: Vec<crate::domain::links::QualityLink>,
     pub created_at: String,
     pub updated_at: String,
     /// The version of this view (T687): higher is newer, for every change — the progress
@@ -799,6 +801,45 @@ fn link_of(state: &AppState, row: &VideoRow) -> Option<Links> {
     ))
 }
 
+/// T694 — a link per quality of the finished set, the heaviest first: each rung's own
+/// playlist (`{slug}/v9/stream.m3u8`), named the way the build names its directory. Empty
+/// until the video is done.
+fn quality_links_of(state: &AppState, row: &VideoRow) -> Vec<crate::domain::links::QualityLink> {
+    if row.stage != VideoStage::Done {
+        return Vec::new();
+    }
+    let Some(profile) = crate::store::profiles::get(&state.db, &row.server_id)
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    let Some(rungs) = custom_rungs(row).or_else(|| basis_of(row).map(|b| b.rungs)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<crate::domain::links::QualityLink> = rungs
+        .iter()
+        .map(|rung| {
+            let sub = crate::domain::ladder_build::sub_name(rung);
+            let links = crate::domain::links::for_path(
+                &profile.domain,
+                profile.cdn_base.as_deref(),
+                &format!("{}/{sub}/stream.m3u8", row.slug),
+            );
+            crate::domain::links::QualityLink {
+                width: rung.width,
+                height: rung.height,
+                bitrate_bps: (rung.bitrate_bps / 1_000_000).max(1) * 1_000_000,
+                origin: links.origin,
+                cdn: links.cdn,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.bitrate_bps.cmp(&a.bitrate_bps));
+    out.dedup_by(|a, b| a.origin == b.origin);
+    out
+}
+
 /// A view of a video at a version taken now — after the row was read. Fine where nothing
 /// else can be changing the video meanwhile (it was just written under the rows lock, and
 /// its event follows with a higher one); a reader racing the watcher takes its version
@@ -848,6 +889,7 @@ fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         link: link_of(state, row),
+        quality_links: quality_links_of(state, row),
         created_at: row.created_at.clone(),
         updated_at: row.updated_at.clone(),
         rev,

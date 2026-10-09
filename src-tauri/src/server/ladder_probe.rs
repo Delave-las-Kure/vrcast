@@ -25,6 +25,8 @@ pub struct TopRung {
     pub bitrate_bps: u64,
     /// `None` when there is no `.facts` file to read it from.
     pub duration_s: Option<f64>,
+    /// Every rung the master names (T694): what a link per quality is made from.
+    pub variants: Vec<Variant>,
 }
 
 /// Read the master playlist and the heaviest rung's own facts.
@@ -58,6 +60,7 @@ pub async fn top_rung(conn: &Connection, video_dir: &str, slug: &str) -> Option<
         // question with the same word.
         bitrate_bps: top.average_bandwidth,
         duration_s,
+        variants: variants.clone(),
     })
 }
 

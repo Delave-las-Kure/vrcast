@@ -638,3 +638,45 @@ fn a_rung_named_around_a_medium_s_file_is_suggested_with_its_work() {
     );
     assert_eq!(s.singles, vec!["film_9x.mp4"]);
 }
+
+/// T694 — a link per quality of a set: the rung's own playlist beside its master, labelled
+/// by the rung's own bitrate (`v9` → 9 Mbit/s), the heaviest first, through the CDN too when
+/// there is one. A path the master writes absolute is not this set's and is left out.
+#[test]
+fn a_set_gives_a_link_per_quality() {
+    use vrcast_studio_lib::domain::hls_master::Variant;
+    use vrcast_studio_lib::domain::links::{mbit_of_playlist, qualities_of};
+    let variant = |path: &str, height: u32, average: u64| Variant {
+        path: path.to_owned(),
+        bandwidth: average * 2,
+        average_bandwidth: average,
+        width: height * 16 / 9,
+        height,
+        fps: Some(24.0),
+        codecs: String::from("avc1.640028,mp4a.40.2"),
+    };
+    let links = qualities_of(
+        "stream.example.com",
+        Some("https://cdn.example.net/"),
+        "фильм",
+        &[
+            variant("v3/stream.m3u8", 720, 3_100_000),
+            variant("v9/stream.m3u8", 1080, 9_400_000),
+            variant("/videos/other/v5/stream.m3u8", 720, 5_000_000),
+        ],
+    );
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].bitrate_bps, 9_000_000);
+    assert_eq!(links[0].height, 1080);
+    assert_eq!(
+        links[0].origin,
+        "https://stream.example.com/videos/%D1%84%D0%B8%D0%BB%D1%8C%D0%BC/v9/stream.m3u8"
+    );
+    assert_eq!(
+        links[0].cdn.as_deref(),
+        Some("https://cdn.example.net/videos/%D1%84%D0%B8%D0%BB%D1%8C%D0%BC/v9/stream.m3u8")
+    );
+    assert_eq!(links[1].bitrate_bps, 3_000_000);
+    assert_eq!(mbit_of_playlist("v12/stream.m3u8"), Some(12));
+    assert_eq!(mbit_of_playlist("hd/stream.m3u8"), None);
+}

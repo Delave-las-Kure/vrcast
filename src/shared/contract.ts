@@ -534,6 +534,23 @@ export interface LadderSetView {
   exists_on_server: boolean;
   origin_url: string;
   cdn_url: string | null;
+  /** T694 — a link per quality, the heaviest first, from what the set's master names. Empty
+   *  when the master could not be read; absent from a cache written before T694. */
+  qualities?: QualityLink[];
+}
+
+/**
+ * T694 (the owner's decision of 2026-10-09) — a link to one quality of a set, held steady:
+ * the rung's own HLS playlist (`{slug}/v9/stream.m3u8`), for when a steady low bitrate serves
+ * everybody better than the player's own choosing.
+ */
+export interface QualityLink {
+  width: number;
+  height: number;
+  /** The rung's own bitrate (`v9` → 9 Mbit/s). */
+  bitrate_bps: number;
+  origin: string;
+  cdn: string | null;
 }
 
 export interface MediaView {
@@ -1799,6 +1816,8 @@ export interface VideoView {
   problem: VideoProblem | null;
   /** The link to the set, once `done`. */
   link: Links | null;
+  /** T694 — a link per quality of the set, the heaviest first; empty until `done`. */
+  quality_links: QualityLink[];
   created_at: string;
   updated_at: string;
   /**

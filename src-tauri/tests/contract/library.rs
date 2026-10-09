@@ -167,6 +167,13 @@ fn a_library_s_completeness_is_counted_over_every_visible_file() {
                 exists_on_server: true,
                 origin_url: String::from("https://stream.example.com/videos/film/master.m3u8"),
                 cdn_url: None,
+                qualities: vec![vrcast_studio_lib::domain::links::QualityLink {
+                    width: 1920,
+                    height: 1080,
+                    bitrate_bps: 4_000_000,
+                    origin: String::from("https://stream.example.com/videos/film/v4/stream.m3u8"),
+                    cdn: None,
+                }],
             }],
             set_files: vec![file_view("film_4.mp4")],
             total_bytes: 2048,
