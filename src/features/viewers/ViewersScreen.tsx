@@ -11,7 +11,7 @@
  * quietly take them out of everything else.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { NoServer } from "../shared/NoServer";
@@ -58,8 +58,18 @@ function ageLine(
   return fill(words.staleAge, { age }, t, lang);
 }
 
-/** A medium, in the two forms this screen needs it in. */
-type Named = { id: string; slug: string; title: string };
+/** A medium, in the forms this screen needs it in. `hasSet` — it has a set of qualities. */
+type Named = { id: string; slug: string; title: string; hasSet: boolean };
+
+/** The set the viewer at `ip` is watching now, by the current list (T668, T704). */
+function watchingSlug(
+  viewers: Viewer[] | null,
+  ip: string,
+  slugById: Record<string, string>,
+): string | null {
+  const viewer = viewers?.find((v) => v.ip === ip);
+  return viewer?.media_id ? (slugById[viewer.media_id] ?? null) : null;
+}
 
 /**
  * The media of this server, so the list can name what is being watched and the cap dialog
@@ -77,7 +87,7 @@ type Named = { id: string; slug: string; title: string };
  * a quality set is found by `slug`. Handing over the media themselves lets each take what it
  * needs, and there is nothing left to rename in passing.
  */
-function useMedia(serverId: string | null): Named[] {
+function useMedia(serverId: string | null, attempt: number): Named[] {
   const [media, setMedia] = useState<Named[]>([]);
 
   useEffect(() => {
@@ -87,7 +97,14 @@ function useMedia(serverId: string | null): Named[] {
       .libraryList(serverId)
       .then((view: LibraryView) => {
         if (!alive) return;
-        setMedia(view.media.map((m) => ({ id: m.id, slug: m.slug, title: m.title })));
+        setMedia(
+          view.media.map((m) => ({
+            id: m.id,
+            slug: m.slug,
+            title: m.title,
+            hasSet: (m.ladders ?? []).some((l) => l.exists_on_server),
+          })),
+        );
       })
       // A library that will not load is not a reason to hide the viewers: they are still
       // there, and their addresses and speeds are the point. They simply show up under
@@ -96,9 +113,27 @@ function useMedia(serverId: string | null): Named[] {
     return () => {
       alive = false;
     };
-  }, [serverId]);
+    // `attempt` (T707): asked again with every new try at reaching the server, so a library
+    // that could not load while the server was down is there once it is back.
+  }, [serverId, attempt]);
 
   return media;
+}
+
+/**
+ * When the screen tries the server again by itself after it could not be reached (T707), in
+ * seconds after each failure in a row; the last one repeats. Short at first — a server
+ * restarting is back within seconds — and then no more often than every half a minute.
+ */
+const RETRY_AFTER_S = [5, 10, 20, 30] as const;
+
+/**
+ * Whether trying again by itself can help. Only for a server that did not answer: a refused
+ * sign-in or a changed host key will not mend with waiting, and repeated sign-in attempts
+ * are what gets an address banned by the server's own protection.
+ */
+function worthRetrying(error: AppError): boolean {
+  return error.code === "SSH_UNREACHABLE";
 }
 
 export function ViewersScreen() {
@@ -116,7 +151,10 @@ export function ViewersScreen() {
   useEffect(() => {
     void reloadServers();
   }, [reloadServers]);
-  const media = useMedia(serverId);
+  // Bumped by "start again" after the watching has given up, and by "try again" — or the
+  // screen itself — after the server could not be reached (T707): the effect below runs afresh.
+  const [restarts, setRestarts] = useState(0);
+  const media = useMedia(serverId, restarts);
   // By identifier, which is how a viewer record names what it is watching.
   const titleById = useMemo(() => Object.fromEntries(media.map((m) => [m.id, m.title])), [media]);
   // And the set a viewer is watching, by the same identifier — for the cap dialog (T668).
@@ -131,26 +169,32 @@ export function ViewersScreen() {
     as_of: null,
     attempt: 0,
   });
-  // Bumped by "start again" after the watching has given up: the effect below runs afresh.
-  const [restarts, setRestarts] = useState(0);
-  // Whom the person is about to cap, if anybody, and what they are watching. The dialogue is
-  // opened from the row rather than from a screen of its own: capping is something done
-  // **to a viewer you are looking at**, and making somebody go elsewhere and retype an
-  // address would be three actions where SC-006 allows three altogether. The medium goes
-  // with the address (T668, QA-24B-09): the dialog used to open on the first film of the
-  // catalogue, whatever the viewer was watching.
-  const [capping, setCapping] = useState<{ ip: string; slug: string | null } | null>(null);
+  // Whom the person is about to cap, if anybody. The dialogue is opened from the row rather
+  // than from a screen of its own: capping is something done **to a viewer you are looking
+  // at**, and making somebody go elsewhere and retype an address would be three actions
+  // where SC-006 allows three altogether. The medium goes with the address (T668,
+  // QA-24B-09) — and is read from the current list on every render rather than frozen at
+  // the click (T704): a viewer's film is often learnt a little after they appear.
+  const [capping, setCapping] = useState<string | null>(null);
+  // The address a cap was just written for (T704): said once, with when it takes effect.
+  const [capped, setCapped] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
+  // Tries at reaching the server that failed one after another (T707), and when the screen
+  // will try again by itself — `null` when it will not.
+  const failures = useRef(0);
+  const [retryAt, setRetryAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (!serverId) return;
     let alive = true;
     setError(null);
+    setRetryAt(null);
     setViewers(null);
     setWatch({ watch: "watching", as_of: null, attempt: 0 });
 
     const unlisten = onViewersUpdate((update) => {
       if (!alive || update.server_id !== serverId) return;
+      failures.current = 0;
       setViewers(update.active);
       setWatch({
         watch: update.watch ?? "watching",
@@ -159,9 +203,26 @@ export function ViewersScreen() {
       });
     });
 
-    ipc.viewersWatchStart(serverId).catch((e: AppError) => {
-      if (alive) setError(e);
-    });
+    ipc
+      .viewersWatchStart(serverId)
+      .then(() => {
+        if (alive) failures.current = 0;
+      })
+      .catch((e: AppError) => {
+        if (!alive) return;
+        setError(e);
+        // ⚠ **Not left at "could not reach the server"** (T707, tour I04–I05). That was the
+        // whole screen, a minute later as much as at once, and closing the notice left
+        // "starting…" for good; the server coming back changed nothing until the person
+        // left the screen and came back. Now it is tried again by itself while waiting can
+        // help, and "Try again" is there whatever the failure.
+        const inARow = failures.current;
+        failures.current = inARow + 1;
+        if (worthRetrying(e)) {
+          const wait = RETRY_AFTER_S[Math.min(inARow, RETRY_AFTER_S.length - 1)];
+          setRetryAt(Date.now() + wait * 1000);
+        }
+      });
 
     return () => {
       alive = false;
@@ -173,9 +234,17 @@ export function ViewersScreen() {
     };
   }, [serverId, restarts]);
 
+  // Trying again by itself, when the time comes (T707).
+  useEffect(() => {
+    if (retryAt === null) return;
+    const timer = setTimeout(() => setRestarts((n) => n + 1), Math.max(0, retryAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [retryAt]);
+
   const stale = watch.watch !== "watching";
-  // The age of a list nobody is keeping up to date grows by itself, with no event to say so.
-  const now = useNow(stale);
+  // The age of a list nobody is keeping up to date grows by itself, with no event to say so —
+  // and the wait before the next try counts down the same way.
+  const now = useNow(stale || retryAt !== null);
 
   if (!server) {
     return (
@@ -194,7 +263,28 @@ export function ViewersScreen() {
     <section className="screen">
       <h1>{t.ui.sections.viewers}</h1>
 
-      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+      {/* Not dismissable (T707): closing it left "starting…" for good, with nothing on
+          screen to say the server had not been reached. */}
+      {error && (
+        <>
+          <ErrorNotice error={error} />
+          <p className="viewers-retry" data-testid="viewers-retry">
+            {retryAt !== null && (
+              <span className="hint" data-testid="viewers-retry-in">
+                {fill(
+                  words.retryIn,
+                  { n: Math.max(1, Math.ceil((retryAt - now) / 1000)) },
+                  t,
+                  lang,
+                )}{" "}
+              </span>
+            )}
+            <button type="button" onClick={() => setRestarts((n) => n + 1)}>
+              {words.retry}
+            </button>
+          </p>
+        </>
+      )}
 
       {/*
         The tables the countries and cities on this screen come from. Silent while they are
@@ -269,12 +359,10 @@ export function ViewersScreen() {
                 key={viewer.ip}
                 viewer={viewer}
                 mediaTitle={viewer.media_id ? titleById[viewer.media_id] : undefined}
-                onLimit={() =>
-                  setCapping({
-                    ip: viewer.ip,
-                    slug: viewer.media_id ? (slugById[viewer.media_id] ?? null) : null,
-                  })
-                }
+                onLimit={() => {
+                  setCapped(null);
+                  setCapping(viewer.ip);
+                }}
                 limitLabel={t.ui.limits.title}
               />
             ))}
@@ -282,14 +370,32 @@ export function ViewersScreen() {
         </table>
       )}
 
+      {capped && (
+        <div className="notice notice--ok" role="status" data-testid="limit-applied">
+          <div className="notice__body">
+            <p className="notice__message">{fill(t.ui.limits.applied, { ip: capped }, t, lang)}</p>
+          </div>
+          <button
+            className="notice__close"
+            onClick={() => setCapped(null)}
+            aria-label={t.ui.common.dismiss}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {capping && serverId && (
         <LimitDialog
-          key={`${capping.ip}/${capping.slug ?? ""}`}
+          key={capping}
           serverId={serverId}
-          ip={capping.ip}
-          initialSlug={capping.slug}
+          ip={capping}
+          initialSlug={watchingSlug(viewers, capping, slugById)}
           media={media}
-          onDone={() => setCapping(null)}
+          onDone={() => {
+            setCapped(capping);
+            setCapping(null);
+          }}
           onCancel={() => setCapping(null)}
         />
       )}

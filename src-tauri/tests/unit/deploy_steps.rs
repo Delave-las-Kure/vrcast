@@ -449,3 +449,80 @@ fn our_own_caddyfile_is_recognised_however_its_end_was_read() {
         "stream.example.com"
     ));
 }
+
+/// T703 (the owner's decision Д1). Nothing under `/videos/` may be declared immutable:
+/// «Заменить» puts a new film at the same addresses, and a month-long `immutable` would keep
+/// the old one in a player's cache (and a CDN's) behind the old link.
+#[test]
+fn the_serving_declares_nothing_immutable_and_revalidates_everything() {
+    use vrcast_studio_lib::server::deploy::configs::caddyfile_for;
+
+    let ours = caddyfile_for("stream.example.com");
+    let rules: Vec<&str> = ours
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .collect();
+    assert!(
+        !rules
+            .iter()
+            .any(|l| l.contains("immutable") || l.contains("max-age")),
+        "a caching rule that outlives «Заменить» is back: {rules:?}"
+    );
+    let caching: Vec<&&str> = rules
+        .iter()
+        .filter(|l| l.contains("Cache-Control"))
+        .collect();
+    assert_eq!(
+        caching,
+        vec![&"header Cache-Control \"no-cache\""],
+        "one blanket rule, and it says revalidate"
+    );
+}
+
+/// T703: an upgrade from version 1 recognises version 1's own file as ours — otherwise it
+/// would be refused as «edited by hand», and no server deployed before version 2 could ever
+/// get the new caching rules.
+#[test]
+fn version_one_s_caddyfile_is_still_ours_and_differs_from_the_current_one() {
+    use vrcast_studio_lib::domain::server_state::APP_EXPECTS;
+    use vrcast_studio_lib::server::deploy::configs::caddyfile_for;
+    use vrcast_studio_lib::server::deploy::references::{caddyfile, is_ours, known_versions};
+
+    assert_eq!(known_versions().last(), Some(&APP_EXPECTS));
+    let v1 = caddyfile(1, "stream.example.com").expect("version 1 is not kept");
+    assert!(is_ours(&v1, "stream.example.com"));
+    assert!(
+        v1.contains("immutable"),
+        "the kept version 1 is not version 1"
+    );
+    assert_ne!(
+        v1,
+        caddyfile_for("stream.example.com"),
+        "the current file is version 1's: the upgrade would find nothing to do"
+    );
+    assert_eq!(
+        caddyfile(APP_EXPECTS, "stream.example.com"),
+        Some(caddyfile_for("stream.example.com"))
+    );
+    assert!(!is_ours(
+        &format!("{v1}# edited by hand\n"),
+        "stream.example.com"
+    ));
+}
+
+/// T703 (QA-26 №2): the description of a quality set is `no-cache` from the first deployment
+/// on, not from the first limit — the rules file a deployment lays down already holds the
+/// exception, and is exactly what «no limits» would be written as.
+#[test]
+fn the_first_rules_file_already_holds_the_caching_exception() {
+    use vrcast_studio_lib::domain::limits_conf::{build, parse, read_generation, SERVING_PREFIX};
+    use vrcast_studio_lib::server::deploy::configs::limits_initial;
+
+    let first = limits_initial();
+    assert_eq!(first, build(&[], SERVING_PREFIX, 0));
+    assert!(first.contains("@vrcast_master path /videos/*/master.m3u8"));
+    assert!(first.contains("Cache-Control \"no-cache\""));
+    assert!(parse(&first).is_empty());
+    assert_eq!(read_generation(&first), 0);
+}

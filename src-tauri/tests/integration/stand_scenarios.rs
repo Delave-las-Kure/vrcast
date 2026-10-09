@@ -1046,6 +1046,8 @@ async fn scenario_8_a_complaint_of_stalling_is_explained_with_the_readings_behin
         Some(vrcast_studio_lib::domain::stalls::FileShape {
             average_mbit: 4.0,
             peak_10s_mbit: 6.0,
+            // The film being pulled (T705): a measurement applies to its own film only.
+            slug: Some(slug.clone()),
         }),
     )
     .await

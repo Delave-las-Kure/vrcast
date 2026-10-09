@@ -67,6 +67,17 @@ export function formatBitrate(bps: number | null | undefined, lang: Lang): strin
   return `${decimal(mbit, lang)} ${units.mbit}`;
 }
 
+/**
+ * A plain number to at most `digits` places, trailing zeros dropped, in the separator of the
+ * language: 0.05 → «0,05» / "0.05", 51.30 → «51,3» (T706). A figure the core sends raw used
+ * to be shown with a point in Russian text, beside the same figure with a comma a line below.
+ */
+export function formatNumber(value: number | null | undefined, lang: Lang, digits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return NOTHING;
+  const s = String(Number(value.toFixed(digits)));
+  return lang === "ru" ? s.replace(".", ",") : s;
+}
+
 /** Resolution: 3840×2160. A dash if either side is unknown. Language-neutral. */
 export function formatResolution(
   width: number | null | undefined,

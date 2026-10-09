@@ -31,15 +31,19 @@ const LIMITS: &str = "/etc/caddy/vrcast-limits.conf";
 /// machine, which is a thing that goes missing.
 const REFERENCE: &str = include_str!("../../../resources/server/Caddyfile");
 
-/// What the empty rules file holds.
+/// What the rules file holds on the first deployment: no limits, and the caching exception
+/// for the description of a quality set (T703).
 ///
-/// A line rather than nothing: importing a file that matches nothing is an error and Caddy
-/// would refuse to start, and an entirely empty one draws a warning on every validate — and a
-/// warning that is always there teaches people not to read warnings.
-const LIMITS_EMPTY: &str = "\
-# The quality-limit rules. This file belongs to VRCast Studio: it is rewritten whole
-# on every change, and anything added here by hand will be lost.
-";
+/// It used to be the header alone, and the exception appeared with the first limit — too
+/// late, QA-26 №2: the players of everyone who watched before it were still holding the
+/// answer the blanket rule had let them keep. Version 2's main configuration already says
+/// `no-cache` for everything, so on a server of this version the exception repeats it; it is
+/// written anyway so that the rules file is one and the same shape from the first deployment
+/// on — the very file `limits_conf::build` would write for "no limits" (generation 0, the
+/// generation an absent line reads as).
+pub fn limits_initial() -> String {
+    crate::domain::limits_conf::build(&[], crate::domain::limits_conf::SERVING_PREFIX, 0)
+}
 
 /// The reference with this server's domain in it.
 pub fn caddyfile_for(domain: &str) -> String {
@@ -187,7 +191,7 @@ fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
             .asks(&format!("test -f {LIMITS} && echo yes || echo no"))
             .await?;
         if !there {
-            ctx.put_file(LIMITS, LIMITS_EMPTY).await?;
+            ctx.put_file(LIMITS, &limits_initial()).await?;
         }
 
         ctx.put_file(CADDYFILE, &caddyfile_for(ctx.domain)).await?;
@@ -215,6 +219,32 @@ fn apply<'x, 'a>(ctx: &'x Context<'a>) -> BoxFuture<'x, Result<()>> {
         // ourselves, by the mechanism asking again after applying (2026-08-27).
         ctx.ran("chown -R caddy:caddy /var/log/caddy 2>/dev/null || true")
             .await?;
+
+        // ⚠ **A configuration written is a configuration in force** (T703). The `services`
+        // step reloads Caddy only when its check finds it not serving our domain — and on an
+        // upgrade it always finds it serving: the old configuration names the same domain.
+        // So the new file sat on disk and the running server went on answering with version
+        // 1's `immutable` until somebody restarted it. Reloaded here, whenever it is running;
+        // a restart only if the reload is refused, the same fallback `services` uses. On a
+        // first deployment Caddy is either not running yet (nothing to do) or running the
+        // package's own site, which `services` would replace a moment later anyway.
+        let said = ctx
+            .ran(
+                "if systemctl is-active --quiet caddy 2>/dev/null; then \
+                 systemctl reload caddy || systemctl restart caddy || { echo reload-failed; exit 0; }; \
+                 fi; echo done",
+            )
+            .await?;
+        if said.contains("reload-failed") || !said.contains("done") {
+            return Err(DeployError::Step {
+                id: StepId::Configs,
+                detail: format!(
+                    "the web server would not take the new configuration: {}",
+                    said.trim()
+                ),
+                advice: None,
+            });
+        }
         Ok(())
     })
 }

@@ -532,11 +532,15 @@ export const en: Catalogue = {
     WARN_LIMIT_FOLLOWS_THE_ADDRESS: "The limit is put on an address, not on a person.",
     WARN_ADDRESS_SHARED: "{count} viewers are on this address — the limit reaches all of them.",
     WARN_CAP_BELOW_LIGHTEST:
-      "The cap is below the lightest rung ({lightest_bps} bit/s) — the viewer gets that rung.",
+      "The cap is below the lightest rung ({lightest_bps|bitrate}) — the viewer gets that rung.",
     LIMITS_ROLLBACK_UNSUCCESSFUL:
       "Putting the previous limits back failed — the serving may not be working. Check Diagnostics.",
     LIMITS_ROLLBACK_NOT_STARTED:
       "The previous limits were not put back: the end of the previous command was not confirmed. Reload the list in a minute. If the change got as far as replacing the file, the new rules may have stayed.",
+    LIMITS_NOT_CHECKABLE:
+      "The limits were not changed: the serving's address does not answer this computer, so a change could not be checked.",
+    LIMITS_ROLLED_BACK:
+      "The serving stopped answering after the change — the previous limits are back in force.",
     NOTICE_NO_HARDWARE_FOUND:
       "No acceleration — the processor encodes. Quality will not suffer, but it takes several times longer.",
     NOTICE_SOFTWARE_AS_ASKED: "The processor encodes, as you asked.",
@@ -639,14 +643,15 @@ export const en: Catalogue = {
       "The server sent the whole file instead of the range asked for ({status}). Watching works, seeking does not.",
     HEALTH_DELIVERY_REFUSED: "The server answered {status} to its own check.",
     HEALTH_DELIVERY_SILENT: "The server did not answer over HTTPS.",
-    HEALTH_NOTHING_TO_SERVE: "Nothing to check: there is no video on the server yet.",
+    HEALTH_NOTHING_TO_SERVE:
+      "There are no single mp4 files on the server — nothing to check seeking on.",
     HEALTH_FIREWALL_ON: "The firewall is on.",
     HEALTH_FIREWALL_OFF:
       "The firewall is off: {status}. Everything that listens is open to the outside.",
     HEALTH_OPEN_PORTS: "Ports open to the outside: {count} — {ports}.",
     HEALTH_MEMORY: "Memory: {used_mb} MB used of {total_mb}.",
     HEALTH_CACHE_IDLE:
-      "The serving cache holds {cache_mb} MB. Nobody is watching, so there is nothing to fill it with.",
+      "The serving cache holds {cache_mb} MB. No viewer is connected right now, so there is nothing to fill it with.",
     HEALTH_CACHE_SMALL:
       "The serving cache holds only {cache_mb} MB of {total_mb} while {watching} are watching. So it is being served off the disk rather than out of memory.",
     HEALTH_CACHE_OK:
@@ -666,16 +671,18 @@ export const en: Catalogue = {
 
     // Why the picture stops (FR-072). The conclusion is sometimes wrong, and has to be arguable.
     STALLS_TOO_SHORT: "Too short a stretch — {seconds} s. There is nothing to judge by.",
-    STALLS_KEEPING_UP: "The viewer keeps up: {ratio}× real time, link {mbit_s} Mbit/s.",
+    STALLS_KEEPING_UP: "The viewer keeps up: {ratio|num}× real time, link {mbit_s|mbit}.",
     STALLS_SERVER_LINK:
-      "The server's own link is the limit: {out_mbit_s} Mbit/s going out of {capacity_mbit_s} possible.",
-    STALLS_DISK: "The disk is the limit: {disk_read_mb_s} MB/s read, {ratio}× real time received.",
+      "The server's own link is the limit: {out_mbit_s|mbit} going out of the network card's {capacity_mbit_s|mbit}.",
+    STALLS_DISK:
+      "The disk is the limit: {disk_read_mb_s|num} MB/s read, {ratio|num}× real time received.",
     STALLS_FILE_PEAKS:
-      "The file's peaks: link {mbit_s} Mbit/s, average {average_mbit}, 10 s peak {peak_10s_mbit}.",
+      "The file's peaks: link {mbit_s|mbit}, average {average_mbit|mbit}, 10 s peak {peak_10s_mbit|mbit}.",
     STALLS_THE_PLAYER:
-      "The player, not the link: {in_download_mbit_s} Mbit/s against {average_mbit} needed; by the clock {mbit_s} Mbit/s, ratio {ratio}. Restarts: {restarts}, skipped: {skipped}.",
+      "The server hands pieces out faster than needed: {in_download_mbit_s|mbit} against {average_mbit|mbit}, yet by the clock it comes to {mbit_s|mbit}, ratio {ratio|num}. The player stops asking, or the viewer's link is slower than the server can see. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
-      "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}). Skipped: {skipped}, restarts: {restarts}.",
+      "The viewer's link is short: {ratio|num}× at {mbit_s|mbit} (in downloads {in_download_mbit_s|mbit}), and this quality needs {need_mbit|mbit}. Skipped: {skipped}, restarts: {restarts}.",
+    STALLS_UNCLEAR: "Falling behind: {ratio|num}× real time. These figures do not say why.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
     RUNG_FILE_CLAIMED:
@@ -890,7 +897,7 @@ export const en: Catalogue = {
       mascotViewerTrouble: "The mascot is worried: a viewer is struggling",
     },
     diag: {
-      title: "Diagnosis",
+      title: "Diagnostics",
       period: "Over the last",
       minutes: "minutes",
       refresh: "Ask again",
@@ -921,8 +928,6 @@ export const en: Catalogue = {
       logsAddresses: (n: number) => `Addresses: ${n}`,
       logsUnreadable: (n: number) => `Lines that yielded nothing: ${n}`,
       logsCodes: "Answers",
-      logsRangesOk: "Ranges are being served — 206 dominates, as it should.",
-      logsRangesBad: "Files are sent whole — seeking does not work.",
       logsTopPaths: "Asked for most often",
       logsTopAddresses: "Asked most often",
       logsFailures: "Failures",
@@ -942,23 +947,29 @@ export const en: Catalogue = {
       stallsSkipped: "Segments skipped",
       stallsRestarts: "Player restarts",
       stallsWatching: "Watching",
+      stallsNeeds: "This quality needs",
       stallsLoad: "What the server was doing",
       stallsLoadCpu: "Processor",
       stallsLoadDisk: "Read off the disk",
+      unitMBps: "MB/s",
+      unitSeconds: "s",
       stallsLoadOut: "Going out",
-      stallsLoadCapacity: "of a possible",
+      stallsLoadCapacity: "of the network card's",
       stallsCapacityUnknown:
         "the link's capacity was not established — so it is never named as the culprit",
 
       bitrateTitle: "The file's bitrate peaks",
+      bitrateWhere: "This measures the file on this computer, not what is on the server.",
       bitratePick: "Choose a file",
+      bitrateFilm: "This is the film",
+      bitrateFilmNone: "not said — the diagnosis leaves it out",
       bitrateAverage: "Average",
       bitrateMedian: "Median",
       bitratePeak1: "One-second peak",
       bitratePeak10: "Ten-second peak",
       bitrateAt: "at",
       bitrateWorst: "Where it is heaviest",
-      bitratePeakOverAverage: (times: number) =>
+      bitratePeakOverAverage: (times: string) =>
         `The ten-second peak is ${times} times the average.`,
       bitrateAdvice: "Fixed by re-encoding with a peak cap.",
       bitrateEven: "The file is even — no need to re-encode.",
@@ -991,8 +1002,15 @@ export const en: Catalogue = {
       noLadder: "This medium has no quality set.",
       previewing: "Working out what the viewer would be left with…",
       applying: "Capping…",
+      whenEffective: "Takes effect when the viewer restarts the video.",
+      applied: "Limit for {ip} saved — it takes effect when the viewer restarts the video.",
+      pickPlaceholder: "Choose a film",
+      watchingUnknown: "What this viewer is watching is not known yet.",
+      noSets: "No film on the server has a set of qualities.",
+      variant: "{rate} — {size}",
 
       listTitle: "Limits in force",
+      listHint: "Setting and lifting take effect when the viewer restarts the video.",
       listEmpty: "Nothing is capped.",
       columnWho: "Address",
       columnMedia: "Medium",
@@ -1015,6 +1033,8 @@ export const en: Catalogue = {
       speedNotYet: "Not measured yet.",
       needs: "needs",
       fine: "fine",
+      noData: "no data yet",
+      noDataHint: "The speed, or what this quality needs, is not known yet.",
       columnAddress: "Address",
       columnPlace: "From",
       columnWatching: "Watching",
@@ -1022,8 +1042,8 @@ export const en: Catalogue = {
       columnFor: "For",
       columnState: "State",
       problems: {
-        slowLink: "not enough link",
-        slowLinkHint: "The link is too slow for this quality — cap the quality.",
+        slowLink: "falling behind",
+        slowLinkHint: "Arriving slower than this quality needs — cap the quality.",
         retransmits: "a lossy link",
         retransmitsHint: "Poor connection on the viewer's side.",
         stalls: "the pulling has stopped",
@@ -1036,6 +1056,8 @@ export const en: Catalogue = {
       staleNever: "No list has come from the server yet.",
       stopped: "Watching stopped: cannot sign in to the server. Check the server.",
       restart: "Start again",
+      retry: "Try again",
+      retryIn: "Trying again by itself in {n} s.",
       ageSeconds: "{n} s",
       ageMinutes: "{n} min",
     },

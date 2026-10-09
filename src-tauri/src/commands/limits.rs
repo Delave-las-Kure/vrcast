@@ -12,15 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use super::error::{AppError, DetailCode, ErrorCode, Result};
 use crate::domain::hls_master::{self, Variant};
-use crate::domain::limits_conf::Limit;
+use crate::domain::limits_conf::{Limit, SERVING_PREFIX};
 use crate::domain::slow_master::shorten;
 use crate::domain::wording::Detail;
 use crate::server::gate::{self, Intent};
 use crate::server::limits::{LimitError, Serving};
 use crate::server::shell_quote;
-
-/// Where the media sit in an address on this project's servers.
-const SERVING_PREFIX: &str = "/videos";
 
 /// The file this application owns, and the one it only reads.
 const LIMITS_CONF: &str = "/etc/caddy/vrcast-limits.conf";
@@ -294,6 +291,15 @@ pub fn to_error(e: LimitError) -> AppError {
             .with_cause(e),
         LimitError::RollbackNotStarted(_) => AppError::new(ErrorCode::LimitsRollbackFailed)
             .detail(DetailCode::LimitsRollbackNotStarted)
+            .with_cause(e),
+        // T704: two answers that used to come out as "internal error" or as "the serving may
+        // be broken", while the serving was as it had been. Said as what they are: the domain
+        // does not serve (from here), and what that meant for the limits.
+        LimitError::NotCheckable(_) => AppError::new(ErrorCode::DomainNotServing)
+            .detail(DetailCode::LimitsNotCheckable)
+            .with_cause(e),
+        LimitError::ServingStopped => AppError::new(ErrorCode::DomainNotServing)
+            .detail(DetailCode::LimitsRolledBack)
             .with_cause(e),
         other => AppError::new(ErrorCode::Internal).with_cause(other),
     }

@@ -117,20 +117,49 @@ echo "== Caddyfile =="
 # The patterns are awk regexes: a brace and a star are written as character classes rather
 # than backslash-escaped, because awk warns about the escapes and then treats them as the
 # plain characters anyway — a warning on every run teaches people not to read warnings.
+#
+# ⚠ **The caching rule is the third deliberate difference** (T703, the owner's decision Д1,
+# version 2 of the server side). The skill caches everything but the master description as
+# `immutable` for a month; the application declares nothing immutable, because «Заменить»
+# puts a new film at the same addresses. So the serving block is compared with its caching
+# lines (`Cache-Control` and the matchers that only exist for it) and its comments set aside
+# on both sides, and the application's own caching rule is checked separately below — it is
+# set aside, not let go.
+strip_caching() { # stdin -> stdout
+  grep -v -E '^[[:space:]]*#|Cache-Control|^[[:space:]]*@(not)?master[[:space:]]|^[[:space:]]*$' || true
+}
 for pair in "handle_path /videos/[*]:блок раздачи" "log [{]:блок журнала"; do
   pattern="${pair%%:*}"
   title="${pair##*:}"
   block "$SKILL/Caddyfile" "$pattern" > "$work/skill.block"
   block "$RES/Caddyfile" "$pattern" > "$work/res.block"
+  if [ "$title" = "блок раздачи" ]; then
+    strip_caching < "$work/skill.block" > "$work/skill.cmp"
+    strip_caching < "$work/res.block" > "$work/res.cmp"
+  else
+    cp "$work/skill.block" "$work/skill.cmp"
+    cp "$work/res.block" "$work/res.cmp"
+  fi
   if [ ! -s "$work/skill.block" ] || [ ! -s "$work/res.block" ]; then
     bad "$title не найден в одном из файлов"
-  elif cmp -s "$work/skill.block" "$work/res.block"; then
+  elif cmp -s "$work/skill.cmp" "$work/res.cmp"; then
     note "$title — совпадает дословно"
   else
     bad "$title разошёлся:"
-    diff "$work/skill.block" "$work/res.block" | sed 's/^/    /' || true
+    diff "$work/skill.cmp" "$work/res.cmp" | sed 's/^/    /' || true
   fi
 done
+
+# The application's caching rule (T703): exactly one, `no-cache`, and nothing immutable
+# anywhere in the file.
+caching="$(grep -E '^[[:space:]]*header[^#]*Cache-Control' "$RES/Caddyfile" || true)"
+if [ "$(printf '%s\n' "$caching" | grep -c .)" -eq 1 ] \
+  && printf '%s' "$caching" | grep -q 'header Cache-Control "no-cache"' \
+  && ! grep -v -E '^[[:space:]]*#' "$RES/Caddyfile" | grep -q -E 'immutable|max-age'; then
+  note "кеш: всё no-cache, ничего immutable (в эталоне скилла иначе — так и задумано, Д1)"
+else
+  bad "правило кеша в Caddyfile приложения не «одно no-cache без immutable»: $caching"
+fi
 
 # The line the whole of milestone C hangs on. It is NOT in the skill's reference, and that is
 # the difference this file records rather than hides: without it the rules file the

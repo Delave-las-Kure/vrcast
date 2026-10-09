@@ -137,6 +137,16 @@ pub enum LimitError {
     #[error("the serving stopped answering, so the previous configuration was put back")]
     ServingStopped,
 
+    /// The serving did not answer this machine **before** the change (T704), so nothing was
+    /// touched. The check after a change asks over the address a viewer uses; when that
+    /// address is silent already — the domain not yet pointing here, this machine unable to
+    /// reach it — a silence afterwards could not be told from one the change caused, and the
+    /// change would be rolled back with a message that the serving may be broken (found in the
+    /// window tour: no limit could be put on at all, and the error said the previous limits
+    /// had not come back). Refused up front instead, the serving untouched.
+    #[error("the serving does not answer {0} from here, so a change could not be checked")]
+    NotCheckable(String),
+
     /// The worst case: the change failed **and** putting the old one back failed too — a
     /// step of the undo refused or failed (`LOST_LOCK` among them), or everything went back
     /// and the serving still does not answer. `LIMITS_ROLLBACK_FAILED`, detail
@@ -810,6 +820,12 @@ impl Serving<'_> {
         base_generation: u64,
     ) -> Result<(), LimitError> {
         let id = uuid::Uuid::new_v4().simple().to_string();
+        // T704: whether the check after the change can mean anything. Asked before the lock
+        // is taken: an address that does not answer can take the whole of `ANSWER_TIMEOUT` to
+        // say so, and nobody else's change should wait on that.
+        if !self.serving_answers().await {
+            return Err(LimitError::NotCheckable(self.check_url.to_owned()));
+        }
         let lock = self.lock(&id).await?;
         let outcome = self
             .locked(&id, lock.holder, limits, needs_ladder, base_generation)

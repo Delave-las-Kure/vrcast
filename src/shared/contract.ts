@@ -279,6 +279,8 @@ export type DetailCode =
   // a change of the limits whose previous rules did not come back (T640)
   | "LIMITS_ROLLBACK_UNSUCCESSFUL"
   | "LIMITS_ROLLBACK_NOT_STARTED"
+  | "LIMITS_NOT_CHECKABLE"
+  | "LIMITS_ROLLED_BACK"
   | "NOTICE_NO_HARDWARE_FOUND"
   | "NOTICE_SOFTWARE_AS_ASKED"
   | "NOTICE_HARDWARE_FAILED"
@@ -382,6 +384,7 @@ export type DetailCode =
   | "STALLS_FILE_PEAKS"
   | "STALLS_VIEWER_LINK"
   | "STALLS_THE_PLAYER"
+  | "STALLS_UNCLEAR"
   // Videos in work (T672).
   | "VIDEO_ALREADY_LISTED"
   | "RUNG_FILE_CLAIMED"
@@ -906,10 +909,20 @@ export interface Watcher {
   restarts: number;
   reinits: number;
   failures: number;
+  /** T705 — the rung of a set they pulled most segments from (`v9`). */
+  rung?: string | null;
+  /** T705 — what that rung of that film needs, Mbit/s, from the set on the server. */
+  need_mbit?: number | null;
 }
 
 export type StallCause =
-  "nothing_wrong" | "viewer_link" | "server_link" | "disk" | "the_file_itself" | "unclear";
+  | "nothing_wrong"
+  | "viewer_link"
+  | "server_link"
+  | "disk"
+  | "the_file_itself"
+  | "the_player"
+  | "unclear";
 
 export interface StallVerdict {
   cause: StallCause;

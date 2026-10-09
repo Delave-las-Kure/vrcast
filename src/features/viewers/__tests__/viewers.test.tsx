@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
 import type {
   GeoStatus,
+  LadderSetView,
   ServerProfile,
   Viewer,
   ViewersUpdateEvent,
@@ -100,6 +101,21 @@ const server: ServerProfile = {
   is_active: true,
 };
 
+/** A quality set on the server, as the library reports one (T704: only these can be capped). */
+function aSet(slug: string): LadderSetView {
+  return {
+    path: `${slug}/master.m3u8`,
+    size_bytes: 1,
+    width: 1920,
+    height: 1080,
+    bitrate_bps: 6_000_000,
+    duration_s: 60,
+    exists_on_server: true,
+    origin_url: `https://stream.example.com/videos/${slug}/master.m3u8`,
+    cdn_url: null,
+  };
+}
+
 function viewer(over: Partial<Viewer> = {}): Viewer {
   return {
     ip: "203.0.113.9",
@@ -147,7 +163,7 @@ beforeEach(() => {
         title: "Backrooms",
         slug: "backrooms",
         files: [],
-        ladders: [],
+        ladders: [aSet("backrooms")],
         total_bytes: 0,
         created_at: "",
       },
@@ -193,6 +209,25 @@ describe("the viewers screen", () => {
     // Not knowing what is being watched is a state of its own, and it is said in words —
     // an empty cell would read as a fault in the application.
     expect(screen.getByText(ru.ui.viewers.watchingUnknown)).toBeInTheDocument();
+  });
+
+  it("says «в порядке» only when both speeds are known, and «данных пока нет» otherwise (T705)", async () => {
+    // QA-26 №12: a viewer whose speed, need and film were all unknown was shown as fine.
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+    send?.(
+      update([
+        viewer({ ip: "203.0.113.1", delivery_bps: null }),
+        viewer({ ip: "203.0.113.2", required_bps: null }),
+        viewer({ ip: "203.0.113.3" }),
+        viewer({ ip: "203.0.113.4", delivery_bps: 1_000_000, problems: ["SlowLink"] }),
+      ]),
+    );
+    await waitFor(() => expect(screen.getAllByTestId("viewer-no-data")).toHaveLength(2));
+    expect(screen.getAllByText(ru.ui.viewers.noData)).toHaveLength(2);
+    expect(screen.getAllByText(ru.ui.viewers.fine)).toHaveLength(1);
+    expect(screen.getByText(ru.ui.viewers.problems.slowLink)).toBeInTheDocument();
+    expect(ru.ui.viewers.problems.slowLink).toBe("не успевает");
   });
 
   it("marks a viewer in trouble with the reason rather than merely marking them", async () => {
@@ -303,6 +338,70 @@ describe("when the connection to the server is lost", () => {
   });
 });
 
+/**
+ * T707 (tour I04–I05) — a server that could not be reached. It used to be one line, "could not
+ * reach the server", a minute later as much as at once; closing it left "starting…" for good.
+ */
+describe("when the server cannot be reached at all", () => {
+  const unreachable = { code: "SSH_UNREACHABLE", details: [] };
+
+  it("offers to try again, and trying again starts the watching again", async () => {
+    mockWatchStart.mockRejectedValueOnce(unreachable);
+    renderIn(<ViewersScreen />, "ru");
+    const retry = await screen.findByRole("button", { name: ru.ui.viewers.retry });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    // The notice cannot be closed into an empty "starting…".
+    expect(screen.queryByLabelText(ru.ui.common.dismiss)).toBeNull();
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(2));
+    send?.(update([]));
+    await screen.findByText(ru.ui.viewers.nobody);
+    expect(screen.queryByTestId("viewers-retry")).toBeNull();
+  });
+
+  it("tries again by itself, waiting longer each time, and says when", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockWatchStart.mockRejectedValueOnce(unreachable).mockRejectedValueOnce(unreachable);
+      renderIn(<ViewersScreen />, "ru");
+      await screen.findByTestId("viewers-retry-in");
+      expect(screen.getByTestId("viewers-retry-in").textContent).toMatch(/через [45] с/);
+      expect(mockWatchStart).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(2));
+      // The second failure in a row waits longer.
+      await waitFor(() =>
+        expect(screen.getByTestId("viewers-retry-in").textContent).toMatch(/через (9|10) с/),
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await waitFor(() => expect(mockWatchStart).toHaveBeenCalledTimes(3));
+      // The third try succeeded: the screen is back to its ordinary self.
+      send?.(update([]));
+      await screen.findByText(ru.ui.viewers.nobody);
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not try a refused sign-in again by itself — only when asked", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockWatchStart.mockRejectedValueOnce({ code: "SSH_AUTH_FAILED", details: [] });
+      renderIn(<ViewersScreen />, "en");
+      await screen.findByRole("button", { name: en.ui.viewers.retry });
+      expect(screen.queryByTestId("viewers-retry-in")).toBeNull();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockWatchStart).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("the tables of places", () => {
   it("says nothing while they are there and current", async () => {
     // The ordinary state. A line reporting it on every visit is noise, and noise in a corner
@@ -374,7 +473,7 @@ describe("the tables of places", () => {
           title: "Film A",
           slug: "film-a",
           files: [],
-          ladders: [],
+          ladders: [aSet("film-a")],
           total_bytes: 0,
           created_at: "",
         },
@@ -383,7 +482,7 @@ describe("the tables of places", () => {
           title: "Film B",
           slug: "film-b",
           files: [],
-          ladders: [],
+          ladders: [aSet("film-b")],
           total_bytes: 0,
           created_at: "",
         },
@@ -412,5 +511,10 @@ describe("the tables of places", () => {
       slug: "film-b",
       cap_bps: 3_000_000,
     });
+    // T704: the screen says the rule is written, and when it takes effect — not "done".
+    expect(await screen.findByTestId("limit-applied")).toHaveTextContent(
+      ru.ui.limits.applied.replace("{ip}", "203.0.113.9"),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

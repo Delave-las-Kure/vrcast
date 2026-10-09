@@ -157,11 +157,13 @@ export const ipc = {
    *
    * `file` is what `diagBitrate` found, when it has been run. Without it the conclusion "the
    * file is at fault" is not reached at all, and rightly: the file comes last in the method.
+   * `slug` (T705) — which film on the server the measured file is; the measurement is applied
+   * to that film's viewers only, and to nobody when it is not said.
    */
   diagExplainStalls: (
     serverId: string,
     minutes: number,
-    file?: { average_mbit: number; peak_10s_mbit: number },
+    file?: { average_mbit: number; peak_10s_mbit: number; slug: string | null },
   ) => call<Stalls>("diag_explain_stalls", { serverId, minutes, file: file ?? null }),
   /** Where a local file peaks (FR-073). The server is not touched at all. */
   diagBitrate: (path: string) => call<Peaks>("diag_bitrate", { path }),

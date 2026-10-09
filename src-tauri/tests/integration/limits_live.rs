@@ -850,6 +850,67 @@ async fn a_silent_address() -> String {
     format!("http://127.0.0.1:{port}/never")
 }
 
+/// Somewhere that answers the **first** question and then never again (T704).
+///
+/// A change now asks the serving once before it touches anything and refuses outright when
+/// there is no answer (`LimitError::NotCheckable`): a silence after the change says nothing
+/// about the change when it was silent before it too. So a serving that "stops answering
+/// because of the change" is one that answered the question before it — this one — and the
+/// checks of the putting back that used to use [`a_silent_address`] use this, one per change.
+async fn an_address_that_answers_once() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("no local port for the address that answers once");
+    let port = listener.local_addr().expect("no local address").port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        let mut answered = false;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            if answered {
+                held.push(socket);
+                continue;
+            }
+            answered = true;
+            let mut buf = [0u8; 2048];
+            let _ = socket.read(&mut buf).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    format!("http://127.0.0.1:{port}/once")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_the_serving_cannot_be_asked_about_is_refused_untouched() {
+    // T704. The address a change is checked over does not answer from here even before
+    // anything is done — in the window tour, a domain not pointing at the container. The
+    // change used to go in, be rolled back on the silence, and say the previous limits might
+    // not have come back. Now nothing is touched at all.
+    let server = TestServer::start().expect("the container would not come up");
+    lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
+    let all = the_ladder(&server);
+    let conf_before = contents(&server, CONF);
+    let slow_before = slow_snapshot(&server);
+
+    let silent = a_silent_address().await;
+    let outcome = put_limit(&server, "203.0.113.20", "demo", all[1].bandwidth, &silent).await;
+    assert!(
+        matches!(outcome, Err(LimitError::NotCheckable(_))),
+        "a change nobody could check was attempted: {outcome:?}"
+    );
+    assert_eq!(
+        contents(&server, CONF),
+        conf_before,
+        "the rules were touched"
+    );
+    assert_eq!(slow_snapshot(&server), slow_before, "_slow/ was touched");
+    assert_eq!(leftovers(&server), "");
+    assert!(lock_is_free(&server));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rollback_never_undoes_a_change_that_landed_after_it() {
     // T603 (c). A puts its rule in and waits on a serving that does not answer; B, starting
@@ -860,11 +921,12 @@ async fn a_rollback_never_undoes_a_change_that_landed_after_it() {
     lay_out_ladder(&server, "demo").expect("the quality set was not laid out");
     let all = the_ladder(&server);
     one_limit_in_force(&server, &all).await;
-    let silent = a_silent_address().await;
     let good = good_url(&server);
 
     let mut b_rules: Vec<String> = Vec::new();
     for round in 0..3u32 {
+        // One per change: it answers the question before A's change and none after (T704).
+        let silent = an_address_that_answers_once().await;
         let slow_before = slow_snapshot(&server);
         let ip_a = format!("198.51.100.{}", 10 + round);
         let ip_b = format!("203.0.113.{}", 100 + round);
@@ -1114,7 +1176,7 @@ async fn a_clear_whose_check_fails_brings_the_description_back() {
     one_limit_in_force(&server, &all).await;
     let slow_before = slow_snapshot(&server);
 
-    let silent = a_silent_address().await;
+    let silent = an_address_that_answers_once().await;
     let conn = connect(&server).await;
     let outcome = serving_at(&conn, &silent).apply(&[], None, 1).await;
     conn.close().await;
@@ -1569,7 +1631,7 @@ async fn a_change_that_fails_its_check_leaves_everything_under_slow_as_it_was() 
     let conf_before = contents(&server, CONF);
     let slow_before = slow_snapshot(&server);
 
-    let silent = a_silent_address().await;
+    let silent = an_address_that_answers_once().await;
     let outcome = put_limit(&server, "203.0.113.20", "demo", all[1].bandwidth, &silent).await;
     // `RollbackFailed` rather than `ServingStopped`: the silent address does not answer
     // after the rollback either, so the rollback's own check fails too. What matters here
@@ -1613,6 +1675,7 @@ async fn a_change_that_fails_its_check_leaves_everything_under_slow_as_it_was() 
         .expect("a sound change would not go in");
     let conf_before = contents(&server, CONF);
     let slow_before = slow_snapshot(&server);
+    let silent = an_address_that_answers_once().await;
     let outcome = take_limit_off(&server, a.ip(), "demo", &silent).await;
     assert!(
         outcome.is_err(),

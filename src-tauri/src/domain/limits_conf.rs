@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 
 use super::slow_master::slow_master_address;
 
+/// Where the serving root sits in an address: `/videos` (the main configuration's
+/// `handle_path /videos/*`). One place, read by the limit commands and by the deployment's
+/// first rules file (T703).
+pub const SERVING_PREFIX: &str = "/videos";
+
 /// One limit in force.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limit {
@@ -57,8 +62,11 @@ pub struct Limit {
 /// over the set beside it and leaves the description with no caching rule — which is not
 /// better than the wrong one: a player left to its own judgement caches what it likes.
 ///
-/// In every case the segments kept the blanket rule, which is right — they really are
-/// immutable.
+/// In every case the segments kept the blanket rule. That was thought right — "they really
+/// are immutable" — and was not (QA-26 №4, the owner's decision D1, T703): "Replace" puts
+/// new pieces at the same addresses. Version 2 of the server side says `no-cache` for
+/// everything in the main configuration itself; this exception stays, because a server still
+/// on version 1 has only it between a limit and a description cached for a month.
 pub const CACHE_NOTE: &str =
     "deferred, and setting only: a plain set loses to the blanket rule, a delete leaves none";
 /// The line every generated file starts with.

@@ -6,9 +6,11 @@
  * are only the ones that delivered almost nothing while taking that long — otherwise the
  * screen goes red on a working machine, and after the second time people stop looking at it.
  *
- * **206s should be the majority.** If whole files are handed out more often, then pieces are
- * not being handed out at all: watching works, seeking does not, and the complaint arrives as
- * "it broke" with nothing to do with the network.
+ * **Nothing about seeking is read off the mix of answers** (T706, QA-26 №11). It used to be:
+ * "206s should be the majority, or seeking does not work". A quality set is fetched as whole
+ * small segments, each rightly answered 200, so every healthy set was declared broken. The
+ * question belongs to single mp4 files, and is asked of them directly with a range request
+ * under the server's state.
  *
  * **Hitting the line limit is said out loud.** A summary that quietly covered a quarter of
  * what was asked for is answering a different question from the one it was given.
@@ -32,10 +34,6 @@ export function LogsPanel({ logs }: { logs: Logs }) {
       </section>
     );
   }
-
-  const ranged = d.by_status["206"] ?? 0;
-  const whole = d.by_status["200"] ?? 0;
-  const rangesDominate = ranged + whole === 0 ? null : ranged > whole;
 
   return (
     <section className="diag-logs">
@@ -62,9 +60,11 @@ export function LogsPanel({ logs }: { logs: Logs }) {
           </li>
         ))}
       </ul>
-      {rangesDominate !== null && (
-        <p data-testid="logs-ranges">{rangesDominate ? words.logsRangesOk : words.logsRangesBad}</p>
-      )}
+      {/* T706 (QA-26 №11): nothing about seeking is concluded from this mix any more. A
+          quality set is fetched in whole small segments, and 200 is the right answer to each
+          of them — so a log of a healthy set "proved" seeking broken. Whether pieces of a
+          single mp4 are handed out is asked separately, with a range request, under the
+          server's state (the delivery reading). */}
 
       <h4>{words.logsTopPaths}</h4>
       <ul>
@@ -110,7 +110,8 @@ export function LogsPanel({ logs }: { logs: Logs }) {
                 className={r.slow ? "diag-rating-watch" : undefined}
                 data-testid={r.slow ? "long-slow" : "long-normal"}
               >
-                {Math.round(r.seconds)} s · {formatBitrate(r.mbit_s * 1_000_000, lang)} · {r.path}
+                {Math.round(r.seconds)} {words.unitSeconds} ·{" "}
+                {formatBitrate(r.mbit_s * 1_000_000, lang)} · {r.path}
               </li>
             ))}
           </ul>

@@ -22,7 +22,12 @@ use serde::{Deserialize, Serialize};
 ///
 /// A whole number that grows by one on any change to the composition. Not a semantic
 /// version: the server side is not a public library, and it has exactly one consumer (R-11).
-pub const APP_EXPECTS: u32 = 1;
+///
+/// **2** (T703, the owner's decision D1): nothing under `/videos/` is declared immutable any
+/// more — every answer is `no-cache`, revalidated by ETag/Last-Modified, because "Replace"
+/// puts a new film at the same addresses. Version 1 is still worked with (it serves, and the
+/// application's files go where they always went); the card offers the upgrade.
+pub const APP_EXPECTS: u32 = 2;
 
 /// The oldest version this application can still work with.
 ///
@@ -187,9 +192,8 @@ pub struct ServerState {
     pub compat: Compat,
     /// Whether a newer server side exists than the one deployed. Separate from `compat` on
     /// purpose: "you could upgrade" (FR-129) and "you must upgrade before changing anything"
-    /// are different sentences and lead to different screens. With one version in existence
-    /// this is always false, and it is written now rather than when version 2 appears —
-    /// which is when nobody would remember the difference.
+    /// are different sentences and lead to different screens. True since version 2 exists
+    /// (T703) for every server still on version 1.
     pub upgrade_available: bool,
     pub foreign_reason: Option<ForeignReason>,
 }
@@ -344,7 +348,16 @@ pub fn allowed(state: &ServerState) -> Allowed {
         (Kind::Managed, Compat::Ok) => Allowed {
             read: true,
             change_serving: true,
-            setup: Setup::Nothing,
+            // ⚠ **Upgrade when a newer server side exists** (T703). This said `Nothing`
+            // unconditionally, which was right while only version 1 existed and became a
+            // locked door the day version 2 did: the card offered "Upgrade" (it reads
+            // `upgrade_available`), and the upgrade's own gate (`Intent::Setup`) refused it
+            // as "already deployed".
+            setup: if state.upgrade_available {
+                Setup::Upgrade
+            } else {
+                Setup::Nothing
+            },
         },
         // Too old to write to, but perfectly readable — and the way forward is named rather
         // than left to the person to work out.

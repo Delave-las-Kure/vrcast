@@ -131,7 +131,15 @@ fn a_cache_and_our_own_checks_are_set_aside() {
 #[test]
 fn the_server_asleep_points_at_the_viewers_link() {
     let s = sifted();
-    let it = s.watchers.iter().find(|w| w.client_ip == STARVING).unwrap();
+    let mut it = s
+        .watchers
+        .iter()
+        .find(|w| w.client_ip == STARVING)
+        .unwrap()
+        .clone();
+    // What their rung needs, as the film's own set on the server says (T705). Without it
+    // there is no number for the link to fall short of — see the test below.
+    it.need_mbit = Some(1000.0);
 
     // Low processor, little read from the disk, a small amount going out — and a viewer
     // hanging. This is the server saying it is not the one at fault.
@@ -142,13 +150,59 @@ fn the_server_asleep_points_at_the_viewers_link() {
         capacity_mbit_s: 940.0,
         cache_small: false,
     };
-    let verdict = stalls::explain(it, Some(&asleep), None);
+    let verdict = stalls::explain(&it, Some(&asleep), None);
     assert_eq!(verdict.cause, Cause::ViewerLink);
     // With the figures behind it, because this conclusion is sometimes wrong.
     assert_eq!(
         verdict.say.params.get("mbit_s").and_then(|v| v.as_f64()),
         Some(15.9)
     );
+    assert_eq!(
+        verdict.say.params.get("need_mbit").and_then(|v| v.as_f64()),
+        Some(1000.0),
+        "the link is blamed without the number it falls short of"
+    );
+}
+
+#[test]
+fn without_what_the_film_needs_the_link_is_not_blamed() {
+    // T705 (QA-26 №12): the catch-all used to tell any viewer behind real time that their
+    // link was too thin — a viewer with a speed of 0 over two requests among them — with no
+    // figure for what the link would have had to carry.
+    let s = sifted();
+    let it = s.watchers.iter().find(|w| w.client_ip == STARVING).unwrap();
+    assert_eq!(it.need_mbit, None);
+    let asleep = Load {
+        cpu_busy: 0.04,
+        disk_read_mb_s: 1.0,
+        out_mbit_s: 18.0,
+        capacity_mbit_s: 940.0,
+        cache_small: false,
+    };
+    let verdict = stalls::explain(it, Some(&asleep), None);
+    assert_eq!(verdict.cause, Cause::Unclear);
+    assert_eq!(verdict.say.key.as_str(), "STALLS_UNCLEAR");
+}
+
+#[test]
+fn a_file_measured_for_another_film_is_not_applied() {
+    // T705: the measured file is one film; a viewer of another is not judged by it.
+    let s = sifted();
+    let it = s.watchers.iter().find(|w| w.client_ip == STARVING).unwrap();
+    let elsewhere = FileShape {
+        average_mbit: 12.0,
+        peak_10s_mbit: 150.0,
+        slug: Some(String::from("another-film")),
+    };
+    let unsaid = FileShape {
+        slug: None,
+        ..elsewhere.clone()
+    };
+    for shape in [&elsewhere, &unsaid] {
+        let verdict = stalls::explain(it, None, Some(shape));
+        assert_ne!(verdict.cause, Cause::TheFileItself, "{shape:?}");
+        assert_ne!(verdict.cause, Cause::ThePlayer, "{shape:?}");
+    }
 }
 
 #[test]
@@ -181,6 +235,8 @@ fn a_wide_link_and_a_peaky_file_point_at_the_file() {
     let peaky = FileShape {
         average_mbit: 12.0,
         peak_10s_mbit: 150.0,
+        // The film they are watching (T705): a measurement is applied to its own film only.
+        slug: it.watching.clone(),
     };
     let asleep = Load {
         cpu_busy: 0.04,
@@ -196,6 +252,7 @@ fn a_wide_link_and_a_peaky_file_point_at_the_file() {
     let flat = FileShape {
         average_mbit: 30.0,
         peak_10s_mbit: 34.0,
+        slug: it.watching.clone(),
     };
     assert_eq!(
         stalls::explain(it, Some(&asleep), Some(&flat)).cause,
@@ -242,7 +299,7 @@ fn a_viewer_whose_link_carries_it_is_not_told_their_link_is_the_problem() {
     // nothing else fits — took it.
     let watcher = Watcher {
         client_ip: String::from("203.0.113.7"),
-        watching: None,
+        watching: Some(String::from("film")),
         segments: 5,
         bytes: 9_500_000,
         first: time::OffsetDateTime::UNIX_EPOCH,
@@ -255,10 +312,13 @@ fn a_viewer_whose_link_carries_it_is_not_told_their_link_is_the_problem() {
         restarts: 0,
         reinits: 0,
         failures: 0,
+        rung: Some(String::from("v4")),
+        need_mbit: None,
     };
     let film = FileShape {
         average_mbit: 4.0,
         peak_10s_mbit: 6.0,
+        slug: Some(String::from("film")),
     };
     let verdict = stalls::explain(&watcher, None, Some(&film));
     assert_eq!(
@@ -291,7 +351,7 @@ fn a_viewer_whose_link_really_is_thin_is_still_told_so() {
     // the downloads themselves crawl: under what the film needs even while they are running.
     let watcher = Watcher {
         client_ip: String::from("203.0.113.8"),
-        watching: None,
+        watching: Some(String::from("film")),
         segments: 5,
         bytes: 900_000,
         first: time::OffsetDateTime::UNIX_EPOCH,
@@ -304,10 +364,13 @@ fn a_viewer_whose_link_really_is_thin_is_still_told_so() {
         restarts: 0,
         reinits: 0,
         failures: 0,
+        rung: Some(String::from("v4")),
+        need_mbit: None,
     };
     let film = FileShape {
         average_mbit: 4.0,
         peak_10s_mbit: 6.0,
+        slug: Some(String::from("film")),
     };
     let verdict = stalls::explain(&watcher, None, Some(&film));
     assert_eq!(verdict.cause, Cause::ViewerLink);
@@ -315,11 +378,11 @@ fn a_viewer_whose_link_really_is_thin_is_still_told_so() {
 
 #[test]
 fn without_a_film_to_compare_against_nothing_is_claimed_about_the_player() {
-    // Saying "not the link" needs a number for what the link would have to carry. Without one
-    // the old answer stands rather than a guess dressed as a finding.
+    // Saying "not the link" needs a number for what the link would have to carry — and so,
+    // since T705, does saying "the link". Without one, neither is claimed.
     let watcher = Watcher {
         client_ip: String::from("203.0.113.9"),
-        watching: None,
+        watching: Some(String::from("film")),
         segments: 5,
         bytes: 9_500_000,
         first: time::OffsetDateTime::UNIX_EPOCH,
@@ -332,7 +395,17 @@ fn without_a_film_to_compare_against_nothing_is_claimed_about_the_player() {
         restarts: 0,
         reinits: 0,
         failures: 0,
+        rung: Some(String::from("v4")),
+        need_mbit: None,
     };
     let verdict = stalls::explain(&watcher, None, None);
-    assert_eq!(verdict.cause, Cause::ViewerLink);
+    assert_eq!(verdict.cause, Cause::Unclear);
+
+    // With the rung's own need from the server, the same viewer is placed: their downloads
+    // carry 30.35 against 4 — the player.
+    let known = Watcher {
+        need_mbit: Some(4.0),
+        ..watcher
+    };
+    assert_eq!(stalls::explain(&known, None, None).cause, Cause::ThePlayer);
 }

@@ -19,7 +19,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT } from "../../shared/i18n";
-import { formatBitrate, formatDuration } from "../../shared/i18n/format";
+import { formatBitrate, formatDuration, formatNumber } from "../../shared/i18n/format";
 import { ipc } from "../../shared/ipc";
 import type { AppError, BitrateWindow, Peaks } from "../../shared/contract";
 
@@ -32,23 +32,53 @@ function Where({ window: w }: { window: BitrateWindow | null }) {
   if (!w) return <>{t.ui.diag.notDetermined}</>;
   return (
     <>
-      {formatBitrate(w.bitrate_bps, lang)} {t.ui.diag.bitrateAt} {formatDuration(w.at_s)}
+      {formatBitrate(w.bitrate_bps, lang)} {t.ui.diag.bitrateAt} {moment(w.at_s)}
     </>
   );
 }
 
+/**
+ * A point in the film. The very start is «0:00», a moment like any other — `formatDuration`
+ * shows nothing for zero, and the heaviest window starting there read «— — 7,0 Мбит/с» (T706).
+ */
+function moment(seconds: number): string {
+  return seconds <= 0 ? "0:00" : formatDuration(seconds);
+}
+
+/** What `diagExplainStalls` is told about a measured file, and which film it is (T705). */
+function shapeOf(
+  found: Peaks,
+  slug: string,
+): { average_mbit: number; peak_10s_mbit: number; slug: string | null } | null {
+  if (!found.wide) return null;
+  return {
+    average_mbit: found.average_bps / 1_000_000,
+    peak_10s_mbit: found.wide.bitrate_bps / 1_000_000,
+    slug: slug || null,
+  };
+}
+
 export function BitratePeaks({
   path,
+  films = [],
   onMeasured,
 }: {
   path?: string;
+  /**
+   * The films on the server (T705). A measured file is one film; the person says which, and
+   * only that film's viewers are judged by it. Guessed from the file's name when exactly one
+   * title matches it; otherwise nothing is chosen, and the measurement judges nobody.
+   */
+  films?: { slug: string; title: string }[];
   /**
    * Told once the peak is known, and told `null` the moment it stops being known — a file
    * newly chosen, one that failed to measure, or one whose ten-second peak could not be
    * worked out at all (T500). `DiagScreen` hands this straight to `diagExplainStalls`, and a
    * stale shape left over from a previous file would blame the wrong material.
    */
-  onMeasured?: (shape: { average_mbit: number; peak_10s_mbit: number } | null) => void;
+  onMeasured?: (
+    shape: { average_mbit: number; peak_10s_mbit: number; slug: string | null } | null,
+  ) => void;
 }) {
   const t = useT();
   const { lang } = useLang();
@@ -58,6 +88,8 @@ export function BitratePeaks({
   const [peaks, setPeaks] = useState<Peaks | null>(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  // Which film on the server the measured file is (T705); "" — not said.
+  const [film, setFilm] = useState("");
   // Which choice of file is the current one (T669, QA-24B-10). Every pick takes the next
   // number, and a measurement's answer — figures, error, `onMeasured` — counts only if its
   // number is still the current one. Clearing the figures at the moment of choosing is not
@@ -74,6 +106,11 @@ export function BitratePeaks({
     setChosen(picked);
     setPeaks(null);
     setError(null);
+    // The film this file is, guessed from its name only when exactly one title matches it.
+    const stem = (picked.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "").toLowerCase();
+    const matching = films.filter((f) => f.title.toLowerCase() === stem);
+    const guessed = matching.length === 1 ? matching[0].slug : "";
+    setFilm(guessed);
     // The file just changed, so whatever shape was known before is not this file's shape.
     onMeasured?.(null);
     setAsking(true);
@@ -84,14 +121,7 @@ export function BitratePeaks({
       // Translated from bits/s to megabits the same way `LadderScreen.tsx`'s `bitrate()`
       // does. Without a ten-second peak there is nothing to compare a viewer's link
       // against, so the shape stays unknown rather than being sent half-filled.
-      if (found.wide) {
-        onMeasured?.({
-          average_mbit: found.average_bps / 1_000_000,
-          peak_10s_mbit: found.wide.bitrate_bps / 1_000_000,
-        });
-      } else {
-        onMeasured?.(null);
-      }
+      onMeasured?.(shapeOf(found, guessed));
     } catch (e) {
       if (!current()) return;
       setError(e as AppError);
@@ -110,11 +140,35 @@ export function BitratePeaks({
   return (
     <section className="diag-bitrate">
       <h3>{words.bitrateTitle}</h3>
+      <p className="diag-hint" data-testid="bitrate-where">
+        {words.bitrateWhere}
+      </p>
 
       <button type="button" onClick={pick}>
         {words.bitratePick}
       </button>
       {chosen && <p className="diag-chosen">{chosen}</p>}
+
+      {chosen && films.length > 0 && (
+        <label className="diag-film">
+          {words.bitrateFilm}{" "}
+          <select
+            value={film}
+            data-testid="bitrate-film"
+            onChange={(e) => {
+              setFilm(e.target.value);
+              if (peaks) onMeasured?.(shapeOf(peaks, e.target.value));
+            }}
+          >
+            <option value="">{words.bitrateFilmNone}</option>
+            {films.map((f) => (
+              <option key={f.slug} value={f.slug}>
+                {f.title}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       {asking && <p>{words.asking}</p>}
       {error && <ErrorNotice error={error} />}
@@ -139,7 +193,7 @@ export function BitratePeaks({
           {overAverage !== null &&
             (overAverage >= PEAK_WORTH_MENTIONING ? (
               <div data-testid="bitrate-peaky">
-                <p>{words.bitratePeakOverAverage(Number(overAverage.toFixed(1)))}</p>
+                <p>{words.bitratePeakOverAverage(formatNumber(overAverage, lang, 1))}</p>
                 <p>{words.bitrateAdvice}</p>
               </div>
             ) : (
@@ -152,7 +206,7 @@ export function BitratePeaks({
               <ul className="diag-worst-windows">
                 {peaks.worst_wide.map((w) => (
                   <li key={w.at_s} data-testid={`window-${w.at_s}`}>
-                    {formatDuration(w.at_s)} — {formatBitrate(w.bitrate_bps, lang)}
+                    {moment(w.at_s)} — {formatBitrate(w.bitrate_bps, lang)}
                   </li>
                 ))}
               </ul>

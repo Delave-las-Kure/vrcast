@@ -84,6 +84,56 @@ fn a_version_below_the_oldest_supported_waits_for_an_upgrade() {
 }
 
 #[test]
+fn a_server_one_version_behind_works_and_is_offered_the_upgrade() {
+    // T703. Version 2 exists (the caching rules of Д1); a server deployed with version 1 is
+    // still served from — and the card's «Обновить» has to lead somewhere. The upgrade goes
+    // through `Intent::Setup`, which used to refuse every current server of ours as «already
+    // deployed»: the button was there and the door behind it was locked.
+    // This check is about a server behind the application.
+    const _: () = assert!(APP_EXPECTS >= 2);
+    let state = judge(&Facts {
+        state_file: Some(Ok(state_file(APP_EXPECTS - 1))),
+        caddyfile_present: true,
+        web_server_running: Some(String::from("caddy")),
+        video_dir_present: true,
+        our_own_marks: true,
+    });
+    assert_eq!(state.kind, Kind::Managed);
+    assert_eq!(
+        state.compat,
+        Compat::Ok,
+        "one version behind is still worked with"
+    );
+    assert!(
+        state.upgrade_available,
+        "the card would not offer «Обновить»"
+    );
+    let may = allowed(&state);
+    assert!(may.read && may.change_serving);
+    assert_eq!(may.setup, Setup::Upgrade);
+    assert!(
+        vrcast_studio_lib::server::gate::allowed(
+            &state,
+            vrcast_studio_lib::server::gate::Intent::Setup
+        )
+        .is_ok(),
+        "the upgrade's own gate refuses the upgrade it offers"
+    );
+
+    // And a server already at this version is not offered one.
+    let current = judge(&Facts {
+        state_file: Some(Ok(state_file(APP_EXPECTS))),
+        ..Facts::default()
+    });
+    assert_eq!(allowed(&current).setup, Setup::Nothing);
+    assert!(vrcast_studio_lib::server::gate::allowed(
+        &current,
+        vrcast_studio_lib::server::gate::Intent::Setup
+    )
+    .is_err());
+}
+
+#[test]
 fn no_state_file_but_something_is_serving_means_somebody_else_was_first() {
     // **The row that costs the most to get wrong** (FR-132). And it is checked with nginx
     // rather than with a Caddyfile on purpose: a detector that looks only at
@@ -217,6 +267,17 @@ fn what_is_allowed_holds_on_every_combination() {
                 may.setup == Setup::Upgrade,
                 kind == Kind::Managed && compat == Compat::NeedsUpgrade,
                 "{at}: the wrong answer about upgrading"
+            );
+            // A newer server side to go to (T703) opens the upgrade on a server that is
+            // otherwise current — and on nothing else.
+            let behind = vrcast_studio_lib::domain::server_state::ServerState {
+                upgrade_available: true,
+                ..state.clone()
+            };
+            assert_eq!(
+                allowed(&behind).setup == Setup::Upgrade,
+                kind == Kind::Managed && matches!(compat, Compat::Ok | Compat::NeedsUpgrade),
+                "{at}: the wrong answer about upgrading to a newer server side"
             );
             if kind == Kind::Foreign {
                 assert!(!may.change_serving, "{at}: a foreign server was written to");

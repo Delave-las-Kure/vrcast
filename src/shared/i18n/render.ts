@@ -6,7 +6,8 @@
  * and `{name|how}` when it needs formatting:
  *
  * - `{bytes|bytes}` — a size, in the units and separator of the language
- * - `{bps|bitrate}` — a bitrate, likewise
+ * - `{bps|bitrate}` — a bitrate, likewise; `{x|mbit}` — one counted in megabits a second
+ * - `{x|num}` — a plain number in the separator of the language
  * - `{n|plural:file}` — the word form matching the count
  * - `{name|encoder}` — the human name of a hardware encoder
  * - `{id|deployStep}` — a deployment step by the name the plan gave it
@@ -18,7 +19,7 @@
 
 import type { AppError, Detail, DetailCode } from "../contract";
 import type { Catalogue, Lang } from "./catalogue";
-import { formatBitrate, formatBytes, plural } from "./format";
+import { formatBitrate, formatBytes, formatNumber, plural } from "./format";
 import type { PluralWord } from "./types";
 
 /**
@@ -60,6 +61,13 @@ export function fill(
         return formatBytes(Number(value), lang);
       case "bitrate":
         return formatBitrate(Number(value), lang);
+      // A speed the core counts in megabits a second (T706): the same units and separator
+      // as every other bitrate on screen, not "0.51" beside «505 кбит/с».
+      case "mbit":
+        return formatBitrate(Number(value) * 1_000_000, lang);
+      // A plain fraction in the separator of the language (T706).
+      case "num":
+        return formatNumber(Number(value), lang);
       case "plural": {
         const forms = catalogue.plurals[arg as PluralWord];
         return forms ? plural(Number(value), forms, lang) : String(value);

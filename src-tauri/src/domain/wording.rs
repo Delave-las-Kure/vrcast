@@ -350,6 +350,12 @@ detail_codes! {
     /// `LIMITS_ROLLBACK_FAILED`: putting back was not started — a command of this change may
     /// still be running on the server (T635). The serving is most likely working.
     LimitsRollbackNotStarted => "LIMITS_ROLLBACK_NOT_STARTED",
+    /// `DOMAIN_NOT_SERVING` (T704): the serving did not answer this machine **before** the
+    /// change, so nothing was touched — a check after it could not have told anything.
+    LimitsNotCheckable => "LIMITS_NOT_CHECKABLE",
+    /// `DOMAIN_NOT_SERVING` (T704): the change went in, the serving stopped answering, and
+    /// the previous limits are back in force.
+    LimitsRolledBack => "LIMITS_ROLLED_BACK",
     /// `encoder` — the ffmpeg name of the one that failed, e.g. `h264_nvenc`.
     NoticeHardwareFailed => "NOTICE_HARDWARE_FAILED",
 
@@ -568,9 +574,13 @@ detail_codes! {
     StallsDisk => "STALLS_DISK",
     /// `mbit_s`, `average_mbit`, `peak_10s_mbit`.
     StallsFilePeaks => "STALLS_FILE_PEAKS",
-    /// `ratio`, `mbit_s`, `in_download_mbit_s`, `skipped`, `restarts`.
+    /// `ratio`, `mbit_s`, `in_download_mbit_s`, `need_mbit`, `skipped`, `restarts`. Only with
+    /// what the viewer's rung needs, and their speed under it (T705).
     StallsViewerLink => "STALLS_VIEWER_LINK",
     StallsThePlayer => "STALLS_THE_PLAYER",
+    /// `ratio`, `mbit_s`, `need_mbit` (either may be absent). Behind real time, and nothing
+    /// measured says why (T705) — said instead of blaming the viewer's link without a number.
+    StallsUnclear => "STALLS_UNCLEAR",
 
     // --- videos in work (T672) ---
     /// This file is already on the list of videos for this server, and not finished.

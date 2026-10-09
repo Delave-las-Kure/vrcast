@@ -372,6 +372,39 @@ button:focus-visible {
   background: var(--danger-bg);
 }
 
+/* ---------- fields, everywhere (T704) ----------
+   A field outside `.form`/`.dialog` used to get the browser's own look: a grey system select
+   and a bare number box in the dark theme, a white one in the light — the only things on a
+   screen not painted from the tokens. Inside `:where()`, which weighs nothing, so every rule
+   that already styles a field (the sidebar's, the form's) still wins. Checkboxes, radios, ranges
+   and file pickers keep their own drawing. */
+:where(
+  select,
+  textarea,
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"])
+) {
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+}
+
+:where(select option) {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+
+:where(select:focus-visible, textarea:focus-visible, input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+:where(select:disabled, textarea:disabled, input:disabled) {
+  opacity: 0.6;
+}
+
 /* ---------- messages ---------- */
 
 .notice {
@@ -979,8 +1012,11 @@ button:focus-visible {
    Over, not beside: it is the answer to a menu item that used to end the application on the
    spot, and a person who chose "Exit" is looking for the consequence of that choice, not
    scrolling a page for it. The ground is painted from a token so the panel behind does not
-   show through in one theme and not the other. */
-.leave {
+   show through in one theme and not the other.
+   T704: the same ground for every dialogue that has to be answered before the screen behind
+   it is worked with again — the quality cap among them. */
+.leave,
+.modal {
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -991,9 +1027,12 @@ button:focus-visible {
   background: var(--scrim);
 }
 
-.leave .dialog {
+.leave .dialog,
+.modal .dialog {
   margin-bottom: 0;
   width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .dialog__error {

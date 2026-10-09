@@ -523,11 +523,15 @@ export const ruCore: CatalogueCore = {
     WARN_LIMIT_FOLLOWS_THE_ADDRESS: "Ограничение ставится на адрес, а не на человека.",
     WARN_ADDRESS_SHARED: "С этого адреса смотрят {count} — ограничение достанется всем.",
     WARN_CAP_BELOW_LIGHTEST:
-      "Потолок ниже самой лёгкой ступени ({lightest_bps} бит/с) — зритель получит её.",
+      "Потолок ниже самой лёгкой ступени ({lightest_bps|bitrate}) — зритель получит её.",
     LIMITS_ROLLBACK_UNSUCCESSFUL:
       "Вернуть прежние ограничения не удалось — раздача может не работать. Проверьте «Диагностику».",
     LIMITS_ROLLBACK_NOT_STARTED:
       "Прежние ограничения не возвращались: окончание предыдущей команды не подтверждено. Обновите список через минуту. Если изменение дошло до замены файла, новые правила могли остаться.",
+    LIMITS_NOT_CHECKABLE:
+      "Ограничения не менялись: с этого компьютера адрес раздачи не отвечает, и проверить изменение было бы нечем.",
+    LIMITS_ROLLED_BACK:
+      "После изменения раздача перестала отвечать — прежние ограничения возвращены и действуют.",
     NOTICE_NO_HARDWARE_FOUND:
       "Ускорения нет — кодирует процессор. Качество не пострадает, но времени уйдёт в разы больше.",
     NOTICE_SOFTWARE_AS_ASKED: "Кодирует процессор, как вы и просили.",
@@ -628,13 +632,13 @@ export const ruCore: CatalogueCore = {
       "Сервер отдал файл целиком вместо запрошенного куска ({status}). Смотреть можно, перематывать — нет.",
     HEALTH_DELIVERY_REFUSED: "Сервер ответил {status} на собственную проверку.",
     HEALTH_DELIVERY_SILENT: "Сервер не ответил по HTTPS.",
-    HEALTH_NOTHING_TO_SERVE: "Проверять нечего: видео на сервере пока нет.",
+    HEALTH_NOTHING_TO_SERVE: "Отдельных файлов mp4 на сервере нет — перемотку проверять не на чем.",
     HEALTH_FIREWALL_ON: "Защита включена.",
     HEALTH_FIREWALL_OFF: "Защита выключена: {status}. Наружу открыто всё, что слушает.",
     HEALTH_OPEN_PORTS: "Наружу открыто портов: {count} — {ports}.",
     HEALTH_MEMORY: "Память: занято {used_mb} МБ из {total_mb}.",
     HEALTH_CACHE_IDLE:
-      "Кеш раздачи {cache_mb} МБ. Сейчас никто не смотрит, так что заполнять его нечем.",
+      "Кеш раздачи {cache_mb} МБ. Сейчас ни один зритель не подключён — заполнять его нечем.",
     HEALTH_CACHE_SMALL:
       "Кеш раздачи всего {cache_mb} МБ из {total_mb}, а смотрят {watching}. Значит, отдаётся с диска, а не из памяти.",
     HEALTH_CACHE_OK: "Кеш раздачи {cache_mb} МБ, смотрят {watching}. Отдаётся из памяти.",
@@ -653,17 +657,18 @@ export const ruCore: CatalogueCore = {
 
     // Почему встаёт картинка (FR-072). Вывод бывает неверен, и его должно быть чем оспорить.
     STALLS_TOO_SHORT: "Слишком короткий отрезок — {seconds} с. Судить не по чему.",
-    STALLS_KEEPING_UP: "Зритель успевает: {ratio}× реального времени, канал {mbit_s} Мбит/с.",
+    STALLS_KEEPING_UP: "Зритель успевает: {ratio|num}× реального времени, канал {mbit_s|mbit}.",
     STALLS_SERVER_LINK:
-      "Упирается канал самого сервера: отдаётся {out_mbit_s} Мбит/с из {capacity_mbit_s} возможных.",
+      "Упирается канал самого сервера: отдаётся {out_mbit_s|mbit} из {capacity_mbit_s|mbit} по сетевой карте.",
     STALLS_DISK:
-      "Упирается диск: читается {disk_read_mb_s} МБ/с, получено {ratio}× реального времени.",
+      "Упирается диск: читается {disk_read_mb_s|num} МБ/с, получено {ratio|num}× реального времени.",
     STALLS_FILE_PEAKS:
-      "Вешают пики файла: канал {mbit_s} Мбит/с, средний {average_mbit}, пик 10 с — {peak_10s_mbit}.",
+      "Вешают пики файла: канал {mbit_s|mbit}, средний {average_mbit|mbit}, пик 10 с — {peak_10s_mbit|mbit}.",
     STALLS_THE_PLAYER:
-      "Дело в плеере, не в канале: {in_download_mbit_s} Мбит/с при нужных {average_mbit}; по часам {mbit_s} Мбит/с, доля {ratio}. Перезапусков: {restarts}, пропусков: {skipped}.",
+      "Сервер отдаёт куски быстрее нужного: {in_download_mbit_s|mbit} при нужных {average_mbit|mbit}, а по часам выходит {mbit_s|mbit}, доля {ratio|num}. Плеер не просит дальше или канал зрителя медленнее, чем видно серверу. Перезапусков: {restarts}, пропусков: {skipped}.",
     STALLS_VIEWER_LINK:
-      "Не хватает канала зрителя: {ratio}× при {mbit_s} Мбит/с (в закачках {in_download_mbit_s}). Пропусков: {skipped}, перезапусков: {restarts}.",
+      "Не хватает канала зрителя: {ratio|num}× при {mbit_s|mbit} (в закачках {in_download_mbit_s|mbit}), а этому качеству нужно {need_mbit|mbit}. Пропусков: {skipped}, перезапусков: {restarts}.",
+    STALLS_UNCLEAR: "Отстаёт: {ratio|num}× реального времени. Причину по этим данным не назвать.",
     VIDEO_ALREADY_LISTED: "Это видео уже в списке",
     RUNG_FILE_CLAIMED:
       "Файл «{name}» принадлежит медиа и не перезаписывается. Смените ступени или имя.",
@@ -917,8 +922,6 @@ const ui = {
     logsAddresses: (n: number) => `Адресов: ${n}`,
     logsUnreadable: (n: number) => `Строк не разобрано: ${n}`,
     logsCodes: "Коды ответов",
-    logsRangesOk: "Куски отдаются — как и должно быть, преобладает 206.",
-    logsRangesBad: "Файлы отдаются целиком — перемотка не работает.",
     logsTopPaths: "Что чаще всего просили",
     logsTopAddresses: "Кто чаще всего просил",
     logsFailures: "Ошибки",
@@ -938,22 +941,28 @@ const ui = {
     stallsSkipped: "Пропущено отрезков",
     stallsRestarts: "Перезапусков плеера",
     stallsWatching: "Смотрит",
+    stallsNeeds: "Нужно этому качеству",
     stallsLoad: "Что делал сервер",
     stallsLoadCpu: "Процессор",
     stallsLoadDisk: "Чтение с диска",
+    unitMBps: "МБ/с",
+    unitSeconds: "с",
     stallsLoadOut: "Отдача",
-    stallsLoadCapacity: "из возможных",
+    stallsLoadCapacity: "из возможных по сетевой карте",
     stallsCapacityUnknown: "ёмкость канала не выяснена — виновным он не назначается",
 
     bitrateTitle: "Пики битрейта файла",
+    bitrateWhere: "Меряется файл на этом компьютере, а не то, что лежит на сервере.",
     bitratePick: "Выбрать файл",
+    bitrateFilm: "Это фильм",
+    bitrateFilmNone: "не указан — разбор его не учитывает",
     bitrateAverage: "Средний",
     bitrateMedian: "Медиана",
     bitratePeak1: "Пик 1 секунды",
     bitratePeak10: "Пик 10 секунд",
     bitrateAt: "на",
     bitrateWorst: "Где тяжелее всего",
-    bitratePeakOverAverage: (times: number) =>
+    bitratePeakOverAverage: (times: string) =>
       `Пик 10-секундного окна выше среднего в ${times} раза.`,
     bitrateAdvice: "Лечится перекодом с ограничением пиков.",
     bitrateEven: "Файл ровный — перекодировать незачем.",
@@ -986,8 +995,17 @@ const ui = {
     noLadder: "У медиа нет набора качеств.",
     previewing: "Считаю, что останется у зрителя…",
     applying: "Ограничиваю…",
+    // T704 (Г2, QA-26 №2): the rule changes the next request for the film's description,
+    // and a player that already has it keeps the quality it chose.
+    whenEffective: "Подействует, когда зритель перезапустит видео.",
+    applied: "Ограничение для {ip} записано — подействует, когда зритель перезапустит видео.",
+    pickPlaceholder: "Выберите фильм",
+    watchingUnknown: "Что смотрит этот зритель — пока неизвестно.",
+    noSets: "На сервере нет фильмов с набором качеств.",
+    variant: "{rate} — {size}",
 
     listTitle: "Действующие ограничения",
+    listHint: "Поставленное и снятое действует, когда зритель перезапускает видео.",
     listEmpty: "Ограничений нет.",
     columnWho: "Адрес",
     columnMedia: "Медиа",
@@ -1010,6 +1028,8 @@ const ui = {
     speedNotYet: "Ещё не посчитано.",
     needs: "нужно",
     fine: "в порядке",
+    noData: "данных пока нет",
+    noDataHint: "Скорость или то, сколько нужно этому качеству, ещё не известны.",
     columnAddress: "Адрес",
     columnPlace: "Откуда",
     columnWatching: "Смотрит",
@@ -1017,8 +1037,8 @@ const ui = {
     columnFor: "Длительность",
     columnState: "Состояние",
     problems: {
-      slowLink: "не хватает канала",
-      slowLinkHint: "Канала не хватает на это качество — ограничьте качество.",
+      slowLink: "не успевает",
+      slowLinkHint: "Приходит медленнее, чем нужно этому качеству — ограничьте качество.",
       retransmits: "потери в канале",
       retransmitsHint: "Плохая связь у зрителя.",
       stalls: "передача встала",
@@ -1031,6 +1051,8 @@ const ui = {
     staleNever: "Списка с сервера ещё не было.",
     stopped: "Наблюдение остановлено: вход на сервер не удаётся. Проверьте сервер.",
     restart: "Начать заново",
+    retry: "Повторить",
+    retryIn: "Повторю сам через {n} с.",
     ageSeconds: "{n} с",
     ageMinutes: "{n} мин",
   },

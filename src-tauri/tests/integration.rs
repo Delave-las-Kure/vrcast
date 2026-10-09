@@ -37,6 +37,10 @@ mod convert_kill;
 /// because it is the one fixture that guards the address it hands out (T249).
 #[path = "integration/deploy_upgrade.rs"]
 mod deploy_upgrade;
+/// T703: an upgrade from version 1 of the server side, live — the card's offer, the gate, the
+/// plan, the Caddyfile recognised as ours, the new caching rules in force.
+#[path = "integration/deploy_upgrade_v1.rs"]
+mod deploy_upgrade_v1;
 
 #[path = "integration/deploy_fixture.rs"]
 mod deploy_fixture;

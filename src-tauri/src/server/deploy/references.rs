@@ -6,16 +6,28 @@
 //! `contracts/server-contract.md`) — a person who tuned their own web server and found the
 //! application had quietly undone it would be right to stop trusting it.
 //!
-//! With one version in existence this holds exactly one entry, and the distinction it draws
-//! is dormant. It is written now because the moment it stops being dormant is the moment
-//! version 2 appears — and by then nobody remembers that the difference mattered.
+//! With one version in existence this held exactly one entry, and the distinction it drew
+//! was dormant.
+//!
+//! Version 2 (T703) is the first time the distinction is live: an upgrade from version 1
+//! finds version 1's Caddyfile — kept word for word in `resources/server/history/` — and
+//! replaces it; a version-1 file a person has edited matches neither and is left alone.
 
 /// The main configuration as each version wrote it, newest last.
 ///
 /// The domain is still a placeholder here: what is compared is the file with this server's
 /// domain put in, and every version's reference goes through the same substitution.
-const CADDYFILE_BY_VERSION: [(u32, &str); 1] =
-    [(1, include_str!("../../../resources/server/Caddyfile"))];
+///
+/// ⚠ **A version's file is never edited after it has shipped**, not even its comments: the
+/// comparison is of the whole text, and a corrected comment would turn every server deployed
+/// with the old one into "edited by hand".
+const CADDYFILE_BY_VERSION: [(u32, &str); 2] = [
+    (
+        1,
+        include_str!("../../../resources/server/history/Caddyfile.v1"),
+    ),
+    (2, include_str!("../../../resources/server/Caddyfile")),
+];
 
 /// The main configuration of a given version, with a domain put in.
 pub fn caddyfile(version: u32, domain: &str) -> Option<String> {

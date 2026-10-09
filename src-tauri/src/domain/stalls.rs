@@ -91,6 +91,19 @@ pub struct Watcher {
     pub reinits: usize,
     /// Requests that came back 4xx or 5xx.
     pub failures: usize,
+    /// The rung of a quality set they pulled most segments from (`v9`), when they watched a
+    /// set (T705).
+    #[serde(default)]
+    pub rung: Option<String>,
+    /// What that rung of **that** film needs, in Mbit/s — its BANDWIDTH in the set's own
+    /// description on the server (T705). Filled in by the command, which can read the server;
+    /// `None` when the film or rung is not known, or its description could not be read.
+    ///
+    /// The one figure a verdict about the viewer's link may stand on. Before it, a viewer
+    /// behind real time with nothing else explaining it was told their link was too thin —
+    /// with no number for what the link would have had to carry (QA-26 №12).
+    #[serde(default)]
+    pub need_mbit: Option<f64>,
 }
 
 impl Watcher {
@@ -143,11 +156,24 @@ pub struct Load {
 }
 
 /// What the file being served looks like, when it is known (T315).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileShape {
     pub average_mbit: f64,
     /// The peak over a ten-second window. This is the one that hangs a player.
     pub peak_10s_mbit: f64,
+    /// Which film on the server the measured file is (T705). The shape is a fact about one
+    /// film, and is applied to the viewers of that film only — never to everybody in the log:
+    /// a file measured on this computer says nothing about a viewer watching something else.
+    /// `None` — not said — and then it is applied to nobody.
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+impl FileShape {
+    /// Whether this measurement is about what `watcher` is watching.
+    pub fn is_about(&self, watcher: &Watcher) -> bool {
+        matches!((&self.slug, &watcher.watching), (Some(a), Some(b)) if a == b)
+    }
 }
 
 /// What is most likely at fault.
@@ -166,6 +192,12 @@ pub enum Cause {
     TheFileItself,
     /// Not the link at all: it carries what the film needs whenever it is carrying anything,
     /// and the viewer is not asking in between (T482).
+    ///
+    /// ⚠ **Seen from the server's side only, and said so** (T706). Measured on the container
+    /// 2026-10-09: a viewer held to 50 kB/s (0.4 Mbit/s) showed 6.16 Mbit/s "inside the
+    /// downloads" against a rung needing 2 — the server finishes a request when the last byte
+    /// is in the socket buffers, not when the viewer has it. A slow link and a player that
+    /// stops asking look the same from the log, and the wording names both.
     ThePlayer,
     /// Not enough to say. Never dressed up as one of the above.
     Unclear,
@@ -230,6 +262,7 @@ fn assemble(client_ip: &str, mine: &[&Request]) -> Watcher {
     let mut reinits = 0usize;
     let mut failures = 0usize;
     let mut numbers: Vec<u32> = Vec::new();
+    let mut by_rung: BTreeMap<String, usize> = BTreeMap::new();
     let mut watching: Option<String> = None;
     let mut first = mine[0].at;
     let mut last = mine[0].at;
@@ -255,8 +288,9 @@ fn assemble(client_ip: &str, mine: &[&Request]) -> Watcher {
             watching.get_or_insert_with(|| key.to_owned());
         }
         match asked {
-            Asked::Segment { .. } => {
+            Asked::Segment { ref rung, .. } => {
                 segments += 1;
+                *by_rung.entry(rung.clone()).or_default() += 1;
                 if let Some(n) = segment_number(&r.path) {
                     numbers.push(n);
                 }
@@ -299,6 +333,13 @@ fn assemble(client_ip: &str, mine: &[&Request]) -> Watcher {
         restarts,
         reinits,
         failures,
+        // The rung most of their segments came from — ties to the name, so the answer does
+        // not change from one run to the next.
+        rung: by_rung
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+            .map(|(rung, _)| rung),
+        need_mbit: None,
     }
 }
 
@@ -380,6 +421,11 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
         }
     }
 
+    // From here on only a measurement **of the film this viewer is watching** may be used
+    // (T705): a file measured on this computer is applied to the viewers of that film and to
+    // nobody else.
+    let file = file.filter(|f| f.is_about(watcher));
+
     // The file, but only when the link is demonstrably wide enough for the average and not
     // for the peaks. Reached last, and only with both numbers in hand.
     if let (Some(file), Some(mbit)) = (file, watcher.mbit_s) {
@@ -394,6 +440,12 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
         }
     }
 
+    // What this viewer's film needs: the rung they are on, read off that film's own set on
+    // the server (T705); failing that, the measured file of that same film. Without either
+    // there is no number for what their link would have to carry, and no verdict about the
+    // link or the player can stand.
+    let need = watcher.need_mbit.or(file.map(|f| f.average_mbit));
+
     // ⚠ **Not the link, when the link demonstrably carries it.** Measured on the stand
     // 2026-09-04: a viewer at a ratio of 0.39 was told their link was too thin while the
     // speed *inside* their downloads was 30.35 Mbit/s against a film needing 4 — a hundred
@@ -404,29 +456,42 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
     // **The comparison is the film's own figure, not a threshold of ours.** If what arrives
     // while anything is arriving would keep up with the film, the shortfall is in the gaps —
     // a player that has stopped, a decoder that cannot keep pace, somebody who pressed pause.
-    // Without a file to compare against nothing is claimed, and the catch-all keeps the case:
-    // saying "not the link" needs a number for what the link would have to carry.
-    if let (Some(file), Some(in_download)) = (file, watcher.in_download_mbit_s) {
-        if in_download >= file.average_mbit {
+    if let (Some(need), Some(in_download)) = (need, watcher.in_download_mbit_s) {
+        if in_download >= need {
             return Verdict {
                 cause: Cause::ThePlayer,
                 say: Detail::new(DetailCode::StallsThePlayer)
                     .with("ratio", round2(ratio))
                     .with("mbit_s", watcher.mbit_s.map(round2))
                     .with("in_download_mbit_s", round2(in_download))
-                    .with("average_mbit", round2(file.average_mbit))
+                    .with("average_mbit", round2(need))
                     .with("restarts", watcher.restarts as u64)
                     .with("skipped", watcher.skipped.len() as u64),
             };
         }
     }
 
+    // ⚠ **The link, only with the number it fails to reach** (T705, QA-26 №12). This was the
+    // catch-all: any viewer behind real time whom nothing else explained was told their link
+    // was not enough — a viewer with a speed of 0 measured over two requests among them. Now
+    // it takes what the film needs, and their speed measured under it.
+    let speed = watcher.in_download_mbit_s.or(watcher.mbit_s);
+    let (Some(need), Some(true)) = (need, speed.map(|s| need.is_some_and(|n| s < n))) else {
+        return Verdict {
+            cause: Cause::Unclear,
+            say: Detail::new(DetailCode::StallsUnclear)
+                .with("ratio", round2(ratio))
+                .with("mbit_s", watcher.mbit_s.map(round2))
+                .with("need_mbit", need.map(round2)),
+        };
+    };
     Verdict {
         cause: Cause::ViewerLink,
         say: Detail::new(DetailCode::StallsViewerLink)
             .with("ratio", round2(ratio))
             .with("mbit_s", watcher.mbit_s.map(round2))
             .with("in_download_mbit_s", watcher.in_download_mbit_s.map(round2))
+            .with("need_mbit", round2(need))
             .with("skipped", watcher.skipped.len() as u64)
             .with("restarts", watcher.restarts as u64),
     }
