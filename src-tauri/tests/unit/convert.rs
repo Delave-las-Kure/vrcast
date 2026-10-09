@@ -346,6 +346,115 @@ fn high_dynamic_range_is_brought_down_and_the_format_is_fixed_last() {
 }
 
 #[test]
+fn the_hdr_source_is_described_to_the_tonemapper_rather_than_left_to_its_tags() {
+    // T715: a PQ curve without primaries or a matrix left zscale with nothing to convert
+    // from. The input is spelled out — the source's own curve, BT.2100's primaries and matrix.
+    let pq = convert::tonemap_chain(Some("smpte2084"));
+    assert!(
+        pq.starts_with("zscale=tin=smpte2084:pin=bt2020:min=bt2020nc:"),
+        "{pq}"
+    );
+    // The first step's output is spelled out as well: «as the input» means the frame's tags.
+    assert!(
+        pq.contains("transfer=linear:primaries=bt2020:matrix=bt2020nc"),
+        "{pq}"
+    );
+    let hlg = convert::tonemap_chain(Some("arib-std-b67"));
+    assert!(hlg.starts_with("zscale=tin=arib-std-b67:"), "{hlg}");
+    // A curve zscale cannot name is read as PQ rather than stopping the encode.
+    assert!(convert::tonemap_chain(Some("smpte428")).starts_with("zscale=tin=smpte2084:"));
+}
+
+/// T715 — with the bundled FFmpeg: an HDR clip marked PQ but with no primaries and no matrix
+/// is examined, planned and encoded by the very command production builds, and comes out in
+/// the ordinary range. Before, it stopped at the first frame («no path between colorspaces»).
+#[test]
+fn an_hdr_clip_marked_pq_without_primaries_is_brought_down_by_the_real_encoder() {
+    use vrcast_studio_lib::media::ffmpeg;
+    let (Ok(ff), Ok(_)) = (ffmpeg::locate("ffmpeg"), ffmpeg::locate("ffprobe")) else {
+        eprintln!("SKIPPED: no bundled FFmpeg. Run `npm run ffmpeg` for this to check anything.");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("vrcast-t715-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let clip = dir.join("pq-bare.mkv");
+    let made = std::process::Command::new(&ff)
+        .args([
+            "-hide_banner",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            "1",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-c:v",
+            "libx264",
+            // The curve said, the primaries and the matrix «unspecified» (2).
+            "-bsf:v",
+            "h264_metadata=colour_primaries=2:transfer_characteristics=16:matrix_coefficients=2",
+            "-c:a",
+            "aac",
+        ])
+        .arg(&clip)
+        .status()
+        .unwrap();
+    assert!(made.success(), "could not prepare the clip");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let source = rt
+        .block_on(vrcast_studio_lib::media::probe::probe(&clip))
+        .expect("the clip could not be examined");
+    assert_eq!(source.color_transfer.as_deref(), Some("smpte2084"));
+    assert!(source.is_hdr());
+
+    let out = dir.join("ready.mp4");
+    let out_s = out.to_string_lossy().into_owned();
+    let plan = plan::plan(
+        &source,
+        &ConvertRequest {
+            height: Some(180),
+            ..as_is()
+        },
+    )
+    .unwrap();
+    assert!(plan.tonemap);
+    let args = convert::build_args(&ConvertJob {
+        source: &source,
+        plan: &plan,
+        encoder: &Encoder::Software,
+        out_path: &out_s,
+    });
+    let run = std::process::Command::new(&ff)
+        .args(&args)
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "the encode failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let made = rt
+        .block_on(vrcast_studio_lib::media::probe::probe(&out))
+        .expect("the result could not be examined");
+    assert_eq!(made.height, 180);
+    assert_eq!(made.pix_fmt, "yuv420p");
+    assert!(!made.is_hdr(), "{:?}", made.color_transfer);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn only_one_filter_argument_is_ever_passed() {
     // FFmpeg accepts a single `-vf`; a second one silently replaces the first
     // rather than adding to it, so a tonemap plus a resize would lose one of them.
@@ -585,7 +694,10 @@ fn hdr_is_brought_down_before_subtitles_are_drawn() {
     });
     let graph = value_of(&args, "-filter_complex").unwrap();
     assert!(
-        graph.starts_with(&format!("[0:v:0]{}[film];", convert::TONEMAP_CHAIN)),
+        graph.starts_with(&format!(
+            "[0:v:0]{}[film];",
+            convert::tonemap_chain(Some("smpte2084"))
+        )),
         "{graph}"
     );
     p.subtitles = Some(plan::SubtitleBurn {
@@ -600,7 +712,10 @@ fn hdr_is_brought_down_before_subtitles_are_drawn() {
     });
     let vf = value_of(&args, "-vf").unwrap();
     assert!(
-        vf.starts_with(&format!("{},subtitles=", convert::TONEMAP_CHAIN)),
+        vf.starts_with(&format!(
+            "{},subtitles=",
+            convert::tonemap_chain(Some("smpte2084"))
+        )),
         "{vf}"
     );
 }

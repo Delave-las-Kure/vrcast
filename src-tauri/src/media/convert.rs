@@ -149,8 +149,36 @@ pub fn build_args(job: &ConvertJob<'_>) -> Vec<String> {
 /// Software tonemapping through zscale. The GPU path (libplacebo/Vulkan) is faster but needs a
 /// working Vulkan stack, and on a machine without one it fails at startup rather than falling
 /// back. Correct-everywhere beats fast-sometimes for a step that runs once per file.
-pub const TONEMAP_CHAIN: &str = "zscale=transfer=linear:npl=100,tonemap=tonemap=hable:desat=0,\
-     zscale=primaries=bt709:transfer=bt709:matrix=bt709";
+///
+/// **What the source is, said rather than read** (T715). zscale takes the picture's colour
+/// from the frames, and a frame that names its transfer curve (PQ) but not its primaries or
+/// its matrix leaves it with nothing to convert from: «no path between colorspaces», and the
+/// whole film fails at the first frame. Plenty of real rips are tagged that way. So the input
+/// is spelled out: the source's own HDR curve, and the BT.2020 primaries and matrix that
+/// BT.2100 fixes for PQ and HLG — and the first step's output is spelled out too, since its
+/// «as the input» means the frame's tags again, not the ones given here. A fully tagged
+/// source comes out the same, byte for byte, as before. Production and measurement both take
+/// the chain from here, so the two stay one recipe.
+pub fn tonemap_chain(transfer: Option<&str>) -> String {
+    format!(
+        "zscale=tin={}:pin=bt2020:min=bt2020nc:transfer=linear:primaries=bt2020:matrix=bt2020nc\
+         :npl=100,tonemap=tonemap=hable:desat=0,zscale=primaries=bt709:transfer=bt709:matrix=bt709",
+        hdr_input_transfer(transfer)
+    )
+}
+
+/// The curve an HDR source is read with, by zscale's name for it (T715).
+///
+/// The source's own when zscale knows it; otherwise PQ, the curve of nearly every HDR film —
+/// a curve zscale cannot name (`smpte428`) would otherwise stop the encode outright.
+pub fn hdr_input_transfer(transfer: Option<&str>) -> &'static str {
+    match transfer.map(str::to_ascii_lowercase).as_deref() {
+        Some("arib-std-b67") => "arib-std-b67",
+        Some("bt2020-10") => "bt2020-10",
+        Some("bt2020-12") => "bt2020-12",
+        _ => "smpte2084",
+    }
+}
 
 /// The `-vf` chain, if any filtering is needed at all.
 ///
@@ -160,7 +188,7 @@ fn video_filter(job: &ConvertJob<'_>) -> Option<String> {
     let mut steps: Vec<String> = Vec::new();
 
     if job.plan.tonemap {
-        steps.push(String::from(TONEMAP_CHAIN));
+        steps.push(tonemap_chain(job.source.color_transfer.as_deref()));
     }
 
     // T696: text subtitles are drawn by libass onto the full-size picture, after HDR is
@@ -217,7 +245,7 @@ fn picture_subtitles_graph(job: &ConvertJob<'_>) -> Option<String> {
     let burn = burning(job).filter(|b| b.kind == SubtitleKind::Picture)?;
     let mut film = String::from("null");
     if job.plan.tonemap {
-        film = String::from(TONEMAP_CHAIN);
+        film = tonemap_chain(job.source.color_transfer.as_deref());
     }
     let mut after = String::new();
     if let Some(height) = target_height(job) {

@@ -349,16 +349,21 @@ fn a_point_is_encoded_with_the_keyframes_and_the_ceiling_a_rung_is_made_with() {
 
 #[test]
 fn an_hdr_point_is_brought_down_the_same_way_on_both_sides_of_the_comparison() {
-    use vrcast_studio_lib::media::convert::TONEMAP_CHAIN;
+    use vrcast_studio_lib::media::convert::tonemap_chain;
     use vrcast_studio_lib::media::vmaf::{score_args, Recipe};
     let hdr = Recipe::for_material(24, Some("smpte2084"));
-    assert!(hdr.tonemap);
-    assert!(!Recipe::for_material(24, Some("bt709")).tonemap);
-    assert!(!Recipe::for_material(24, None).tonemap);
+    assert_eq!(hdr.tonemap, Some("smpte2084"));
+    assert_eq!(
+        Recipe::for_material(24, Some("arib-std-b67")).tonemap,
+        Some("arib-std-b67")
+    );
+    assert!(Recipe::for_material(24, Some("bt709")).tonemap.is_none());
+    assert!(Recipe::for_material(24, None).tonemap.is_none());
+    let chain = tonemap_chain(Some("smpte2084"));
 
     // The encode: tonemapped first, then the height, then eight-bit.
     let filter = value_after(&chunk_with(6, hdr), "-vf").unwrap();
-    assert!(filter.starts_with(TONEMAP_CHAIN), "{filter}");
+    assert!(filter.starts_with(&chain), "{filter}");
     assert!(filter.ends_with("scale=-2:720,format=yuv420p"), "{filter}");
     // An ordinary source is not tonemapped.
     let plain = value_after(&chunk_with(6, Recipe::for_material(24, None)), "-vf").unwrap();
@@ -374,7 +379,7 @@ fn an_hdr_point_is_brought_down_the_same_way_on_both_sides_of_the_comparison() {
         &hdr,
     ));
     let reference = branch(&graph, "[0:v]");
-    assert!(reference.contains(TONEMAP_CHAIN), "{reference}");
+    assert!(reference.contains(&chain), "{reference}");
     assert!(reference.contains("format=yuv420p"), "{reference}");
     assert!(
         !reference.contains("scale=-2") && !reference.contains(&format!("scale={SOURCE_W}")),
@@ -448,11 +453,29 @@ async fn a_point_is_measured_by_the_production_recipe_on_ordinary_and_hdr_materi
             "bt2020nc"
         ]
     ));
+    // T715: marked PQ, with neither primaries nor a matrix — the tonemapper used to stop at
+    // the first frame of it, on both sides of the comparison.
+    let bare = dir.join("hdr-bare.mkv");
+    assert!(make(
+        &bare,
+        &[
+            "-pix_fmt",
+            "yuv420p10le",
+            "-c:v",
+            "libx264",
+            "-bsf:v",
+            "h264_metadata=colour_primaries=2:transfer_characteristics=16:matrix_coefficients=2",
+        ]
+    ));
     let cell = vrcast_studio_lib::domain::measure_grid::Cell {
         bitrate_mbps: 1,
         height: 360,
     };
-    for (clip, transfer) in [(&sdr, None), (&hdr, Some("smpte2084"))] {
+    for (clip, transfer) in [
+        (&sdr, None),
+        (&hdr, Some("smpte2084")),
+        (&bare, Some("smpte2084")),
+    ] {
         let recipe = vmaf::Recipe::for_material(24, transfer);
         let point = vmaf::measure_point(
             clip,

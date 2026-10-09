@@ -43,13 +43,14 @@ pub const MEASURE_CONTAINER: &str = "matroska";
 /// spacing is the rung's own (one a second, `ladder_build::shared_gop`), the ceiling and the
 /// buffer are `convert_plan::peak_control` in kilobits, the picture is eight-bit 4:2:0 at the
 /// High profile as production writes it, and an HDR source goes through the same
-/// [`crate::media::convert::TONEMAP_CHAIN`] on both sides of the comparison.
+/// [`crate::media::convert::tonemap_chain`] on both sides of the comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Recipe {
     /// Frames between keyframes: the source's frame rate, as production uses.
     pub gop: u32,
-    /// Whether HDR is brought down to the ordinary range — then on both sides.
-    pub tonemap: bool,
+    /// The HDR curve the source is read with (zscale's name, T715), when HDR is brought down
+    /// to the ordinary range — then on both sides. `None` for the ordinary range.
+    pub tonemap: Option<&'static str>,
 }
 
 impl Recipe {
@@ -57,7 +58,8 @@ impl Recipe {
     pub fn for_material(fps: u32, color_transfer: Option<&str>) -> Self {
         Self {
             gop: fps.max(1),
-            tonemap: crate::domain::source::is_hdr_transfer(color_transfer),
+            tonemap: crate::domain::source::is_hdr_transfer(color_transfer)
+                .then(|| super::convert::hdr_input_transfer(color_transfer)),
         }
     }
 
@@ -343,8 +345,8 @@ pub fn chunk_args(
     // it may reach 1.1.
     let (maxrate_kbps, bufsize_kbps) = crate::domain::convert_plan::peak_control(target_kbps);
     let mut filter = Vec::new();
-    if recipe.tonemap {
-        filter.push(String::from(super::convert::TONEMAP_CHAIN));
+    if let Some(transfer) = recipe.tonemap {
+        filter.push(super::convert::tonemap_chain(Some(transfer)));
     }
     // `-2` rather than a width of our own: the width follows the height and stays divisible
     // by two, which keeps the aspect of anamorphic and side-by-side material.
@@ -423,7 +425,7 @@ pub fn chunk_args(
 /// could look at them until T490.
 ///
 /// **The reference is seen as the rung will show it** (T697): an HDR source goes through the
-/// same [`crate::media::convert::TONEMAP_CHAIN`] the encode went through, and both sides are
+/// same [`crate::media::convert::tonemap_chain`] the encode went through, and both sides are
 /// eight-bit 4:2:0 — the picture production writes. Compared raw, an HDR reference scored the
 /// tonemapping as loss, and a ten-bit one was matched against an eight-bit encode by whatever
 /// conversion the filter graph chose by itself. The reference is never resized.
@@ -435,10 +437,12 @@ pub fn score_args(
     source_height: u32,
     recipe: &Recipe,
 ) -> Vec<String> {
-    let picture = if recipe.tonemap {
-        format!("{},format=yuv420p", super::convert::TONEMAP_CHAIN)
-    } else {
-        String::from("format=yuv420p")
+    let picture = match recipe.tonemap {
+        Some(transfer) => format!(
+            "{},format=yuv420p",
+            super::convert::tonemap_chain(Some(transfer))
+        ),
+        None => String::from("format=yuv420p"),
     };
     // The reference is the source's own frames; the distorted one is stretched back up to
     // meet it. `setpts` on both puts them on the same clock — without it the two inputs
