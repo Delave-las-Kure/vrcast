@@ -115,6 +115,7 @@ export type DetailCode =
   | "PROFILE_HOST_EMPTY"
   | "PROFILE_HOST_NOT_BARE"
   | "PROFILE_PORT_RANGE"
+  | "PROFILE_TARIFF_RANGE"
   | "PROFILE_USER_EMPTY"
   | "PROFILE_USER_HAS_SPACES"
   | "PROFILE_SECRET_REF_EMPTY"
@@ -382,6 +383,7 @@ export type DetailCode =
   | "STALLS_TOO_SHORT"
   | "STALLS_KEEPING_UP"
   | "STALLS_SERVER_LINK"
+  | "STALLS_SERVER_LINK_TARIFF"
   | "STALLS_DISK"
   | "STALLS_FILE_PEAKS"
   | "STALLS_VIEWER_LINK"
@@ -453,6 +455,8 @@ export interface ServerProfile {
   host_fingerprint: string | null;
   ipv6_mode: Ipv6Mode | null;
   is_active: boolean;
+  /** T712 — the hosting plan's speed going out, Mbit/s; `null` — not given (then the network card). */
+  tariff_mbit?: number | null;
 }
 
 /** The fields the interface sends when creating or changing a profile. */
@@ -468,6 +472,8 @@ export interface ServerInput {
   video_dir: string | null;
   cdn_base: string | null;
   ipv6_mode: Ipv6Mode | null;
+  /** T712 — the hosting plan's speed, Mbit/s; `null` or absent — not given. */
+  tariff_mbit?: number | null;
 }
 
 /** `skipped` — the step was never reached: it stopped earlier (FR-003). */
@@ -895,6 +901,8 @@ export interface ServerLoad {
   /** Nought means "not determined", and the server's own link is then not among the suspects. */
   capacity_mbit_s: number;
   cache_small: boolean;
+  /** T712 — what the capacity is: the plan on the server's card, or the network card's speed. */
+  capacity_by?: "network_card" | "tariff";
 }
 
 export interface Watcher {

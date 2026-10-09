@@ -141,6 +141,8 @@ pub mod api {
             opened.conn.close().await;
         }
         let (live, polls) = live?;
+        // T712: weighed against the plan on the server's card when the owner wrote one there.
+        let load = live.load.against(profile.tariff_mbit);
         let mut sifted = stalls::sift(&stretch?.requests, &live.addresses);
 
         // T711: each viewer's own connection, read before and after the load's five seconds —
@@ -178,14 +180,14 @@ pub mod api {
         let verdicts = sifted
             .watchers
             .iter()
-            .map(|w| stalls::explain(w, Some(&live.load), file.as_ref()))
+            .map(|w| stalls::explain(w, Some(&load), file.as_ref()))
             .collect();
 
         Ok(Stalls {
             watchers: sifted.watchers,
             set_aside: sifted.set_aside,
             verdicts,
-            load: live.load,
+            load,
         })
     }
 

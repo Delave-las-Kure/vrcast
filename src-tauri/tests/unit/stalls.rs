@@ -150,6 +150,7 @@ fn the_server_asleep_points_at_the_viewers_link() {
         out_mbit_s: 18.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(&it, Some(&asleep), None);
     assert_eq!(verdict.cause, Cause::ViewerLink);
@@ -179,6 +180,7 @@ fn without_what_the_film_needs_the_link_is_not_blamed() {
         out_mbit_s: 18.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(it, Some(&asleep), None);
     assert_eq!(verdict.cause, Cause::Unclear);
@@ -217,6 +219,7 @@ fn a_busy_server_takes_the_blame_itself() {
         out_mbit_s: 900.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(it, Some(&flat_out), None);
     assert_eq!(
@@ -245,6 +248,7 @@ fn a_wide_link_and_a_peaky_file_point_at_the_file() {
         out_mbit_s: 18.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(it, Some(&asleep), Some(&peaky));
     assert_eq!(verdict.cause, Cause::TheFileItself);
@@ -623,4 +627,49 @@ fn a_side_full_whenever_anything_was_sent_is_the_player_even_if_little_was() {
     let live = stalls::live_links(&before, &after)["203.0.113.40"];
     let verdict = stalls::explain(&starving_with(Some(live), Some(2.0)), None, None);
     assert_eq!(verdict.say.key, DetailCode::StallsThePlayer);
+}
+
+// ---------- T712: the load weighed against the plan on the server's card ----------
+
+#[test]
+fn the_plan_on_the_card_is_what_the_load_is_weighed_against_and_it_is_said() {
+    let s = sifted();
+    let it = s.watchers.iter().find(|w| w.client_ip == STARVING).unwrap();
+    // 90 Mbit/s going out of a gigabit card: room to spare, by the card.
+    let by_card = Load {
+        cpu_busy: 0.05,
+        disk_read_mb_s: 0.0,
+        out_mbit_s: 90.0,
+        capacity_mbit_s: 1000.0,
+        cache_small: false,
+        capacity_by: Default::default(),
+    };
+    assert_ne!(
+        stalls::explain(it, Some(&by_card), None).cause,
+        Cause::ServerLink
+    );
+    // The same 90 out of a plan of 100: the server's own link is full — and said to be the
+    // plan's, not the card's.
+    let by_plan = by_card.against(Some(100));
+    assert_eq!(by_plan.capacity_mbit_s, 100.0);
+    assert_eq!(by_plan.capacity_by, stalls::CapacityBy::Tariff);
+    let verdict = stalls::explain(it, Some(&by_plan), None);
+    assert_eq!(verdict.cause, Cause::ServerLink);
+    assert_eq!(verdict.say.key, DetailCode::StallsServerLinkTariff);
+
+    // No plan: as before, by the card, and said so.
+    let flat_out = Load {
+        out_mbit_s: 900.0,
+        ..by_card.against(None)
+    };
+    assert_eq!(flat_out.capacity_by, stalls::CapacityBy::NetworkCard);
+    assert_eq!(
+        stalls::explain(it, Some(&flat_out), None).say.key,
+        DetailCode::StallsServerLink
+    );
+    // And the shape the interface reads.
+    assert_eq!(
+        serde_json::to_value(by_plan).unwrap()["capacity_by"],
+        "tariff"
+    );
 }

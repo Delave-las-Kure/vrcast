@@ -57,6 +57,7 @@ export function toInput(profile: ServerProfile): ServerInput {
     video_dir: profile.video_dir,
     cdn_base: profile.cdn_base,
     ipv6_mode: profile.ipv6_mode,
+    tariff_mbit: profile.tariff_mbit ?? null,
   };
 }
 

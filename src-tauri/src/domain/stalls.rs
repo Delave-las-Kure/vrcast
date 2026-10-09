@@ -271,6 +271,35 @@ pub struct Load {
     pub capacity_mbit_s: f64,
     /// Whether the serving cache is small — the disk is being read instead of memory.
     pub cache_small: bool,
+    /// What `capacity_mbit_s` is (T712): the plan written on the server's card, or the
+    /// network card's own speed when none was. Said beside the figure, because the two are
+    /// not the same thing on a rented machine.
+    #[serde(default)]
+    pub capacity_by: CapacityBy,
+}
+
+/// Where the capacity of the server's own link was taken from (T712).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapacityBy {
+    /// The network card's speed, as the machine reports it — the only figure there is
+    /// without the owner's word.
+    #[default]
+    NetworkCard,
+    /// The plan's speed, as the owner wrote it on the server's card.
+    Tariff,
+}
+
+impl Load {
+    /// The load weighed against the plan on the server's card, when one is written there
+    /// (T712); as it was — against the network card — when none is.
+    pub fn against(mut self, tariff_mbit: Option<u32>) -> Self {
+        if let Some(t) = tariff_mbit.filter(|t| *t > 0) {
+            self.capacity_mbit_s = f64::from(t);
+            self.capacity_by = CapacityBy::Tariff;
+        }
+        self
+    }
 }
 
 /// What the file being served looks like, when it is known (T315).
@@ -521,9 +550,13 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
 
     if let Some(load) = load {
         if load.capacity_mbit_s > 0.0 && load.out_mbit_s / load.capacity_mbit_s > SERVER_LINK_BUSY {
+            let code = match load.capacity_by {
+                CapacityBy::NetworkCard => DetailCode::StallsServerLink,
+                CapacityBy::Tariff => DetailCode::StallsServerLinkTariff,
+            };
             return Verdict {
                 cause: Cause::ServerLink,
-                say: Detail::new(DetailCode::StallsServerLink)
+                say: Detail::new(code)
                     .with("out_mbit_s", round2(load.out_mbit_s))
                     .with("capacity_mbit_s", round2(load.capacity_mbit_s)),
             };

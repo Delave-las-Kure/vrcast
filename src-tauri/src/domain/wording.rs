@@ -62,6 +62,8 @@ detail_codes! {
     ProfileHostEmpty => "PROFILE_HOST_EMPTY",
     ProfileHostNotBare => "PROFILE_HOST_NOT_BARE",
     ProfilePortRange => "PROFILE_PORT_RANGE",
+    /// `max` — the plan's speed on the server card is above any real one (T712).
+    ProfileTariffRange => "PROFILE_TARIFF_RANGE",
     ProfileUserEmpty => "PROFILE_USER_EMPTY",
     ProfileUserHasSpaces => "PROFILE_USER_HAS_SPACES",
     ProfileSecretRefEmpty => "PROFILE_SECRET_REF_EMPTY",
@@ -575,6 +577,9 @@ detail_codes! {
     StallsKeepingUp => "STALLS_KEEPING_UP",
     /// `out_mbit_s`, `capacity_mbit_s`.
     StallsServerLink => "STALLS_SERVER_LINK",
+    /// `out_mbit_s`, `capacity_mbit_s` — the capacity being the plan on the server card
+    /// (T712), not the network card.
+    StallsServerLinkTariff => "STALLS_SERVER_LINK_TARIFF",
     /// `disk_read_mb_s`, `ratio`.
     StallsDisk => "STALLS_DISK",
     /// `mbit_s`, `average_mbit`, `peak_10s_mbit`.

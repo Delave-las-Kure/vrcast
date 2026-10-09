@@ -85,6 +85,7 @@ async fn setup() -> (DeployTarget, AppState, String) {
             video_dir: None,
             cdn_base: None,
             ipv6_mode: None,
+            tariff_mbit: None,
         },
         ROOT_PASSWORD,
     )

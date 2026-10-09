@@ -1054,3 +1054,49 @@ fn a_locked_store_does_not_stop_an_edit_that_brings_no_secret() {
     api::server_update(&s, &id, valid_input("Renamed"), None).expect("a rename was refused");
     assert_eq!(api::servers_list(&s).unwrap()[0].name, "Renamed");
 }
+
+// ---------- T712: the hosting plan on the server's card ----------
+
+#[test]
+fn the_plan_on_the_card_is_kept_changed_and_cleared() {
+    let s = state();
+    // Without it, as every profile had before: not given.
+    let id = api::server_add(&s, valid_input("Server"), SECRET).unwrap();
+    assert_eq!(api::servers_list(&s).unwrap()[0].tariff_mbit, None);
+
+    let mut input = valid_input("Server");
+    input.tariff_mbit = Some(500);
+    api::server_update(&s, &id, input.clone(), None).expect("the plan was not saved");
+    assert_eq!(api::servers_list(&s).unwrap()[0].tariff_mbit, Some(500));
+
+    // Editing another field keeps it: the form sends what it holds.
+    input.domain = String::from("new.example.com");
+    api::server_update(&s, &id, input.clone(), None).unwrap();
+    assert_eq!(api::servers_list(&s).unwrap()[0].tariff_mbit, Some(500));
+
+    // Nought is the field emptied, not a plan of nothing.
+    input.tariff_mbit = Some(0);
+    api::server_update(&s, &id, input.clone(), None).unwrap();
+    assert_eq!(api::servers_list(&s).unwrap()[0].tariff_mbit, None);
+
+    // And the form that sends no plan at all — an older screen — is read as none given.
+    let json = serde_json::json!({
+        "name": "Server", "host": "203.0.113.10", "port": 22, "user": "root",
+        "auth_kind": "password", "key_path": null, "domain": "stream.example.com",
+        "video_dir": null, "cdn_base": null, "ipv6_mode": null
+    });
+    let older: ServerInput = serde_json::from_value(json).expect("an input without a plan");
+    assert_eq!(older.tariff_mbit, None);
+}
+
+#[test]
+fn a_plan_beyond_any_real_one_is_refused_and_named() {
+    let s = state();
+    let mut input = valid_input("Server");
+    input.tariff_mbit = Some(1_000_000);
+    let e = api::server_add(&s, input, SECRET).expect_err("a plan of a terabit was taken");
+    assert_eq!(e.code, ErrorCode::InvalidInput);
+    let said = serde_json::to_string(&e).unwrap();
+    assert!(said.contains("PROFILE_TARIFF_RANGE"), "{said}");
+    assert!(said.contains("100000"), "{said}");
+}

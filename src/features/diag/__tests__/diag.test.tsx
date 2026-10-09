@@ -649,3 +649,33 @@ describe("T711 — the link and the player told apart on the live connection", (
     }
   });
 });
+
+/** T712 — the server's link weighed against the plan on its card, and said to be. */
+describe("T712 — the plan, not the network card", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHealth.mockResolvedValue(HEALTH);
+    mockLogs.mockResolvedValue(LOGS);
+    mockLibrary.mockResolvedValue([]);
+  });
+
+  it("says the capacity is the plan's when it is", async () => {
+    mockStalls.mockResolvedValue({
+      ...STALLS,
+      load: { ...STALLS.load, capacity_mbit_s: 100, capacity_by: "tariff" },
+    });
+    renderIn(<DiagScreen serverId="s1" />, "ru");
+    await waitFor(() => expect(screen.getByTestId("stalls-load")).toBeInTheDocument());
+    expect(screen.getByTestId("stalls-load")).toHaveTextContent(
+      "из положенных по тарифу 100,0 Мбит/с",
+    );
+    expect(screen.getByTestId("stalls-load").textContent).not.toContain("сетевой карте");
+  });
+
+  it("and the network card's when no plan was written", async () => {
+    mockStalls.mockResolvedValue(STALLS);
+    renderIn(<DiagScreen serverId="s1" />, "ru");
+    await waitFor(() => expect(screen.getByTestId("stalls-load")).toBeInTheDocument());
+    expect(screen.getByTestId("stalls-load")).toHaveTextContent("по сетевой карте");
+  });
+});

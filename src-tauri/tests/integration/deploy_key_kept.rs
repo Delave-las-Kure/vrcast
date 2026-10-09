@@ -75,6 +75,7 @@ async fn a_run_closed_after_the_hardening_step_leaves_a_profile_that_signs_in_wi
                 video_dir: None,
                 cdn_base: None,
                 ipv6_mode: None,
+                tariff_mbit: None,
             },
             ROOT_PASSWORD,
         )

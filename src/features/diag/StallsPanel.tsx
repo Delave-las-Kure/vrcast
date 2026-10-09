@@ -54,7 +54,9 @@ export function StallsPanel({
         {stalls.load.capacity_mbit_s > 0 ? (
           <>
             {" "}
-            {words.stallsLoadCapacity}{" "}
+            {stalls.load.capacity_by === "tariff"
+              ? words.stallsLoadTariff
+              : words.stallsLoadCapacity}{" "}
             {formatBitrate(stalls.load.capacity_mbit_s * 1_000_000, lang)}
           </>
         ) : (

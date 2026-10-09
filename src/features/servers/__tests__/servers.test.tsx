@@ -800,3 +800,53 @@ describe("a section with no server (T709)", () => {
     expect(screen.getByText(ru.ui.common.noActiveServer, { exact: false })).toBeInTheDocument();
   });
 });
+
+/** T712 — the hosting plan on the server's card. */
+describe("T712 — «Тариф, Мбит/с» on the server's card", () => {
+  it("is shown filled from the profile and sent with the rest", async () => {
+    mockServersList.mockResolvedValue([makeProfile({ tariff_mbit: 300 })]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    const field = await screen.findByLabelText(ru.ui.wizard.fieldTariff);
+    expect(field).toHaveValue(300);
+    fireEvent.change(field, { target: { value: "500" } });
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ tariff_mbit: 500 }),
+        null,
+      ),
+    );
+  });
+
+  it("left empty, says the network card is what counts, and sends none", async () => {
+    mockServersList.mockResolvedValue([makeProfile()]);
+    mockServerUpdate.mockResolvedValue(undefined);
+    draw();
+
+    fireEvent.click(await screen.findByText(ru.ui.servers.edit));
+    const field = await screen.findByLabelText(ru.ui.wizard.fieldTariff);
+    expect(field).toHaveValue(null);
+    expect(field).toHaveAttribute("placeholder", "по сетевой карте");
+    fireEvent.click(screen.getByText(ru.ui.servers.save));
+
+    await waitFor(() =>
+      expect(mockServerUpdate).toHaveBeenCalledWith(
+        "srv_1",
+        expect.objectContaining({ tariff_mbit: null }),
+        null,
+      ),
+    );
+  });
+
+  it("is short and said in both languages", () => {
+    for (const label of [ru.ui.wizard.fieldTariff, en.ui.wizard.fieldTariff]) {
+      expect(label.length).toBeLessThanOrEqual(90);
+    }
+    expect(en.ui.wizard.fieldTariff).toBe("Plan, Mbit/s");
+  });
+});

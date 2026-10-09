@@ -306,6 +306,7 @@ pub fn read_load(said: &str) -> Live {
             out_mbit_s,
             capacity_mbit_s,
             cache_small,
+            capacity_by: crate::domain::stalls::CapacityBy::NetworkCard,
         },
         addresses,
     }

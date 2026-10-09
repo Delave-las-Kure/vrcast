@@ -78,6 +78,7 @@ pub(crate) async fn add_profile(state: &AppState, server: &TestServer) -> String
         video_dir: Some(String::from(VIDEO_DIR)),
         cdn_base: None,
         ipv6_mode: None,
+        tariff_mbit: None,
     };
     let id =
         servers::server_add(state, input, KEY_PASSPHRASE).expect("the profile was not created");
@@ -533,6 +534,7 @@ pub(crate) fn attach_secret(state: &AppState) -> String {
         video_dir: Some(profile.video_dir.clone()),
         cdn_base: profile.cdn_base.clone(),
         ipv6_mode: profile.ipv6_mode,
+        tariff_mbit: None,
     };
     servers::server_update(state, &profile.id, input, Some(KEY_PASSPHRASE))
         .expect("the secret was not written");

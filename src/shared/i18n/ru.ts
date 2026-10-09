@@ -328,6 +328,7 @@ export const ruCore: CatalogueCore = {
     PROFILE_HOST_NOT_BARE:
       "Адрес сервера не должен содержать пробелов и косых черт — только адрес, без ссылки.",
     PROFILE_PORT_RANGE: "Порт должен быть от 1 до 65535. Обычный порт SSH — 22.",
+    PROFILE_TARIFF_RANGE: "Тариф больше {max} Мбит/с — проверьте число.",
     PROFILE_USER_EMPTY: "Укажите пользователя, под которым приложение входит на сервер.",
     PROFILE_USER_HAS_SPACES: "Имя пользователя не должно содержать пробелов.",
     PROFILE_SECRET_REF_EMPTY: "Не задана ссылка на секрет в хранилище системы.",
@@ -662,6 +663,8 @@ export const ruCore: CatalogueCore = {
     STALLS_KEEPING_UP: "Зритель успевает: {ratio|num}× реального времени, канал {mbit_s|mbit}.",
     STALLS_SERVER_LINK:
       "Упирается канал самого сервера: отдаётся {out_mbit_s|mbit} из {capacity_mbit_s|mbit} по сетевой карте.",
+    STALLS_SERVER_LINK_TARIFF:
+      "Упирается канал самого сервера: отдаётся {out_mbit_s|mbit} из {capacity_mbit_s|mbit} по тарифу.",
     STALLS_DISK:
       "Упирается диск: читается {disk_read_mb_s|num} МБ/с, получено {ratio|num}× реального времени.",
     STALLS_FILE_PEAKS:
@@ -958,6 +961,7 @@ const ui = {
     unitSeconds: "с",
     stallsLoadOut: "Отдача",
     stallsLoadCapacity: "из возможных по сетевой карте",
+    stallsLoadTariff: "из положенных по тарифу",
     stallsCapacityUnknown: "ёмкость канала не выяснена — виновным он не назначается",
 
     bitrateTitle: "Пики битрейта файла",
@@ -1054,6 +1058,8 @@ const ui = {
       stallsHint: "Данные не идут. Если надолго — просмотр оборвался.",
     },
     watchingNow: "смотрят сейчас",
+    loadTariff: "Отдаётся {out|bitrate} из {tariff|mbit} по тарифу",
+    loadHigh: "канал сервера почти занят",
     reconnecting: "Связь с сервером потеряна — переподключаюсь…",
     reconnectingTry: "Попытка {n}.",
     staleAge: "Список {age} назад — сейчас может быть другим.",
@@ -1118,6 +1124,8 @@ const ui = {
     fieldVideoDir: "Каталог с видео на сервере",
     fieldVideoDirPlaceholder: "по умолчанию",
     fieldCdn: "Адрес CDN",
+    fieldTariff: "Тариф, Мбит/с",
+    fieldTariffPlaceholder: "по сетевой карте",
     fieldCdnPlaceholder: "нет",
     checking: "Проверяем…",
     next: "Дальше",

@@ -95,6 +95,7 @@ pub fn read_from(path: &Path) -> Option<Imported> {
                 .or_else(|| Some(String::from(DEFAULT_VIDEO_DIR))),
             cdn_base: values.get("CDN_BASE").cloned().filter(|c| !c.is_empty()),
             ipv6_mode: None,
+            tariff_mbit: None,
         },
         source: path.to_path_buf(),
         needs_passphrase: key_path.is_some(),

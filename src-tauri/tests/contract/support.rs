@@ -35,5 +35,6 @@ pub fn valid_input(name: &str) -> ServerInput {
         video_dir: None,
         cdn_base: None,
         ipv6_mode: None,
+        tariff_mbit: None,
     }
 }

@@ -80,6 +80,7 @@ fn app_state(port: u16) -> AppState {
             // Confirmed, so `connect_raw` goes on to the network rather than refusing at once.
             host_fingerprint: Some(String::from("SHA256:t621-never-compared")),
             ipv6_mode: None,
+            tariff_mbit: None,
             is_active: true,
         },
     )

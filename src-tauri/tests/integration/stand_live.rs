@@ -71,6 +71,7 @@ async fn profile_for(state: &AppState, stand: &Stand) -> String {
         video_dir: None,
         cdn_base: None,
         ipv6_mode: None,
+        tariff_mbit: None,
     };
     let id = servers::server_add(state, input, "").expect("the profile was not created");
 

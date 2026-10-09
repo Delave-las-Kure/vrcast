@@ -52,6 +52,7 @@ async fn setup() -> (TestServer, AppState, String) {
         video_dir: Some(String::from(VIDEO_DIR)),
         cdn_base: None,
         ipv6_mode: None,
+        tariff_mbit: None,
     };
     let id =
         servers::server_add(&state, input, KEY_PASSPHRASE).expect("the profile was not created");
