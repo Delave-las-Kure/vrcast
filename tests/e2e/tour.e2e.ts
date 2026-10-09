@@ -575,8 +575,18 @@ async function ensureServer() {
   await waitServer();
 }
 
+/** A container's address on Docker's network (the old `.NetworkSettings.IPAddress` is empty
+ *  on current Docker). */
+function ipOf(name: string): string {
+  return docker([
+    ...["inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", name],
+  ])
+    .stdout.trim()
+    .split(/\s+/)[0];
+}
+
 function serverIp(): string {
-  return docker(["inspect", "-f", "{{.NetworkSettings.IPAddress}}", NAME]).stdout.trim();
+  return ipOf(NAME);
 }
 
 function removeContainers() {
@@ -1823,7 +1833,8 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         [VIEWER_FAST, ""],
         [VIEWER_SLOW, "--limit-rate 60k"],
       ] as const) {
-        if (containerState(name) !== "running") {
+        {
+          // Always afresh: a viewer left by an earlier run watches whatever it was told then.
           docker(["rm", "-f", name]);
           const r = docker([
             "run",
@@ -1839,18 +1850,8 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           if (r.status !== 0) note(`зритель ${name} не запустился: ${r.stderr.slice(0, 200)}`);
         }
       }
-      const slowIp = docker([
-        "inspect",
-        "-f",
-        "{{.NetworkSettings.IPAddress}}",
-        VIEWER_SLOW,
-      ]).stdout.trim();
-      const fastIp = docker([
-        "inspect",
-        "-f",
-        "{{.NetworkSettings.IPAddress}}",
-        VIEWER_FAST,
-      ]).stdout.trim();
+      const slowIp = ipOf(VIEWER_SLOW);
+      const fastIp = ipOf(VIEWER_FAST);
       note(
         `зрители — два контейнера с curl по кругу (master → ступень → куски) к ${master}: быстрый ${fastIp}, медленный ${slowIp} (--limit-rate 60k)`,
       );
@@ -1882,8 +1883,23 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           await sleep(500);
         },
       );
+      const dialog = "//section[@aria-label='Ограничение качества']";
+      await step(
+        "limit-media-chosen",
+        "В «Какое медиа» выбран «Фильм с двумя дорожками» — предпросмотр",
+        async () => {
+          await chooseX(`${dialog}//select`, "option[normalize-space()='Фильм с двумя дорожками']");
+          await sleep(600);
+          await until(
+            "the preview",
+            async () => !(await s().has('[data-testid="limit-previewing"]')),
+            60_000,
+          );
+          await sleep(500);
+        },
+      );
       await step("limit-cap-2", "Потолок изменён на 2 Мбит/с — предпросмотр", async () => {
-        const input = await s().findX("//section[@aria-label='Ограничение качества']//input");
+        const input = await s().findX(`${dialog}//input`);
         await input.clear();
         await input.type("2");
         await sleep(600);
@@ -1896,16 +1912,30 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       });
       await step("limit-applied", "«Понимаю, ограничить» — итог", async () => {
         await (await s().find('[data-testid="confirm"]')).click();
-        await until(
-          "the dialog to close",
-          async () =>
-            !(await has("//section[@aria-label='Ограничение качества']")) ||
-            /ограничен|Ограничено|Ошибк|не удалось/i.test(await pageText()),
-          120_000,
-          500,
-        );
+        await until("the dialog to close", async () => !(await has(dialog)), 90_000, 500);
         await sleep(1000);
       });
+      if (await has(dialog)) {
+        await step(
+          "limit-error-details",
+          "Диалог не закрылся — у ошибки раскрыто «Подробнее»",
+          async () => {
+            await press("Подробнее", dialog, 5_000);
+            await sleep(400);
+          },
+        );
+        await step("limit-cancel", "«Отмена» в диалоге ограничения", async () => {
+          await press("Отмена", dialog, 5_000);
+          await sleep(600);
+        });
+      }
+      await step(
+        "limit-viewers-after",
+        "Через 30 с после ограничения — список зрителей",
+        async () => {
+          await sleep(30_000);
+        },
+      );
       await go("limits");
       await step("limits-list", "«Ограничения» — список действующих", async () => {
         await sleep(2000);
