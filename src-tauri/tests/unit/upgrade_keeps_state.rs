@@ -49,6 +49,7 @@ const RELEASED: &[&str] = &[
     include_str!("../../src/store/migrations/0025_video_replacing.sql"),
     include_str!("../../src/store/migrations/0026_video_made_medium.sql"),
     include_str!("../../src/store/migrations/0027_video_subtitles.sql"),
+    include_str!("../../src/store/migrations/0028_measured_the_old_recipe.sql"),
 ];
 
 /// A directory that removes itself, so a failing test does not leave databases behind.
@@ -393,4 +394,63 @@ fn videos_kept_before_0022_keep_the_order_they_were_added_in() {
         .map(|v| v.id)
         .collect();
     assert_eq!(ids, vec!["first", "second", "third"]);
+}
+
+#[test]
+fn measurements_of_the_recipe_before_t697_are_gone_and_the_videos_stay() {
+    // T714 (the owner's decision of 2026-10-09): the old recipe's scores are thrown away,
+    // as 0016 threw away the mp4 ones; the videos resting on them stay where they were.
+    let scratch = Scratch::new("old-recipe");
+    let path = scratch.db_path();
+    {
+        let old = database_at(&path, 27);
+        old.execute(
+            "INSERT INTO server_profiles
+             (id, name, host, port, username, auth_kind, secret_ref, domain, video_dir,
+              is_active, created_at)
+             VALUES ('s1', 'S', 'a.example.test', 22, 'root', 'key', 'server/s1',
+                     'v.example.test', '/v', 1, '2026-10-01T10:00:00Z')",
+            [],
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO quality_measurements
+             (source_key, codec, source_path, width, height, fps, source_bitrate_bps,
+              heavier_codec, anchor_mbps, chunk_starts, chunk_s, updated_at)
+             VALUES ('film.mkv:1', 'h264', 'F:/film.mkv', 1920, 1080, 24, 9000000, 0, 6,
+                     '[0]', 10, '2026-10-01T10:00:00Z')",
+            [],
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO quality_points
+             (source_key, codec, bitrate_mbps, height, vmaf, actual_bps, measured_at, took_ms)
+             VALUES ('film.mkv:1', 'h264', 6, 1080, 95.5, 6000000, '2026-10-01T10:00:00Z', 1)",
+            [],
+        )
+        .unwrap();
+        old.execute(
+            "INSERT INTO videos (id, server_id, source_path, title, slug, stage, state, measured,
+                                 created_at, updated_at)
+             VALUES ('v1', 's1', 'F:/film.mkv', 't', 's', 'encoding', 'working', 1,
+                     '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z')",
+            [],
+        )
+        .unwrap();
+    }
+    let db = Db::open(&path).expect("the old database would not open");
+    let (runs, points): (i64, i64) = db
+        .with_conn(|c| {
+            Ok((
+                c.query_row("SELECT count(*) FROM quality_measurements", [], |r| {
+                    r.get(0)
+                })?,
+                c.query_row("SELECT count(*) FROM quality_points", [], |r| r.get(0))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!((runs, points), (0, 0), "an old measurement survived");
+    let videos = vrcast_studio_lib::store::videos::list(&db).unwrap();
+    assert_eq!(videos.len(), 1, "the video went with the measurement");
+    assert!(videos[0].measured, "the row itself is not rewritten");
 }

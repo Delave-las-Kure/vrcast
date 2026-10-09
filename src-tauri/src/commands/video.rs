@@ -680,6 +680,88 @@ fn with_measured_here(state: &AppState, path: &str, rungs: &[Rung]) -> Vec<Rung>
     crate::domain::ladder::with_measured(&out, &points, false)
 }
 
+/// What the store still holds measured for a film (T714).
+struct KeptPoints {
+    /// The film's own grid, measured here or lent: what a measured plan rests on.
+    grid: bool,
+    /// Points measured for rungs a person edited.
+    edited: bool,
+}
+
+/// `None` when the film cannot be looked at (moved, on a drive not plugged in): not knowing
+/// whether its measurement is there is not the same as knowing it is gone.
+fn kept_points(state: &AppState, path: &str) -> Option<KeptPoints> {
+    use crate::store::measurements;
+    let key = measurements::key_for(std::path::Path::new(path)).ok()?;
+    let any = |codec: &str| {
+        measurements::points(&state.db, &key, codec).is_ok_and(|points| !points.is_empty())
+    };
+    Some(KeptPoints {
+        grid: any("h264"),
+        edited: any(&super::quality::edited_codec("h264")),
+    })
+}
+
+/// **A plan resting on a measurement the store no longer has is unmeasured again** (T714).
+///
+/// The measurements taken by the recipe before T697 are removed by migration 0028 (the
+/// owner's decision of 2026-10-09: films are measured again), and a person can forget one
+/// (`quality_forget`). A video not yet past its measurement kept the plan made from it: its
+/// rungs marked measured, `measured` set, «Start» going straight to a build — which then
+/// asked the store, found nothing and stopped on «not measured». Now such a video says
+/// «measure», with the time it takes, and «Start» measures first. The marks of rungs a person
+/// edited go too when nothing of theirs is left. Past the measurement the rungs are chosen
+/// and being built (`next_task` builds them as they are). Returns whether the row changed.
+fn forget_lost_measurement(state: &AppState, row: &mut VideoRow) -> bool {
+    if row.stage > VideoStage::Measuring {
+        return false;
+    }
+    let basis = basis_of(row);
+    let custom = custom_rungs(row);
+    let basis_measured = basis
+        .as_ref()
+        .is_some_and(|b| matches!(b.from, PlanSource::Measured | PlanSource::Borrowed));
+    let custom_marked = custom
+        .as_ref()
+        .is_some_and(|rungs| rungs.iter().any(|r| r.quality.vmaf().is_some()));
+    if !basis_measured && !custom_marked && !row.measured {
+        return false;
+    }
+    let Some(kept) = kept_points(state, &row.source_path) else {
+        return false;
+    };
+    let unmark = |rungs: &mut Vec<Rung>| {
+        for r in rungs.iter_mut() {
+            r.quality = crate::domain::ladder::Quality::NotMeasured;
+        }
+    };
+    let mut changed = false;
+    if let Some(mut b) = basis.filter(|_| basis_measured && !kept.grid) {
+        b.from = PlanSource::Formula;
+        b.needs_measuring = true;
+        b.measure_s = source_of(row)
+            .map(|s| grid_estimate(state, &facts_of(&s), None, 0))
+            .unwrap_or(0);
+        unmark(&mut b.rungs);
+        row.plan_json = serde_json::to_string(&b).ok();
+        changed = true;
+    }
+    // The marks of edited rungs came from the plan's measurement (or from points measured for
+    // an earlier edit); with neither left, they go with it.
+    if let Some(mut rungs) =
+        custom.filter(|_| custom_marked && basis_measured && !kept.grid && !kept.edited)
+    {
+        unmark(&mut rungs);
+        row.rungs_json = serde_json::to_string(&rungs).ok();
+        changed = true;
+    }
+    if row.measured && !kept.grid {
+        row.measured = false;
+        changed = true;
+    }
+    changed
+}
+
 fn facts_of(source: &SourceFile) -> SourceFacts {
     SourceFacts {
         width: source.width,
@@ -864,6 +946,10 @@ fn view_of(state: &AppState, row: &VideoRow) -> VideoView {
 
 /// A view of a video, at the version `rev` taken **before** `row` was read (T687).
 fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
+    // A measurement gone from the store is shown as gone (T714), not as the plan once was.
+    let mut current = row.clone();
+    forget_lost_measurement(state, &mut current);
+    let row = &current;
     let source = source_of(row);
     let plan = match (basis_of(row), source.as_ref()) {
         (Some(basis), Some(source)) => Some(effective_plan(row, &basis, source)),
@@ -1600,17 +1686,25 @@ async fn make_basis(state: &AppState, id: &str, cancel: &CancellationToken) -> R
 }
 
 fn measure_estimate(state: &AppState, path: &str, preview: &super::ladder::LadderPreview) -> u64 {
-    use crate::domain::measure_grid::{grid, seconds_per_point};
-    let facts = preview.source;
-    let anchor = preview
-        .anchor_mbps
-        .unwrap_or(crate::domain::ladder::FALLBACK_MBPS);
-    let points = grid(&facts, anchor).len();
     let already = crate::store::measurements::key_for(std::path::Path::new(path))
         .ok()
         .and_then(|key| crate::store::measurements::points(&state.db, &key, "h264").ok())
         .map(|p| p.len())
         .unwrap_or(0);
+    grid_estimate(state, &preview.source, preview.anchor_mbps, already)
+}
+
+/// The time to measure the grid of this material, less the points `already` measured, on
+/// this machine's model — at the grid's own anchor when known, the fallback's otherwise.
+fn grid_estimate(
+    state: &AppState,
+    facts: &SourceFacts,
+    anchor: Option<u64>,
+    already: usize,
+) -> u64 {
+    use crate::domain::measure_grid::{grid, seconds_per_point};
+    let anchor = anchor.unwrap_or(crate::domain::ladder::FALLBACK_MBPS);
+    let points = grid(facts, anchor).len();
     let per_point = seconds_per_point(
         facts.width,
         facts.height,
@@ -1752,7 +1846,15 @@ async fn make_medium(state: &AppState, row: &VideoRow) -> Result<String> {
 /// The task that does this video's next stage: the measurement (chained on to the build), or
 /// the build itself.
 async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
-    let row = load(state, id)?;
+    let mut row = load(state, id)?;
+    // A plan resting on a measurement the store no longer has is unmeasured again (T714) —
+    // written down, so that what the measurement finds replaces it rather than old marks.
+    if forget_lost_measurement(state, &mut row.clone()) {
+        row = change(state, id, |r| {
+            forget_lost_measurement(state, r);
+            Ok(r.clone())
+        })?;
+    }
     let source = source_of(&row).ok_or_else(|| AppError::new(ErrorCode::Internal))?;
 
     // **Room is asked before anything is made** — the plan's own answer, which carries the
@@ -1879,23 +1981,38 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
             rungs
         }
         None => {
-            let preview = super::ladder::api::ladder_plan_until(
-                state,
-                &ladder_request(&row.source_path),
-                None,
-            )
-            .await?;
-            if preview.from == super::ladder::LadderSource::Formula {
-                return Err(AppError::new(ErrorCode::LadderNotMeasured));
+            // **Past its measurement, a build goes on with the rungs it was building** (T714):
+            // the measurement they were chosen by may be gone from the store (the old recipe's,
+            // removed by migration 0028), and the set half made on the server is not thrown
+            // away for it. Only these rungs: the objections were answered before the build.
+            let chosen = (row.stage > VideoStage::Measuring
+                && row.measured
+                && kept_points(state, &row.source_path).is_some_and(|k| !k.grid))
+            .then(|| basis_of(&row))
+            .flatten()
+            .filter(|b| matches!(b.from, PlanSource::Measured | PlanSource::Borrowed))
+            .map(|b| b.rungs);
+            if let Some(rungs) = chosen {
+                rungs
+            } else {
+                let preview = super::ladder::api::ladder_plan_until(
+                    state,
+                    &ladder_request(&row.source_path),
+                    None,
+                )
+                .await?;
+                if preview.from == super::ladder::LadderSource::Formula {
+                    return Err(AppError::new(ErrorCode::LadderNotMeasured));
+                }
+                if !row.confirmed
+                    && !crate::domain::ladder::may_build_unasked(&preview.verdict.objections)
+                {
+                    return Err(AppError::new(ErrorCode::LadderObjection)
+                        .with_details(preview.verdict.objections.iter().map(|o| o.detail()))
+                        .detail(DetailCode::ChainStoppedByObjection));
+                }
+                preview.plan.rungs
             }
-            if !row.confirmed
-                && !crate::domain::ladder::may_build_unasked(&preview.verdict.objections)
-            {
-                return Err(AppError::new(ErrorCode::LadderObjection)
-                    .with_details(preview.verdict.objections.iter().map(|o| o.detail()))
-                    .detail(DetailCode::ChainStoppedByObjection));
-            }
-            preview.plan.rungs
         }
     };
     let task = super::ladder::api::ladder_build(

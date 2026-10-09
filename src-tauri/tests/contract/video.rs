@@ -1495,3 +1495,142 @@ async fn subtitles_are_found_chosen_checked_and_counted_in_the_time() {
     let off = video::video_set_subtitles(&state, &id, None).unwrap();
     assert_eq!(off.subtitle_track, None);
 }
+
+// ---------- a measurement gone from the store (T714) ----------
+
+/// Migration 0028 removes every measurement of the old recipe (the owner's decision of
+/// 2026-10-09). A video on its plan, or stopped at its measurement, then says «measure» — the
+/// formula's plan with the time to measure, no rung passed off as measured — rather than
+/// a plan resting on scores that are gone, whose «Start» stopped on «not measured». One
+/// already building goes on with the rungs it was building.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_plan_whose_measurement_is_gone_says_measure_and_a_build_under_way_goes_on() {
+    use vrcast_studio_lib::commands::ladder::{api as ladder, RecomputeRungRequest};
+    use vrcast_studio_lib::tasks::state::TaskKind;
+
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let film = films.film("measured before.mp4", true).unwrap();
+    let source = vrcast_studio_lib::media::probe::probe(std::path::Path::new(&film))
+        .await
+        .unwrap();
+    let mut rung = ladder::ladder_recompute_rung(&RecomputeRungRequest {
+        index: 0,
+        bitrate_bps: 3_000_000,
+        source: vrcast_studio_lib::domain::ladder::SourceFacts {
+            width: source.width,
+            height: source.height,
+            fps: source.fps,
+            bitrate_bps: source.bitrate_bps,
+            heavier_codec: false,
+            native_height: None,
+        },
+    })
+    .await
+    .unwrap();
+    rung.quality = Quality::MeasuredHere { vmaf_x100: 9_500 };
+    // The plan as it was made from the old measurement: measured, nothing left to measure.
+    let plan_json = serde_json::json!({
+        "rungs": [rung],
+        "from": "measured",
+        "needs_measuring": false,
+        "measure_s": 0,
+        "encoder": "libx264",
+        "pixels_per_s": 1.0e7,
+        "encode_estimate": "model",
+        "server_disk": null,
+        "local_disk": null,
+        "name_taken": false,
+        "notices": [],
+    })
+    .to_string();
+
+    let state = state();
+    let server = server(&state);
+    let put = |id: &str, stage: VideoStage, st: VideoState| {
+        let mut row = VideoRow::new(id, &server, &film, id, id);
+        row.stage = stage;
+        row.state = st;
+        row.measured = stage != VideoStage::Planned;
+        row.audio_chosen = true;
+        row.media_id = Some(format!("m_{id}"));
+        row.own_medium = true;
+        row.source_json = serde_json::to_string(&source).ok();
+        row.plan_json = Some(plan_json.clone());
+        rows::save(&state.db, &row).unwrap();
+    };
+    put("planned", VideoStage::Planned, VideoState::Ready);
+    put("stopped", VideoStage::Measuring, VideoState::Problem);
+    put("building", VideoStage::Encoding, VideoState::Working);
+
+    // On the plan and stopped at the measurement: «measure», honestly.
+    for id in ["planned", "stopped"] {
+        let plan = video::video_get(&state, id).unwrap().plan.expect("no plan");
+        assert_eq!(plan.from, PlanSource::Formula, "{id}");
+        assert!(plan.needs_measuring, "{id}: not said to need measuring");
+        assert!(plan.measure_s > 0, "{id}: no time to measure");
+        assert!(
+            plan.rungs.iter().all(|r| r.quality == Quality::NotMeasured),
+            "{id}: a rung passed off as measured: {:?}",
+            plan.rungs
+        );
+    }
+
+    // The one building carries on after the restart, with its rungs, to the build — which
+    // stops on the server that does not answer, not on «not measured».
+    assert_eq!(video::restore_videos(&state).unwrap(), 1);
+    let building = until(
+        &state,
+        "building",
+        "carrying on",
+        Duration::from_secs(120),
+        |v| v.state == VideoState::Problem,
+    )
+    .await;
+    let problem = building.problem.unwrap();
+    assert_ne!(
+        problem.error.code,
+        ErrorCode::LadderNotMeasured,
+        "{problem:?}"
+    );
+    assert!(
+        state
+            .tasks
+            .list()
+            .unwrap()
+            .iter()
+            .any(|t| t.kind == TaskKind::BuildLadder),
+        "the build was not taken up: {problem:?}"
+    );
+    assert!(
+        !state
+            .tasks
+            .list()
+            .unwrap()
+            .iter()
+            .any(|t| t.kind == TaskKind::MeasureQuality),
+        "a build under way was sent back to measuring"
+    );
+
+    // «Start» on the planned one measures first.
+    let started = video::video_start(&state, &[String::from("planned")]);
+    assert!(started[0].error.is_none(), "{:?}", started[0].error);
+    let measuring = until(
+        &state,
+        "planned",
+        "measuring",
+        Duration::from_secs(60),
+        |v| v.stage == VideoStage::Measuring || v.state == VideoState::Problem,
+    )
+    .await;
+    assert_eq!(
+        measuring.stage,
+        VideoStage::Measuring,
+        "{:?}",
+        measuring.problem
+    );
+    assert!(!rows::get(&state.db, "planned").unwrap().unwrap().measured);
+    let _ = video::video_cancel(&state, "planned");
+}
