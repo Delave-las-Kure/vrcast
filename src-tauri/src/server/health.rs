@@ -51,7 +51,13 @@ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -vE '^127\.|^\[::1\]' | sort -u |
 # How many are being served right now. It decides whether a small serving cache is worth
 # saying anything about, so it is taken in the same breath as the cache itself — a figure a
 # minute older would be about a different machine.
-printf 'watching=%s\n' "$(ss -tnH state established 2>/dev/null | awk '$4 ~ /:(80|443)$/' | awk '{print $5}' | sed 's/:[0-9]*$//' | sort -u | wc -l)"
+#
+# ⚠ T706 (QA-26, tour G02): with a state filter `ss` leaves the State column out, so the
+# columns are Recv-Q, Send-Q, Local, Peer — and the old `$4 ~ /:(80|443)$/` matched the
+# **peer's** port. It counted this machine's own fetches from web servers, never a viewer,
+# and the panel said "nobody is watching" beside a list of people watching. The ports are
+# now asked of `ss` itself, and the peer is the last column whatever the layout.
+printf 'watching=%s\n' "$(ss -tnH state established '( sport = :80 or sport = :443 )' 2>/dev/null | awk '{print $NF}' | sed 's/:[0-9]*$//' | sort -u | wc -l)"
 # The serving asked with a **range**, and its answer checked rather than the port (R-20).
 #
 # **Over the domain, resolved to the loopback.** A deployed Caddy binds the domain and

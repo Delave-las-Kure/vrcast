@@ -627,14 +627,15 @@ export const en: Catalogue = {
       "The server sent the whole file instead of the range asked for ({status}). Watching works, seeking does not.",
     HEALTH_DELIVERY_REFUSED: "The server answered {status} to its own check.",
     HEALTH_DELIVERY_SILENT: "The server did not answer over HTTPS.",
-    HEALTH_NOTHING_TO_SERVE: "Nothing to check: there is no video on the server yet.",
+    HEALTH_NOTHING_TO_SERVE:
+      "There are no single mp4 files on the server — nothing to check seeking on.",
     HEALTH_FIREWALL_ON: "The firewall is on.",
     HEALTH_FIREWALL_OFF:
       "The firewall is off: {status}. Everything that listens is open to the outside.",
     HEALTH_OPEN_PORTS: "Ports open to the outside: {count} — {ports}.",
     HEALTH_MEMORY: "Memory: {used_mb} MB used of {total_mb}.",
     HEALTH_CACHE_IDLE:
-      "The serving cache holds {cache_mb} MB. Nobody is watching, so there is nothing to fill it with.",
+      "The serving cache holds {cache_mb} MB. No viewer is connected right now, so there is nothing to fill it with.",
     HEALTH_CACHE_SMALL:
       "The serving cache holds only {cache_mb} MB of {total_mb} while {watching} are watching. So it is being served off the disk rather than out of memory.",
     HEALTH_CACHE_OK:
@@ -654,17 +655,18 @@ export const en: Catalogue = {
 
     // Why the picture stops (FR-072). The conclusion is sometimes wrong, and has to be arguable.
     STALLS_TOO_SHORT: "Too short a stretch — {seconds} s. There is nothing to judge by.",
-    STALLS_KEEPING_UP: "The viewer keeps up: {ratio}× real time, link {mbit_s} Mbit/s.",
+    STALLS_KEEPING_UP: "The viewer keeps up: {ratio|num}× real time, link {mbit_s|mbit}.",
     STALLS_SERVER_LINK:
-      "The server's own link is the limit: {out_mbit_s} Mbit/s going out of {capacity_mbit_s} possible.",
-    STALLS_DISK: "The disk is the limit: {disk_read_mb_s} MB/s read, {ratio}× real time received.",
+      "The server's own link is the limit: {out_mbit_s|mbit} going out of the network card's {capacity_mbit_s|mbit}.",
+    STALLS_DISK:
+      "The disk is the limit: {disk_read_mb_s|num} MB/s read, {ratio|num}× real time received.",
     STALLS_FILE_PEAKS:
-      "The file's peaks: link {mbit_s} Mbit/s, average {average_mbit}, 10 s peak {peak_10s_mbit}.",
+      "The file's peaks: link {mbit_s|mbit}, average {average_mbit|mbit}, 10 s peak {peak_10s_mbit|mbit}.",
     STALLS_THE_PLAYER:
-      "The player, not the link: {in_download_mbit_s} Mbit/s against {average_mbit} needed; by the clock {mbit_s} Mbit/s, ratio {ratio}. Restarts: {restarts}, skipped: {skipped}.",
+      "The server hands pieces out faster than needed: {in_download_mbit_s|mbit} against {average_mbit|mbit}, yet by the clock it comes to {mbit_s|mbit}, ratio {ratio|num}. The player stops asking, or the viewer's link is slower than the server can see. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
-      "The viewer's link is short: {ratio}× at {mbit_s} Mbit/s (in downloads {in_download_mbit_s}), and this quality needs {need_mbit}. Skipped: {skipped}, restarts: {restarts}.",
-    STALLS_UNCLEAR: "Falling behind: {ratio}× real time. These figures do not say why.",
+      "The viewer's link is short: {ratio|num}× at {mbit_s|mbit} (in downloads {in_download_mbit_s|mbit}), and this quality needs {need_mbit|mbit}. Skipped: {skipped}, restarts: {restarts}.",
+    STALLS_UNCLEAR: "Falling behind: {ratio|num}× real time. These figures do not say why.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
     RUNG_FILE_CLAIMED:
@@ -867,7 +869,7 @@ export const en: Catalogue = {
       mascotViewerTrouble: "The mascot is worried: a viewer is struggling",
     },
     diag: {
-      title: "Diagnosis",
+      title: "Diagnostics",
       period: "Over the last",
       minutes: "minutes",
       refresh: "Ask again",
@@ -898,8 +900,6 @@ export const en: Catalogue = {
       logsAddresses: (n: number) => `Addresses: ${n}`,
       logsUnreadable: (n: number) => `Lines that yielded nothing: ${n}`,
       logsCodes: "Answers",
-      logsRangesOk: "Ranges are being served — 206 dominates, as it should.",
-      logsRangesBad: "Files are sent whole — seeking does not work.",
       logsTopPaths: "Asked for most often",
       logsTopAddresses: "Asked most often",
       logsFailures: "Failures",
@@ -923,12 +923,15 @@ export const en: Catalogue = {
       stallsLoad: "What the server was doing",
       stallsLoadCpu: "Processor",
       stallsLoadDisk: "Read off the disk",
+      unitMBps: "MB/s",
+      unitSeconds: "s",
       stallsLoadOut: "Going out",
-      stallsLoadCapacity: "of a possible",
+      stallsLoadCapacity: "of the network card's",
       stallsCapacityUnknown:
         "the link's capacity was not established — so it is never named as the culprit",
 
       bitrateTitle: "The file's bitrate peaks",
+      bitrateWhere: "This measures the file on this computer, not what is on the server.",
       bitratePick: "Choose a file",
       bitrateFilm: "This is the film",
       bitrateFilmNone: "not said — the diagnosis leaves it out",
@@ -938,7 +941,7 @@ export const en: Catalogue = {
       bitratePeak10: "Ten-second peak",
       bitrateAt: "at",
       bitrateWorst: "Where it is heaviest",
-      bitratePeakOverAverage: (times: number) =>
+      bitratePeakOverAverage: (times: string) =>
         `The ten-second peak is ${times} times the average.`,
       bitrateAdvice: "Fixed by re-encoding with a peak cap.",
       bitrateEven: "The file is even — no need to re-encode.",

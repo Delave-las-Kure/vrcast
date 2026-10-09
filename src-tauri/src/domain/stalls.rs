@@ -192,6 +192,12 @@ pub enum Cause {
     TheFileItself,
     /// Not the link at all: it carries what the film needs whenever it is carrying anything,
     /// and the viewer is not asking in between (T482).
+    ///
+    /// ⚠ **Seen from the server's side only, and said so** (T706). Measured on the container
+    /// 2026-10-09: a viewer held to 50 kB/s (0.4 Mbit/s) showed 6.16 Mbit/s "inside the
+    /// downloads" against a rung needing 2 — the server finishes a request when the last byte
+    /// is in the socket buffers, not when the viewer has it. A slow link and a player that
+    /// stops asking look the same from the log, and the wording names both.
     ThePlayer,
     /// Not enough to say. Never dressed up as one of the above.
     Unclear,

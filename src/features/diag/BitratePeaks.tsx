@@ -19,7 +19,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { useLang, useT } from "../../shared/i18n";
-import { formatBitrate, formatDuration } from "../../shared/i18n/format";
+import { formatBitrate, formatDuration, formatNumber } from "../../shared/i18n/format";
 import { ipc } from "../../shared/ipc";
 import type { AppError, BitrateWindow, Peaks } from "../../shared/contract";
 
@@ -32,9 +32,17 @@ function Where({ window: w }: { window: BitrateWindow | null }) {
   if (!w) return <>{t.ui.diag.notDetermined}</>;
   return (
     <>
-      {formatBitrate(w.bitrate_bps, lang)} {t.ui.diag.bitrateAt} {formatDuration(w.at_s)}
+      {formatBitrate(w.bitrate_bps, lang)} {t.ui.diag.bitrateAt} {moment(w.at_s)}
     </>
   );
+}
+
+/**
+ * A point in the film. The very start is «0:00», a moment like any other — `formatDuration`
+ * shows nothing for zero, and the heaviest window starting there read «— — 7,0 Мбит/с» (T706).
+ */
+function moment(seconds: number): string {
+  return seconds <= 0 ? "0:00" : formatDuration(seconds);
 }
 
 /** What `diagExplainStalls` is told about a measured file, and which film it is (T705). */
@@ -132,6 +140,9 @@ export function BitratePeaks({
   return (
     <section className="diag-bitrate">
       <h3>{words.bitrateTitle}</h3>
+      <p className="diag-hint" data-testid="bitrate-where">
+        {words.bitrateWhere}
+      </p>
 
       <button type="button" onClick={pick}>
         {words.bitratePick}
@@ -182,7 +193,7 @@ export function BitratePeaks({
           {overAverage !== null &&
             (overAverage >= PEAK_WORTH_MENTIONING ? (
               <div data-testid="bitrate-peaky">
-                <p>{words.bitratePeakOverAverage(Number(overAverage.toFixed(1)))}</p>
+                <p>{words.bitratePeakOverAverage(formatNumber(overAverage, lang, 1))}</p>
                 <p>{words.bitrateAdvice}</p>
               </div>
             ) : (
@@ -195,7 +206,7 @@ export function BitratePeaks({
               <ul className="diag-worst-windows">
                 {peaks.worst_wide.map((w) => (
                   <li key={w.at_s} data-testid={`window-${w.at_s}`}>
-                    {formatDuration(w.at_s)} — {formatBitrate(w.bitrate_bps, lang)}
+                    {moment(w.at_s)} — {formatBitrate(w.bitrate_bps, lang)}
                   </li>
                 ))}
               </ul>

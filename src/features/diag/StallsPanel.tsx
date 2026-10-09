@@ -18,12 +18,12 @@
 
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
-import { formatBitrate } from "../../shared/i18n/format";
+import { formatBitrate, formatNumber } from "../../shared/i18n/format";
 import type { Stalls, Watcher } from "../../shared/contract";
 
 /** A number to two places, or a dash. A dash is not a zero: a zero reads as a measurement. */
-function ratio(value: number | null, nothing: string): string {
-  return value === null ? nothing : `${value.toFixed(2)}×`;
+function ratio(value: number | null, lang: "ru" | "en", nothing: string): string {
+  return value === null ? nothing : `${formatNumber(value, lang)}×`;
 }
 
 function speed(value: number | null, lang: "ru" | "en", nothing: string): string {
@@ -49,8 +49,8 @@ export function StallsPanel({
 
       <p className="diag-load" data-testid="stalls-load">
         {words.stallsLoad}: {words.stallsLoadCpu} {Math.round(stalls.load.cpu_busy * 100)}% ·{" "}
-        {words.stallsLoadDisk} {stalls.load.disk_read_mb_s.toFixed(1)} MB/s · {words.stallsLoadOut}{" "}
-        {formatBitrate(stalls.load.out_mbit_s * 1_000_000, lang)}
+        {words.stallsLoadDisk} {formatNumber(stalls.load.disk_read_mb_s, lang, 1)} {words.unitMBps}{" "}
+        · {words.stallsLoadOut} {formatBitrate(stalls.load.out_mbit_s * 1_000_000, lang)}
         {stalls.load.capacity_mbit_s > 0 ? (
           <>
             {" "}
@@ -95,7 +95,9 @@ export function StallsPanel({
                     column. */}
                 <dl className="diag-figures">
                   <dt>{words.stallsRatio}</dt>
-                  <dd data-testid={`ratio-${w.client_ip}`}>{ratio(w.content_ratio, nothing)}</dd>
+                  <dd data-testid={`ratio-${w.client_ip}`}>
+                    {ratio(w.content_ratio, lang, nothing)}
+                  </dd>
                   <dt>{words.stallsLink}</dt>
                   <dd data-testid={`link-${w.client_ip}`}>
                     {speed(w.mbit_s, lang, nothing)}

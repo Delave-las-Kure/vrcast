@@ -210,6 +210,18 @@ async fn the_slow_viewer_is_a_short_link_and_not_a_server_in_trouble() {
     // from which no stretch and no speed can be worked out at all.
     std::thread::sleep(Duration::from_secs(50));
 
+    // T706: the viewer is counted as connected while they pull. The count used to match the
+    // peer's port rather than this machine's, saw nobody, and the cache reading said "nobody
+    // is watching" beside a list of people watching.
+    let snap = server_health::look(&conn, VIDEO_DIR, DEPLOY_DOMAIN)
+        .await
+        .expect("the machine would not answer");
+    assert!(
+        snap.watching_now >= 1,
+        "a viewer pulling right now was not counted as connected: {}",
+        snap.watching_now
+    );
+
     let live = server_health::load(&conn)
         .await
         .expect("the live readings would not come");
@@ -240,11 +252,49 @@ async fn the_slow_viewer_is_a_short_link_and_not_a_server_in_trouble() {
         watcher.elapsed_s
     );
 
-    let verdict = stalls::explain(watcher, Some(&live.load), None);
+    // What the rung needs, read off the set's own description on the server, as
+    // `diag_explain_stalls` does (T705) — without it the link is not blamed at all.
+    let needs =
+        vrcast_studio_lib::server::viewers::rung_needs(&conn, VIDEO_DIR, &[String::from("demo")])
+            .await;
+    let mut watcher = watcher.clone();
     assert_eq!(
-        verdict.cause,
-        Cause::ViewerLink,
+        watcher.rung.as_deref(),
+        Some("v3"),
+        "the rung was not read off the log"
+    );
+    watcher.need_mbit = needs
+        .get("demo")
+        .and_then(|rungs| rungs.get("v3"))
+        .map(|bps| *bps as f64 / 1_000_000.0);
+    assert!(
+        watcher.need_mbit.is_some(),
+        "the rung's need was not read off the set on the server: {needs:?}"
+    );
+
+    let verdict = stalls::explain(&watcher, Some(&live.load), None);
+    // ⚠ **The link or the player — both are the viewer's side, and that is the question.**
+    // Measured here 2026-10-09: held to 50 kB/s, this viewer still showed 6.16 Mbit/s "inside
+    // the downloads" against a rung needing 2. The server finishes a request when the last
+    // byte is in the socket buffers, not when the viewer has it, so from the log a slow link
+    // can look like a player that stops asking — and `STALLS_THE_PLAYER` now names both
+    // (T706). What must never happen is the idle server taking the blame, or no answer.
+    assert!(
+        matches!(verdict.cause, Cause::ViewerLink | Cause::ThePlayer),
         "an idle container was blamed for a viewer's own narrow link: {:?}",
+        verdict.say
+    );
+    // Either way with what the rung needs, in the figures the conclusion stands on.
+    let need = verdict
+        .say
+        .params
+        .get("need_mbit")
+        .or_else(|| verdict.say.params.get("average_mbit"))
+        .and_then(|v| v.as_f64());
+    assert_eq!(
+        need,
+        watcher.need_mbit.map(|n| (n * 100.0).round() / 100.0),
+        "the conclusion does not carry the number the rung needs: {:?}",
         verdict.say
     );
 
