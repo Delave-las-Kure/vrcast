@@ -596,6 +596,46 @@ fn source_of(row: &VideoRow) -> Option<SourceFile> {
         .and_then(|s| serde_json::from_str(s).ok())
 }
 
+/// Whether the description of the source was made before subtitle tracks were looked for
+/// (T696): it says nothing about them, which reads as «none» and is not (T716).
+fn subtitles_unknown(row: &VideoRow) -> bool {
+    row.source_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .is_some_and(|v| v.get("subtitle_tracks").is_none())
+}
+
+/// **The subtitle tracks of a video added before they were looked for** (T716).
+///
+/// Its source is examined again and only the tracks are taken into the stored description:
+/// the sound chosen, the plan, the rungs and everything else known about the file stay as
+/// they are. A file that cannot be examined now (moved, a drive not plugged in) keeps the
+/// old description and is tried again at the next start.
+fn read_subtitles_again(state: &AppState, id: &str) {
+    let state = state.clone();
+    let id = id.to_owned();
+    spawn(async move {
+        let Ok(row) = load(&state, &id) else { return };
+        let probed = match super::api::source_probe(&row.source_path).await {
+            Ok(probed) => probed,
+            Err(e) => {
+                tracing::warn!(video = %id, error = ?e.code, "the source could not be examined again for its subtitles");
+                return;
+            }
+        };
+        let _ = change(&state, &id, |r| {
+            if !subtitles_unknown(r) {
+                return Ok(());
+            }
+            if let Some(mut source) = source_of(r) {
+                source.subtitle_tracks = probed.subtitle_tracks;
+                r.source_json = serde_json::to_string(&source).ok();
+            }
+            Ok(())
+        });
+    });
+}
+
 fn problem_of(row: &VideoRow) -> Option<VideoProblem> {
     row.problem_json
         .as_deref()
@@ -3043,6 +3083,11 @@ pub mod api {
         ensure_watching(state);
         let mut carried = 0;
         for row in rows::list(&state.db).map_err(storage)? {
+            // Added before subtitles were looked for (T716): their tracks are read now, so the
+            // choice of subtitles is there. A finished set has nothing left to choose.
+            if row.state != VideoState::Done && subtitles_unknown(&row) {
+                read_subtitles_again(state, &row.id);
+            }
             // A confirmed «Replace» the last run did not finish (T686) is carried through,
             // whatever the video's state reads: it is still on the problem it was replacing.
             if row.replacing_json.is_some() {

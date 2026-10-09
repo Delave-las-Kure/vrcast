@@ -1496,6 +1496,115 @@ async fn subtitles_are_found_chosen_checked_and_counted_in_the_time() {
     assert_eq!(off.subtitle_track, None);
 }
 
+/// T716 — a video added before subtitles were looked for (T696) kept a description of its
+/// source with no word about them, read as «none». At the start its source is examined
+/// again and the tracks are taken in — the sound chosen, the plan and the rest of what was
+/// known about the file stay as they were.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_video_added_before_subtitles_were_looked_for_finds_them_at_the_start() {
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let Ok(ff) = ffmpeg::locate("ffmpeg") else {
+        return;
+    };
+    let srt = films.0.join("lines.srt");
+    std::fs::write(&srt, "1\n00:00:00,500 --> 00:00:02,500\nПривет\n").unwrap();
+    let film = films.path("old.mkv");
+    let made = std::process::Command::new(ff)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+        ])
+        .arg("testsrc2=size=640x360:rate=24:duration=2")
+        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-i"])
+        .arg(&srt)
+        .args(["-map", "0:v", "-map", "1:a", "-map", "2:s"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .args(["-c:a", "aac", "-c:s", "srt"])
+        .arg(&film)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+
+    // The description as a build before T696 wrote it: no `subtitle_tracks` at all, and a
+    // measured peak only that build knew.
+    let mut source = vrcast_studio_lib::media::probe::probe(std::path::Path::new(&film))
+        .await
+        .unwrap();
+    source.peak_bps = Some(7_000_000);
+    let mut old = serde_json::to_value(&source).unwrap();
+    old.as_object_mut().unwrap().remove("subtitle_tracks");
+    let plan_json = String::from("{\"kept\":\"as it was\"}");
+
+    let state = state();
+    let server = server(&state);
+    let mut row = VideoRow::new("old", &server, &film, "Old", "old");
+    row.state = VideoState::Paused;
+    row.paused_by_person = true;
+    row.audio_track = 0;
+    row.audio_chosen = true;
+    row.source_json = Some(old.to_string());
+    row.plan_json = Some(plan_json.clone());
+    rows::save(&state.db, &row).unwrap();
+    // Read as none before.
+    let before = video::video_get(&state, "old").unwrap();
+    assert!(before.source.unwrap().subtitle_tracks.is_empty());
+
+    video::restore_videos(&state).unwrap();
+    let found = until(
+        &state,
+        "old",
+        "the subtitles",
+        Duration::from_secs(60),
+        |v| {
+            v.source
+                .as_ref()
+                .is_some_and(|s| !s.subtitle_tracks.is_empty())
+        },
+    )
+    .await;
+    let found_source = found.source.unwrap();
+    assert_eq!(found_source.subtitle_tracks.len(), 1);
+    assert_eq!(found_source.subtitle_tracks[0].codec, "subrip");
+    assert_eq!(
+        found_source.peak_bps,
+        Some(7_000_000),
+        "the rest was read anew"
+    );
+    assert_eq!(found.audio_track, 0);
+    assert!(found.audio_chosen, "the sound has to be chosen again");
+    assert_eq!(found.state, VideoState::Paused);
+    let kept = rows::get(&state.db, "old").unwrap().unwrap();
+    assert_eq!(kept.plan_json.as_deref(), Some(plan_json.as_str()));
+
+    // Once known, it is not read again: a second start leaves the description alone.
+    let known = kept.source_json.clone();
+    video::restore_videos(&state).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        rows::get(&state.db, "old").unwrap().unwrap().source_json,
+        known
+    );
+}
+
 // ---------- a measurement gone from the store (T714) ----------
 
 /// Migration 0028 removes every measurement of the old recipe (the owner's decision of
