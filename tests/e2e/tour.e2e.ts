@@ -1999,8 +1999,37 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           500,
         );
       });
-      note(
-        "«Пики битрейта файла» → «Выбрать файл» открывает системный диалог — WebDriver его не нажмёт, не снято",
+      const how = await answerDialog(FILM1);
+      await step(
+        "diag-bitrate-peaks",
+        `«Пики битрейта файла» → «Выбрать файл»; в системном диалоге «выбран» «Фильм с двумя дорожками.mkv» (ответ подставлен тестом${how ? "" : " — НЕ удалось"}); промотано к результату`,
+        async () => {
+          if (!how) throw new Error("the dialog's answer could not be put in");
+          await press("Выбрать файл");
+          await s().find('[data-testid="bitrate-average"]');
+          await until(
+            "diagnostics to answer again",
+            async () => !(await s().has('[data-testid="diag-asking"]')),
+            180_000,
+            500,
+          );
+          await s().execute(
+            `const h = [...document.querySelectorAll('h3')].find((x) => /Пики битрейта/.test(x.textContent));
+             if (h) h.scrollIntoView();`,
+          );
+          await sleep(400);
+        },
+      );
+      await step(
+        "diag-stalls-with-file",
+        "Разбор «Почему встаёт картинка» после замера файла (учитывает его пики)",
+        async () => {
+          await s().execute(
+            `const h = [...document.querySelectorAll('h3')].find((x) => /Почему встаёт/.test(x.textContent));
+             if (h) h.scrollIntoView();`,
+          );
+          await sleep(400);
+        },
       );
     },
     480_000,
