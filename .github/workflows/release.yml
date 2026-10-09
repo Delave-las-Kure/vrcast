@@ -14,7 +14,10 @@
 #   - the signing key is here, or the artefacts go out unsigned and every installed copy
 #     refuses them, after the download, for no reason a person can see;
 #   - the FFmpeg source addresses still answer, or a licence obligation is broken at the exact
-#     moment somebody new is handed a copy.
+#     moment somebody new is handed a copy. Since T719 the source goes out **with each
+#     release** (owner's decision 2026-10-09): here it is checked that the pinned FFmpeg
+#     builds and commits can still be fetched and that THIRD-PARTY.md names this release; the
+#     publishing job packs the source, attaches it, and checks that it downloads for anybody.
 #
 # **The release notes are the tag's own message.** `git tag -a v1.2.3` and what is written there
 # becomes both the release body and the text the update screen shows under "what is in it". One
@@ -290,6 +293,19 @@ jobs:
             --out latest.json
           cat latest.json
 
+      # **T719 — the FFmpeg source travels with the release** (owner's decision 2026-10-09).
+      # The pinned BtbN build tag the links used to name was deleted by its author weeks after
+      # it was pinned, and the source link died with it. So FFmpeg at the pinned commit and
+      # BtbN's build scripts at theirs (which pin every library inside the build, x264
+      # included) are packed here from git — verified against the commit hashes — and attached
+      # beside the installers under the names THIRD-PARTY.md links to.
+      # Before publishing, so that a failure leaves nothing half-published.
+      - name: Pack the FFmpeg source this release owes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ffmpeg-sources.py pack --out ffmpeg-sources
+
       - name: Publish, with everything owed alongside
         # Оболочка названа явно: `pipefail` нужен.
         shell: bash
@@ -298,16 +314,17 @@ jobs:
         run: |
           set -euo pipefail
           notes=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
-          # `LICENSE` and `THIRD-PARTY.md` go with the installers rather than being left in the
-          # repository: what a person is owed should not need looking for.
+          # `LICENSE`, `THIRD-PARTY.md` and the FFmpeg source go with the installers rather than
+          # being left somewhere else: what a person is owed should not need looking for.
           mapfile -t installers < <(find bundles -type f \
             \( -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.tar.gz' \) | sort)
+          mapfile -t sources < <(find ffmpeg-sources -type f | sort)
           python3 scripts/publish-release.py \
             --repo "$GITHUB_REPOSITORY" \
             --tag "$GITHUB_REF_NAME" \
             --notes "$notes" \
             --token "$TOKEN" \
-            "${installers[@]}" latest.json LICENSE THIRD-PARTY.md
+            "${installers[@]}" latest.json LICENSE THIRD-PARTY.md "${sources[@]}"
 
       # **Последняя проверка — та, которую делает установленная копия.**
       #
@@ -333,3 +350,11 @@ jobs:
           # единственном шаге, который никем заранее не запускается.
           echo "$got" >latest-served.json
           python3 -c "import json,sys; d=json.load(open('latest-served.json',encoding='utf-8')); v=d.get('version'); w=sys.argv[1]; sys.exit('the address serves version %s, and this release is %s' % (v, w)) if v != w else print('the address serves this very release, %d platforms' % len(d.get('platforms', {})))" "$version" 
+
+      # **T719 — and the source THIRD-PARTY.md promises downloads, the same way.** Without any
+      # permission, whole, from the addresses the file names: a stranger following the link is
+      # the person the obligation is to, and a link to a file that is not there is the failure
+      # that stopped v0.3.0, moved one step later.
+      - name: The FFmpeg source downloads for anybody
+        shell: bash
+        run: bash scripts/check-source-links.sh --published

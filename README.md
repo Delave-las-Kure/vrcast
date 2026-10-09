@@ -66,7 +66,7 @@
 ```bash
 cd vrcast-studio
 npm install
-npm run ffmpeg         # положить вложенный FFmpeg (около 280 МБ, качается один раз)
+npm run ffmpeg         # положить вложенный FFmpeg (около 320 МБ, качается один раз)
 
 npm run tauri dev      # запуск для разработки
 npm run tauri build    # установщик под текущую ОС

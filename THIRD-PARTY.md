@@ -8,19 +8,24 @@
 Само приложение распространяется под GPL-3.0-or-later (см. [LICENSE](LICENSE)).
 Перечисленное ниже — чужие работы, входящие в поставку, с их собственными
 условиями. В поставку входит также сборка FFmpeg; её условия и способ получения
-исходного кода описаны в разделе «О программе» самого приложения.
+исходного кода описаны в разделе «FFmpeg» ниже.
 
 ## FFmpeg — в поставке целиком
 
-Версия: **n8.1.2-44-g7c533d0f86** (GPL-3.0-or-later).
+Версия: **n8.1.3-9-g29e619e767** (GPL-3.0-or-later).
 
 Приложение не скачивает FFmpeg при первом запуске: он кладётся в установщик
-при сборке. Исходный код именно этой сборки:
+при сборке. Исходный код именно этой сборки приложен к самому выпуску, рядом
+с установщиками:
 
-- исходники FFmpeg: [7c533d0f86](https://github.com/FFmpeg/FFmpeg/tree/7c533d0f86)
-- сценарии сборки: [autobuild-2026-08-25-13-06](https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-08-25-13-06)
+- исходники FFmpeg: [ffmpeg-source.tar.gz](https://github.com/Delave-las-Kure/vrcast/releases/download/v0.3.0/ffmpeg-source.tar.gz) — коммит `29e619e767` ветки `release/8.1` из https://github.com/FFmpeg/FFmpeg
+- сценарии сборки: [ffmpeg-build-scripts.tar.gz](https://github.com/Delave-las-Kure/vrcast/releases/download/v0.3.0/ffmpeg-build-scripts.tar.gz) — метка `autobuild-2026-09-30-13-08` (коммит `6c9aec5fc9`) из https://github.com/BtbN/FFmpeg-Builds
 
-Оба адреса ведут на неизменяемые точки, а не на главную ветку, которая уедет.
+Сценарии закрепляют точную версию каждой библиотеки внутри сборки — x264 и
+остальных (`scripts.d/`). Сборка сделана командами `./build.sh win64 gpl 8.1` и `./build.sh linux64 gpl 8.1`.
+
+Копии лежат в нашем выпуске, а не ссылками на чужие хранилища: чужие метки
+удаляются, и ссылка на исходники умирала бы вместе с ними.
 
 Две возможности этой сборки приложению обязательны, и обе проверяются на каждом
 прогоне (`scripts/check-ffmpeg-features.sh`):
@@ -81,7 +86,7 @@ libvmaf — разработка Netflix, распространяется по 
 **Rive тоже не появился** (T323): маскот нарисован в коде, и ни пакета, ни бинарного
 файла со стороны для него не потребовалось.
 
-## Ядро (Rust) — 693
+## Ядро (Rust) — 694
 
 | Пакет | Версия | Лицензия | Источник |
 |---|---|---|---|
@@ -602,6 +607,7 @@ libvmaf — разработка Netflix, распространяется по 
 | `tauri-plugin-fs` | 2.5.1 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/plugins-workspace) |
 | `tauri-plugin-notification` | 2.3.3 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/plugins-workspace) |
 | `tauri-plugin-opener` | 2.5.4 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/plugins-workspace) |
+| `tauri-plugin-single-instance` | 2.4.4 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/plugins-workspace) |
 | `tauri-plugin-updater` | 2.10.1 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/plugins-workspace) |
 | `tauri-runtime` | 2.11.3 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/tauri) |
 | `tauri-runtime-wry` | 2.11.4 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/tauri) |
@@ -18226,7 +18232,7 @@ DEALINGS IN THE SOFTWARE.
 
 </details>
 
-<details><summary>tauri-plugin-dialog 2.7.2, tauri-plugin-fs 2.5.1, tauri-plugin-notification 2.3.3, tauri-plugin-opener 2.5.4, tauri-plugin-updater 2.10.1, @tauri-apps/plugin-dialog 2.7.2 и ещё 2</summary>
+<details><summary>tauri-plugin-dialog 2.7.2, tauri-plugin-fs 2.5.1, tauri-plugin-notification 2.3.3, tauri-plugin-opener 2.5.4, tauri-plugin-single-instance 2.4.4, tauri-plugin-updater 2.10.1 и ещё 3</summary>
 
 ```
 SPDXVersion: SPDX-2.1

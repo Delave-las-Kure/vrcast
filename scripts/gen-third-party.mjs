@@ -127,6 +127,32 @@ function nodePackages() {
 }
 
 /**
+ * Where this release of ours is published: `https://github.com/<owner>/<name>/releases/download/v<version>`.
+ *
+ * T719 — the FFmpeg source travels with each release, so the links below must name THIS release.
+ * Both halves are read from where they already live rather than written here a second time: the
+ * version from `src-tauri/Cargo.toml` (the one place it is kept, see `check-version.sh`), the
+ * repository from the address installed copies read their updates from. If either moved without
+ * this file being reassembled, `--check` says so.
+ */
+function releaseBase() {
+  const cargo = readFileSync(join(APP, "src-tauri", "Cargo.toml"), "utf8");
+  const version = cargo.match(/^version = "([^"]+)"/m)?.[1];
+  if (!version) throw new Error("src-tauri/Cargo.toml has no version");
+
+  const conf = JSON.parse(readFileSync(join(APP, "src-tauri", "tauri.conf.json"), "utf8"));
+  const endpoint = conf.plugins?.updater?.endpoints?.[0] ?? "";
+  const repo = endpoint.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\//)?.[1];
+  if (!repo) {
+    throw new Error(
+      `the update address is not a GitHub release (${endpoint || "none"}), so it is not known ` +
+        "where the FFmpeg source is published.",
+    );
+  }
+  return `https://github.com/${repo}/releases/download/v${version}`;
+}
+
+/**
  * The section about the bundled FFmpeg.
  *
  * It is in neither the core's dependency tree nor the interface's: it is not a library but a
@@ -134,21 +160,36 @@ function nodePackages() {
  * than smaller — we hand out somebody else's executable under the GPL, so we owe its source
  * code too. The details come from the same pinned manifest the build is downloaded by, so
  * that the two cannot diverge.
+ *
+ * T719 — the links lead to copies attached to our own release, not into BtbN's repository: a
+ * BtbN tag the previous links named was deleted by its author, and the obligation broke with
+ * it. Where each copy came from is still named, as text.
  */
 function ffmpegSection() {
   const m = JSON.parse(readFileSync(join(APP, "scripts", "ffmpeg.json"), "utf8"));
+  const base = releaseBase();
+  const files = m.source.release_files;
+  const short = (sha) => sha.slice(0, 10);
+  const builds = Object.values(m.platforms)
+    .map((p) => `\`${p.built_with}\``)
+    .join(" и ");
   return [
     "## FFmpeg — в поставке целиком",
     "",
     `Версия: **${m.version}** (${m.source.license}).`,
     "",
     "Приложение не скачивает FFmpeg при первом запуске: он кладётся в установщик",
-    "при сборке. Исходный код именно этой сборки:",
+    "при сборке. Исходный код именно этой сборки приложен к самому выпуску, рядом",
+    "с установщиками:",
     "",
-    `- исходники FFmpeg: [${m.source.ffmpeg_commit}](${m.source.ffmpeg_source_url})`,
-    `- сценарии сборки: [${m.release_tag}](${m.source.build_scripts_url})`,
+    `- исходники FFmpeg: [${files.ffmpeg}](${base}/${files.ffmpeg}) — коммит \`${short(m.source.ffmpeg_commit)}\` ветки \`${m.source.ffmpeg_branch}\` из ${m.source.ffmpeg_repo}`,
+    `- сценарии сборки: [${files.build_scripts}](${base}/${files.build_scripts}) — метка \`${m.release_tag}\` (коммит \`${short(m.source.build_scripts_commit)}\`) из ${m.source.build_scripts_repo}`,
     "",
-    "Оба адреса ведут на неизменяемые точки, а не на главную ветку, которая уедет.",
+    "Сценарии закрепляют точную версию каждой библиотеки внутри сборки — x264 и",
+    `остальных (\`scripts.d/\`). Сборка сделана командами ${builds}.`,
+    "",
+    "Копии лежат в нашем выпуске, а не ссылками на чужие хранилища: чужие метки",
+    "удаляются, и ссылка на исходники умирала бы вместе с ними.",
     "",
     "Две возможности этой сборки приложению обязательны, и обе проверяются на каждом",
     "прогоне (`scripts/check-ffmpeg-features.sh`):",
@@ -305,7 +346,7 @@ function build() {
     "Само приложение распространяется под GPL-3.0-or-later (см. [LICENSE](LICENSE)).",
     "Перечисленное ниже — чужие работы, входящие в поставку, с их собственными",
     "условиями. В поставку входит также сборка FFmpeg; её условия и способ получения",
-    "исходного кода описаны в разделе «О программе» самого приложения.",
+    "исходного кода описаны в разделе «FFmpeg» ниже.",
     "",
     ffmpegSection(),
     placesSection(),
@@ -357,7 +398,8 @@ if (CHECK) {
   const before = existsSync(OUT) ? readFileSync(OUT, "utf8") : "";
   if (uniform(before) !== uniform(document)) {
     console.error(
-      "THIRD-PARTY.md is stale: the set of dependencies changed.\n" +
+      "THIRD-PARTY.md is stale: the set of dependencies, the pinned FFmpeg or the version\n" +
+        "(the FFmpeg source links name the release) changed.\n" +
         "Run `npm run third-party` and include the updated file in the commit.",
     );
     process.exit(1);

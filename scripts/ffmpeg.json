@@ -26,46 +26,81 @@
   "_why_branch_8_1_and_not_9_0": [
     "9.0 exists and is newer, but 8.1 is the settled branch one step back. The application's",
     "value is in not spoiling people's videos, and there is no reason to risk that for the",
-    "sake of freshness. Moving to 9.0 means replacing the three fields below and running the",
-    "preparation checks."
+    "sake of freshness. Moving to 9.0 means re-pinning the fields below (the way",
+    "_why_a_month_end_build describes) and running the preparation checks."
+  ],
+  "_why_a_month_end_build": [
+    "T719, 2026-10-09. BtbN keeps the last 14 daily builds and the LAST BUILD OF EACH MONTH",
+    "for two years (their README, \"Release Retention Policy\"). The pin before this one was a",
+    "daily build, autobuild-2026-08-25-13-06; it was deleted a few weeks later, and with it",
+    "both the download in fetch-ffmpeg.mjs and the source link the release depended on.",
+    "So the pin is the last build of a month: autobuild-2026-09-30-13-08 stays downloadable",
+    "until about September 2028. A newer daily build was there (2026-10-09, n8.1.3-16) but",
+    "would vanish again by November and stop the next release in the same place.",
+    "To move to a newer build: take the last build of a finished month, replace the fields",
+    "below with its checksums.sha256 and commits, run `npm run ffmpeg -- --force` and the",
+    "preparation checks, then `npm run third-party`."
   ],
   "_gpl_obligation": [
     "We hand out a built FFmpeg, so we are obliged to give its source code too — the very",
-    "source this file was built from. Below are the exact snapshot of the sources and the tag",
-    "of the build scripts; both addresses point at immutable points rather than at a \"main",
-    "branch\" that will move."
+    "source this file was built from. Owner's decision 2026-10-09: every release of ours",
+    "carries that source itself, as two files beside the installers (release_files below):",
+    "FFmpeg at the pinned commit and BtbN's build scripts at the pinned tag's commit. The",
+    "scripts pin the exact commit of every library inside the build, x264 included. Links",
+    "into somebody else's repository die when the somebody tidies up (that is how the",
+    "previous pin was lost); a file attached to our own release lives as long as the release.",
+    "Both are packed by scripts/ffmpeg-sources.py from the commits, so the content is what",
+    "git verifies against the hash, not whatever an address happened to return."
   ],
-  "version": "n8.1.2-44-g7c533d0f86",
-  "release_tag": "autobuild-2026-08-25-13-06",
+  "version": "n8.1.3-9-g29e619e767",
+  "release_tag": "autobuild-2026-09-30-13-08",
   "source": {
-    "ffmpeg_commit": "7c533d0f86",
-    "ffmpeg_source_url": "https://github.com/FFmpeg/FFmpeg/tree/7c533d0f86",
-    "build_scripts_url": "https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-08-25-13-06",
+    "ffmpeg_repo": "https://github.com/FFmpeg/FFmpeg",
+    "ffmpeg_branch": "release/8.1",
+    "ffmpeg_commit": "29e619e767cde9045a75c29bc9a8278ae7b3a98b",
+    "build_scripts_repo": "https://github.com/BtbN/FFmpeg-Builds",
+    "build_scripts_commit": "6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b",
     "license": "GPL-3.0-or-later",
+    "release_files": {
+      "ffmpeg": "ffmpeg-source.tar.gz",
+      "build_scripts": "ffmpeg-build-scripts.tar.gz"
+    },
+    "_release_files": [
+      "The names do not change from one release to the next, on purpose: the address of the",
+      "source of version X is always .../releases/download/vX/ffmpeg-source.tar.gz, so it can",
+      "be written down without knowing anything else, and the version inside the archive is",
+      "named by its top directory (ffmpeg-<version>/, FFmpeg-Builds-<tag>/)."
+    ],
     "_verified": [
       "The build was made with --enable-gpl --enable-version3, without --enable-nonfree and",
       "without fdk-aac: it may be handed out, and the terms meet our GPL-3.0-or-later",
       "directly rather than through the \"or later\" clause. Verified by running",
-      "`ffmpeg -version` on 2026-08-25.",
-      "The encoders we need are there: libx264 (the software fallback, FR-026), h264_nvenc",
-      "(hardware) and aac. Verified with `ffmpeg -encoders`."
+      "`ffmpeg -version` on 2026-10-10 (both platforms).",
+      "The encoders and filters we need are there: libx264 (the software fallback, FR-026),",
+      "h264_nvenc (hardware), aac, libvmaf and subtitles. Verified with `ffmpeg -encoders`",
+      "and `ffmpeg -filters`, and by the preparation tests run against this very build.",
+      "The tag autobuild-2026-09-30-13-08 points at BtbN commit 6c9aec5fc9 (git ls-remote),",
+      "and the archive names carry FFmpeg commit 29e619e767 on branch release/8.1."
     ]
   },
   "platforms": {
     "win32-x64": {
-      "asset": "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip",
-      "sha256": "7c2fd45e2e700b291489acc98e4f2274c30bff4256e5a989c3eecbc5912e63b9",
-      "exe_suffix": ".exe"
+      "asset": "ffmpeg-n8.1.3-9-g29e619e767-win64-gpl-8.1.zip",
+      "sha256": "7b801cdd3a1a0bb54ae6f572187e68b4ed54f52086cfee133fab2180bfb429fa",
+      "exe_suffix": ".exe",
+      "built_with": "./build.sh win64 gpl 8.1"
     },
     "linux-x64": {
-      "asset": "ffmpeg-n8.1.2-44-g7c533d0f86-linux64-gpl-8.1.tar.xz",
-      "sha256": "30fc0f171f3482491ec4c17dcd62af57fb79cb84b1ae25d5af682d47ca4b1fa8",
-      "exe_suffix": ""
+      "asset": "ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1.tar.xz",
+      "sha256": "97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79",
+      "exe_suffix": "",
+      "built_with": "./build.sh linux64 gpl 8.1"
     }
   },
   "_size": [
-    "Each program is about 138 MB: a static build carries every library inside itself, and",
-    "in the package they lie there twice. A shared build would come out half the weight but",
+    "Each program is about 160 MB (n8.1.3: 157 MB on Windows, 164 MB on Linux): a static",
+    "build carries every library inside itself, and in the package they lie there twice",
+    "(ffmpeg and ffprobe). A shared build would come out half the weight but",
     "would bring a dozen files beside it and a whole class of \"avcodec-NN.dll not found\"",
     "trouble. The size here is bought with an installed application that works rather than",
     "almost works."

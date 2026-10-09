@@ -107,6 +107,14 @@ function outputPath(name, triple, suffix) {
 
 async function download(url, to) {
   const res = await fetch(url, { redirect: "follow" });
+  if (res.status === 404) {
+    // T719: how the previous pin died. BtbN deletes daily builds after two weeks and keeps
+    // the last build of each month for two years — see `_why_a_month_end_build`.
+    throw new Error(
+      `could not download ${url}: 404 — the pinned build is gone from BtbN. Re-pin ` +
+        "scripts/ffmpeg.json to the last build of a finished month (_why_a_month_end_build).",
+    );
+  }
   if (!res.ok) throw new Error(`could not download ${url}: ${res.status} ${res.statusText}`);
 
   const total = Number(res.headers.get("content-length") ?? 0);

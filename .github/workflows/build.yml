@@ -163,7 +163,7 @@ jobs:
       # that the bundled programs are there and refuses to build without them. So this step
       # stands in every job that builds the core at all — otherwise even `cargo test` fails.
       #
-      # It is cached by the snapshot in scripts/ffmpeg.json: two hundred and eighty megabytes
+      # It is cached by the snapshot in scripts/ffmpeg.json: some three hundred and twenty megabytes
       # are downloaded once per version and taken ready afterwards. It is also the only place
       # where the fetching script itself is checked on both target systems.
       - uses: actions/setup-node@v4
@@ -462,7 +462,7 @@ jobs:
       # that the bundled programs are there and refuses to build without them. So this step
       # stands in every job that builds the core at all — otherwise even `cargo test` fails.
       #
-      # It is cached by the snapshot in scripts/ffmpeg.json: two hundred and eighty megabytes
+      # It is cached by the snapshot in scripts/ffmpeg.json: some three hundred and twenty megabytes
       # are downloaded once per version and taken ready afterwards. It is also the only place
       # where the fetching script itself is checked on both target systems.
       - uses: actions/setup-node@v4
