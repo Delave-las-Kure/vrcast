@@ -335,6 +335,7 @@ fn an_examined_source_s_shape_matches_both_ways() {
         video_codec: String::from("h264"),
         pix_fmt: String::from("yuv420p"),
         color_transfer: None,
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![track],
     };
     same_shape(
@@ -653,6 +654,7 @@ fn nothing_the_screens_send_is_quietly_dropped() {
             slug: String::new(),
             rungs: Vec::new(),
             audio_track: 0,
+            subtitle_track: None,
             prefer_hardware: true,
             batch: None,
             confirmed: false,
@@ -1748,6 +1750,7 @@ fn a_video_s_shape_matches_both_ways() {
         title: String::from("t"),
         slug: String::from("t"),
         audio_track: 0,
+        subtitle_track: None,
         stage: VideoStage::Encoding,
         state: VideoState::Working,
         paused_by_person: false,

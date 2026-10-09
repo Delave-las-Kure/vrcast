@@ -102,6 +102,7 @@ fn build_request(server_id: &str, path: &str, slug: &str) -> BuildRequest {
         slug: slug.to_owned(),
         rungs: vec![rung(0, 500_000, 9200), rung(1, 250_000, 8800)],
         audio_track: 0,
+        subtitle_track: None,
         prefer_hardware: false,
         batch: None,
         // Past the FILE_IN_USE question: nobody is watching in the container, and this is

@@ -563,12 +563,23 @@ pub fn pixels_of(rung: &Rung, source: &SourceFile) -> f64 {
 /// Rungs carried across untouched cost nothing here. `None` when the film's length is not
 /// known — a number made up for that case would look like an estimate and be a guess.
 pub fn encode_seconds(rungs: &[Rung], source: &SourceFile, pixels_per_s: f64) -> Option<u64> {
+    encode_seconds_with(rungs, source, pixels_per_s, false)
+}
+
+/// [`encode_seconds`], with subtitles drawn into the picture or not (T696): drawn, no rung is
+/// carried across — every one is encoded and its time counts.
+pub fn encode_seconds_with(
+    rungs: &[Rung],
+    source: &SourceFile,
+    pixels_per_s: f64,
+    subtitles: bool,
+) -> Option<u64> {
     if source.duration_s <= 0.0 || pixels_per_s <= 0.0 {
         return None;
     }
     let pixels: f64 = rungs
         .iter()
-        .filter(|r| !is_copy(r, source))
+        .filter(|r| subtitles || !is_copy(r, source))
         .map(|r| pixels_of(r, source))
         .sum();
     Some((pixels / pixels_per_s * (1.0 + VALIDATE_SHARE)).round() as u64)

@@ -61,6 +61,9 @@ pub struct BuildRequest {
     /// Which audio track to keep.
     #[serde(default)]
     pub audio_track: usize,
+    /// The subtitle track drawn into every rung (T696, owner's decision B3); `None` — none.
+    #[serde(default)]
+    pub subtitle_track: Option<usize>,
     #[serde(default = "yes")]
     pub prefer_hardware: bool,
     /// Which batch this build belongs to (T445). `None` for a build a person started.
@@ -492,6 +495,14 @@ pub mod api {
         }
 
         let source = super::super::api::source_probe(&request.path).await?;
+        // T696: subtitles asked for that cannot be drawn are refused before anything starts.
+        if let Some(track) = request.subtitle_track {
+            if crate::domain::ladder_build::subtitle_burn(&source, track).is_none() {
+                return Err(AppError::new(ErrorCode::InvalidInput).with_detail(
+                    Detail::new(DetailCode::PlanNoSuchSubtitles).with("number", track + 1),
+                ));
+            }
+        }
         let (encoder, _) = pick_encoder(request.prefer_hardware).await?;
         // Where these rungs came from, so the description can say it (T433). Asked of the
         // same planner the screen asked, rather than guessed from the rungs: a rung carries
@@ -580,6 +591,7 @@ pub mod api {
                         rungs: &request.rungs,
                         encoder: &encoder,
                         audio_track: request.audio_track,
+                        subtitle_track: request.subtitle_track,
                         master_url: &master_url,
                         provenance,
                         work_dir: &work_dir,

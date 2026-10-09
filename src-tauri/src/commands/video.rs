@@ -148,6 +148,9 @@ pub struct VideoView {
     pub title: String,
     pub slug: String,
     pub audio_track: usize,
+    /// The subtitle track drawn into every rung (T696, owner's decision B3); `null` — none,
+    /// the default. The tracks themselves are in `source.subtitle_tracks`.
+    pub subtitle_track: Option<usize>,
     pub stage: VideoStage,
     pub state: VideoState,
     /// Paused by a person — stays paused across a restart.
@@ -695,7 +698,13 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
         .map(|o| o.detail())
         .collect();
     VideoPlan {
-        encode_s: video::encode_seconds(&rungs, source, basis.pixels_per_s),
+        // T696: subtitles drawn in make every rung an encode, the top one included.
+        encode_s: video::encode_seconds_with(
+            &rungs,
+            source,
+            basis.pixels_per_s,
+            row.subtitle_track.is_some(),
+        ),
         from: if edited {
             PlanSource::Edited
         } else {
@@ -778,6 +787,7 @@ fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
         title: row.title.clone(),
         slug: row.slug.clone(),
         audio_track: row.audio_track,
+        subtitle_track: row.subtitle_track,
         stage: row.stage,
         state: row.state,
         paused_by_person: row.paused_by_person,
@@ -1701,6 +1711,7 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
                     server_id: row.server_id.clone(),
                     slug: row.slug.clone(),
                     audio_track: row.audio_track,
+                    subtitle_track: row.subtitle_track,
                     confirmed: past_viewers,
                     accept_objections: row.confirmed,
                 }),
@@ -1774,6 +1785,7 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
             slug: row.slug.clone(),
             rungs,
             audio_track: row.audio_track,
+            subtitle_track: row.subtitle_track,
             prefer_hardware: true,
             batch: Some(batch_of(&row)),
             confirmed: past_viewers,
@@ -2166,6 +2178,34 @@ pub mod api {
                 ));
             }
             row.audio_track = track;
+            Ok(())
+        })?;
+        video_get(state, id)
+    }
+
+    /// Choose the subtitles drawn into the picture (T696, owner's decision B3): a track of the
+    /// source that can be drawn, or `None` for none. At the same moments as the audio track —
+    /// before anything is encoded — because the choice changes every frame of every rung.
+    pub fn video_set_subtitles(
+        state: &AppState,
+        id: &str,
+        track: Option<usize>,
+    ) -> Result<VideoView> {
+        change(state, id, |row| {
+            if !video::allowed(Act::SetAudio, row.state, row.stage, row.media_id.is_some()) {
+                return Err(not_now(row));
+            }
+            if let Some(track) = track {
+                let drawable = source_of(row).is_some_and(|s| {
+                    crate::domain::ladder_build::subtitle_burn(&s, track).is_some()
+                });
+                if !drawable {
+                    return Err(AppError::new(ErrorCode::InvalidInput).with_detail(
+                        Detail::new(DetailCode::PlanNoSuchSubtitles).with("number", track + 1),
+                    ));
+                }
+            }
+            row.subtitle_track = track;
             Ok(())
         })?;
         video_get(state, id)
@@ -2800,6 +2840,15 @@ pub mod ipc {
         track: usize,
     ) -> Result<VideoView> {
         api::video_set_audio(&state, &id, track)
+    }
+
+    #[tauri::command]
+    pub fn video_set_subtitles(
+        state: State<'_, AppState>,
+        id: String,
+        track: Option<usize>,
+    ) -> Result<VideoView> {
+        api::video_set_subtitles(&state, &id, track)
     }
 
     #[tauri::command]

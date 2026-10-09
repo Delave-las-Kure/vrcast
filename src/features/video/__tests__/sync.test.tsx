@@ -57,6 +57,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     slug: "film",
     source_path: "film.mp4",
     audio_track: 0,
+    subtitle_track: null,
     state: "working",
     stage: "encoding",
     paused_by_person: false,

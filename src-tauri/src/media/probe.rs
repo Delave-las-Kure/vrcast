@@ -11,7 +11,7 @@
 //! against a recorded answer, with no file on disk and no program at all.
 
 use super::ffmpeg;
-use crate::domain::source::{AudioTrack, SourceFile};
+use crate::domain::source::{AudioTrack, SourceFile, SubtitleKind, SubtitleTrack};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -118,6 +118,9 @@ struct Tags {
 struct Disposition {
     #[serde(default)]
     default: u8,
+    /// T696: a subtitle track of the lines meant for everybody.
+    #[serde(default)]
+    forced: u8,
 }
 
 /// Read `ffprobe`'s answer.
@@ -152,6 +155,26 @@ pub fn parse(json: &str, path: &str) -> Result<SourceFile> {
         })
         .collect();
 
+    // T696 — the subtitle tracks, numbered among subtitle streams as `0:s:<N>` counts them.
+    let subtitle_tracks = probed
+        .streams
+        .iter()
+        .filter(|s| s.codec_type.as_deref() == Some("subtitle"))
+        .enumerate()
+        .map(|(index, s)| {
+            let codec = s.codec_name.clone().unwrap_or_default();
+            SubtitleTrack {
+                index,
+                kind: SubtitleKind::of_codec(&codec),
+                codec,
+                language: language(&s.tags.language),
+                title: not_empty(&s.tags.title),
+                forced: s.disposition.forced == 1,
+                is_default: s.disposition.default == 1,
+            }
+        })
+        .collect();
+
     Ok(SourceFile {
         path: path.to_owned(),
         size_bytes: number(&probed.format.size).unwrap_or(0),
@@ -172,6 +195,7 @@ pub fn parse(json: &str, path: &str) -> Result<SourceFile> {
         pix_fmt: video.pix_fmt.clone().unwrap_or_default(),
         color_transfer: not_empty(&video.color_transfer),
         audio_tracks,
+        subtitle_tracks,
     })
 }
 

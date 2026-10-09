@@ -352,6 +352,7 @@ pub fn run() {
             commands::video::ipc::video_add,
             commands::video::ipc::video_list,
             commands::video::ipc::video_set_audio,
+            commands::video::ipc::video_set_subtitles,
             commands::video::ipc::video_set_name,
             commands::video::ipc::video_set_rungs,
             commands::video::ipc::video_start,

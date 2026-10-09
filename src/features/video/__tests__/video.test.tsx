@@ -140,6 +140,7 @@ function source(tracks = 1): SourceFile {
       title: null,
       is_default: i === 0,
     })),
+    subtitle_tracks: [],
   };
 }
 
@@ -171,6 +172,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     title: "Фильм",
     slug: "film",
     audio_track: 0,
+    subtitle_track: null,
     stage: "planned",
     state: "ready",
     paused_by_person: false,

@@ -16,6 +16,8 @@ pub struct VideoRow {
     pub title: String,
     pub slug: String,
     pub audio_track: usize,
+    /// The subtitle track drawn into the picture (T696); `None` — none.
+    pub subtitle_track: Option<usize>,
     pub stage: VideoStage,
     pub state: VideoState,
     pub paused_by_person: bool,
@@ -49,6 +51,7 @@ impl VideoRow {
             title: title.to_owned(),
             slug: slug.to_owned(),
             audio_track: 0,
+            subtitle_track: None,
             stage: VideoStage::Planned,
             state: VideoState::Planning,
             paused_by_person: false,
@@ -80,6 +83,9 @@ fn row_to_video(row: &rusqlite::Row<'_>) -> rusqlite::Result<VideoRow> {
         title: row.get("title")?,
         slug: row.get("slug")?,
         audio_track: row.get::<_, i64>("audio_track")?.max(0) as usize,
+        subtitle_track: row
+            .get::<_, Option<i64>>("subtitle_track")?
+            .and_then(|t| usize::try_from(t).ok()),
         // A stage or a state this build does not know was written by a newer one. The safest
         // reading is the start, standing still: nothing runs by itself from there.
         stage: VideoStage::parse(&stage).unwrap_or(VideoStage::Planned),
@@ -113,9 +119,9 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 (id, server_id, source_path, title, slug, audio_track, stage, state,
                  paused_by_person, start_requested, measured, own_medium, confirmed,
                  task_id, media_id, source_json, plan_json, rungs_json, problem_json,
-                 created_at, updated_at, remove_requested, replacing, seq)
+                 created_at, updated_at, remove_requested, replacing, subtitle_track, seq)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                     ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+                     ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24,
                      (SELECT COALESCE(MAX(seq), 0) + 1 FROM videos))
              ON CONFLICT (id) DO UPDATE SET
                 title = excluded.title,
@@ -130,6 +136,7 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 confirmed = excluded.confirmed,
                 remove_requested = excluded.remove_requested,
                 replacing = excluded.replacing,
+                subtitle_track = excluded.subtitle_track,
                 task_id = excluded.task_id,
                 media_id = excluded.media_id,
                 source_json = excluded.source_json,
@@ -161,6 +168,7 @@ pub fn save(db: &Db, v: &VideoRow) -> Result<(), DbError> {
                 now_rfc3339(),
                 v.remove_requested as i64,
                 v.replacing_json,
+                v.subtitle_track.map(|t| t as i64),
             ],
         )?;
         Ok(())

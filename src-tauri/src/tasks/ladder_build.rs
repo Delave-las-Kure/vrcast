@@ -120,6 +120,8 @@ pub struct BuildJob<'a> {
     pub rungs: &'a [Rung],
     pub encoder: &'a Encoder,
     pub audio_track: usize,
+    /// The subtitle track drawn into every rung (T696); `None` — none.
+    pub subtitle_track: Option<usize>,
     /// Where a viewer would open the finished set.
     pub master_url: &'a str,
     /// Where these rungs came from, for the description (T433). A code, never the donor's
@@ -167,6 +169,14 @@ pub async fn run(job: &BuildJob<'_>, ctx: &TaskContext) -> Result<Built, BuildEr
         spacing,
         SEGMENT_SECONDS,
     );
+    // T696: the chosen subtitles go into every rung. Checked by the command before the task
+    // started; a track that is not there now is not drawn rather than guessed at.
+    if let Some(burn) = job
+        .subtitle_track
+        .and_then(|t| ladder_build::subtitle_burn(job.source, t))
+    {
+        ladder_build::burn_subtitles(&mut work, burn);
+    }
 
     // ⚠ **Said to the task as it happens, not gathered up and handed over at the end**
     // (T524). This used to be a local `Vec` that reached the outside world only through

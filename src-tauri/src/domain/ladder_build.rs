@@ -150,7 +150,9 @@ const MADE_PREFIX: &str = "made ";
 /// and the file is still whole. Written into [`PREPARED_RECORD`] in the same command that puts
 /// the file in place, so the record never names a file that is not there.
 ///
-/// Line: `made v9 film_9v.mp4 h=1080 b=9000000 a=0 s=4000000000 d=3600000`.
+/// Line: `made v9 film_9v.mp4 h=1080 b=9000000 a=0 s=4000000000 d=3600000`, and ` t=2` at
+/// the end when subtitle track 2 is drawn into the picture (T696) — a line without it is a
+/// rung made without subtitles, which is every line written before they could be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MadeRung {
     pub sub: String,
@@ -162,6 +164,8 @@ pub struct MadeRung {
     pub source_bytes: u64,
     /// The source's length, in milliseconds.
     pub duration_ms: u64,
+    /// The subtitle track drawn into it (T696); `None` — none.
+    pub subtitles: Option<usize>,
 }
 
 impl MadeRung {
@@ -175,11 +179,12 @@ impl MadeRung {
             audio_track,
             source_bytes: source.size_bytes,
             duration_ms: duration_ms(source.duration_s),
+            subtitles: variant.plan.subtitles.map(|s| s.index),
         }
     }
 
     pub fn line(&self) -> String {
-        format!(
+        let mut line = format!(
             "{MADE_PREFIX}{} {} h={} b={} a={} s={} d={}",
             self.sub,
             self.file,
@@ -188,7 +193,11 @@ impl MadeRung {
             self.audio_track,
             self.source_bytes,
             self.duration_ms
-        )
+        );
+        if let Some(t) = self.subtitles {
+            line.push_str(&format!(" t={t}"));
+        }
+        line
     }
 
     fn parse(line: &str) -> Option<Self> {
@@ -203,21 +212,34 @@ impl MadeRung {
                 .parse()
                 .ok()
         };
+        let height = u32::try_from(field("h")?).ok()?;
+        let bitrate_bps = field("b")?;
+        let audio_track = usize::try_from(field("a")?).ok()?;
+        let source_bytes = field("s")?;
+        let duration_ms = field("d")?;
+        // Optional, and last: a line without it was made without subtitles. A `t` that is
+        // there and unreadable makes the line unreadable — not «without subtitles».
+        let subtitles = match parts.next() {
+            None => None,
+            Some(t) => Some(usize::try_from(t.strip_prefix("t=")?.parse::<u64>().ok()?).ok()?),
+        };
         Some(Self {
             sub,
             file,
-            height: u32::try_from(field("h")?).ok()?,
-            bitrate_bps: field("b")?,
-            audio_track: usize::try_from(field("a")?).ok()?,
-            source_bytes: field("s")?,
-            duration_ms: field("d")?,
+            height,
+            bitrate_bps,
+            audio_track,
+            source_bytes,
+            duration_ms,
+            subtitles,
         })
     }
 
     /// Whether this record says that `variant` of `source` with `audio_track` is made.
     ///
     /// The same rung directory and file, the same height, the bitrate within a tenth, the
-    /// same sound track and the same source (size, and length within a second).
+    /// same sound track, the same subtitles drawn in (T696) and the same source (size, and
+    /// length within a second).
     pub fn is(&self, variant: &VariantWork, source: &SourceFile, audio_track: usize) -> bool {
         let want = variant.rung.bitrate_bps;
         self.sub == variant.sub
@@ -225,6 +247,7 @@ impl MadeRung {
             && self.height == variant.rung.height
             && self.bitrate_bps.abs_diff(want) * 10 <= want
             && self.audio_track == audio_track
+            && self.subtitles == variant.plan.subtitles.map(|s| s.index)
             && self.source_bytes == source.size_bytes
             && self.duration_ms.abs_diff(duration_ms(source.duration_s)) < 1000
     }
@@ -467,6 +490,49 @@ pub fn work_for(
         .collect()
 }
 
+/// The subtitle track `index` of `source` as a burn (T696): `None` when there is no such
+/// track or it cannot be drawn into the picture — a choice like that is refused, never
+/// silently dropped: the owner asked for the lines to be there.
+pub fn subtitle_burn(
+    source: &SourceFile,
+    index: usize,
+) -> Option<super::convert_plan::SubtitleBurn> {
+    source
+        .subtitle(index)
+        .filter(|t| t.burnable())
+        .map(|t| super::convert_plan::SubtitleBurn {
+            index: t.index,
+            kind: t.kind,
+        })
+}
+
+/// Draw the subtitle track `burn` into every rung (T696, owner's decision B3).
+///
+/// Drawing changes every frame, so no rung is carried across any longer: a copy becomes a
+/// re-encode to the rung's own target under its ceiling, said as the reason. The notice
+/// about keyframes goes with the copy it explained — the rung is re-encoded for the
+/// subtitles whatever the keyframes do.
+pub fn burn_subtitles(work: &mut [VariantWork], burn: super::convert_plan::SubtitleBurn) {
+    for variant in work.iter_mut() {
+        variant.plan.subtitles = Some(burn);
+        let keyframes = matches!(
+            &variant.plan.video,
+            VideoAction::ReencodeCapped { reason, .. }
+                if reason.key == DetailCode::ReasonKeyframesUnaligned
+        );
+        if variant.plan.video == VideoAction::Copy || keyframes {
+            variant.plan.video = capped_to(
+                &variant.rung,
+                Detail::new(DetailCode::ReasonSubtitlesBurned),
+            );
+            variant
+                .notices
+                .retain(|n| n.key != DetailCode::NoticeReencodedForKeyframes);
+        }
+        variant.lossless = variant.plan.lossless();
+    }
+}
+
 /// Every variant is prepared with the **same** keyframe spacing.
 ///
 /// One per second of film, at whatever the frame rate is — the same rule as for a single
@@ -504,6 +570,7 @@ fn fallback_plan(source: &SourceFile, request: &ConvertRequest, rung: &Rung) -> 
         tonemap: source.is_hdr(),
         requested_height: request.height,
         faststart: true,
+        subtitles: None,
     }
 }
 

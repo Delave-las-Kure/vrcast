@@ -143,6 +143,7 @@ fn source_with(
         video_codec: String::from("h264"),
         pix_fmt: String::from("yuv420p"),
         color_transfer: None,
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![track],
     }
 }

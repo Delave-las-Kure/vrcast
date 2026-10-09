@@ -434,6 +434,9 @@ export const ipc = {
   videoList: () => call<VideoView[]>("video_list"),
   /** Choose the audio track (from zero). Before encoding only. */
   videoSetAudio: (id: string, track: number) => call<VideoView>("video_set_audio", { id, track }),
+  /** T696: the subtitles burned into every rung; null — none. */
+  videoSetSubtitles: (id: string, track: number | null) =>
+    call<VideoView>("video_set_subtitles", { id, track }),
   /** Change the title and short name. Before the medium exists only. */
   videoSetName: (id: string, title: string, slug: string | null) =>
     call<VideoView>("video_set_name", { id, title, slug }),

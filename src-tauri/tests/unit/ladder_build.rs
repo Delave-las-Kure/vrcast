@@ -22,6 +22,7 @@ fn source(width: u32, height: u32, fps: u32, bitrate_bps: u64, codec: &str) -> S
         video_codec: codec.to_owned(),
         pix_fmt: String::from("yuv420p"),
         color_transfer: None,
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![AudioTrack {
             index: 0,
             codec: String::from("aac"),
@@ -1023,4 +1024,108 @@ fn a_stream_is_copyable_exactly_when_the_plan_would_carry_it_across() {
             "{codec} {pix_fmt} {transfer:?}"
         );
     }
+}
+
+// ---------- T696: the chosen subtitles, drawn into every rung ----------
+
+fn with_subtitles(mut src: SourceFile) -> SourceFile {
+    use vrcast_studio_lib::domain::source::{SubtitleKind, SubtitleTrack};
+    let track = |index: usize, codec: &str| SubtitleTrack {
+        index,
+        codec: codec.to_owned(),
+        kind: SubtitleKind::of_codec(codec),
+        language: Some(String::from("rus")),
+        title: None,
+        forced: false,
+        is_default: false,
+    };
+    src.subtitle_tracks = vec![
+        track(0, "subrip"),
+        track(1, "hdmv_pgs_subtitle"),
+        track(2, "eia_608"),
+    ];
+    src
+}
+
+#[test]
+fn drawn_subtitles_make_every_rung_an_encode_to_its_own_bitrate() {
+    use vrcast_studio_lib::domain::ladder_build::{burn_subtitles, subtitle_burn};
+    use vrcast_studio_lib::domain::source::SubtitleKind;
+    let src = with_subtitles(source(1920, 1080, 24, 8_000_000, "h264"));
+    let rungs = [rung(0, 8_000_000, 1080), rung(1, 3_000_000, 720)];
+    // Keyframes that line up: the top rung would be a copy.
+    let mut work = work_for("film", &rungs, &src, 0, Some(1.0), 4);
+    assert_eq!(work[0].plan.video, VideoAction::Copy);
+    assert!(work[0].lossless);
+
+    let burn = subtitle_burn(&src, 1).expect("a PGS track can be drawn");
+    assert_eq!(burn.kind, SubtitleKind::Picture);
+    burn_subtitles(&mut work, burn);
+    for v in &work {
+        assert_eq!(v.plan.subtitles, Some(burn));
+        assert!(!v.lossless);
+        match &v.plan.video {
+            VideoAction::ReencodeCapped { target_kbps, .. } => {
+                assert_eq!(u64::from(*target_kbps), v.rung.bitrate_bps / 1000)
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    match &work[0].plan.video {
+        VideoAction::ReencodeCapped { reason, .. } => {
+            assert_eq!(reason.key, DetailCode::ReasonSubtitlesBurned)
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // A top rung whose copy was refused for its keyframes: re-encoded for the subtitles now,
+    // and the notice about keyframes no longer stands.
+    let mut work = work_for("film", &rungs, &src, 0, None, 4);
+    assert!(work[0]
+        .notices
+        .iter()
+        .any(|n| n.key == DetailCode::NoticeReencodedForKeyframes));
+    burn_subtitles(&mut work, subtitle_burn(&src, 0).unwrap());
+    assert!(work[0].notices.is_empty(), "{:?}", work[0].notices);
+
+    // A track that is not there, or cannot be drawn, is no burn at all.
+    assert!(
+        subtitle_burn(&src, 2).is_none(),
+        "closed captions cannot be drawn"
+    );
+    assert!(subtitle_burn(&src, 9).is_none());
+}
+
+#[test]
+fn the_sets_record_says_which_subtitles_a_rung_was_made_with() {
+    use vrcast_studio_lib::domain::ladder_build::{
+        burn_subtitles, made_here, parse_made, subtitle_burn, MadeRung,
+    };
+    let src = with_subtitles(source(1920, 1080, 24, 8_000_000, "h264"));
+    let rungs = [rung(1, 3_000_000, 720)];
+    let plain = work_for("film", &rungs, &src, 0, Some(1.0), 4);
+    let mut drawn = plain.clone();
+    burn_subtitles(&mut drawn, subtitle_burn(&src, 0).unwrap());
+
+    // Written and read back.
+    let line = MadeRung::of(&drawn[0], &src, 0).line();
+    assert!(line.ends_with(" t=0"), "{line}");
+    let read = parse_made(&line);
+    assert_eq!(read, vec![MadeRung::of(&drawn[0], &src, 0)]);
+    // A line from before subtitles is a rung without them, and still reads.
+    let old = MadeRung::of(&plain[0], &src, 0).line();
+    assert!(!old.contains(" t="), "{old}");
+    assert_eq!(parse_made(&old)[0].subtitles, None);
+    // A `t` that cannot be read makes the line unreadable, not «without subtitles».
+    assert!(parse_made(&format!("{old} t=x")).is_empty());
+
+    // Made with subtitles is not made without them, and the other way round — a change of
+    // choice makes the rungs again.
+    assert!(made_here(&read, &drawn[0], &src, 0));
+    assert!(!made_here(&read, &plain[0], &src, 0));
+    assert!(!made_here(&parse_made(&old), &drawn[0], &src, 0));
+    assert!(made_here(&parse_made(&old), &plain[0], &src, 0));
+    let mut other = plain.clone();
+    burn_subtitles(&mut other, subtitle_burn(&src, 1).unwrap());
+    assert!(!made_here(&read, &other[0], &src, 0));
 }

@@ -69,6 +69,7 @@ fn source_of(path: &str) -> SourceFile {
         video_codec: String::from("h264"),
         pix_fmt: String::from("yuv420p"),
         color_transfer: Some(String::from("bt709")),
+        subtitle_tracks: Vec::new(),
         audio_tracks: vec![AudioTrack {
             index: 0,
             codec: String::from("aac"),
@@ -95,6 +96,7 @@ fn a_plan() -> ConvertPlan {
         gop: 24,
         tonemap: false,
         faststart: true,
+        subtitles: None,
         audio_track: 0,
     }
 }

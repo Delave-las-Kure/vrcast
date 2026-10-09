@@ -168,12 +168,27 @@ pub struct ConvertPlan {
     /// The housekeeping data at the front of the file — otherwise a viewer waits for the
     /// tail to download (FR-023).
     pub faststart: bool,
+    /// The subtitle track drawn into the picture (T696, owner's decision B3): `None` — no
+    /// subtitles, which is what an ordinary plan has. Drawing them is a change to every
+    /// frame, so a plan carrying them never copies the picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitles: Option<SubtitleBurn>,
+}
+
+/// A subtitle track to draw into the picture, and how it is drawn (T696).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubtitleBurn {
+    /// The index among the source's subtitle tracks (`0:s:<N>`).
+    pub index: usize,
+    pub kind: super::source::SubtitleKind,
 }
 
 impl ConvertPlan {
     /// Whether the quality will be left untouched.
     pub fn lossless(&self) -> bool {
-        self.video == VideoAction::Copy && self.audio == AudioAction::Copy
+        self.video == VideoAction::Copy
+            && self.audio == AudioAction::Copy
+            && self.subtitles.is_none()
     }
 }
 
@@ -345,6 +360,7 @@ pub fn plan(
         tonemap,
         requested_height: request.height,
         faststart: true,
+        subtitles: None,
     })
 }
 

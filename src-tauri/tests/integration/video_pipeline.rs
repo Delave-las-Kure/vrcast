@@ -671,6 +671,7 @@ async fn a_set_is_built_into_a_medium_beside_its_single_file_named_like_a_rung_w
             slug: String::from("old-film"),
             rungs: nine,
             audio_track: 0,
+            subtitle_track: None,
             prefer_hardware: true,
             batch: None,
             confirmed: true,
@@ -1297,4 +1298,139 @@ async fn several_videos_started_at_once_each_get_their_medium() {
             v.title
         );
     }
+}
+
+/// The brightest pixel in the bottom fifth of the frame at `at_s` of a served rung, read the
+/// way a player reads it: over HTTP, through the rung's playlist.
+fn brightest_at_the_bottom(url: &str, at_s: f64) -> u8 {
+    let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg");
+    let out = std::process::Command::new(ff)
+        .args(["-nostdin", "-v", "error", "-ss"])
+        .arg(at_s.to_string())
+        .args(["-i", url, "-frames:v", "1", "-vf"])
+        .arg("crop=iw:ih/5:0:ih*4/5,format=gray")
+        .args(["-f", "rawvideo", "pipe:1"])
+        .output()
+        .expect("could not run the bundled FFmpeg");
+    assert!(
+        out.status.success() && !out.stdout.is_empty(),
+        "{url} at {at_s}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout.iter().copied().max().unwrap_or(0)
+}
+
+/// T696 (owner's decision B3) — subtitles chosen for a video are burned into every rung on the
+/// real server, the top one included (a copy of the source otherwise), and the set's record
+/// says so: a line is on screen while it should be and gone after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_subtitles_chosen_are_burned_into_every_rung() {
+    super::fixture::logging_if_requested();
+    let server = TestServer::start().expect("the container would not come up");
+    let scratch = Scratch::new("t696-subtitles");
+    let state = state_on(
+        &scratch.0.join("vrcast.sqlite3"),
+        Arc::new(InMemorySecretStore::new()),
+        &origin_of(&server),
+    );
+    let server_id = add_profile(&state, &server).await;
+
+    // A black film — nothing bright anywhere but the line — with one SubRip track. Padded to
+    // a steady 1.5 Mbit/s: over the megabit a ladder needs, and under the top rung's 2, so
+    // without subtitles the top rung would be the source carried across.
+    let srt = scratch.0.join("lines.srt");
+    std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:10,000\nПривет, мир\n").unwrap();
+    let film = scratch.0.join("With Lines.mkv");
+    let ff = ffmpeg::locate("ffmpeg").expect("no bundled FFmpeg");
+    let made = std::process::Command::new(ff)
+        .args(["-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i"])
+        .arg("color=c=black:size=1280x720:rate=24:duration=12")
+        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=12", "-i"])
+        .arg(&srt)
+        .args(["-map", "0:v", "-map", "1:a", "-map", "2:s"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-b:v", "1500k"])
+        .args([
+            "-minrate", "1500k", "-maxrate", "1500k", "-bufsize", "1500k",
+        ])
+        .args(["-x264-params", "nal-hrd=cbr", "-g", "24"])
+        .args(["-keyint_min", "24", "-pix_fmt", "yuv420p", "-c:a", "aac"])
+        .args(["-c:s", "srt"])
+        .arg(&film)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+
+    let added = video::video_add(
+        &state,
+        &server_id,
+        &[film.to_string_lossy().into_owned()],
+        None,
+    )
+    .await
+    .expect("adding failed");
+    assert!(added.refused.is_empty(), "{:?}", added.refused);
+    let id = added.added[0].id.clone();
+    let planned = until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    assert_eq!(planned.state, VideoState::Ready, "{:?}", planned.problem);
+    let tracks = &planned.source.as_ref().expect("no source").subtitle_tracks;
+    assert_eq!(tracks.len(), 1, "{tracks:?}");
+    video::video_set_rungs(&state, &id, Some(two_rungs())).unwrap();
+    let chosen = video::video_set_subtitles(&state, &id, Some(0)).expect("refused");
+    assert_eq!(chosen.subtitle_track, Some(0));
+    let started = video::video_start(&state, std::slice::from_ref(&id));
+    assert!(started[0].error.is_none(), "{:?}", started[0].error);
+    let done = until(&state, &id, "the build", Duration::from_secs(400), |v| {
+        matches!(
+            v.state,
+            VideoState::Done | VideoState::Problem | VideoState::Cancelled
+        )
+    })
+    .await;
+    assert_eq!(done.state, VideoState::Done, "{:?}", done.problem);
+    the_set_is_served(&server, &done.slug);
+    no_prepared_files(&server, &done.slug);
+
+    // The set's own record: every rung made with subtitle track 0.
+    let record = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/{}/.prepared'", done.slug))
+        .expect("no record of the set");
+    let made: Vec<&str> = record.lines().filter(|l| l.starts_with("made ")).collect();
+    assert_eq!(made.len(), 2, "{record}");
+    assert!(made.iter().all(|l| l.ends_with(" t=0")), "{record}");
+
+    // Every rung, as a player gets it: the line at 3 s, nothing at 11.5 s.
+    let master = server
+        .exec_inside(&format!("cat '{VIDEO_DIR}/{}/master.m3u8'", done.slug))
+        .unwrap();
+    let rungs: Vec<&str> = master
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .collect();
+    assert_eq!(rungs.len(), 2, "{master}");
+    for rung in rungs {
+        let url = format!(
+            "{}/videos/{}/{}",
+            origin_of(&server),
+            done.slug,
+            rung.trim()
+        );
+        let with_line = brightest_at_the_bottom(&url, 3.0);
+        let after = brightest_at_the_bottom(&url, 11.5);
+        assert!(
+            with_line > 150,
+            "{rung}: no line drawn (brightest {with_line})"
+        );
+        assert!(
+            after < 60,
+            "{rung}: something drawn after the line (brightest {after})"
+        );
+    }
+    drop(scratch);
 }

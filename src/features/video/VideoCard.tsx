@@ -36,6 +36,7 @@ import {
   trackLabel,
 } from "./rules";
 import { VideoRungs } from "./VideoRungs";
+import { SubtitlePick } from "./SubtitlePick";
 
 export function VideoCard({
   video,
@@ -192,6 +193,7 @@ export function VideoCard({
           </select>
         </label>
       )}
+      {planShown && <SubtitlePick video={video} busy={busy} run={(act) => void run(act)} />}
 
       {!planShown && <StageBar video={video} t={t} lang={lang} />}
 

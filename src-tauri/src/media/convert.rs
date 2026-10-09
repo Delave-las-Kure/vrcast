@@ -13,8 +13,8 @@
 //! looks finished while being garbage.
 
 use super::ffmpeg;
-use crate::domain::convert_plan::{AudioAction, ConvertPlan, VideoAction};
-use crate::domain::source::SourceFile;
+use crate::domain::convert_plan::{AudioAction, ConvertPlan, SubtitleBurn, VideoAction};
+use crate::domain::source::{SourceFile, SubtitleKind};
 use crate::domain::wording::Detail;
 use crate::media::encoders::{self, Encoder};
 use crate::tasks::engine::TaskContext;
@@ -88,15 +88,27 @@ pub fn build_args(job: &ConvertJob<'_>) -> Vec<String> {
     push(a, "-i");
     push(a, job.source.path.as_str());
 
+    // T696: picture subtitles are a second input to the picture, and so a graph of their own
+    // rather than a chain; the graph's output is the one video stream.
+    let graph = picture_subtitles_graph(job);
+
     // Exactly one video and one audio stream, chosen explicitly. Letting FFmpeg
     // pick means it picks differently on files with several video streams
     // (cover art counts as one), and the result is a still image with sound.
-    push(a, "-map");
-    push(a, "0:v:0");
+    if let Some(graph) = &graph {
+        push(a, "-filter_complex");
+        push(a, graph);
+        push(a, "-map");
+        push(a, &format!("[{PICTURE_OUT}]"));
+    } else {
+        push(a, "-map");
+        push(a, "0:v:0");
+    }
     push(a, "-map");
     push(a, &format!("0:a:{}", job.plan.audio_track));
     // Subtitles and data streams are dropped: MP4 for the VRChat player carries
-    // video and audio, and an unexpected stream can make the muxer refuse.
+    // video and audio, and an unexpected stream can make the muxer refuse. A subtitle track
+    // the owner chose is drawn into the picture instead (T696), never carried as a stream.
     push(a, "-map_metadata");
     push(a, "-1");
     // **And the chapters, which are not metadata.** FFmpeg keeps them apart and copies them
@@ -110,9 +122,11 @@ pub fn build_args(job: &ConvertJob<'_>) -> Vec<String> {
     push(a, "-map_chapters");
     push(a, "-1");
 
-    if let Some(filter) = video_filter(job) {
-        push(a, "-vf");
-        push(a, &filter);
+    if graph.is_none() {
+        if let Some(filter) = video_filter(job) {
+            push(a, "-vf");
+            push(a, &filter);
+        }
     }
 
     video_args(job, a);
@@ -149,6 +163,19 @@ fn video_filter(job: &ConvertJob<'_>) -> Option<String> {
         steps.push(String::from(TONEMAP_CHAIN));
     }
 
+    // T696: text subtitles are drawn by libass onto the full-size picture, after HDR is
+    // brought down and before the height changes — every rung shows the same lines at the
+    // same place, scaled with the picture.
+    if let Some(burn) = burning(job) {
+        if burn.kind == SubtitleKind::Text {
+            steps.push(format!(
+                "subtitles=filename={}:si={}",
+                filter_path(&job.source.path),
+                burn.index
+            ));
+        }
+    }
+
     if let Some(height) = target_height(job) {
         // `-2` keeps the aspect ratio and rounds the width to an even number.
         // H.264 in yuv420p cannot encode odd dimensions at all, and `-1` produces
@@ -162,6 +189,74 @@ fn video_filter(job: &ConvertJob<'_>) -> Option<String> {
     }
 
     (!steps.is_empty()).then(|| steps.join(","))
+}
+
+/// The label of the picture a `-filter_complex` graph hands to the encoder.
+const PICTURE_OUT: &str = "picture";
+
+/// The subtitles to draw, when the picture is re-encoded at all. A copied picture cannot be
+/// drawn on; the plan never asks for both (`ladder_build::burn_subtitles`), and if it did the
+/// copy would win rather than the command failing.
+fn burning(job: &ConvertJob<'_>) -> Option<SubtitleBurn> {
+    match job.plan.video {
+        VideoAction::Copy => None,
+        _ => job.plan.subtitles,
+    }
+}
+
+/// The graph for picture subtitles (Blu-ray PGS, DVD VobSub) — T696.
+///
+/// The subtitle pictures are drawn on a canvas of their own size, which is often not the
+/// film's (a 1280×720 PGS track over a 720×480 picture, a 1920×1080 VobSub over a cropped
+/// 1920×800), so the canvas is first scaled to the frame size the source was examined to
+/// have — a fixed size rather than a reference stream, so no frames of the film queue up
+/// waiting for a line that comes once a minute — then laid over it. `eof_action=pass` keeps
+/// the film going after the last line. HDR is brought down before, the height changed after
+/// — the same order as the text path.
+fn picture_subtitles_graph(job: &ConvertJob<'_>) -> Option<String> {
+    let burn = burning(job).filter(|b| b.kind == SubtitleKind::Picture)?;
+    let mut film = String::from("null");
+    if job.plan.tonemap {
+        film = String::from(TONEMAP_CHAIN);
+    }
+    let mut after = String::new();
+    if let Some(height) = target_height(job) {
+        after.push_str(&format!(",scale=-2:{height}"));
+    }
+    Some(format!(
+        "[0:v:0]{film}[film];\
+         [0:s:{index}]scale={w}:{h}[lines];\
+         [film][lines]overlay=eof_action=pass{after},format=yuv420p[{PICTURE_OUT}]",
+        index = burn.index,
+        w = job.source.width.max(2),
+        h = job.source.height.max(2),
+    ))
+}
+
+/// A file name as a filter option's value inside a filter graph (T696).
+///
+/// Two levels of FFmpeg's quoting: the option's own (`:` would end the value, `'` and `\` are
+/// special) and then the graph's (`,` `;` `[` `]` would end the filter). A Windows name has
+/// all of them — `F:`, `\`, `It's, a film [1080p].mkv` — and one character left bare makes
+/// FFmpeg refuse to start, or open another file. Back-slashes become forward ones first:
+/// FFmpeg takes those on Windows, and they need no quoting.
+pub fn filter_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let mut option = String::with_capacity(path.len() * 2);
+    for c in path.chars() {
+        if matches!(c, '\\' | ':' | '\'') {
+            option.push('\\');
+        }
+        option.push(c);
+    }
+    let mut graph = String::with_capacity(option.len() * 2);
+    for c in option.chars() {
+        if matches!(c, '\\' | '\'' | ',' | ';' | '[' | ']') {
+            graph.push('\\');
+        }
+        graph.push(c);
+    }
+    graph
 }
 
 /// Requested frame height, when it differs from the source.

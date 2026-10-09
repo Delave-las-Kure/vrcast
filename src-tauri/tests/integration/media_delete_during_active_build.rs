@@ -176,6 +176,7 @@ fn build_request(server_id: &str, path: &str, slug: &str, confirmed: bool) -> Bu
         slug: slug.to_owned(),
         rungs: rungs(),
         audio_track: 0,
+        subtitle_track: None,
         prefer_hardware: false,
         batch: None,
         confirmed,
