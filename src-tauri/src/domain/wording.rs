@@ -586,6 +586,9 @@ detail_codes! {
     /// `count`. Removing a server stops what runs on it first — its videos and its tasks
     /// (T683): the question asked before `server_remove(confirmed)`.
     ConfirmStopServerWork => "CONFIRM_STOP_SERVER_WORK",
+    /// A film with more than one sound track waits for a person to choose one (T695, the
+    /// owner's decision of 2026-10-09): «Start», «Retry» and «Replace» are refused until then.
+    AudioNotChosen => "AUDIO_NOT_CHOSEN",
 }
 
 impl TryFrom<String> for DetailCode {

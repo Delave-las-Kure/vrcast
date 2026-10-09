@@ -26,8 +26,17 @@ import { useActiveServer, useServers } from "../servers/store";
 import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
 import { NoServer } from "../shared/NoServer";
 import { basename } from "../shared/names";
+import { SendSpeed } from "./SendSpeed";
 import { VideoCard } from "./VideoCard";
-import { VIDEO_EXTENSIONS, anyInWork, canStart, mergeListed, upsert } from "./rules";
+import {
+  VIDEO_EXTENSIONS,
+  anyInWork,
+  audioMissing,
+  canStart,
+  mergeListed,
+  nameBlocked,
+  upsert,
+} from "./rules";
 
 /** How often the list is asked again while something is in work (T687). */
 const RESYNC_MS = 15_000;
@@ -162,7 +171,9 @@ export function VideoScreen() {
     });
   }, []);
 
-  const startable = videos.filter((v) => v.state === "ready" && canStart(v));
+  const startable = videos.filter(
+    (v) => v.state === "ready" && canStart(v) && !audioMissing(v) && !nameBlocked(v),
+  );
   const startAll = async () => {
     setBusy(true);
     try {
@@ -197,6 +208,7 @@ export function VideoScreen() {
           >
             {w.startAll}
           </button>
+          <SendSpeed />
         </div>
       </div>
 
@@ -210,7 +222,9 @@ export function VideoScreen() {
             {refused.map((r) => (
               <li key={r.path} data-testid="refused">
                 <strong>{basename(r.path)}</strong>
-                <ErrorFolded error={r.error} lineClassName="video__problem-line" />
+                {/* T700 — a file refused: what is wrong with it in a line, the raw cause under
+                    «Details»; no advice about «fields» that a file does not have. */}
+                <ErrorFolded error={r.error} lineClassName="video__problem-line" hint={false} />
               </li>
             ))}
           </ul>

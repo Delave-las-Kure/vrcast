@@ -387,7 +387,9 @@ export type DetailCode =
   | "RUNG_FILE_CLAIMED"
   | "OLD_SET_UNRECOGNIZED"
   // Removing a server with work alive on it (T683): `count`.
-  | "CONFIRM_STOP_SERVER_WORK";
+  | "CONFIRM_STOP_SERVER_WORK"
+  // A film with several sound tracks waits for a person to choose one (T695).
+  | "AUDIO_NOT_CHOSEN";
 
 /** One thing to say, with the values to put into it. */
 export interface Detail {
@@ -541,6 +543,23 @@ export interface LadderSetView {
   exists_on_server: boolean;
   origin_url: string;
   cdn_url: string | null;
+  /** T694 — a link per quality, the heaviest first, from what the set's master names. Empty
+   *  when the master could not be read; absent from a cache written before T694. */
+  qualities?: QualityLink[];
+}
+
+/**
+ * T694 (the owner's decision of 2026-10-09) — a link to one quality of a set, held steady:
+ * the rung's own HLS playlist (`{slug}/v9/stream.m3u8`), for when a steady low bitrate serves
+ * everybody better than the player's own choosing.
+ */
+export interface QualityLink {
+  width: number;
+  height: number;
+  /** The rung's own bitrate (`v9` → 9 Mbit/s). */
+  bitrate_bps: number;
+  origin: string;
+  cdn: string | null;
 }
 
 export interface MediaView {
@@ -581,6 +600,9 @@ export interface LibraryView {
   disk: DiskUsage | null;
   /** True = this is the last known state; the server is out of reach right now. */
   stale: boolean;
+  /** T702 — when what is shown was read from the server (RFC 3339); a stale list is «shown
+   *  as of» it. Absent from an answer older than T702. */
+  read_at?: string | null;
 }
 
 /** The viewer links for a file (FR-016). */
@@ -1203,13 +1225,19 @@ export interface LimitRequest {
   cap_bps: number;
 }
 
-/** What the checker says about a ladder's soundness. */
+/**
+ * What the checker says about a ladder's soundness.
+ *
+ * T692 — tagged by `code`, its fields beside it, exactly as the core sends it
+ * (`#[serde(tag = "code", rename_all = "SCREAMING_SNAKE_CASE")]`). This type once described a
+ * shape the core never sent, and the first objection an edit raised took the whole window down.
+ */
 export type Objection =
-  | { RungAboveSource: { index: number; source_bps: number } }
-  | { BufsizeTooLarge: { index: number; maxrate_bps: number } }
-  | { LevelExceeded: { index: number; level: string; limits: unknown[] } }
-  | { OutOfOrder: { index: number } }
-  | { BadStep: { index: number; times: number } };
+  | { code: "RUNG_ABOVE_SOURCE"; index: number; source_bps: number }
+  | { code: "BUFSIZE_TOO_LARGE"; index: number; maxrate_bps: number }
+  | { code: "LEVEL_EXCEEDED"; index: number; level: string; limits: unknown[] }
+  | { code: "OUT_OF_ORDER"; index: number }
+  | { code: "BAD_STEP"; index: number; times: number };
 
 /** Why a ladder must not be built yet. Separate from soundness on purpose. */
 export type NotBuildable = { code: "NO_RUNGS" } | { code: "RUNGS_NOT_MEASURED"; indexes: number[] };
@@ -1471,6 +1499,9 @@ export interface Settings {
    *  source": the disk a film is on certainly fits a film, which no other default can
    *  promise. */
   work_dir: string | null;
+  /** T701 — the cap on sending a video's rungs, **bytes** per second; null — no cap. Chosen on
+   *  the «Video» screen and applied to a send already on its way. Absent from an older core. */
+  send_limit_bps?: number | null;
 }
 
 export const EVENTS = {
@@ -1779,6 +1810,12 @@ export interface VideoView {
   slug: string;
   /** From zero, as `SourceFile.audio_tracks[].index`. */
   audio_track: number;
+  /**
+   * T695 — whether the sound is chosen. `false` for a film with several tracks until a
+   * person picks one: «Start» is refused (`INVALID_INPUT` + `AUDIO_NOT_CHOSEN`) meanwhile, and
+   * `audio_track` is only what the plan's sizes are reckoned with.
+   */
+  audio_chosen: boolean;
   stage: VideoStage;
   state: VideoState;
   paused_by_person: boolean;
@@ -1794,6 +1831,8 @@ export interface VideoView {
   problem: VideoProblem | null;
   /** The link to the set, once `done`. */
   link: Links | null;
+  /** T694 — a link per quality of the set, the heaviest first; empty until `done`. */
+  quality_links: QualityLink[];
   created_at: string;
   updated_at: string;
   /**

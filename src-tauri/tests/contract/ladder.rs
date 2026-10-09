@@ -695,3 +695,43 @@ async fn opening_another_file_stops_the_probe_of_the_one_left() {
     eprintln!("stopped after {took:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// T692 — an objection goes over the wire tagged by `code`, its fields beside the tag.
+///
+/// The interface once read `{ "BadStep": { … } }`, a shape this never sent, and the first
+/// objection an edit raised took the whole window down. This pins the shape the screen reads.
+#[test]
+fn an_objection_is_sent_tagged_by_code_with_its_fields_beside_it() {
+    let step = serde_json::to_value(Objection::BadStep {
+        index: 1,
+        times: 4.0,
+    })
+    .unwrap();
+    assert_eq!(
+        step,
+        serde_json::json!({ "code": "BAD_STEP", "index": 1, "times": 4.0 })
+    );
+    let above = serde_json::to_value(Objection::RungAboveSource {
+        index: 0,
+        source_bps: 60_000_000,
+    })
+    .unwrap();
+    assert_eq!(
+        above,
+        serde_json::json!({ "code": "RUNG_ABOVE_SOURCE", "index": 0, "source_bps": 60_000_000 })
+    );
+    for (objection, code) in [
+        (Objection::OutOfOrder { index: 2 }, "OUT_OF_ORDER"),
+        (
+            Objection::BufsizeTooLarge {
+                index: 0,
+                maxrate_bps: 1,
+            },
+            "BUFSIZE_TOO_LARGE",
+        ),
+    ] {
+        let value = serde_json::to_value(objection).unwrap();
+        assert_eq!(value["code"], code);
+        assert!(value["index"].is_u64(), "{value}");
+    }
+}

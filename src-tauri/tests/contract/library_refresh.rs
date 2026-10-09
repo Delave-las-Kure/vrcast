@@ -54,6 +54,7 @@ fn view(server_id: &str, title: &str) -> LibraryView {
         unrecognized: Vec::new(),
         disk: None,
         stale: false,
+        read_at: Some(String::from("2026-10-09T10:00:00.000000000Z")),
     }
 }
 
@@ -287,4 +288,54 @@ async fn reading_from_the_cache_writes_nothing_and_says_nothing() {
         library_events(&mut rx).is_empty(),
         "a read from the cache announced a change"
     );
+}
+
+/// T702 — a read of the server that fails marks the kept library as the last known one, and
+/// says so: a screen showing the cache learns that it is old rather than showing it as current.
+/// The next read that succeeds puts it right, and says that too. A read's own time is not a
+/// difference in the library.
+#[tokio::test]
+async fn a_failed_read_marks_the_kept_library_as_the_last_known() {
+    use vrcast_studio_lib::error::{AppError, ErrorCode};
+    let (s, id) = state_with_server();
+    library_cache::save(&s.db, &id, &view(&id, "Film")).unwrap();
+    let mut rx = s.subscribe();
+
+    let failed = refreshes::run(&s, &id, || {
+        async { Err(AppError::new(ErrorCode::SshUnreachable)) }.boxed()
+    })
+    .await;
+    assert!(failed.is_err());
+    let kept = library_cache::load(&s.db, &id).unwrap().unwrap();
+    assert!(
+        kept.stale,
+        "a library the server did not confirm is shown as current"
+    );
+    assert_eq!(
+        kept.read_at,
+        view(&id, "Film").read_at,
+        "the time it was read changed"
+    );
+    assert_eq!(library_events(&mut rx), vec![id.clone()]);
+    // What the screen reads on the event says so.
+    assert!(api::library_list_known(&s, &id).await.unwrap().stale);
+
+    // Failing again says nothing new.
+    let _ = refreshes::run(&s, &id, || {
+        async { Err(AppError::new(ErrorCode::SshUnreachable)) }.boxed()
+    })
+    .await;
+    assert!(library_events(&mut rx).is_empty());
+
+    // A read that succeeds — the same library, read later — is current again, and said.
+    let mut later = view(&id, "Film");
+    later.read_at = Some(String::from("2026-10-09T11:00:00.000000000Z"));
+    let answer = later.clone();
+    refreshes::run(&s, &id, move || async move { Ok(answer) }.boxed())
+        .await
+        .unwrap();
+    let kept = library_cache::load(&s.db, &id).unwrap().unwrap();
+    assert!(!kept.stale);
+    assert_eq!(kept.read_at, later.read_at);
+    assert_eq!(library_events(&mut rx), vec![id.clone()]);
 }

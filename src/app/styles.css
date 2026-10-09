@@ -1640,6 +1640,38 @@ button.danger:disabled {
   overflow-wrap: anywhere;
 }
 
+/* T694 — the links to a finished set: «Auto» and one per quality, a line each. */
+.set-links__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.set-links__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.set-links__label {
+  min-width: 9em;
+}
+
+.set-links__said,
+.set-links__cdn {
+  margin: 4px 0 0;
+}
+
+/* T701 — the sending speed, beside «Start all». */
+.video__send-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .video__actions {
   display: flex;
   gap: 8px;

@@ -31,6 +31,8 @@ pub mod api {
             network: saved.concurrent_heavy_tasks as usize,
             light: crate::tasks::state::LaneLimits::default().light,
         });
+        // T701 — the sending cap reaches the rungs already on their way.
+        crate::domain::rate_limit::SENDING.set(saved.send_limit_bps);
         Ok(saved)
     }
 

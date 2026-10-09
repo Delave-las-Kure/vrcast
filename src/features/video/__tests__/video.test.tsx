@@ -34,6 +34,7 @@ const mockVideoSetAudio = vi.fn();
 const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
 const mockLadderRecomputeRung = vi.fn();
+const mockLadderValidate = vi.fn();
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
@@ -63,7 +64,7 @@ vi.mock("../../../shared/ipc", async () => {
       videoSetAudio: (...a: unknown[]) => mockVideoSetAudio(...a),
       videoSetName: (...a: unknown[]) => mockVideoSetName(...a),
       videoSetRungs: (...a: unknown[]) => mockVideoSetRungs(...a),
-      ladderValidate: () => Promise.resolve({ objections: [], not_buildable: null }),
+      ladderValidate: (...a: unknown[]) => mockLadderValidate(...a),
       ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
@@ -171,6 +172,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     title: "Фильм",
     slug: "film",
     audio_track: 0,
+    audio_chosen: true,
     stage: "planned",
     state: "ready",
     paused_by_person: false,
@@ -182,6 +184,7 @@ function video(over: Partial<VideoView> = {}): VideoView {
     media_id: null,
     problem: null,
     link: null,
+    quality_links: [],
     created_at: "2026-10-01T10:00:00Z",
     updated_at: "2026-10-01T10:00:00Z",
     rev: 1,
@@ -250,6 +253,7 @@ beforeEach(() => {
     m.mockImplementation((id: string) => Promise.resolve(video({ id })));
   }
   mockVideoRemove.mockResolvedValue(null);
+  mockLadderValidate.mockResolvedValue({ objections: [], not_buildable: null });
   mockVideoStart.mockImplementation((ids: string[]) =>
     Promise.resolve(ids.map((id) => ({ id, error: null }))),
   );
@@ -309,7 +313,9 @@ describe("the list", () => {
     ).toHaveAttribute("data-mark", "current");
 
     const c = await card("c");
-    expect(c.getByText("https://stream.example.com/c/master.m3u8")).toBeInTheDocument();
+    // T694 — the links, not an address on view: «Auto» first, with its «Copy».
+    expect(c.getAllByTestId("set-link")[0]).toHaveTextContent(ru.ui.video.linkAuto);
+    expect(c.queryByText("https://stream.example.com/c/master.m3u8")).toBeNull();
     expect(mockVideoList).toHaveBeenCalledTimes(1);
   });
 
@@ -398,6 +404,8 @@ describe("adding videos", () => {
     const refused = await screen.findByTestId("refused");
     expect(refused).toHaveTextContent("notes.txt");
     expect(refused).toHaveTextContent(ru.details.VIDEO_ALREADY_LISTED);
+    // T700 — a file has no field to correct: the form's advice is not given.
+    expect(refused).not.toHaveTextContent(ru.errors.INVALID_INPUT.hint);
   });
 
   it("a plan waiting for a place among the heavy work says it is queued (T688)", async () => {
@@ -570,6 +578,65 @@ describe("the plan before Start", () => {
     expect((await card("v2")).queryByRole("combobox")).toBeNull();
   });
 
+  it("with several tracks none is chosen beforehand, and «Start» waits for one (T695)", async () => {
+    const asking = video({ id: "a", source: source(2), audio_chosen: false });
+    mockVideoList.mockResolvedValue([asking, video({ id: "b" })]);
+    mockVideoSetAudio.mockImplementation((_id: string, track: number) =>
+      Promise.resolve({ ...asking, audio_track: track, audio_chosen: true, rev: 2 }),
+    );
+    show();
+    const a = await card("a");
+    const select = a.getByRole("combobox");
+    expect(select).toHaveValue("");
+    expect(within(select).getByRole("option", { name: ru.ui.video.chooseAudio })).toBeDisabled();
+    expect(a.getByRole("button", { name: ru.ui.video.start })).toBeDisabled();
+
+    // «Start all» starts the others and leaves this one asking.
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.video.startAll }));
+    await waitFor(() => expect(mockVideoStart).toHaveBeenCalledWith(["b"]));
+    expect((await card("a")).getByRole("combobox")).toHaveValue("");
+
+    fireEvent.change(select, { target: { value: "1" } });
+    await waitFor(() => expect(mockVideoSetAudio).toHaveBeenCalledWith("a", 1));
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("video-a")).getByRole("button", { name: ru.ui.video.start }),
+      ).toBeEnabled(),
+    );
+    expect(
+      within(screen.getByTestId("video-a")).queryByRole("option", {
+        name: ru.ui.video.chooseAudio,
+      }),
+    ).toBeNull();
+  });
+
+  it("a name already taken in the plan: no «Start», «Another name» and «Replace» at once (T700)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({ plan: plan({ name_taken: true }) }),
+      video({ id: "free" }),
+    ]);
+    mockVideoReplace.mockResolvedValue(working({ media_id: "m9" }));
+    show();
+    const c = await card();
+    expect(c.getByRole("button", { name: ru.ui.video.start })).toBeDisabled();
+    expect(c.queryByRole("button", { name: ru.ui.video.editTitle })).toBeNull();
+    expect(c.getAllByText("Имя «film» занято")).toHaveLength(1);
+
+    // «Start all» leaves it be.
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.video.startAll }));
+    await waitFor(() => expect(mockVideoStart).toHaveBeenCalledWith(["free"]));
+
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.otherName }));
+    expect(c.getByLabelText(ru.ui.video.title)).toHaveValue("Фильм");
+    fireEvent.click(c.getByRole("button", { name: ru.ui.common.cancel }));
+
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.replace }));
+    const ask = c.getByRole("group", { name: ru.ui.video.replace });
+    expect(mockVideoReplace).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole("button", { name: ru.ui.video.replace }));
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v1", false));
+  });
+
   it("starts one video, and «Start all» starts every ready one", async () => {
     mockVideoList.mockResolvedValue([video({ id: "a" }), video({ id: "b" }), working({ id: "c" })]);
     show();
@@ -709,6 +776,12 @@ describe("the stages after Start", () => {
     await waitFor(() => expect(mockVideoResume).toHaveBeenCalledWith("v1"));
   });
 
+  it("a card started and waiting behind another says «Queued», not nothing (T700)", async () => {
+    mockVideoList.mockResolvedValue([working({ stage: "planned", progress: null })]);
+    show();
+    expect((await card()).getByTestId("stage-facts")).toHaveTextContent(ru.ui.video.queued);
+  });
+
   it("says it is stopping while cancelling, and offers nothing to press", async () => {
     mockVideoList.mockResolvedValue([working({ state: "cancelling" })]);
     show();
@@ -726,6 +799,22 @@ describe("the stages after Start", () => {
         state: "done",
         media_id: "m1",
         link: { origin: "https://s/x/master.m3u8", cdn: null },
+        quality_links: [
+          {
+            width: 1920,
+            height: 1080,
+            bitrate_bps: 8_000_000,
+            origin: "https://s/x/v8/stream.m3u8",
+            cdn: null,
+          },
+          {
+            width: 1280,
+            height: 720,
+            bitrate_bps: 4_000_000,
+            origin: "https://s/x/v4/stream.m3u8",
+            cdn: null,
+          },
+        ],
       }),
     ]);
     show();
@@ -733,9 +822,19 @@ describe("the stages after Start", () => {
     expect(
       within(c.getByRole("list", { name: ru.ui.video.stagesLabel })).getByText(/Готово/),
     ).toHaveAttribute("data-mark", "passed");
-    fireEvent.click(c.getByRole("button", { name: ru.ui.video.copy }));
+    // T694 — «Auto» and one per quality, each with «Copy»; the same as in the library.
+    const rows = c.getAllByTestId("set-link");
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toHaveTextContent("1080p · 8 Мбит/с");
+    expect(rows[2]).toHaveTextContent("720p · 4 Мбит/с");
+    fireEvent.click(within(rows[0]).getByRole("button", { name: ru.ui.video.copy }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://s/x/master.m3u8"));
     expect(await c.findByText(ru.ui.video.copied)).toBeInTheDocument();
+    fireEvent.click(within(rows[2]).getByRole("button", { name: ru.ui.video.copy }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith("https://s/x/v4/stream.m3u8"));
+    // No CDN, no word about one; the note for friends is there, folded.
+    expect(c.queryByText(ru.ui.video.cdnBlind)).toBeNull();
+    expect(c.getByText(ru.ui.video.friendsHow).closest("details")!.open).toBe(false);
   });
 });
 
@@ -806,12 +905,27 @@ describe("a problem", () => {
     mockVideoList.mockResolvedValue([problem("SLUG_TAKEN", ["replace", "rename"])]);
     show();
     const c = await card();
-    // «Rename» is offered as the field and its «Retry».
-    fireEvent.click(c.getByRole("button", { name: ru.ui.video.retry }));
+    // «Another name» puts the field up — not a «Retry» that a person cannot predict (T700).
+    expect(c.queryByRole("button", { name: ru.ui.video.retry })).toBeNull();
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.otherName }));
     fireEvent.change(c.getByLabelText(ru.ui.video.title), { target: { value: "Фильм 2" } });
-    fireEvent.click(c.getByRole("button", { name: ru.ui.video.retry }));
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.saveTitle }));
     await waitFor(() => expect(mockVideoSetName).toHaveBeenCalledWith("v1", "Фильм 2", null));
     await waitFor(() => expect(mockVideoRetry).toHaveBeenCalledWith("v1", false));
+  });
+
+  it("says a taken name once, not in the plan and again in the problem (T700)", async () => {
+    mockVideoList.mockResolvedValue([
+      {
+        ...problem("SLUG_TAKEN", ["replace", "rename"]),
+        stage: "planned",
+        plan: plan({ name_taken: true }),
+      },
+    ]);
+    show();
+    const c = await card();
+    expect(c.getByRole("alert")).toHaveTextContent(ru.errors.SLUG_TAKEN.message);
+    expect(c.getByTestId("plan")).not.toHaveTextContent("Имя «film» занято");
   });
 
   it("opens the rung editor here, saves the rungs to the video and carries on", async () => {
@@ -890,6 +1004,108 @@ describe("the rungs before Start", () => {
     await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledWith("v1", null));
     expect(mockVideoRetry).not.toHaveBeenCalled();
     expect(mockVideoStart).not.toHaveBeenCalled();
+  });
+});
+
+describe("the rung editor does not take the window down (T692)", () => {
+  const three = () => [rung(0, 8, 1080), rung(1, 4, 720), rung(2, 2, 480)];
+  /** The core's own wire shape: tagged by `code`, its fields beside it. */
+  const badStep = { objections: [{ code: "BAD_STEP", index: 1, times: 4 }], not_buildable: null };
+  const unmeasured = (index: number, mbps: number, height: number) =>
+    ({
+      ...rung(index, mbps, height),
+      reasons: ["edited_by_hand"],
+      quality: { state: "not_measured" },
+    }) as Rung;
+
+  async function openEditor() {
+    mockVideoList.mockResolvedValue([video({ plan: plan({ rungs: three() }) })]);
+    show();
+    fireEvent.click((await card()).getByRole("button", { name: ru.ui.video.rungs }));
+    return screen.findByRole("dialog", { name: ru.ui.video.rungs });
+  }
+
+  /** The plan the core answers with after an edit: the edited rung is to be measured. */
+  function savedAsEdited(edited: Rung) {
+    mockVideoSetRungs.mockImplementation((_id: string, sent: Rung[]) =>
+      Promise.resolve(
+        video({
+          plan: plan({
+            rungs: sent.map((r) => (r.index === edited.index ? edited : r)),
+            from: "edited",
+            needs_measuring: true,
+            measure_s: 120,
+          }),
+        }),
+      ),
+    );
+  }
+
+  it("an emptied field and a new number: no crash, the objection shown, saved to measure", async () => {
+    const edited = unmeasured(2, 3, 540);
+    mockLadderRecomputeRung.mockResolvedValue(edited);
+    savedAsEdited(edited);
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue(badStep);
+    const field = within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 3`);
+    // Emptied as Backspace leaves it: nothing is recomputed, the field stays empty.
+    fireEvent.change(field, { target: { value: "" } });
+    expect(field).toHaveValue(null);
+    expect(mockLadderRecomputeRung).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: "3" } });
+    await waitFor(() => expect(mockLadderRecomputeRung).toHaveBeenCalledTimes(1));
+    expect(mockLadderRecomputeRung.mock.calls[0][1]).toBe(3_000_000);
+    expect(await within(editor).findByRole("alert")).toHaveTextContent("2");
+    expect(within(editor).getByTestId("rung-2")).toHaveTextContent(ru.ui.ladder.notMeasured);
+
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent.map((r) => r.bitrate_bps)).toEqual([8_000_000, 4_000_000, 3_000_000]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect((await card()).getByTestId("plan")).toHaveTextContent(
+      `540p · 3 Мбит/с · ${ru.ui.video.rungToMeasure}`,
+    );
+  });
+
+  it("a value replaced in one go (select and type): no crash, saved to measure", async () => {
+    const edited = unmeasured(2, 1, 360);
+    mockLadderRecomputeRung.mockResolvedValue(edited);
+    savedAsEdited(edited);
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue(badStep);
+    fireEvent.change(within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 3`), {
+      target: { value: "1" },
+    });
+    await waitFor(() =>
+      expect(within(editor).getByTestId("rung-2")).toHaveTextContent(ru.ui.ladder.notMeasured),
+    );
+    expect(await within(editor).findByRole("alert")).toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    expect((await card()).getByTestId("plan")).toHaveTextContent(ru.ui.video.rungToMeasure);
+  });
+
+  it("a middle rung left out: no crash, the widened step objected to, two rungs saved", async () => {
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue(badStep);
+    fireEvent.click(within(editor).getAllByRole("checkbox")[1]);
+    expect(await within(editor).findByRole("alert")).toHaveTextContent(ru.ui.ladder.objections);
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent.map((r) => r.index)).toEqual([0, 2]);
+  });
+
+  it("an objection it does not know is left out rather than read wrongly", async () => {
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue({
+      objections: [{ code: "SOMETHING_NEW" }, { RungAboveSource: { index: 0 } }],
+      not_buildable: null,
+    });
+    fireEvent.click(within(editor).getAllByRole("checkbox")[1]);
+    await waitFor(() => expect(mockLadderValidate).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("dialog", { name: ru.ui.video.rungs })).toBeInTheDocument();
   });
 });
 

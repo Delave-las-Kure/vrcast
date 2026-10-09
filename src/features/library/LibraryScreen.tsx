@@ -20,18 +20,12 @@ import { Link } from "react-router-dom";
 import type { AppError, LadderSetView, LibraryView, MediaView } from "../../shared/contract";
 import { ipc, onLibraryChanged, onViewersUpdate, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
-import {
-  formatBitrate,
-  formatBytes,
-  formatDuration,
-  formatResolution,
-  usedFraction,
-} from "../../shared/i18n/format";
+import { formatBytes, formatDuration, usedFraction } from "../../shared/i18n/format";
 import { fill, renderError } from "../../shared/i18n/render";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { NoServer } from "../shared/NoServer";
-import { CopyLink } from "./CopyLink";
+import { SetLinks } from "../video/SetLinks";
 import { FileRow } from "./FileRow";
 import { StaleBanner } from "./StaleBanner";
 import { UnrecognizedGroup } from "./UnrecognizedGroup";
@@ -322,14 +316,17 @@ export function LibraryScreen() {
         {t.ui.library.serverLine} <strong>{active.name}</strong> · {active.domain}
       </p>
 
-      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+      {/* T702 — a server out of reach under the stale line is said by that line alone. */}
+      {error && !(view?.stale && error.code === "SSH_UNREACHABLE") && (
+        <ErrorNotice error={error} onDismiss={() => setError(null)} />
+      )}
       {/* T684 — refused because a video builds its set into the medium: the way on. */}
       {error?.details?.some((d) => d.key === "MEDIA_BUSY_VIDEO") && (
         <Link className="button-link" to="/video">
           {t.ui.library.openVideo}
         </Link>
       )}
-      {view?.stale && <StaleBanner onRetry={() => void load(true)} />}
+      {view?.stale && <StaleBanner readAt={view.read_at} onRetry={() => void load(true)} />}
       {view?.disk && <DiskBar disk={view.disk} t={t} lang={lang} />}
 
       {dialog?.kind === "create" && (
@@ -447,12 +444,18 @@ function MediaCard({
       <button className="media__head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="media__title">{media.title}</span>
         <span className="media__facts">
-          {fill(
-            t.ui.library.mediaFacts,
-            { n: media.files.length, bytes: media.total_bytes },
-            t,
-            lang,
-          )}
+          {/* T694 — «0 files» is not news about a medium that is its set, or about one that
+              is empty: the room it takes, or that it is empty. */}
+          {media.files.length > 0
+            ? fill(
+                t.ui.library.mediaFacts,
+                { n: media.files.length, bytes: media.total_bytes },
+                t,
+                lang,
+              )
+            : media.ladders.length > 0 || media.total_bytes > 0
+              ? formatBytes(media.total_bytes, lang)
+              : t.ui.library.mediaEmpty}
           {media.ladders.length > 0 && t.ui.library.hasLadder}
           {watching > 0 && (
             <em className="media__watching">
@@ -482,10 +485,6 @@ function MediaCard({
 
       {open && (
         <>
-          <p className="muted media__note">
-            {t.ui.library.shortName} <code>{media.slug}</code>
-          </p>
-
           <ul className="file-list">
             {media.files.map((f) => (
               <div key={f.path} className="media-card__file">
@@ -607,51 +606,29 @@ function LadderSetRow({
   const l = t.ui.library;
   const missing = !set.exists_on_server && !onItsWay;
   return (
-    <li className={`file ${missing ? "file--missing" : ""}`}>
-      <div className="file__head">
-        <span className="file__name">{set.path}</span>
-        <span className="file__size">{formatBytes(set.size_bytes, lang)}</span>
-      </div>
-
-      {/* Honest absence rather than a made-up value: a set not built by this application,
-          or one whose `.facts` could not be read, says nothing about its resolution,
-          bitrate or duration instead of showing a zero or a dash that looks measured. */}
+    <li className={`file ${missing ? "file--missing" : ""}`} data-testid="ladder-set">
+      {/* T694 — no description file's name on view: the set's length and room, then its
+          links. Honest absence rather than a made-up value for a set whose facts could not
+          be read. */}
       <div className="file__meta">
-        {set.width !== null && set.height !== null && (
-          <span title={l.resolution}>{formatResolution(set.width, set.height)}</span>
-        )}
         {set.duration_s !== null && (
           <span title={l.duration}>{formatDuration(set.duration_s)}</span>
         )}
-        {set.bitrate_bps !== null && (
-          <span title={l.bitrate}>{formatBitrate(set.bitrate_bps, lang)}</span>
-        )}
+        <span className="file__size">{formatBytes(set.size_bytes, lang)}</span>
       </div>
 
       {missing && <p className="file__warning">{l.missingWarning}</p>}
 
-      <div className="file__actions">
-        {/* `CopyLink` asks for a `FileView`; a `LadderSetView` is missing the codec fields
-            it never reads, so a minimal object carrying only what it actually uses is
-            built here rather than widening `CopyLink`'s own type for a screen that does
-            not need the rest. */}
-        <CopyLink
-          file={{
-            path: set.path,
-            size_bytes: set.size_bytes,
-            duration_s: set.duration_s,
-            width: set.width,
-            height: set.height,
-            bitrate_bps: set.bitrate_bps,
-            video_codec: null,
-            audio_codec: null,
-            faststart_ok: null,
-            exists_on_server: set.exists_on_server,
-            origin_url: set.origin_url,
-            cdn_url: set.cdn_url,
-          }}
+      {set.exists_on_server ? (
+        <SetLinks
+          auto={{ origin: set.origin_url, cdn: set.cdn_url }}
+          qualities={set.qualities ?? []}
         />
-      </div>
+      ) : (
+        <span className="copy-link__dead" title={l.linkDeadTitle}>
+          {l.linkDead}
+        </span>
+      )}
     </li>
   );
 }

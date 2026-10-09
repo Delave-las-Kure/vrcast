@@ -290,11 +290,15 @@ fn the_resolution_drops_only_when_the_bits_have_run_thin() {
     assert_eq!(laid.rungs[0].height, 2160);
     assert!(laid.rungs[0].reasons.contains(&Reason::FullResolution));
 
-    // The same 22 Mbit/s at 60 frames is thinner and does come down. Frame rate deciding
-    // the resolution is the whole of why it belongs in the formula.
+    // A bitrate that is plenty at 24 frames is spread thinner at 60 and does come down.
+    // Frame rate deciding the resolution is the whole of why it belongs in the formula.
+    // (14 and not 22 Mbit/s since T700: at 60 frames 22 asked for 2031 — within a step of
+    // the full 2160, which is the standard height it now lands on.)
+    let slow = plan(Some(14_000_000), &src, None).expect("a sound source was refused");
+    assert_eq!(slow.rungs[0].height, 2160);
     let quick = source(3840, 2160, 60, 60);
-    assert!(density(22_000_000, 3840, 2160, 60) < 0.05);
-    let fast = plan(Some(22_000_000), &quick, None).expect("a sound source was refused");
+    assert!(density(14_000_000, 3840, 2160, 60) < 0.05);
+    let fast = plan(Some(14_000_000), &quick, None).expect("a sound source was refused");
     assert!(
         fast.rungs[0].height < 2160,
         "at 60 frames the same bitrate is spread thinner and the height should come down"
@@ -1041,4 +1045,52 @@ fn only_the_rungs_not_measured_are_measured_and_only_from_their_own_point() {
     assert_eq!(got[0].quality, measured.quality);
     let lent = with_measured(&rungs, &[exact], true);
     assert_eq!(lent[1].quality, Quality::Borrowed { vmaf_x100: 9125 });
+}
+
+// ---------- standard heights (T700) ----------
+
+/// T700 — a lowered rung is a size a person knows: «1080p», «720p», never «1060p».
+///
+/// The case from the tour: a 1080p film at 30 frames, 3 Mbit/s. The density formula asked for
+/// 1060 — a 1884×1060 rung. The nearest standard size is the film's own 1080.
+#[test]
+fn a_lowered_rung_lands_on_a_standard_height() {
+    use vrcast_studio_lib::domain::ladder::recompute_rung;
+
+    let film = source(1920, 1080, 30, 20);
+    let near_full = recompute_rung(2, 3_000_000, &film);
+    assert_eq!((near_full.width, near_full.height), (1920, 1080));
+    assert!(near_full.reasons.contains(&Reason::EditedByHand));
+
+    let lowered = recompute_rung(2, 1_000_000, &film);
+    assert!(
+        [720, 540, 480, 360].contains(&lowered.height),
+        "{}x{}",
+        lowered.width,
+        lowered.height
+    );
+
+    // Every rung the formula plans for a 1080p film is of a standard height.
+    let planned = plan(Some(8_000_000), &film, None).unwrap();
+    for rung in &planned.rungs {
+        assert!(
+            [1080, 720, 540, 480, 360, 240, 144].contains(&rung.height),
+            "{}x{}",
+            rung.width,
+            rung.height
+        );
+    }
+
+    // A scope film is sized by the class of its width: the width is about the standard one
+    // (1280 for «720p»; the even height leaves it within a few pixels).
+    let scope = source(1920, 800, 24, 20);
+    let low = recompute_rung(1, 1_000_000, &scope);
+    assert!(
+        [1280, 960, 854, 640]
+            .iter()
+            .any(|w: &u32| low.width.abs_diff(*w) <= 6),
+        "{}x{}",
+        low.width,
+        low.height
+    );
 }

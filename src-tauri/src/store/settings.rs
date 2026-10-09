@@ -57,6 +57,11 @@ pub struct Settings {
     /// and the fallback. Stored rather than derived so that somebody with a scratch disk can
     /// say so once instead of on every build.
     pub work_dir: Option<String>,
+    /// The cap on sending a video's rungs to the server, in **bytes** per second like every
+    /// speed in the core (T701). `None` — no cap. Chosen on the «Video» screen, one for all
+    /// the rungs being sent, and applied to a send already on its way.
+    #[serde(default)]
+    pub send_limit_bps: Option<u64>,
 }
 
 impl Default for Settings {
@@ -72,6 +77,7 @@ impl Default for Settings {
             close_to_tray: true,
             tray_notice_seen: false,
             work_dir: None,
+            send_limit_bps: None,
         }
     }
 }
@@ -96,6 +102,8 @@ impl Settings {
             .viewer_activity_threshold_s
             .clamp(MIN_THRESHOLD_S, MAX_THRESHOLD_S);
         self.concurrent_heavy_tasks = self.concurrent_heavy_tasks.clamp(1, MAX_HEAVY_TASKS);
+        // Zero as a cap would mean never sending at all: it is taken as no cap (T701).
+        self.send_limit_bps = self.send_limit_bps.filter(|v| *v > 0);
         self
     }
 
@@ -184,6 +192,13 @@ pub fn save(db: &Db, settings: &Settings) -> Result<Settings, DbError> {
         ("close_to_tray", settings.close_to_tray.to_string()),
         ("tray_notice_seen", settings.tray_notice_seen.to_string()),
         ("work_dir", settings.work_dir.clone().unwrap_or_default()),
+        (
+            "send_limit_bps",
+            settings
+                .send_limit_bps
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+        ),
     ];
     db.with_conn_mut(|conn| {
         let tx = conn.transaction()?;
@@ -248,6 +263,8 @@ fn apply(settings: &mut Settings, name: &str, value: &str) {
         // Empty means "not chosen" here for the same reason as above, and it matters more:
         // a blank stored as a real value would put two gigabytes in a folder named nothing.
         "work_dir" => settings.work_dir = (!value.is_empty()).then(|| value.to_owned()),
+        // Empty — no cap (T701).
+        "send_limit_bps" => settings.send_limit_bps = value.parse().ok(),
         _ => {}
     }
 }

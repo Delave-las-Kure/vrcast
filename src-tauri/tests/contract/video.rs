@@ -76,6 +76,57 @@ impl Films {
     fn path(&self, name: &str) -> String {
         self.0.join(name).to_string_lossy().into_owned()
     }
+
+    /// A short real film with two sound tracks (T695). `None` without the bundled FFmpeg.
+    fn film_two_tracks(&self, name: &str) -> Option<String> {
+        let ff = ffmpeg::locate("ffmpeg").ok()?;
+        let out = self.0.join(name);
+        let made = std::process::Command::new(ff)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=1280x720:rate=24:duration=3",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=3",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=660:duration=3",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-map",
+                "2:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-b:v",
+                "4000k",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-shortest",
+            ])
+            .arg(&out)
+            .output()
+            .ok()?;
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        Some(out.to_string_lossy().into_owned())
+    }
 }
 
 impl Drop for Films {
@@ -253,6 +304,57 @@ async fn the_plan_comes_back_with_its_rungs_sizes_time_and_room() {
     let source = ready.source.expect("no source");
     assert_eq!(source.audio_tracks.len(), 1);
     assert_eq!(ready.audio_track, 0);
+    // One track: chosen by itself (T695).
+    assert!(ready.audio_chosen);
+}
+
+/// T695 (the owner's decision of 2026-10-09) — with more than one sound track none is taken for the
+/// person: «Start» is refused, changing nothing, until one is chosen; the choice is kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn several_sound_tracks_wait_for_a_choice_before_start() {
+    if skipped() {
+        return;
+    }
+    let films = Films::new();
+    let Some(film) = films.film_two_tracks("two.mp4") else {
+        return;
+    };
+    let state = state();
+    let server = server(&state);
+    let added = video::video_add(&state, &server, &[film], None)
+        .await
+        .unwrap()
+        .added
+        .remove(0);
+    assert!(!added.audio_chosen, "a track was chosen for the person");
+    let id = added.id.clone();
+    let ready = until(&state, &id, "the plan", Duration::from_secs(120), |v| {
+        v.state != VideoState::Planning
+    })
+    .await;
+    assert_eq!(ready.state, VideoState::Ready, "{:?}", ready.problem);
+    assert!(!ready.audio_chosen);
+    let stored = rows::get(&state.db, &id).unwrap().unwrap();
+    assert!(!stored.audio_chosen, "the wait for a choice was not kept");
+    assert_eq!(stored.audio_track, ready.audio_track);
+    let answer = video::video_start(&state, std::slice::from_ref(&id));
+    let refused = answer[0]
+        .error
+        .as_ref()
+        .expect("started on a sound nobody chose");
+    assert_eq!(refused.code, ErrorCode::InvalidInput);
+    assert_eq!(refused.details[0].key, DetailCode::AudioNotChosen);
+    let still = video::video_get(&state, &id).unwrap();
+    assert_eq!(still.state, VideoState::Ready);
+    assert!(!still.start_requested);
+
+    let chosen = video::video_set_audio(&state, &id, 1).unwrap();
+    assert!(chosen.audio_chosen);
+    assert_eq!(chosen.audio_track, 1);
+    // Kept as it is stored: read back, the choice is there.
+    let row = rows::get(&state.db, &id).unwrap().unwrap();
+    assert!(row.audio_chosen);
+    assert_eq!(row.audio_track, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -477,6 +579,33 @@ fn a_video_waiting_for_start_is_not_paused_or_resumed_by_a_restart() {
     use vrcast_studio_lib::domain::video::{after_restart, AfterRestart};
     assert_eq!(after_restart(VideoState::Ready), AfterRestart::Leave);
     assert_eq!(after_restart(VideoState::Paused), AfterRestart::Leave);
+}
+
+/// T700 — whether the video made its medium itself is kept across a restart: only such a
+/// medium, left empty, goes when the video is removed. A video removed with a medium it did
+/// not make (and no server to reach) is simply gone, nothing else asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_video_remembers_whether_it_made_its_medium() {
+    let state = state();
+    let server = server(&state);
+    let mut made = VideoRow::new("made", &server, "C:/nowhere/a.mp4", "a", "a");
+    made.media_id = Some(String::from("m_a"));
+    made.own_medium = true;
+    made.made_medium = true;
+    made.state = VideoState::Cancelled;
+    rows::save(&state.db, &made).unwrap();
+    let mut chosen = VideoRow::new("chosen", &server, "C:/nowhere/b.mp4", "b", "b");
+    chosen.media_id = Some(String::from("m_b"));
+    chosen.own_medium = true;
+    rows::save(&state.db, &chosen).unwrap();
+
+    assert!(rows::get(&state.db, "made").unwrap().unwrap().made_medium);
+    assert!(!rows::get(&state.db, "chosen").unwrap().unwrap().made_medium);
+    // Removing either takes it off the list at once; the medium is asked about in the
+    // background, and a server that cannot be reached leaves it as it is.
+    assert!(video::video_remove(&state, "made").unwrap().is_none());
+    assert!(video::video_remove(&state, "chosen").unwrap().is_none());
+    assert!(rows::get(&state.db, "made").unwrap().is_none());
 }
 
 // ---------- «Replace» (T676) ----------
@@ -723,6 +852,7 @@ async fn the_library_says_a_medium_s_set_is_building_or_stopped_not_missing() {
         unrecognized: Vec::new(),
         disk: None,
         stale: false,
+        read_at: Some(String::from("2026-10-09T10:00:00.000000000Z")),
     };
     library_cache::save(&state.db, &server, &known).unwrap();
 

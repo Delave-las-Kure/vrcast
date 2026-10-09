@@ -508,6 +508,40 @@ pub fn density(bitrate_bps: u64, width: u32, height: u32, fps: u32) -> f64 {
     bitrate_bps as f64 / pixels
 }
 
+/// The heights a person knows a picture by (T700): «1080p», «720p» — never «1060p».
+const STANDARD_HEIGHTS: [u32; 9] = [2160, 1440, 1080, 720, 540, 480, 360, 240, 144];
+
+/// The standard size nearest to a height the density asked for (T700).
+///
+/// The density formula answers with any number — 1060 for a 1080p film at 3 Mbit/s, a
+/// 1884×1060 rung nobody would recognise. The answer is moved to the nearest standard size
+/// (nearest by ratio, so 1060 goes to 1080 and 800 to 720), never above the source's own.
+/// A frame that is not 16:9 is sized by the class of its width — a 1920×800 film at the
+/// «720p» class is 1280×532 — so its width is the standard one.
+fn standard_height(wanted: u32, source: &SourceFacts) -> u32 {
+    let full = source.height;
+    if full == 0 || source.width == 0 || wanted == 0 {
+        return wanted.max(2) - wanted.max(2) % 2;
+    }
+    // Heights in the «class» of a 16:9 frame of the same width, and back.
+    let class_per_height = f64::from(source.width) * 9.0 / 16.0 / f64::from(full);
+    let class_of_wanted = f64::from(wanted) * class_per_height;
+    let class_of_full = f64::from(full) * class_per_height;
+    let nearest = STANDARD_HEIGHTS
+        .iter()
+        .map(|&c| f64::from(c))
+        .min_by(|a, b| {
+            let off = |c: f64| (c / class_of_wanted).ln().abs();
+            off(*a).total_cmp(&off(*b))
+        })
+        .unwrap_or(class_of_wanted);
+    if nearest >= class_of_full {
+        return full;
+    }
+    let height = (nearest / class_per_height).round() as u32;
+    (height - height % 2).clamp(2, full)
+}
+
 /// The height a rung is worth encoding at.
 ///
 /// Lowered only when the density has fallen below the target, and only as far as brings it
@@ -524,8 +558,10 @@ fn height_for(bitrate_bps: u64, source: &SourceFacts) -> (u32, Vec<Reason>) {
     let d = density(bitrate_bps, source.width, source.height, source.fps);
     if d < TARGET_DENSITY && d > 0.0 {
         let lowered = (f64::from(full) * (d / TARGET_DENSITY).sqrt()) as u32;
-        height = lowered - (lowered % 2);
-        reasons.push(Reason::LoweredForDensity);
+        height = standard_height(lowered, source);
+        if height < full {
+            reasons.push(Reason::LoweredForDensity);
+        }
     }
 
     if let Some(native) = source.native_height {

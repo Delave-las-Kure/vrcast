@@ -146,6 +146,10 @@ pub struct VideoView {
     pub title: String,
     pub slug: String,
     pub audio_track: usize,
+    /// T695 — whether the sound is chosen. `false` for a film with more than one track
+    /// until a person picks one: «Start» is refused meanwhile, and `audio_track` is only what
+    /// the plan's sizes are reckoned with.
+    pub audio_chosen: bool,
     pub stage: VideoStage,
     pub state: VideoState,
     /// Paused by a person — stays paused across a restart.
@@ -161,6 +165,8 @@ pub struct VideoView {
     pub problem: Option<VideoProblem>,
     /// The link to the set — once it is served (`done`).
     pub link: Option<Links>,
+    /// T694 — a link per quality of the set, the heaviest first; empty until `done`.
+    pub quality_links: Vec<crate::domain::links::QualityLink>,
     pub created_at: String,
     pub updated_at: String,
     /// The version of this view (T687): higher is newer, for every change — the progress
@@ -307,6 +313,17 @@ fn storage(e: crate::store::db::DbError) -> AppError {
     AppError::new(ErrorCode::StorageFailed).with_cause(e)
 }
 
+/// T695 — nothing goes ahead on a sound nobody chose: a film with more than one track
+/// waits for the person to pick one, and is refused, changed in nothing, meanwhile.
+fn audio_not_chosen(row: &VideoRow) -> Result<()> {
+    if row.audio_chosen {
+        return Ok(());
+    }
+    Err(AppError::new(ErrorCode::InvalidInput)
+        .detail(DetailCode::AudioNotChosen)
+        .with_cause(&row.id))
+}
+
 fn load(state: &AppState, id: &str) -> Result<VideoRow> {
     rows::get(&state.db, id)
         .map_err(storage)?
@@ -360,17 +377,47 @@ pub(crate) fn republish(state: &AppState) {
 }
 
 /// Take a video off the list now — the row, what this run holds about it — and say so.
-/// Nothing on the server is touched (T577, part b). Only ever called once nothing of the
-/// video's work is alive.
+/// Nothing on the server is touched (T577, part b), but for an empty medium the video made
+/// itself (T700, `drop_medium_left_empty`). Only ever called once nothing of the video's work
+/// is alive.
 fn take_off_list(state: &AppState, id: &str) {
-    {
+    let left = {
         let _held = lock(&state.videos.inner.rows);
         if let Some(planning) = lock(&state.videos.inner.planning).remove(id) {
             planning.cancel();
         }
+        let row = load(state, id).ok();
         let _ = rows::remove(&state.db, id);
+        row
+    };
+    if let Some(row) = left {
+        drop_medium_left_empty(state, &row);
     }
     forget_video(state, id);
+}
+
+/// A video removed before it was done leaves no empty medium of its own making behind
+/// (T700): the one it made at «Start» goes too — only if it made it, and only if nothing of
+/// it is on the server (`media_drop_if_empty`). Best effort, in the background: a server that
+/// does not answer leaves the medium as it is, for a person to delete in the library.
+fn drop_medium_left_empty(state: &AppState, row: &VideoRow) {
+    let (true, Some(media_id)) = (row.made_medium, row.media_id.clone()) else {
+        return;
+    };
+    if row.state == VideoState::Done {
+        return;
+    }
+    let state = state.clone();
+    let server_id = row.server_id.clone();
+    let vid = row.id.clone();
+    spawn(async move {
+        match super::library::api::media_drop_if_empty(&state, &server_id, &media_id).await {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::info!(video = %vid, media = %media_id, error = %e, "the empty medium of a removed video was left as it is");
+            }
+        }
+    });
 }
 
 /// What this run holds about a video that is gone from the list, and the news of it.
@@ -579,6 +626,21 @@ fn held_for_replace(row: &VideoRow) -> bool {
         && problem_of(row).is_some_and(|p| video::is_old_set_problem(&p.error))
 }
 
+/// Whether «Replace» may be pressed on this video: as `video::may_replace` says, or — T700 —
+/// on the plan itself when it already says the name is taken. «Start» is not offered there
+/// (it would only stop on SLUG_TAKEN); «Another name» and «Replace» are.
+fn may_replace_row(row: &VideoRow) -> bool {
+    video::may_replace(
+        row.state,
+        row.stage,
+        row.media_id.is_some(),
+        problem_of(row).as_ref().map(|p| &p.error),
+    ) || (row.state == VideoState::Ready
+        && row.stage == VideoStage::Planned
+        && row.media_id.is_none()
+        && basis_of(row).and_then(|b| b.name_taken) == Some(true))
+}
+
 fn basis_of(row: &VideoRow) -> Option<PlanBasis> {
     row.plan_json
         .as_deref()
@@ -739,6 +801,45 @@ fn link_of(state: &AppState, row: &VideoRow) -> Option<Links> {
     ))
 }
 
+/// T694 — a link per quality of the finished set, the heaviest first: each rung's own
+/// playlist (`{slug}/v9/stream.m3u8`), named the way the build names its directory. Empty
+/// until the video is done.
+fn quality_links_of(state: &AppState, row: &VideoRow) -> Vec<crate::domain::links::QualityLink> {
+    if row.stage != VideoStage::Done {
+        return Vec::new();
+    }
+    let Some(profile) = crate::store::profiles::get(&state.db, &row.server_id)
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    let Some(rungs) = custom_rungs(row).or_else(|| basis_of(row).map(|b| b.rungs)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<crate::domain::links::QualityLink> = rungs
+        .iter()
+        .map(|rung| {
+            let sub = crate::domain::ladder_build::sub_name(rung);
+            let links = crate::domain::links::for_path(
+                &profile.domain,
+                profile.cdn_base.as_deref(),
+                &format!("{}/{sub}/stream.m3u8", row.slug),
+            );
+            crate::domain::links::QualityLink {
+                width: rung.width,
+                height: rung.height,
+                bitrate_bps: (rung.bitrate_bps / 1_000_000).max(1) * 1_000_000,
+                origin: links.origin,
+                cdn: links.cdn,
+            }
+        })
+        .collect();
+    out.sort_by_key(|q| std::cmp::Reverse(q.bitrate_bps));
+    out.dedup_by(|a, b| a.origin == b.origin);
+    out
+}
+
 /// A view of a video at a version taken now — after the row was read. Fine where nothing
 /// else can be changing the video meanwhile (it was just written under the rows lock, and
 /// its event follows with a higher one); a reader racing the watcher takes its version
@@ -773,6 +874,7 @@ fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
         title: row.title.clone(),
         slug: row.slug.clone(),
         audio_track: row.audio_track,
+        audio_chosen: row.audio_chosen,
         stage: row.stage,
         state: row.state,
         paused_by_person: row.paused_by_person,
@@ -787,6 +889,7 @@ fn view_at(state: &AppState, row: &VideoRow, rev: u64) -> VideoView {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
         link: link_of(state, row),
+        quality_links: quality_links_of(state, row),
         created_at: row.created_at.clone(),
         updated_at: row.updated_at.clone(),
         rev,
@@ -909,6 +1012,9 @@ fn on_progress(
     };
     let mut pause_it = false;
     let mut refresh = false;
+    // T700 — a new task took the video over, or the stage moved on: what the bar said was
+    // about the stage before (a measurement's «100%» shown under «Encoding»).
+    let mut fresh = false;
     let rungs;
     {
         let _held = lock(&state.videos.inner.rows);
@@ -935,6 +1041,7 @@ fn on_progress(
         {
             row.task_id = Some(task_id.to_owned());
             taken_over = true;
+            fresh = true;
             dirty = true;
         }
         if row.task_id.as_deref() != Some(task_id) {
@@ -953,6 +1060,7 @@ fn on_progress(
             if stage != row.stage {
                 row.stage = stage;
                 dirty = true;
+                fresh = true;
             }
         }
         // **A pause is the video's, wherever it was pressed** (T685, QA-25 №6). «Pause» in
@@ -995,7 +1103,7 @@ fn on_progress(
         let _ = state.tasks.pause(task_id);
     }
     note_progress(
-        state, &vid, task_state, progress, code, speed_bps, eta_s, rungs,
+        state, &vid, task_state, progress, code, speed_bps, eta_s, rungs, fresh,
     );
     if refresh {
         refresh_rungs(state, &vid);
@@ -1013,6 +1121,7 @@ fn note_progress(
     speed_bps: Option<i64>,
     eta_s: Option<i64>,
     rungs: u32,
+    fresh: bool,
 ) {
     let mut live = lock(&state.videos.inner.live);
     let entry = live.entry(vid.to_owned()).or_insert_with(|| Live {
@@ -1028,6 +1137,16 @@ fn note_progress(
             rungs,
         },
     });
+    if fresh {
+        // Begun afresh: nothing of the stage before is carried over — not its share, not
+        // its speed, not its time left. Which rung the build is at stays: it is still true.
+        entry.code = None;
+        entry.since = Instant::now();
+        entry.from = 0.0;
+        entry.progress.progress = 0.0;
+        entry.progress.speed_bps = None;
+        entry.progress.eta_s = None;
+    }
     entry.progress.task_state = task_state;
     entry.progress.rungs = rungs.max(entry.progress.rungs);
     let Some(code) = code else {
@@ -1162,6 +1281,7 @@ fn on_done(state: &AppState, task_id: &str, task_state: TaskState, error: Option
                             set_problem(&mut row, AppError::new(ErrorCode::VideoMediumGone));
                             row.media_id = None;
                             row.own_medium = false;
+                            row.made_medium = false;
                             row.task_id = None;
                         }
                     }
@@ -1668,6 +1788,7 @@ async fn next_task(state: &AppState, id: &str) -> Result<(String, VideoStage)> {
         change(state, id, |r| {
             r.media_id = Some(media_id.clone());
             r.own_medium = true;
+            r.made_medium = true;
             Ok(r.clone())
         })?
     } else {
@@ -2026,6 +2147,8 @@ pub mod api {
                 }
             };
             row.audio_track = video::default_audio(&source);
+            // T695: with more than one track the person chooses; none is taken for them.
+            row.audio_chosen = source.audio_tracks.len() <= 1;
             row.source_json = serde_json::to_string(&source).ok();
             // A set of the medium's name nobody claims (T677): added stopped on it, with
             // «Replace». The plan is still made meanwhile, so «Replace» starts at once.
@@ -2161,6 +2284,7 @@ pub mod api {
                 ));
             }
             row.audio_track = track;
+            row.audio_chosen = true;
             Ok(())
         })?;
         video_get(state, id)
@@ -2250,14 +2374,21 @@ pub mod api {
 
     /// «Start» — each video on its own. One still being planned starts the moment its plan is
     /// ready.
+    ///
+    /// **In the order asked** (T700): the videos of one «Start all» are put on the queue one
+    /// after another, the first first. Started side by side, whichever made its medium on the
+    /// server soonest took the first place, and the card at the top waited behind the second.
     pub fn video_start(state: &AppState, ids: &[String]) -> Vec<VideoStarted> {
         ensure_watching(state);
-        ids.iter()
+        let mut going: Vec<String> = Vec::new();
+        let answers = ids
+            .iter()
             .map(|id| {
                 let outcome = change(state, id, |row| {
                     if !video::allowed(Act::Start, row.state, row.stage, row.media_id.is_some()) {
                         return Err(not_now(row));
                     }
+                    audio_not_chosen(row)?;
                     row.start_requested = true;
                     if row.state == VideoState::Ready {
                         row.state = VideoState::Working;
@@ -2269,7 +2400,7 @@ pub mod api {
                 match outcome {
                     Ok(go) => {
                         if go {
-                            start_going(state, id);
+                            going.push(id.clone());
                         }
                         VideoStarted {
                             id: id.clone(),
@@ -2282,7 +2413,16 @@ pub mod api {
                     },
                 }
             })
-            .collect()
+            .collect();
+        if !going.is_empty() {
+            let state = state.clone();
+            spawn(async move {
+                for id in going {
+                    carry_on(&state, &id).await;
+                }
+            });
+        }
+        answers
     }
 
     /// Pause — the task of the current stage. Stays a pause across a restart.
@@ -2362,6 +2502,7 @@ pub mod api {
             if !video::allowed(Act::Retry, row.state, row.stage, row.media_id.is_some()) {
                 return Err(not_now(row));
             }
+            audio_not_chosen(row)?;
             // Waiting on a set of the medium's name nobody claims (T677): going on would build
             // over it, taking its rungs for this film's. «Retry» puts the video back on that
             // problem, where «Replace» is what goes on.
@@ -2432,17 +2573,11 @@ pub mod api {
     /// they are left alone, and a build names a rung around one that is not that rung.
     pub async fn video_replace(state: &AppState, id: &str, confirmed: bool) -> Result<VideoView> {
         let row = load(state, id)?;
-        let may = |r: &VideoRow| {
-            video::may_replace(
-                r.state,
-                r.stage,
-                r.media_id.is_some(),
-                problem_of(r).as_ref().map(|p| &p.error),
-            )
-        };
+        let may = may_replace_row;
         if !may(&row) {
             return Err(not_now(&row));
         }
+        audio_not_chosen(&row)?;
         let into_medium = held_for_replace(&row);
         // One replace at a time for a video: a second click must not remove what the first
         // has just begun to build.
@@ -2487,14 +2622,7 @@ pub mod api {
         into_medium: bool,
     ) -> Result<bool> {
         let row = load(state, id)?;
-        let may = |r: &VideoRow| {
-            video::may_replace(
-                r.state,
-                r.stage,
-                r.media_id.is_some(),
-                problem_of(r).as_ref().map(|p| &p.error),
-            )
-        };
+        let may = may_replace_row;
         let building = replacing_of(&row).is_some_and(|r| r.phase == video::ReplacePhase::Building);
         let cleared = if building {
             Ok(replacing_of(&row).and_then(|r| r.media_id))
@@ -2519,6 +2647,9 @@ pub mod api {
                 }
                 r.replacing_json = None;
                 r.media_id = media_id.clone();
+                // Somebody's medium before this video came (it held the name): never the
+                // video's to take away with it (T700).
+                r.made_medium = false;
                 // The set this medium had is gone, so nobody can be watching it: the build
                 // that makes it again needs no «anyway» against viewers (T571), as for a
                 // medium this video made itself.
@@ -2717,6 +2848,7 @@ pub mod api {
             let mut row = load(state, id)?;
             if !busy && row.state != VideoState::Cancelling {
                 rows::remove(&state.db, id).map_err(storage)?;
+                drop_medium_left_empty(state, &row);
                 None
             } else {
                 row.remove_requested = true;

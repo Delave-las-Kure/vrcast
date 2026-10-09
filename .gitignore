@@ -70,3 +70,5 @@ src-tauri/binaries/
 # оснастку написал, и падает в CI, где непонятно, что искать.
 !src-tauri/tests/fixtures/logs/
 !src-tauri/tests/fixtures/logs/*.log
+
+*.tsbuildinfo

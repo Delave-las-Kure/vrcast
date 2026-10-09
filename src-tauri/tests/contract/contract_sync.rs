@@ -1748,6 +1748,7 @@ fn a_video_s_shape_matches_both_ways() {
         title: String::from("t"),
         slug: String::from("t"),
         audio_track: 0,
+        audio_chosen: true,
         stage: VideoStage::Encoding,
         state: VideoState::Working,
         paused_by_person: false,
@@ -1759,6 +1760,7 @@ fn a_video_s_shape_matches_both_ways() {
         media_id: None,
         problem: Some(problem.clone()),
         link: None,
+        quality_links: Vec::new(),
         created_at: String::new(),
         updated_at: String::new(),
         rev: 1,
@@ -1768,6 +1770,17 @@ fn a_video_s_shape_matches_both_ways() {
         &serialized_fields(&view),
         &declared_fields(&ts, "VideoView"),
         "VideoView",
+    );
+    same_shape(
+        &serialized_fields(&vrcast_studio_lib::domain::links::QualityLink {
+            width: 1920,
+            height: 1080,
+            bitrate_bps: 9_000_000,
+            origin: String::new(),
+            cdn: None,
+        }),
+        &declared_fields(&ts, "QualityLink"),
+        "QualityLink",
     );
     same_shape(
         &serialized_fields(&plan),

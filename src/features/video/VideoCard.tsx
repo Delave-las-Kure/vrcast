@@ -6,15 +6,9 @@
  * Short labels only (T674): whatever needs explaining lives in the error's «Details».
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-import type {
-  AppError,
-  Links,
-  VideoPlan,
-  VideoProblemAction,
-  VideoView,
-} from "../../shared/contract";
+import type { AppError, VideoPlan, VideoProblemAction, VideoView } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
 import { formatDuration } from "../../shared/i18n/format";
@@ -23,6 +17,7 @@ import { ErrorFolded } from "../shared/ErrorNotice";
 import { basename } from "../shared/names";
 import {
   STAGES,
+  audioMissing,
   canCancel,
   canPause,
   canRemove,
@@ -32,9 +27,11 @@ import {
   canSetRungs,
   canStart,
   megabits,
+  nameBlocked,
   showsPlan,
   trackLabel,
 } from "./rules";
+import { SetLinks } from "./SetLinks";
 import { VideoRungs } from "./VideoRungs";
 
 export function VideoCard({
@@ -111,16 +108,21 @@ export function VideoCard({
     build_anyway: w.buildAnyway,
     edit_rungs: w.rungs,
     replace: w.replace,
-    rename: w.retry,
+    // T700 — what the button does: another name, not a «Retry» of the same one.
+    rename: w.otherName,
   };
 
   const planShown = showsPlan(video);
   const fileName = basename(video.source_path);
   const tracks = video.source?.audio_tracks ?? [];
+  const noAudio = audioMissing(video);
+  const blocked = nameBlocked(video);
   const problemActions = video.state === "problem" ? (video.problem?.actions ?? []) : [];
-  // «Rename» puts the name field up and its own «Retry» beside it; the field is the action.
-  const renameOffered = problemActions.includes("rename") && canSetName(video);
-  const confirming = replacing !== null && problemActions.includes("replace");
+  // «Another name» puts the name field up and its own «Save» beside it; the field is the action.
+  const renameOffered = (problemActions.includes("rename") || blocked) && canSetName(video);
+  const confirming = replacing !== null && (problemActions.includes("replace") || blocked);
+  // The taken name is said once: by the problem when there is one, by the plan otherwise.
+  const nameSaid = video.state === "problem" && video.problem?.error.code === "SLUG_TAKEN";
 
   return (
     <li className={`video video--${video.state}`} data-testid={`video-${video.id}`}>
@@ -140,7 +142,7 @@ export function VideoCard({
               autoFocus
             />
             <button type="submit" disabled={busy || title.trim() === ""}>
-              {video.state === "problem" ? w.retry : w.saveTitle}
+              {w.saveTitle}
             </button>
             <button type="button" onClick={() => setNaming(false)} disabled={busy}>
               {t.ui.common.cancel}
@@ -174,16 +176,24 @@ export function VideoCard({
           {video.progress?.task_state === "queued" && ` · ${w.queued}`}
         </p>
       )}
-      {planShown && video.plan && <Plan plan={video.plan} slug={video.slug} t={t} lang={lang} />}
+      {planShown && video.plan && (
+        <Plan plan={video.plan} slug={video.slug} nameSaid={nameSaid} t={t} lang={lang} />
+      )}
 
       {planShown && tracks.length > 1 && (
         <label className="video__audio">
           <span>{w.audio}</span>
+          {/* T695: none is taken for the person — the field asks until one is chosen. */}
           <select
-            value={video.audio_track}
+            value={noAudio ? "" : video.audio_track}
             disabled={busy || !canSetAudio(video)}
             onChange={(e) => void run(() => ipc.videoSetAudio(id, Number(e.target.value)))}
           >
+            {noAudio && (
+              <option value="" disabled>
+                {w.chooseAudio}
+              </option>
+            )}
             {tracks.map((track) => (
               <option key={track.index} value={track.index}>
                 {trackLabel(track, t, lang)}
@@ -195,7 +205,9 @@ export function VideoCard({
 
       {!planShown && <StageBar video={video} t={t} lang={lang} />}
 
-      {video.state === "done" && video.link && <LinkCopy link={video.link} />}
+      {video.state === "done" && video.link && (
+        <SetLinks auto={video.link} qualities={video.quality_links ?? []} />
+      )}
 
       {video.state === "problem" && video.problem && (
         <div className="video__problem" role="alert">
@@ -232,7 +244,8 @@ export function VideoCard({
             <button
               type="button"
               className="button--primary"
-              disabled={busy}
+              disabled={busy || noAudio || blocked}
+              title={noAudio ? w.chooseAudio : undefined}
               onClick={() =>
                 void run(async () => {
                   const [answer] = await ipc.videoStart([id]);
@@ -241,6 +254,17 @@ export function VideoCard({
               }
             >
               {w.start}
+            </button>
+          )}
+          {/* T700 — the plan says the name is taken: the two ways on, at once. */}
+          {blocked && renameOffered && (
+            <button type="button" disabled={busy} onClick={() => doAction("rename")}>
+              {w.otherName}
+            </button>
+          )}
+          {blocked && (
+            <button type="button" disabled={busy} onClick={() => doAction("replace")}>
+              {w.replace}
             </button>
           )}
           {problemActions.map((a) =>
@@ -320,11 +344,14 @@ export function VideoCard({
 function Plan({
   plan,
   slug,
+  nameSaid,
   t,
   lang,
 }: {
   plan: VideoPlan;
   slug: string;
+  /** The problem already says the name is taken: not said a second time here (T700). */
+  nameSaid: boolean;
   t: Catalogue;
   lang: Lang;
 }) {
@@ -369,7 +396,7 @@ function Plan({
           {fill(w.shortLocal, { bytes: plan.local_space.short_by }, t, lang)}
         </p>
       )}
-      {plan.name_taken === true && (
+      {plan.name_taken === true && !nameSaid && (
         <p className="video__warn">{fill(w.nameTaken, { slug }, t, lang)}</p>
       )}
       {folded.length > 0 && (
@@ -407,7 +434,8 @@ function StageBar({ video, t, lang }: { video: VideoView; t: Catalogue; lang: La
   if (video.state === "cancelling") facts.push(w.stopping);
   else if (video.state === "cancelled") facts.push(w.cancelled);
   else if (video.state === "paused") facts.push(w.paused);
-  else if (p?.task_state === "queued") facts.push(w.queued);
+  // T700 — started and waiting its turn (behind the card above it): said, not left blank.
+  else if (p?.task_state === "queued" || (video.state === "working" && !p)) facts.push(w.queued);
   if (p && video.state !== "done" && video.state !== "cancelled") {
     if (p.task_state !== "queued" && known) facts.push(`${Math.round(p.progress * 100)}%`);
     if (p.speed_bps) facts.push(fill(w.speed, { bytes: p.speed_bps }, t, lang));
@@ -454,48 +482,6 @@ function StageBar({ video, t, lang }: { video: VideoView; t: Catalogue; lang: La
           ))}
         </p>
       )}
-    </div>
-  );
-}
-
-/** The link to the finished set, and a button that copies it. */
-function LinkCopy({ link }: { link: Links }) {
-  const t = useT();
-  const w = t.ui.video;
-  const [said, setSaid] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-
-  const copy = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setSaid(w.copied);
-    } catch {
-      setSaid(w.copyFailed);
-    }
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setSaid(null), 2000);
-  };
-
-  return (
-    <div className="video__link">
-      <a href={link.origin} target="_blank" rel="noreferrer">
-        {link.origin}
-      </a>
-      <button type="button" onClick={() => void copy(link.origin)}>
-        {w.copy}
-      </button>
-      {link.cdn && (
-        <button type="button" onClick={() => void copy(link.cdn!)}>
-          {w.copyCdn}
-        </button>
-      )}
-      {said && <span role="status">{said}</span>}
     </div>
   );
 }

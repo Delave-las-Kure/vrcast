@@ -63,6 +63,10 @@ pub struct LadderSetView {
     pub exists_on_server: bool,
     pub origin_url: String,
     pub cdn_url: Option<String>,
+    /// T694 — a link per quality, the heaviest first, from what the set's master names.
+    /// Empty when the master could not be read (and in a cache written before T694).
+    #[serde(default)]
+    pub qualities: Vec<crate::domain::links::QualityLink>,
 }
 
 /// A medium with all of its files.
@@ -114,6 +118,10 @@ pub struct LibraryView {
     /// answer possible: a person cannot tell whether they lost their library or their
     /// connection.
     pub stale: bool,
+    /// T702 — when what is shown was read from the server (RFC 3339): the time a stale list
+    /// is «shown as of». `None` in a cache from before T702.
+    #[serde(default)]
+    pub read_at: Option<String>,
 }
 
 impl LibraryView {
@@ -301,12 +309,23 @@ async fn ladder_view(
     exists_on_server: bool,
 ) -> LadderSetView {
     let links = crate::domain::links::for_path(&profile.domain, profile.cdn_base.as_deref(), path);
+    let slug = path.split('/').next().unwrap_or(path);
     let top = if exists_on_server {
-        let slug = path.split('/').next().unwrap_or(path);
         crate::server::ladder_probe::top_rung(conn, &profile.video_dir, slug).await
     } else {
         None
     };
+    let qualities = top
+        .as_ref()
+        .map(|t| {
+            crate::domain::links::qualities_of(
+                &profile.domain,
+                profile.cdn_base.as_deref(),
+                slug,
+                &t.variants,
+            )
+        })
+        .unwrap_or_default();
     LadderSetView {
         path: path.to_owned(),
         size_bytes,
@@ -317,6 +336,7 @@ async fn ladder_view(
         exists_on_server,
         origin_url: links.origin,
         cdn_url: links.cdn,
+        qualities,
     }
 }
 
@@ -375,6 +395,24 @@ pub mod refreshes {
     type Key = (usize, String);
 
     static RUNNING: LazyLock<Mutex<HashMap<Key, Entry>>> = LazyLock::new(Default::default);
+
+    /// T702 — a read of this server failed: the library kept for it is marked as the last
+    /// known one, so it is not handed out as current — and a screen showing it hears so at
+    /// once. Kept in the cache itself, not beside it: whatever reads the cache next, after a
+    /// restart too, says the same. The next read that succeeds puts a fresh one in its place.
+    fn mark_stale(
+        state: &AppState,
+        server_id: &str,
+    ) -> std::result::Result<(), crate::store::db::DbError> {
+        if let Some(mut cached) = library_cache::load(&state.db, server_id)? {
+            if !cached.stale {
+                cached.stale = true;
+                library_cache::save(&state.db, server_id, &cached)?;
+                state.notify_library_changed(server_id);
+            }
+        }
+        Ok(())
+    }
 
     fn key(db: &Db, server_id: &str) -> Key {
         (db as *const Db as usize, server_id.to_owned())
@@ -446,7 +484,15 @@ pub mod refreshes {
                     tracing::debug!(server = %server, "a library refresh overtaken by a change was not kept")
                 }
                 Err(e) => {
-                    tracing::debug!(server = %server, error = %e, "the library refresh failed")
+                    tracing::debug!(server = %server, error = %e, "the library refresh failed");
+                    // Under the lock, as `settle`: a change forgetting the cache meanwhile
+                    // leaves nothing to mark. Only a server out of reach: a refusal (a key,
+                    // a host key) is said as itself, not as «the server is not answering».
+                    if fresh && e.code == crate::error::ErrorCode::SshUnreachable {
+                        if let Err(e) = mark_stale(&finish.state, &server) {
+                            tracing::warn!(server = %server, error = %e, "the library was not marked as the last known");
+                        }
+                    }
                 }
             }
             drop(map);
@@ -503,7 +549,15 @@ pub mod refreshes {
         server_id: &str,
         view: &LibraryView,
     ) -> std::result::Result<bool, crate::store::db::DbError> {
-        let changed = library_cache::load(&state.db, server_id)?.as_ref() != Some(view);
+        // When it was read is not a difference in the library (T702): every read has its own.
+        let undated = |v: &LibraryView| LibraryView {
+            read_at: None,
+            ..v.clone()
+        };
+        let changed = library_cache::load(&state.db, server_id)?
+            .as_ref()
+            .map(undated)
+            != Some(undated(view));
         library_cache::save(&state.db, server_id, view)?;
         if changed {
             state.notify_library_changed(server_id);
@@ -629,6 +683,7 @@ pub mod api {
                     // Nothing waits for it — it is already running on its own.
                     drop(refresh(state, &profile));
                 }
+                // T702 — `stale` as the last read left it: a failed one marks the cache.
                 return Ok(cached);
             }
         }
@@ -838,6 +893,7 @@ pub mod api {
             unrecognized,
             disk: disk_usage,
             stale: false,
+            read_at: Some(crate::store::db::now_rfc3339()),
         })
     }
 
@@ -1188,6 +1244,54 @@ pub mod api {
             "the medium was deleted along with its files"
         );
         Ok(media_id.to_owned())
+    }
+
+    /// Take an **empty** medium out of the catalogue (T700) — the one a video made for itself
+    /// at «Start» and then was cancelled and removed before its set was filed.
+    ///
+    /// Only the catalogue entry goes; nothing on the server is removed, because there is
+    /// nothing of it there: a medium with any file, any set, any rung file of its set, or a
+    /// directory under its name is left exactly as it is (`Ok(false)`). Never for a medium a
+    /// person chose: the caller asks only about one its video made (`made_medium`).
+    pub async fn media_drop_if_empty(
+        state: &AppState,
+        server_id: &str,
+        media_id: &str,
+    ) -> Result<bool> {
+        let profile = profile_of(state, server_id)?;
+        refuse_if_a_video_builds_into(state, server_id, media_id, None)?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
+        let dropped = async {
+            let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
+            let Some(index) = manifest.media.iter().position(|m| m.id == media_id) else {
+                return Ok(false);
+            };
+            let entries = listing::list(&conn, &profile.video_dir).await?;
+            let seen =
+                set_files::adopted(&conn, &profile.video_dir, &manifest, &entries, Some(index))
+                    .await;
+            let medium = &seen.media[index];
+            let has_dir = entries.iter().any(|e| e.name == medium.slug);
+            if medium.all_paths().next().is_some() || has_dir {
+                return Ok(false);
+            }
+            let mut next = manifest.prepared_for_write();
+            next.media.remove(index);
+            manifest_io::write(&conn, &profile.video_dir, &next, manifest.generation).await?;
+            Ok::<_, AppError>(true)
+        }
+        .await;
+        conn.close().await;
+        if matches!(dropped, Ok(true)) {
+            invalidate(state, server_id);
+            tracing::info!(
+                media = media_id,
+                "an empty medium left by a removed video was taken out of the catalogue"
+            );
+        }
+        dropped
     }
 
     /// Move a file into another medium.

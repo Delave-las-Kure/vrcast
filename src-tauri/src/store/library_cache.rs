@@ -30,17 +30,24 @@ pub fn save(db: &Db, server_id: &str, view: &LibraryView) -> Result<(), DbError>
 /// decides nothing, and failing to open the library over it would be out of all
 /// proportion.
 pub fn load(db: &Db, server_id: &str) -> Result<Option<LibraryView>, DbError> {
-    let json: Option<String> = db.with_conn(|c| {
+    let row: Option<(String, String)> = db.with_conn(|c| {
         Ok(c.query_row(
-            "SELECT view_json FROM library_cache WHERE server_id = ?1",
+            "SELECT view_json, updated_at FROM library_cache WHERE server_id = ?1",
             [server_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?)
     })?;
 
-    Ok(json.and_then(|j| match serde_json::from_str(&j) {
-        Ok(view) => Some(view),
+    Ok(row.and_then(|(j, kept_at)| match serde_json::from_str::<LibraryView>(&j) {
+        Ok(mut view) => {
+            // T702 — a cache from before the read's own time was kept: the time it was kept
+            // is the nearest thing to when it was read.
+            if view.read_at.is_none() {
+                view.read_at = Some(kept_at);
+            }
+            Some(view)
+        }
         Err(e) => {
             tracing::warn!(server = server_id, error = %e, "library cache unreadable, reading from the server");
             None
