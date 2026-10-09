@@ -428,8 +428,18 @@ pub fn work_for(
                 // A rung that will not plan is not a reason to lose the others: it is
                 // re-encoded on the ordinary path and the checker has already had its say
                 // about whether it should exist at all.
-                fallback_plan(source, &request)
+                fallback_plan(source, &request, rung)
             });
+
+            // **A rung that has to be re-encoded is held to its own bitrate** (T698, QA-26
+            // no. 8). The top rung of an HEVC or HDR source is the source by its numbers and so
+            // asks for nothing — and the stream cannot be carried across, so it used to be
+            // re-encoded at a pinned quality, landing wherever it landed: not the bitrate the
+            // plan showed, nor the ceiling a viewer's connection was sized for. Re-encoded, it
+            // is made like every other rung: to the rung's target, under its ceiling.
+            if let VideoAction::Reencode { reason, .. } = &plan.video {
+                plan.video = capped_to(rung, reason.clone());
+            }
 
             let mut notices = Vec::new();
             // The one place a copy is taken away for a reason that has nothing to do with
@@ -440,13 +450,7 @@ pub fn work_for(
                     .map(|spacing| keyframes_line_up(spacing, source.fps, segment_s))
                     .unwrap_or(false)
             {
-                plan.video = VideoAction::ReencodeCapped {
-                    reason: Detail::new(DetailCode::ReasonKeyframesUnaligned),
-                    target_kbps: (rung.bitrate_bps / 1000).max(1) as u32,
-                    maxrate_kbps: (rung.maxrate_bps / 1000).max(1) as u32,
-                    bufsize_kbps: (rung.bufsize_bps / 1000).max(1) as u32,
-                    level: rung.level.clone(),
-                };
+                plan.video = capped_to(rung, Detail::new(DetailCode::ReasonKeyframesUnaligned));
                 notices.push(Detail::new(DetailCode::NoticeReencodedForKeyframes));
             }
 
@@ -473,21 +477,31 @@ pub fn shared_gop(source: &SourceFile) -> u32 {
     source.fps.max(1)
 }
 
-fn fallback_plan(source: &SourceFile, request: &ConvertRequest) -> ConvertPlan {
+/// Re-encode a rung to its own target under its own ceiling — the one way every re-encoded
+/// rung is made (T698).
+fn capped_to(rung: &Rung, reason: Detail) -> VideoAction {
+    VideoAction::ReencodeCapped {
+        reason,
+        target_kbps: (rung.bitrate_bps / 1000).max(1) as u32,
+        maxrate_kbps: (rung.maxrate_bps / 1000).max(1) as u32,
+        bufsize_kbps: (rung.bufsize_bps / 1000).max(1) as u32,
+        level: rung.level.clone(),
+    }
+}
+
+fn fallback_plan(source: &SourceFile, request: &ConvertRequest, rung: &Rung) -> ConvertPlan {
     ConvertPlan {
-        video: VideoAction::Reencode {
-            reason: Detail::new(DetailCode::ReasonTargetBitrate),
-            level: super::convert_plan::h264_level(
-                source.width,
-                request.height.unwrap_or(source.height),
-                source.fps,
-            )
-            .to_owned(),
-        },
-        audio: super::convert_plan::AudioAction::Copy,
+        video: capped_to(rung, Detail::new(DetailCode::ReasonTargetBitrate)),
+        // The sound and the HDR treatment the ordinary plan would give it (T698): a rung that
+        // would not plan used to copy any sound across and leave HDR as it was — a 5.1 track
+        // or a washed-out picture in the one rung nobody looked at.
+        audio: source
+            .track(request.audio_track)
+            .map(super::convert_plan::audio_for)
+            .unwrap_or(super::convert_plan::AudioAction::Copy),
         audio_track: request.audio_track,
         gop: shared_gop(source),
-        tonemap: false,
+        tonemap: source.is_hdr(),
         requested_height: request.height,
         faststart: true,
     }

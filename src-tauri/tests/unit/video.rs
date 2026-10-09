@@ -779,3 +779,17 @@ fn the_encode_and_the_check_after_it_share_one_bar_that_only_goes_forward() {
     assert_eq!(video::bar_of(D::StageSendingVariant, 0.4), 0.4);
     assert_eq!(video::bar_of(D::StageMeasuringQuality, 0.4), 0.4);
 }
+
+/// T698 — the top rung of an HEVC source is re-encoded, and its time is in the plan.
+#[test]
+fn a_rung_of_the_sources_numbers_that_cannot_be_copied_is_counted_in_the_time() {
+    let mut film = source(100.0);
+    film.video_codec = String::from("hevc");
+    let speed = 1920.0 * 1080.0 * 24.0;
+    let top = rung(20_000_000, 1920, 1080);
+    assert!(!video::is_copy(&top, &film));
+    assert_eq!(
+        video::encode_seconds(&[top], &film, speed),
+        Some((100.0 * (1.0 + video::VALIDATE_SHARE)).round() as u64)
+    );
+}

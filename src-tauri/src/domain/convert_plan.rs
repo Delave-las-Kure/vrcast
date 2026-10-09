@@ -348,6 +348,20 @@ pub fn plan(
     })
 }
 
+/// Whether the source's picture can be carried across as it is at all (T698): H.264, eight-bit
+/// 4:2:0, not HDR — the same three reasons [`plan`] gives for re-encoding a stream nobody
+/// asked to change. Geometry and bitrate are the caller's: this is the stream alone.
+///
+/// **What a «copy» rung has to be.** A top rung of a source's own size and bitrate looks like
+/// a copy by its numbers alone, and an HEVC or HDR source is then re-encoded anyway — taken
+/// for minutes in the plan and costing hours (QA-26 no. 8). Asked wherever a rung is called a
+/// copy, so the plan's time and the build agree.
+pub fn stream_copyable(source: &SourceFile) -> bool {
+    source.video_codec.eq_ignore_ascii_case("h264")
+        && source.pix_fmt.eq_ignore_ascii_case("yuv420p")
+        && !source.is_hdr()
+}
+
 fn video_action(
     source: &SourceFile,
     request: &ConvertRequest,

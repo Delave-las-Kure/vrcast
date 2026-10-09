@@ -507,12 +507,15 @@ pub fn default_audio(source: &SourceFile) -> usize {
     source.default_track().map(|t| t.index).unwrap_or(0)
 }
 
-/// Whether a rung is carried across without encoding (the same test `ladder_build::work_for`
-/// makes — a rung that *is* the source asks for nothing).
+/// Whether a rung is carried across without encoding: the same test `ladder_build::work_for`
+/// makes — a rung that *is* the source asks for nothing — **and a stream that can be carried
+/// across at all** (T698): the top rung of an HEVC or HDR source has the source's numbers and
+/// is re-encoded all the same, and its time belongs in the plan.
 pub fn is_copy(rung: &Rung, source: &SourceFile) -> bool {
     rung.height == source.height
         && rung.width == source.width
         && rung.bitrate_bps >= source.bitrate_bps
+        && super::convert_plan::stream_copyable(source)
 }
 
 /// How fast an encoder makes pictures, when nothing has been timed on this machine yet: in

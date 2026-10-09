@@ -947,3 +947,80 @@ fn the_prepared_files_go_only_after_the_set_is_checked() {
     let no_such = script.find("no such file").unwrap();
     assert!(cut_whole < no_such, "{script}");
 }
+
+// ---------- T698: the top rung of an HEVC or HDR source ----------
+
+/// QA-26 no. 8 — the top rung of an HEVC source has the source's numbers and is re-encoded
+/// all the same: to the rung's own bitrate, under its ceiling — not at a pinned quality that
+/// lands wherever it lands.
+#[test]
+fn a_top_rung_that_cannot_be_carried_across_is_held_to_its_own_bitrate() {
+    for (codec, pix_fmt, transfer) in [
+        ("hevc", "yuv420p10le", None),
+        ("h264", "yuv420p10le", None),
+        ("h264", "yuv420p", Some("smpte2084")),
+    ] {
+        let mut src = source(3840, 2160, 24, 22_000_000, codec);
+        src.pix_fmt = pix_fmt.to_owned();
+        src.color_transfer = transfer.map(str::to_owned);
+        let top = rung(0, 22_000_000, 2160);
+        let work = work_for("film", std::slice::from_ref(&top), &src, 0, Some(1.0), 4);
+        match &work[0].plan.video {
+            VideoAction::ReencodeCapped {
+                target_kbps,
+                maxrate_kbps,
+                bufsize_kbps,
+                ..
+            } => {
+                assert_eq!(*target_kbps, 22_000, "{codec} {pix_fmt}");
+                assert_eq!(*maxrate_kbps as u64, top.maxrate_bps / 1000);
+                assert_eq!(*bufsize_kbps as u64, top.bufsize_bps / 1000);
+            }
+            other => panic!("{codec} {pix_fmt} {transfer:?}: {other:?}"),
+        }
+        assert!(!work[0].lossless);
+        // HDR is brought down to the ordinary range on the way.
+        assert_eq!(work[0].plan.tonemap, transfer.is_some());
+        // And the plan's time counts it.
+        assert!(!vrcast_studio_lib::domain::video::is_copy(&top, &src));
+    }
+    // A plain H.264 source of the same numbers is still carried across.
+    let src = source(3840, 2160, 24, 22_000_000, "h264");
+    let top = rung(0, 22_000_000, 2160);
+    assert!(vrcast_studio_lib::domain::video::is_copy(&top, &src));
+    let work = work_for("film", &[top], &src, 0, Some(1.0), 4);
+    assert_eq!(work[0].plan.video, VideoAction::Copy);
+}
+
+/// What a rung is called a copy for and what the build carries across are one test.
+#[test]
+fn a_stream_is_copyable_exactly_when_the_plan_would_carry_it_across() {
+    use vrcast_studio_lib::domain::convert_plan::{plan, stream_copyable, ConvertRequest};
+    for (codec, pix_fmt, transfer) in [
+        ("h264", "yuv420p", None),
+        ("hevc", "yuv420p", None),
+        ("h264", "yuv420p10le", None),
+        ("h264", "yuv420p", Some("arib-std-b67")),
+        ("av1", "yuv420p", None),
+    ] {
+        let mut src = source(1920, 1080, 24, 8_000_000, codec);
+        src.pix_fmt = pix_fmt.to_owned();
+        src.color_transfer = transfer.map(str::to_owned);
+        let carried = plan(
+            &src,
+            &ConvertRequest {
+                audio_track: 0,
+                target_kbps: None,
+                height: None,
+            },
+        )
+        .unwrap()
+        .video
+            == VideoAction::Copy;
+        assert_eq!(
+            stream_copyable(&src),
+            carried,
+            "{codec} {pix_fmt} {transfer:?}"
+        );
+    }
+}
