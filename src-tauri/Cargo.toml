@@ -1,6 +1,6 @@
 [package]
 name = "vrcast-studio"
-version = "0.2.0"
+version = "0.3.0"
 description = "Управление стриминг-сервером VRCast: библиотека, конвертация, заливка, зрители"
 authors = ["VRCast Studio"]
 license = "GPL-3.0-or-later"
