@@ -1176,7 +1176,31 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         });
       }
 
-      const upgradeOffered = await has("//button[normalize-space()='Обновить серверную часть']");
+      let upgradeOffered = await has("//button[normalize-space()='Обновить серверную часть']");
+      const stateFile = "/etc/vrcast/state.json";
+      let downgraded = false;
+      if (!upgradeOffered) {
+        // The versions match, so the card offers nothing. To see the upgrade screen at all the
+        // server is made to say it is one version behind (only its state file), and put back
+        // after.
+        note(
+          `версии совпали (1 и 1) — чтобы показать экран обновления, в ${stateFile} контейнера версия временно понижена до 0`,
+        );
+        docker([
+          ...["exec", NAME, "sed", "-i"],
+          's/"vrcast_server_version": 1/"vrcast_server_version": 0/',
+          stateFile,
+        ]);
+        downgraded = true;
+        await go("library");
+        await go("servers");
+        await sleep(2500);
+        await snap(
+          "card-behind",
+          "Сервер «отстаёт» на версию (state.json понижен тестом) — карточка",
+        );
+        upgradeOffered = await has("//button[normalize-space()='Обновить серверную часть']");
+      }
       if (upgradeOffered) {
         await step(
           "upgrade-dialog",
@@ -1198,8 +1222,15 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         });
       } else {
         note(
-          "кнопки «Обновить серверную часть» на карточке нет — версия сервера совпала с ожидаемой",
+          "кнопки «Обновить серверную часть» нет и при «отставшем» сервере: приложение ждёт версию 1, а 0 читается как нечитаемый файл состояния → «Чужая раздача» (снимок card-behind); экран обновления в этой версии не достать",
         );
+      }
+      if (downgraded) {
+        docker([
+          ...["exec", NAME, "sed", "-i"],
+          's/"vrcast_server_version": 0/"vrcast_server_version": 1/',
+          stateFile,
+        ]);
       }
 
       // A clean server, the way one comes from a hosting provider: the deploy screen.
@@ -1541,7 +1572,9 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       const t0 = Date.now();
       beginSection("D2");
       await ensureServer();
-      await ensureApp();
+      // Started afresh even when D ran in this same process: this part is «after a restart».
+      await shutdown();
+      await launch();
       await setLanguage("ru");
       const tour = readTour();
       if (!tour) throw new Error("no state from section D");
@@ -2165,7 +2198,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       await step("en-library", "English: «Library», фильм раскрыт", async () => {
         await go("library");
         const head =
-          "(//section[contains(@class,'media')]/button[contains(@class,'media__head')])[1]";
+          "//section[contains(@class,'media')][.//span[contains(@class,'media__title') and contains(normalize-space(),'Фильм с двумя дорожками')]]/button[contains(@class,'media__head')]";
         await (await s().findX(head, 30_000)).click();
         await sleep(600);
       });
