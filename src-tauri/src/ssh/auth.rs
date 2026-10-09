@@ -102,16 +102,20 @@ pub fn load_key_text(openssh: &str, passphrase: Option<&str>) -> Result<PrivateK
     if !key.is_encrypted() {
         return Ok(key);
     }
-    let Some(passphrase) = passphrase else {
+    let Some(passphrase) = passphrase.filter(|p| !p.is_empty()) else {
         return Err(SshError::KeyNeedsPassphrase {
             path: String::from("the key kept by the application"),
         });
     };
-    key.decrypt(passphrase)
-        .map_err(|e| SshError::KeyUnreadable {
+    key.decrypt(passphrase).map_err(|e| match e {
+        russh::keys::ssh_key::Error::Crypto => SshError::KeyWrongPassphrase {
             path: String::from("the key kept by the application"),
-            reason: redact::safe_display(&e),
-        })
+        },
+        other => SshError::KeyUnreadable {
+            path: String::from("the key kept by the application"),
+            reason: redact::safe_display(&other),
+        },
+    })
 }
 
 pub fn load_key(path: &Path, passphrase: Option<&str>) -> Result<PrivateKey> {
@@ -120,11 +124,21 @@ pub fn load_key(path: &Path, passphrase: Option<&str>) -> Result<PrivateKey> {
     if let Some(p) = passphrase {
         redact::register(p);
     }
+    // An empty passphrase is no passphrase (T708): the store keeps "" for a key without one,
+    // and for a protected key that must read as "a passphrase is needed", not as a wrong one.
+    let passphrase = passphrase.filter(|p| !p.is_empty());
 
     russh::keys::load_secret_key(path, passphrase).map_err(|e| {
         let shown = path.display().to_string();
         match e {
             russh::keys::Error::KeyIsEncrypted => SshError::KeyNeedsPassphrase { path: shown },
+            // The key decrypted into nonsense: its own check did not hold. With a passphrase
+            // given, that is the passphrase (T708) — the file read fine.
+            russh::keys::Error::SshKey(russh::keys::ssh_key::Error::Crypto)
+                if passphrase.is_some() =>
+            {
+                SshError::KeyWrongPassphrase { path: shown }
+            }
             other => SshError::KeyUnreadable {
                 path: shown,
                 reason: redact::safe_display(&other),

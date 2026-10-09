@@ -562,6 +562,7 @@ fn only_the_network_is_worth_trying_again_for() {
     let passes = sort_refusal(Refusal::Ssh(SshError::Unreachable {
         addr: addr.clone(),
         reason: String::from("timed out"),
+        refused: false,
     }));
     assert!(
         matches!(passes, Retry::Transient(_)),

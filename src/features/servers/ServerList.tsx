@@ -38,7 +38,13 @@ export function ServerList() {
   if (adding) {
     return (
       <div className="panel">
-        <SetupWizard onClose={() => setAdding(false)} />
+        <SetupWizard
+          onClose={() => {
+            setAdding(false);
+            // T708: a profile made by the wizard is in the list at once, «Cancel» or not.
+            void reload();
+          }}
+        />
       </div>
     );
   }

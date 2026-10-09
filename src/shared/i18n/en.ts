@@ -43,6 +43,10 @@ export const en: Catalogue = {
       message: "The key file could not be read",
       hint: "Choose the private key, not the .pub file.",
     },
+    KEY_WRONG_PASSPHRASE: {
+      message: "Wrong key passphrase",
+      hint: "Type the key's passphrase again.",
+    },
     VIDEO_DIR_DENIED: {
       message: "No access to the video directory on the server",
       hint: "Check the path and the user's permissions on it.",
@@ -466,12 +470,18 @@ export const en: Catalogue = {
       "the {percent}% already done will keep, but you will have to start it again — it does not come back by itself",
 
     // --- steps of the connection check ---
-    STEP_NET_BANNER: "answers with {banner}",
+    // T708: what exactly the server said about itself ("SSH-2.0-…") is under "Details" only.
+    STEP_NET_BANNER: "the server answers",
     STEP_NET_TIMEOUT: "the server did not answer within {seconds} s",
     STEP_NET_SILENT_CLOSED:
       "the connection was accepted and closed at once: SSH does not answer on this port",
     STEP_NET_SILENT: "connection accepted, but SSH is silent — check the port number",
     STEP_NET_NOT_SSH: "something other than SSH answers on port {port}: “{got}”",
+    STEP_NET_REFUSED: "the server does not answer on port {port} — check the port number",
+    SSH_PORT_REFUSED: "The server does not answer on port {port}",
+    STEP_LOGIN_WRONG_PASSPHRASE: "wrong key passphrase",
+    STEP_LOGIN_NEEDS_PASSPHRASE: "the key is protected by a passphrase — enter it",
+    STEP_LOGIN_REJECTED: "the server did not accept the user, password or key",
     STEP_LOGIN_FINGERPRINT_UNCONFIRMED: "fingerprint not confirmed",
     STEP_LOGIN_OK: "signed in as {user}",
     STEP_VIDEO_DIR_OK: "{dir} is readable and writable",
@@ -1075,6 +1085,8 @@ export const en: Catalogue = {
       done: "Done",
       testRunning: "Checking the connection…",
       stepSkipped: "not checked: we stopped earlier",
+      stepFailedTech: "did not work",
+      fixDetails: "Fix the details",
     },
 
     // T673 — the "Video" screen: one place from a file to a link. Short labels only.

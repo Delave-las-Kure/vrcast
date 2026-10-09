@@ -343,6 +343,121 @@ describe("the setup wizard", () => {
       expect(screen.getByLabelText(ru.ui.wizard.fieldHost)).toHaveValue("203.0.113.10"),
     );
   });
+
+  /** Fill the wizard's form the way a person would and press «Next». */
+  const fillAndNext = async () => {
+    fireEvent.click(await screen.findByText(ru.ui.servers.add));
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldName), {
+      target: { value: "Контейнер" },
+    });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldHost), {
+      target: { value: "127.0.0.1" },
+    });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldPort), {
+      target: { value: "47099" },
+    });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldDomain), {
+      target: { value: "stream.example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldKeyPath), {
+      target: { value: "/home/u/.ssh/k" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.wizard.next));
+  };
+
+  it("checks the same profile again after the port is fixed, rather than making a second (T708)", async () => {
+    mockServerAdd.mockResolvedValue("srv_new");
+    mockServerUpdate.mockResolvedValue(undefined);
+    mockProbeFingerprint
+      .mockRejectedValueOnce({
+        code: "SSH_UNREACHABLE",
+        details: [{ key: "SSH_PORT_REFUSED", params: { port: 47099 } }],
+        cause: "server 127.0.0.1:47099 is unreachable: IO error (os error 10061)",
+      })
+      .mockResolvedValueOnce("SHA256:верный");
+    draw();
+    await fillAndNext();
+
+    // One plain line in sight; the system's words only under «Details».
+    expect(await screen.findByText("Сервер не отвечает на порту 47099")).toBeInTheDocument();
+    expect(screen.getByText(/os error 10061/).closest("details")).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText(ru.ui.wizard.fieldPort), {
+      target: { value: "47022" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.wizard.next));
+
+    expect(await screen.findByText("SHA256:верный")).toBeInTheDocument();
+    expect(mockServerAdd).toHaveBeenCalledTimes(1);
+    expect(mockServerUpdate).toHaveBeenCalledTimes(1);
+    const [id, input, secret] = mockServerUpdate.mock.calls[0];
+    expect(id).toBe("srv_new");
+    expect((input as { port: number }).port).toBe(47022);
+    // The field was left empty: the passphrase given the first time is kept.
+    expect(secret).toBeNull();
+  });
+
+  it("lets a wrong passphrase be fixed in the wizard and checks again without a second fingerprint (T708)", async () => {
+    mockServerAdd.mockResolvedValue("srv_new");
+    mockServerUpdate.mockResolvedValue(undefined);
+    mockProbeFingerprint.mockResolvedValue("SHA256:верный");
+    mockServerTest
+      .mockResolvedValueOnce([
+        {
+          id: "network",
+          status: "ok",
+          detail: { key: "STEP_NET_BANNER", params: { banner: "SSH-2.0-OpenSSH_9.6p1" } },
+        },
+        { id: "login", status: "failed", detail: { key: "STEP_LOGIN_WRONG_PASSPHRASE" } },
+        { id: "video_dir", status: "skipped", detail: null },
+        { id: "domain", status: "skipped", detail: null },
+      ])
+      .mockResolvedValueOnce(steps());
+    draw();
+    await fillAndNext();
+    fireEvent.click(await screen.findByText(ru.ui.wizard.fingerprintOk));
+
+    expect(await screen.findByText(ru.details.STEP_LOGIN_WRONG_PASSPHRASE)).toBeInTheDocument();
+    // What the server called itself is folded away, not on the line.
+    expect(screen.getByText("SSH-2.0-OpenSSH_9.6p1").closest("details")).not.toBeNull();
+
+    fireEvent.click(screen.getByText(ru.ui.wizard.fixDetails));
+    fireEvent.change(await screen.findByLabelText(ru.ui.wizard.fieldPassphrase), {
+      target: { value: "верная фраза" },
+    });
+    fireEvent.click(screen.getByText(ru.ui.wizard.next));
+
+    await waitFor(() => expect(mockServerTest).toHaveBeenCalledTimes(2));
+    expect(mockServerUpdate).toHaveBeenCalledWith("srv_new", expect.anything(), "верная фраза");
+    expect(mockProbeFingerprint).toHaveBeenCalledTimes(1);
+    expect(mockServerAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the profile in the list at once after «Cancel» (T708)", async () => {
+    mockServerAdd.mockResolvedValue("srv_new");
+    mockProbeFingerprint.mockRejectedValue({ code: "SSH_UNREACHABLE" });
+    draw();
+    await fillAndNext();
+    await screen.findByText(ru.errors.SSH_UNREACHABLE.message);
+
+    mockServersList.mockResolvedValue([
+      makeProfile({ id: "srv_new", name: "Контейнер", host_fingerprint: null }),
+    ]);
+    fireEvent.click(screen.getByText(ru.ui.common.cancel));
+    expect(await screen.findByText("Контейнер")).toBeInTheDocument();
+  });
+
+  it("does not make a newly added server active by itself at «Done» (T708)", async () => {
+    mockServerAdd.mockResolvedValue("srv_new");
+    mockProbeFingerprint.mockResolvedValue("SHA256:верный");
+    mockServerTest.mockResolvedValue(steps());
+    draw();
+    await fillAndNext();
+    fireEvent.click(await screen.findByText(ru.ui.wizard.fingerprintOk));
+    fireEvent.click(await screen.findByText(ru.ui.wizard.done));
+    await screen.findByText(ru.ui.servers.add);
+    expect(mockSetActive).not.toHaveBeenCalled();
+  });
 });
 
 describe("editing a server profile", () => {

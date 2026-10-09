@@ -120,11 +120,19 @@ export function renderError(
 }
 
 /**
+ * Particulars that are the answer themselves, more exact than their code's own message
+ * (T708): «The server does not answer on port 47099» says what «Could not reach the server»
+ * only gestures at, and the port is the very thing to fix.
+ */
+const HEADLINE_DETAILS: ReadonlySet<DetailCode> = new Set<DetailCode>(["SSH_PORT_REFUSED"]);
+
+/**
  * An error the way a screen shows it (T674): one line, and the rest folded under "Details".
  *
  * - `line` — what happened, one short sentence. The code's own message, except for a refused
  *   input, where the code says only "the data does not fit" and the first particular says
- *   which field and why — that particular *is* the answer there.
+ *   which field and why — that particular *is* the answer there; and likewise for a
+ *   particular from `HEADLINE_DETAILS`.
  * - `hint` — what to do, from the code (FR-105), shown folded.
  * - `particulars` — everything else the core named, in order, as one paragraph, folded.
  */
@@ -135,7 +143,10 @@ export function renderErrorFolded(
 ): { line: string; hint: string; particulars: string } {
   const wording = catalogue.errors[error.code];
   const said = (error.details ?? []).map((d) => renderDetail(d, catalogue, lang));
-  const fieldFirst = error.code === "INVALID_INPUT" && said.length > 0;
+  const first = error.details?.[0];
+  const fieldFirst =
+    said.length > 0 &&
+    (error.code === "INVALID_INPUT" || (first !== undefined && HEADLINE_DETAILS.has(first.key)));
   return {
     line: fieldFirst ? said[0] : wording?.message || said[0] || error.code,
     hint: wording?.hint ?? "",

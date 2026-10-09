@@ -188,8 +188,28 @@ pub mod api {
     use crate::store::secrets::SecretRef;
 
     /// The list of profiles. Without the secrets — they are physically not here.
+    ///
+    /// T708: a lone profile with no active mark gets it here too — one left so by an earlier
+    /// version, or by a profile removed while the other was not active.
     pub fn servers_list(state: &AppState) -> Result<Vec<ServerProfile>> {
+        sole_becomes_active(state)?;
         Ok(profiles::list(&state.db)?)
+    }
+
+    /// ⚠ **T708 — which profile is active, without a person having to say it twice.**
+    ///
+    /// The one server there is is the active one: a list with a single profile and nothing
+    /// active used to leave every other screen saying «no server chosen» about the only server
+    /// there was. Nothing else is decided here — with two or more the choice is the person's,
+    /// and a profile added beside an active one does not take the mark from it.
+    fn sole_becomes_active(state: &AppState) -> Result<()> {
+        let all = profiles::list(&state.db)?;
+        if let [only] = all.as_slice() {
+            if !only.is_active {
+                profiles::set_active(&state.db, &only.id)?;
+            }
+        }
+        Ok(())
     }
 
     /// Add a profile. The secret goes to the operating system store; only a pointer is
@@ -218,6 +238,12 @@ pub mod api {
         if let Err(e) = state.secrets.set(&reference, secret) {
             let _ = profiles::remove(&state.db, &id);
             return Err(e.into());
+        }
+
+        // T708: the first server — or one added while none is active — is the active one at
+        // once. One added beside an active server is not: the mark is not moved silently.
+        if profiles::active(&state.db)?.is_none() {
+            profiles::set_active(&state.db, &id)?;
         }
 
         tracing::info!(server = %id, "the server profile was created");
@@ -455,6 +481,11 @@ pub mod api {
             super::super::viewers::api::viewers_watch_stop(state);
         }
         super::super::video::forget_server_videos(state, &videos);
+        // T708: the one server left is the active one. The profile is gone already, so a
+        // failure here is logged rather than returned — deleting again would find nothing.
+        if let Err(e) = sole_becomes_active(state) {
+            tracing::warn!(error = %e, "the one server left was not made active");
+        }
         tracing::info!(server = %id, "the server profile was deleted");
         Ok(true)
     }
@@ -717,9 +748,24 @@ mod probe {
                 c
             }
             Err(e) => {
-                // The detail goes through secret redaction: it comes from somebody else's
+                // The two passphrase troubles are said as themselves (T708): the person fixes
+                // them in the same form, and «SshKey: cryptographic error» sends nobody there.
+                // Everything else goes through secret redaction: it comes from somebody else's
                 // library, which knows nothing of our rules.
-                steps.push(said(1, StepStatus::Failed, system(&e)));
+                let detail = match &e {
+                    crate::ssh::SshError::KeyWrongPassphrase { .. } => {
+                        Detail::new(DetailCode::StepLoginWrongPassphrase)
+                    }
+                    crate::ssh::SshError::KeyNeedsPassphrase { .. } => {
+                        Detail::new(DetailCode::StepLoginNeedsPassphrase)
+                    }
+                    crate::ssh::SshError::AuthFailed { .. } => {
+                        Detail::new(DetailCode::StepLoginRejected)
+                            .with("tech", crate::store::redact::safe_display(&e))
+                    }
+                    _ => system(&e),
+                };
+                steps.push(said(1, StepStatus::Failed, detail));
                 skip_rest(&mut steps);
                 return steps;
             }
@@ -806,6 +852,11 @@ mod probe {
         let mut stream =
             match tokio::time::timeout(STEP_TIMEOUT, tokio::net::TcpStream::connect(&addr)).await {
                 Ok(Ok(s)) => s,
+                // Nothing listens there (T708): «does not answer on port N», not the
+                // system's «(os error 10061)».
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    return Err(Detail::new(DetailCode::StepNetRefused).with("port", port))
+                }
                 Ok(Err(e)) => return Err(system(e)),
                 Err(_) => {
                     return Err(Detail::new(DetailCode::StepNetTimeout)

@@ -250,6 +250,17 @@ detail_codes! {
     StepNetSilent => "STEP_NET_SILENT",
     /// `port`, `got` — where we knocked and what answered.
     StepNetNotSsh => "STEP_NET_NOT_SSH",
+    /// `port` — the machine answered that nothing listens there (T708).
+    StepNetRefused => "STEP_NET_REFUSED",
+    /// `port` — the same, as the one line of an error rather than a step (T708).
+    SshPortRefused => "SSH_PORT_REFUSED",
+    /// The key's passphrase did not open it (T708).
+    StepLoginWrongPassphrase => "STEP_LOGIN_WRONG_PASSPHRASE",
+    /// The key is protected and no passphrase was given (T708).
+    StepLoginNeedsPassphrase => "STEP_LOGIN_NEEDS_PASSPHRASE",
+    /// The server turned the user name, password or key down (T708). `tech` — which ways in
+    /// it offers, in its own words: the screen shows them only under «Details».
+    StepLoginRejected => "STEP_LOGIN_REJECTED",
     StepLoginFingerprintUnconfirmed => "STEP_LOGIN_FINGERPRINT_UNCONFIRMED",
     /// `user` — who we came in as.
     StepLoginOk => "STEP_LOGIN_OK",

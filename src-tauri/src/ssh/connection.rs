@@ -120,10 +120,7 @@ impl Connection {
                         });
                     }
                 }
-                return Err(SshError::Unreachable {
-                    addr,
-                    reason: crate::store::redact::safe_display(&e),
-                });
+                return Err(SshError::unreachable(addr, &e));
             }
         };
 

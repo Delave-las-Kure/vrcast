@@ -1094,30 +1094,60 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           );
         },
       );
-      await step("check-done-list", "«Готово» — список серверов", async () => {
-        await press("Готово", "//section[contains(@class,'wizard__stage')]");
-        await until("the wizard to close", async () => !(await s().has(".wizard")), 15_000);
-        await settle();
-        await sleep(2000);
-      });
-      await step(
-        "edit-passphrase",
-        "«Изменить» → в форме правки введена верная парольная фраза",
-        async () => {
-          await press("Изменить", card);
-          const input = await s().findX(
-            "//label[span[normalize-space()='Парольная фраза ключа']]//input",
-          );
-          await input.clear();
-          await input.type(PASSPHRASE);
-        },
-      );
-      await step("edit-saved", "«Сохранить» — правка закрылась", async () => {
-        await press("Сохранить");
-        await until("the edit to close", async () => !(await s().has(".wizard")), 30_000);
-        await settle();
-        await sleep(2000);
-      });
+      const fixInWizard =
+        "//section[contains(@class,'wizard__stage')]//button[normalize-space()='Исправить данные']";
+      if (await has(fixInWizard)) {
+        // T708: the passphrase is fixed where the mistake showed, in the wizard itself.
+        await step(
+          "wizard-fix-passphrase",
+          "«Исправить данные» → введена верная парольная фраза → «Дальше» (тот же профиль, отпечаток второй раз не спрашивают)",
+          async () => {
+            await press("Исправить данные", "//section[contains(@class,'wizard__stage')]");
+            const input = await s().findX(
+              "//label[span[normalize-space()='Парольная фраза ключа']]//input",
+              15_000,
+            );
+            await input.clear();
+            await input.type(PASSPHRASE);
+            await press("Дальше");
+            await s().findX(
+              "//section[contains(@class,'wizard__stage')]//button[normalize-space()='Готово' and not(@disabled)]",
+              120_000,
+            );
+          },
+        );
+        await step("check-done-list", "«Готово» — список серверов", async () => {
+          await press("Готово", "//section[contains(@class,'wizard__stage')]");
+          await until("the wizard to close", async () => !(await s().has(".wizard")), 15_000);
+          await settle();
+          await sleep(2000);
+        });
+      } else {
+        await step("check-done-list", "«Готово» — список серверов", async () => {
+          await press("Готово", "//section[contains(@class,'wizard__stage')]");
+          await until("the wizard to close", async () => !(await s().has(".wizard")), 15_000);
+          await settle();
+          await sleep(2000);
+        });
+        await step(
+          "edit-passphrase",
+          "«Изменить» → в форме правки введена верная парольная фраза",
+          async () => {
+            await press("Изменить", card);
+            const input = await s().findX(
+              "//label[span[normalize-space()='Парольная фраза ключа']]//input",
+            );
+            await input.clear();
+            await input.type(PASSPHRASE);
+          },
+        );
+        await step("edit-saved", "«Сохранить» — правка закрылась", async () => {
+          await press("Сохранить");
+          await until("the edit to close", async () => !(await s().has(".wizard")), 30_000);
+          await settle();
+          await sleep(2000);
+        });
+      }
       await step("test-ok", "«Проверить подключение» на карточке — результат", async () => {
         await press("Проверить подключение", card);
         await s().findX(`${card}//ol[@class='steps']/li`, 90_000);
@@ -1339,17 +1369,20 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       );
       await go("servers");
       await sleep(2000);
-      await step(
-        "make-active-again",
-        "«Сделать активным» у «Контейнер» — снова он активный",
-        async () => {
-          await press(
-            "Сделать активным",
-            "//li[contains(@class,'server')][.//span[@class='server__name' and normalize-space()='Контейнер']]",
-          );
-          await sleep(1500);
-        },
-      );
+      const containerCard =
+        "//li[contains(@class,'server')][.//span[@class='server__name' and normalize-space()='Контейнер']]";
+      if (await has(`${containerCard}//button[normalize-space()='Сделать активным']`)) {
+        await step(
+          "make-active-again",
+          "«Сделать активным» у «Контейнер» — снова он активный",
+          async () => {
+            await press("Сделать активным", containerCard);
+            await sleep(1500);
+          },
+        );
+      } else {
+        note("«Контейнер» остался активным: добавленный второй сервер отметку не забрал (T708)");
+      }
       await step("clean-remove-ask", "У «Чистый VPS» нажато «Удалить» — вопрос", async () => {
         await press(
           "Удалить",

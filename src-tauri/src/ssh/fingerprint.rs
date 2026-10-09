@@ -133,10 +133,7 @@ pub async fn probe(addr: &ServerAddress) -> Result<HostKey> {
         }
         Err(e) => {
             if taken.is_none() {
-                return Err(SshError::Unreachable {
-                    addr: addr.clone(),
-                    reason: crate::store::redact::safe_display(&e),
-                });
+                return Err(SshError::unreachable(addr.clone(), &e));
             }
         }
     }
@@ -144,6 +141,7 @@ pub async fn probe(addr: &ServerAddress) -> Result<HostKey> {
     taken.ok_or_else(|| SshError::Unreachable {
         addr: addr.clone(),
         reason: String::from("the server presented no key"),
+        refused: false,
     })
 }
 

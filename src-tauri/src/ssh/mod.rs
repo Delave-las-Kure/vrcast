@@ -55,8 +55,15 @@ impl std::fmt::Display for ServerAddress {
 /// `contracts/ipc-commands.md` and to its own answer for the person (FR-105).
 #[derive(Debug, thiserror::Error)]
 pub enum SshError {
+    /// `refused` — the machine answered, but nothing listens on that port (T708): the
+    /// person's own mistake in the port number far more often than a server that is off, and
+    /// it is said that way rather than as the system's «(os error 10061)».
     #[error("server {addr} is unreachable: {reason}")]
-    Unreachable { addr: ServerAddress, reason: String },
+    Unreachable {
+        addr: ServerAddress,
+        reason: String,
+        refused: bool,
+    },
 
     /// FR-092. The most dangerous failure here: it means either the server changed or
     /// the connection was intercepted, and it must not be swallowed quietly.
@@ -81,6 +88,11 @@ pub enum SshError {
 
     #[error("could not read key {path}: {reason}")]
     KeyUnreadable { path: String, reason: String },
+
+    /// A passphrase was given and the key would not open with it (T708). Its own failure, not
+    /// «the file will not read»: the file is fine, and the way out is typing the phrase again.
+    #[error("the passphrase does not open key {path}")]
+    KeyWrongPassphrase { path: String },
 
     #[error("command on the server failed: {0}")]
     Exec(String),
@@ -159,4 +171,18 @@ impl SshError {
     pub(crate) fn protocol(e: impl std::fmt::Display) -> Self {
         Self::Protocol(redact::safe_display(&e))
     }
+
+    /// The connection to `addr` failed before any SSH was spoken.
+    pub(crate) fn unreachable(addr: ServerAddress, e: &russh::Error) -> Self {
+        Self::Unreachable {
+            addr,
+            reason: redact::safe_display(e),
+            refused: is_refused(e),
+        }
+    }
+}
+
+/// Nothing listens on the port: the machine said so at once (T708).
+pub(crate) fn is_refused(e: &russh::Error) -> bool {
+    matches!(e, russh::Error::IO(io) if io.kind() == std::io::ErrorKind::ConnectionRefused)
 }

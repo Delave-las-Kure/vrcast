@@ -17,7 +17,13 @@
  */
 
 import { useEffect, useState } from "react";
-import type { AppError, ImportSuggestion, ServerInput, TestStep } from "../../shared/contract";
+import type {
+  AppError,
+  Detail,
+  ImportSuggestion,
+  ServerInput,
+  TestStep,
+} from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
@@ -50,6 +56,9 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
 
   const [serverId, setServerId] = useState<string | null>(null);
+  /** The address whose fingerprint was confirmed in this wizard (`host:port`). Coming back
+   *  from the check to fix a passphrase does not ask about the same machine twice (T708). */
+  const [confirmedAt, setConfirmedAt] = useState<string | null>(null);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [steps, setSteps] = useState<TestStep[] | null>(null);
   const [suggestion, setSuggestion] = useState<ImportSuggestion | null>(null);
@@ -73,18 +82,39 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
     };
   }, []);
 
-  /** Step 1 to 2: create the profile and learn the fingerprint. */
+  /** Step 1 to 2: create the profile and learn the fingerprint.
+   *
+   *  ⚠ **T708 — the second «Next» changes the same profile rather than making another.** The
+   *  profile is written before the fingerprint is learnt, so a wrong port leaves it behind;
+   *  pressing «Next» again after fixing the port used to call `serverAdd` once more and be
+   *  refused with «a profile named … already exists». Now the profile made the first time is
+   *  updated, and an empty secret field means «keep the one given before». */
   const submitForm = async () => {
     setBusy(true);
     setError(null);
     try {
-      const id = await ipc.serverAdd(input, secret);
-      setServerId(id);
+      let id = serverId;
+      if (id === null) {
+        id = await ipc.serverAdd(input, secret);
+        setServerId(id);
+      } else {
+        await ipc.serverUpdate(id, input, secret === "" ? null : secret);
+      }
       // The secret is no longer needed in the interface's memory: it went into the
       // system store and is never handed back.
       setSecret("");
-      setFingerprint(await ipc.serverProbeFingerprint(input.host, input.port));
-      setStage("fingerprint");
+      // The list behind the wizard knows of the profile from now on — «Cancel» shows it.
+      await reload();
+      if (confirmedAt === addressOf(input)) {
+        // The same machine as a moment ago: its fingerprint is confirmed, the check runs again.
+        setSteps(null);
+        setStage("test");
+        setSteps(await ipc.serverTest(id));
+        await reload();
+      } else {
+        setFingerprint(await ipc.serverProbeFingerprint(input.host, input.port));
+        setStage("fingerprint");
+      }
     } catch (e) {
       setError(toAppError(e));
     } finally {
@@ -99,6 +129,8 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
     setError(null);
     try {
       await ipc.serverFingerprintConfirm(serverId, fingerprint);
+      setConfirmedAt(addressOf(input));
+      setSteps(null);
       setStage("test");
       setSteps(await ipc.serverTest(serverId));
       await reload();
@@ -123,10 +155,22 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
     onClose();
   };
 
+  /** «Done». The core already decided which server is active (T708): the first one is, by
+   *  itself, and one added beside an active server does not take the mark silently — its card
+   *  has «Make active» for that. */
   const finish = async () => {
-    if (serverId) await useServers.getState().setActive(serverId);
+    await reload();
     onClose();
   };
+
+  /** Back to the fields from the check (T708): a wrong passphrase, user or directory is fixed
+   *  here, in the wizard, and «Next» checks the same profile again. */
+  const fixDetails = () => {
+    setError(null);
+    setStage("form");
+  };
+
+  const anyFailed = steps?.some((s) => s.status === "failed") ?? false;
 
   return (
     <div className="wizard" role="dialog" aria-label={w.dialogLabel}>
@@ -172,7 +216,7 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
             onFieldChange={(key, value) => setInput((prev) => ({ ...prev, [key]: value }))}
             secret={secret}
             onSecretChange={setSecret}
-            secretHint={null}
+            secretHint={serverId ? t.ui.servers.editSecretHint : null}
             busy={busy}
             submitLabel={w.next}
             busyLabel={w.checking}
@@ -201,6 +245,11 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
         <section className="wizard__stage">
           <TestSteps steps={steps} />
           <div className="form__actions">
+            {anyFailed && (
+              <button type="button" onClick={fixDetails} disabled={busy}>
+                {w.fixDetails}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -237,7 +286,6 @@ export function SetupWizard({ onClose }: { onClose: () => void }) {
  */
 export function TestSteps({ steps }: { steps: TestStep[] | null }) {
   const t = useT();
-  const { lang } = useLang();
 
   if (!steps) return <p className="muted">{t.ui.wizard.testRunning}</p>;
 
@@ -262,9 +310,7 @@ export function TestSteps({ steps }: { steps: TestStep[] | null }) {
             <span className="step__title">
               {t.ui.servers.steps[step.id as keyof typeof t.ui.servers.steps] ?? step.id}
             </span>
-            {step.detail && (
-              <span className="step__detail">{renderDetail(step.detail, t, lang)}</span>
-            )}
+            {step.detail && <StepDetail detail={step.detail} />}
             {step.status === "skipped" && !step.detail && (
               <span className="step__detail muted">{t.ui.wizard.stepSkipped}</span>
             )}
@@ -272,5 +318,37 @@ export function TestSteps({ steps }: { steps: TestStep[] | null }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+/** `host:port` — the machine a confirmed fingerprint belongs to. */
+function addressOf(input: ServerInput): string {
+  return `${input.host.trim()}:${input.port}`;
+}
+
+/**
+ * What a step said, with its technical part folded (T708).
+ *
+ * What the server introduced itself as («SSH-2.0-OpenSSH_9.6p1 …»), the ways in it offers,
+ * a library's own complaint — all of it true and none of it for the owner's eyes at first.
+ * The line says what it means; the words themselves are one click away under «Details».
+ */
+function StepDetail({ detail }: { detail: Detail }) {
+  const t = useT();
+  const { lang } = useLang();
+  const params = detail.params ?? {};
+  const raw = detail.key === "SYSTEM_ERROR";
+  const tech = raw ? params.text : detail.key === "STEP_NET_BANNER" ? params.banner : params.tech;
+  const line = raw ? t.ui.wizard.stepFailedTech : renderDetail(detail, t, lang);
+  return (
+    <>
+      <span className="step__detail">{line}</span>
+      {tech !== undefined && tech !== "" && (
+        <details className="error-more step__more">
+          <summary>{t.ui.common.more}</summary>
+          <p className="error-more__cause">{String(tech)}</p>
+        </details>
+      )}
+    </>
   );
 }

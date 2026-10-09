@@ -269,6 +269,69 @@ async fn the_connection_check_returns_every_step_marked_where_it_stopped() {
             step.id
         );
     }
+    // T708: a port nobody listens on is said as such, not as «(os error 10061)».
+    let said = steps[0].detail.as_ref().unwrap();
+    assert_eq!(said.key, DetailCode::StepNetRefused, "{said:?}");
+}
+
+#[tokio::test]
+async fn a_closed_port_at_the_fingerprint_step_names_the_port() {
+    // T708: the wizard's first trip to the server. The one line is «does not answer on port
+    // N»; the system's own words stay in the cause, under «Details».
+    let err = vrcast_studio_lib::commands::api::server_probe_fingerprint("127.0.0.1", 1)
+        .await
+        .expect_err("a closed port gave a fingerprint");
+    assert_eq!(err.code, ErrorCode::SshUnreachable);
+    assert!(err.says(DetailCode::SshPortRefused), "{err}");
+    let port = err
+        .details
+        .iter()
+        .find(|d| d.key == DetailCode::SshPortRefused)
+        .and_then(|d| d.params.get("port"))
+        .map(|v| v.to_string());
+    assert_eq!(port.as_deref(), Some("1"), "{err}");
+}
+
+#[test]
+fn the_first_server_is_active_and_a_second_does_not_take_the_mark() {
+    // T708: the only server is the active one by itself; adding another does not move it.
+    let s = state();
+    let first = api::server_add(&s, valid_input("First"), SECRET).unwrap();
+    let active = |s: &_| -> Vec<String> {
+        api::servers_list(s)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.is_active)
+            .map(|p| p.id)
+            .collect()
+    };
+    assert_eq!(
+        active(&s),
+        vec![first.clone()],
+        "the first server is not active"
+    );
+
+    let second = api::server_add(&s, valid_input("Second"), SECRET).unwrap();
+    assert_eq!(
+        active(&s),
+        vec![first.clone()],
+        "adding a second server moved the mark"
+    );
+
+    api::server_set_active(&s, &second).unwrap();
+    assert_eq!(active(&s), vec![second.clone()]);
+}
+
+#[tokio::test]
+async fn the_one_server_left_after_a_removal_is_active() {
+    let s = state();
+    let first = api::server_add(&s, valid_input("First"), SECRET).unwrap();
+    let second = api::server_add(&s, valid_input("Second"), SECRET).unwrap();
+    api::server_remove(&s, &first, false).await.unwrap();
+    let list = api::servers_list(&s).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, second);
+    assert!(list[0].is_active, "the one server left is not active");
 }
 
 #[tokio::test]

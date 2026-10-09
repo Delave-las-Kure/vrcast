@@ -67,6 +67,8 @@ error_codes! {
     HostKeyIsCertificate => "HOST_KEY_IS_CERTIFICATE",
     KeyNeedsPassphrase => "KEY_NEEDS_PASSPHRASE",
     KeyUnreadable => "KEY_UNREADABLE",
+    /// The key's passphrase is wrong (T708): the file read, the phrase did not open it.
+    KeyWrongPassphrase => "KEY_WRONG_PASSPHRASE",
     VideoDirDenied => "VIDEO_DIR_DENIED",
 
     // --- domain ---
@@ -393,6 +395,7 @@ impl From<crate::ssh::SshError> for AppError {
             S::AuthFailed { .. } => ErrorCode::SshAuthFailed,
             S::KeyNeedsPassphrase { .. } => ErrorCode::KeyNeedsPassphrase,
             S::KeyUnreadable { .. } => ErrorCode::KeyUnreadable,
+            S::KeyWrongPassphrase { .. } => ErrorCode::KeyWrongPassphrase,
             S::Exec(_) | S::Protocol(_) => ErrorCode::Internal,
             // A file failure sends a person in DIFFERENT directions depending on the
             // cause. Every one of them used to be reported as a permission problem
@@ -413,6 +416,20 @@ impl From<crate::ssh::SshError> for AppError {
         };
         // The lower layer's particulars are kept: they name the specifics — which
         // address, which authentication methods the server offered, which key file.
+        //
+        // T708: nothing listening on the port is said as such — «the server does not answer
+        // on port N» — with the system's own words («os error 10061») kept in the cause.
+        if let S::Unreachable {
+            addr,
+            refused: true,
+            ..
+        } = &e
+        {
+            let port = addr.port;
+            return AppError::new(code)
+                .with_detail(Detail::new(DetailCode::SshPortRefused).with("port", port))
+                .with_cause(e);
+        }
         AppError::new(code).with_cause(e)
     }
 }

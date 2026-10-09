@@ -73,6 +73,12 @@ fn a_wrong_passphrase_is_not_passed_off_as_an_unreadable_file() {
         Some("not-the-passphrase"),
     )
     .expect_err("the key read with a wrong passphrase");
+    // T708: said as a wrong passphrase, not as a file that will not read — the file is fine,
+    // and the way out is typing the phrase again.
+    assert!(
+        matches!(err, SshError::KeyWrongPassphrase { .. }),
+        "KeyWrongPassphrase was expected, got: {err}"
+    );
     // Whatever the wording, the passphrase itself must not turn up in it.
     let text = err.to_string();
     assert!(
