@@ -654,6 +654,8 @@ pub async fn held(
         borrowed.chunk_s,
         cell,
         encoder,
+        // The recipe of the borrower's own material — what its rungs will be made by (T697).
+        &crate::media::vmaf::Recipe::of_run(borrowed),
         &ctx.cancel_token(),
     )
     .await

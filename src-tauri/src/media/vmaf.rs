@@ -32,11 +32,46 @@ pub const VMAF_THREADS: u32 = 8;
 /// bytes score twenty-three VMAF lower read back out of the mp4 this used to write.
 pub const MEASURE_CONTAINER: &str = "matroska";
 
-/// The distance between keyframes while measuring.
+/// How a measured chunk is encoded and compared — **the production recipe** (T697, QA-26
+/// no. 5).
 ///
-/// Fixed rather than taken from the material: every point of the grid has to be encoded the
-/// same way, or the scores compare encodes rather than bitrates.
-pub const KEYFRAME_EVERY: u32 = 48;
+/// The premise of every number here is that what is measured is what will be made. It was
+/// not: the measurement used a keyframe every 48 frames (once a second on 48-frame material,
+/// once every two on 24-frame) and a ceiling in whole megabits (at 1 Mbit/s it let 2 through,
+/// where production allows 1.1), and an HDR source was compared raw while the rung made from
+/// it is brought down to the ordinary range. Now the keyframe
+/// spacing is the rung's own (one a second, `ladder_build::shared_gop`), the ceiling and the
+/// buffer are `convert_plan::peak_control` in kilobits, the picture is eight-bit 4:2:0 at the
+/// High profile as production writes it, and an HDR source goes through the same
+/// [`crate::media::convert::TONEMAP_CHAIN`] on both sides of the comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Recipe {
+    /// Frames between keyframes: the source's frame rate, as production uses.
+    pub gop: u32,
+    /// Whether HDR is brought down to the ordinary range — then on both sides.
+    pub tonemap: bool,
+}
+
+impl Recipe {
+    /// The recipe for material of this frame rate and colour transfer.
+    pub fn for_material(fps: u32, color_transfer: Option<&str>) -> Self {
+        Self {
+            gop: fps.max(1),
+            tonemap: crate::domain::source::is_hdr_transfer(color_transfer),
+        }
+    }
+
+    /// The recipe for a stored measurement's material. A row written before the material
+    /// was kept says nothing about HDR, and is measured as the ordinary range.
+    pub fn of_run(run: &crate::store::measurements::Run) -> Self {
+        Self::for_material(
+            run.fps,
+            run.material
+                .as_ref()
+                .and_then(|m| m.color_transfer.as_deref()),
+        )
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum VmafError {
@@ -117,6 +152,7 @@ pub async fn measure_point(
     chunk_s: u64,
     cell: Cell,
     encoder: &Encoder,
+    recipe: &Recipe,
     cancel: &CancellationToken,
 ) -> Result<Sampled, VmafError> {
     let ffmpeg_bin = ffmpeg::locate("ffmpeg")?;
@@ -130,7 +166,19 @@ pub async fn measure_point(
             return Err(VmafError::Cancelled);
         }
 
-        match encode_chunk(&ffmpeg_bin, &work, source, *at_s, chunk_s, cell, encoder).await {
+        let encoded = encode_chunk(
+            &ffmpeg_bin,
+            &work,
+            source,
+            *at_s,
+            chunk_s,
+            cell,
+            encoder,
+            (source_width, source_height),
+            recipe,
+        )
+        .await;
+        match encoded {
             Ok(()) => {}
             Err(e) => {
                 tracing::debug!(at_s, ?cell, error = %e, "a chunk of this point would not encode");
@@ -150,6 +198,7 @@ pub async fn measure_point(
             chunk_s,
             source_width,
             source_height,
+            recipe,
         )
         .await;
 
@@ -229,6 +278,7 @@ impl Drop for Workspace {
 }
 
 /// Encode one chunk at this point of the grid.
+#[allow(clippy::too_many_arguments)]
 async fn encode_chunk(
     ffmpeg_bin: &Path,
     work: &Workspace,
@@ -237,9 +287,22 @@ async fn encode_chunk(
     chunk_s: u64,
     cell: Cell,
     encoder: &Encoder,
+    source_size: (u32, u32),
+    recipe: &Recipe,
 ) -> Result<(), VmafError> {
-    let args = chunk_args(source, at_s, chunk_s, cell, encoder);
+    let args = chunk_args(source, at_s, chunk_s, cell, encoder, source_size, recipe);
     run_in(ffmpeg_bin, &work.dir, &args).await
+}
+
+/// The width a picture of `source_size` has at `height`, as `scale=-2:height` makes it: the
+/// aspect kept, rounded to an even number.
+fn width_at(source_size: (u32, u32), height: u32) -> u32 {
+    let (w, h) = source_size;
+    if h == 0 {
+        return w;
+    }
+    let exact = f64::from(w) * f64::from(height) / f64::from(h);
+    ((exact / 2.0).round() as u32 * 2).max(2)
 }
 
 /// The arguments that encode one chunk, apart from the running of them.
@@ -260,14 +323,39 @@ async fn encode_chunk(
 ///
 /// Matroska, because that is what every measurement in R-45 through R-48 was taken with: the
 /// same cell through this path now gives 96.37 against the script's 96.38.
+///
+/// **And encoded by the production recipe** (T697, [`Recipe`]): the picture filtered as
+/// `media::convert` filters a rung (HDR brought down the same way, then the height, then
+/// eight-bit 4:2:0), the ceiling and buffer of `convert_plan::peak_control`, the High profile
+/// at the level the rung would carry, and a keyframe every [`Recipe::gop`] frames.
 pub fn chunk_args(
     source: &Path,
     at_s: u64,
     chunk_s: u64,
     cell: Cell,
     encoder: &Encoder,
+    source_size: (u32, u32),
+    recipe: &Recipe,
 ) -> Vec<String> {
-    let ceiling = ceiling_mbps(cell.bitrate_mbps);
+    let target_kbps = (cell.bitrate_mbps * 1000) as u32;
+    // Kilobits, +10 %, strictly above the target — production's own arithmetic. The script's
+    // whole megabits (`ceiling_mbps`) let a 1 Mbit/s point peak at 2 where the rung made from
+    // it may reach 1.1.
+    let (maxrate_kbps, bufsize_kbps) = crate::domain::convert_plan::peak_control(target_kbps);
+    let mut filter = Vec::new();
+    if recipe.tonemap {
+        filter.push(String::from(super::convert::TONEMAP_CHAIN));
+    }
+    // `-2` rather than a width of our own: the width follows the height and stays divisible
+    // by two, which keeps the aspect of anamorphic and side-by-side material.
+    filter.push(format!("scale=-2:{}", cell.height));
+    filter.push(String::from("format=yuv420p"));
+    let level = crate::domain::convert_plan::h264_level(
+        width_at(source_size, cell.height),
+        cell.height,
+        recipe.gop,
+    );
+
     let mut args: Vec<String> = vec![
         "-nostdin".into(),
         "-y".into(),
@@ -282,10 +370,8 @@ pub fn chunk_args(
         source.to_string_lossy().into_owned(),
         "-map".into(),
         "0:v:0".into(),
-        // `-2` rather than a width of our own: the width follows the height and stays
-        // divisible by two, which keeps the aspect of anamorphic and side-by-side material.
         "-vf".into(),
-        format!("scale=-2:{}", cell.height),
+        filter.join(","),
         "-c:v".into(),
         encoder.ffmpeg_name().to_owned(),
     ];
@@ -294,19 +380,26 @@ pub fn chunk_args(
     // nobody asked: the whole premise is that what is measured here is what will be made.
     let family = super::encoder_args::family_of(encoder);
     args.extend(super::encoder_args::quality_preset(family));
+    // Buffer equal to the ceiling. A larger one lets bursts through above it, which is what
+    // froze viewers once: ceiling 45, buffer 60, peaks at 54.
     args.extend(super::encoder_args::bitrate_capped(
-        (cell.bitrate_mbps * 1000) as u32,
-        (ceiling * 1000) as u32,
-        // Buffer equal to the ceiling. A larger one lets bursts through above it, which is
-        // what froze viewers once: ceiling 45, buffer 60, peaks at 54.
-        (ceiling * 1000) as u32,
+        target_kbps,
+        maxrate_kbps,
+        bufsize_kbps,
     ));
 
+    let gop = recipe.gop.to_string();
     for a in [
+        "-profile:v",
+        "high",
+        "-level",
+        level,
+        "-pix_fmt",
+        "yuv420p",
         "-g",
-        &KEYFRAME_EVERY.to_string(),
+        &gop,
         "-keyint_min",
-        &KEYFRAME_EVERY.to_string(),
+        &gop,
         "-an",
         "-f",
         MEASURE_CONTAINER,
@@ -328,19 +421,32 @@ pub fn chunk_args(
 /// scaler does the stretching, whether the two are put on one clock — and every one of them
 /// changes the number without changing the shape of the answer. They lived where no check
 /// could look at them until T490.
+///
+/// **The reference is seen as the rung will show it** (T697): an HDR source goes through the
+/// same [`crate::media::convert::TONEMAP_CHAIN`] the encode went through, and both sides are
+/// eight-bit 4:2:0 — the picture production writes. Compared raw, an HDR reference scored the
+/// tonemapping as loss, and a ten-bit one was matched against an eight-bit encode by whatever
+/// conversion the filter graph chose by itself. The reference is never resized.
 pub fn score_args(
     source: &Path,
     at_s: u64,
     chunk_s: u64,
     source_width: u32,
     source_height: u32,
+    recipe: &Recipe,
 ) -> Vec<String> {
+    let picture = if recipe.tonemap {
+        format!("{},format=yuv420p", super::convert::TONEMAP_CHAIN)
+    } else {
+        String::from("format=yuv420p")
+    };
     // The reference is the source's own frames; the distorted one is stretched back up to
     // meet it. `setpts` on both puts them on the same clock — without it the two inputs
     // start at different timestamps and the filter compares frame 0 against frame 240.
     let graph = format!(
-        "[0:v]setpts=PTS-STARTPTS[r];\
-         [1:v]scale={source_width}:{source_height}:flags=bicubic,setpts=PTS-STARTPTS[d];\
+        "[0:v]{picture},setpts=PTS-STARTPTS[r];\
+         [1:v]scale={source_width}:{source_height}:flags=bicubic,format=yuv420p,\
+         setpts=PTS-STARTPTS[d];\
          [d][r]libvmaf=n_threads={VMAF_THREADS}:log_fmt=json:log_path={}",
         Workspace::SCORE
     );
@@ -366,6 +472,7 @@ pub fn score_args(
 }
 
 /// Score one encoded chunk against the source it came from.
+#[allow(clippy::too_many_arguments)]
 async fn score_chunk(
     ffmpeg_bin: &Path,
     work: &Workspace,
@@ -374,8 +481,9 @@ async fn score_chunk(
     chunk_s: u64,
     source_width: u32,
     source_height: u32,
+    recipe: &Recipe,
 ) -> Result<f64, VmafError> {
-    let args = score_args(source, at_s, chunk_s, source_width, source_height);
+    let args = score_args(source, at_s, chunk_s, source_width, source_height, recipe);
 
     run_in(ffmpeg_bin, &work.dir, &args).await?;
 

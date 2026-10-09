@@ -185,7 +185,15 @@ async fn try_grid_encode(
 ) -> Result<(), String> {
     std::fs::create_dir_all(work_dir)
         .map_err(|e| format!("could not make {}: {e}", work_dir.display()))?;
-    let args = vmaf::chunk_args(source, at_s, seconds, cell, encoder);
+    let args = vmaf::chunk_args(
+        source,
+        at_s,
+        seconds,
+        cell,
+        encoder,
+        (1920, 1080),
+        &vmaf::Recipe::for_material(24, None),
+    );
     let mut child = ManagedProcess::spawn_in(Some(work_dir), &ffmpeg_bin.to_string_lossy(), &args)
         .map_err(|e| format!("could not start the grid-point encode: {e}"))?;
     let (_stdout, stderr) = child.take_output();

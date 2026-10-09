@@ -65,6 +65,15 @@ pub struct SourceFile {
 /// The marks of HDR in a colour transfer characteristic.
 const HDR_TRANSFERS: [&str; 4] = ["smpte2084", "arib-std-b67", "smpte428", "bt2020-10"];
 
+/// Whether a colour transfer characteristic is one of HDR's (T697: asked of a measurement's
+/// stored material as well as of a source). Not knowing is not HDR.
+pub fn is_hdr_transfer(transfer: Option<&str>) -> bool {
+    transfer.is_some_and(|t| {
+        let t = t.to_ascii_lowercase();
+        HDR_TRANSFERS.iter().any(|h| t == *h)
+    })
+}
+
 impl SourceFile {
     /// The track worth offering by default.
     ///
@@ -87,13 +96,7 @@ impl SourceFile {
     /// Not important in itself: such a picture has to be brought down to the ordinary
     /// range, and that means the stream can no longer be copied without re-encoding.
     pub fn is_hdr(&self) -> bool {
-        match &self.color_transfer {
-            Some(t) => {
-                let t = t.to_ascii_lowercase();
-                HDR_TRANSFERS.iter().any(|h| t == *h)
-            }
-            None => false,
-        }
+        is_hdr_transfer(self.color_transfer.as_deref())
     }
 
     /// How many pixels there are in a frame.

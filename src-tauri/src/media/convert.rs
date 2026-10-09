@@ -129,6 +129,15 @@ pub fn build_args(job: &ConvertJob<'_>) -> Vec<String> {
     args
 }
 
+/// How HDR is brought down to the ordinary range — in the production encode and, the same
+/// way, on both sides of a quality measurement (T697).
+///
+/// Software tonemapping through zscale. The GPU path (libplacebo/Vulkan) is faster but needs a
+/// working Vulkan stack, and on a machine without one it fails at startup rather than falling
+/// back. Correct-everywhere beats fast-sometimes for a step that runs once per file.
+pub const TONEMAP_CHAIN: &str = "zscale=transfer=linear:npl=100,tonemap=tonemap=hable:desat=0,\
+     zscale=primaries=bt709:transfer=bt709:matrix=bt709";
+
 /// The `-vf` chain, if any filtering is needed at all.
 ///
 /// Kept as one chain because FFmpeg accepts only one `-vf`; a second one silently
@@ -137,14 +146,7 @@ fn video_filter(job: &ConvertJob<'_>) -> Option<String> {
     let mut steps: Vec<String> = Vec::new();
 
     if job.plan.tonemap {
-        // Software tonemapping through zscale. The GPU path (libplacebo/Vulkan)
-        // is faster but needs a working Vulkan stack, and on a machine without
-        // one it fails at startup rather than falling back. Correct-everywhere
-        // beats fast-sometimes for a step that runs once per file.
-        steps.push(String::from(
-            "zscale=transfer=linear:npl=100,tonemap=tonemap=hable:desat=0,\
-             zscale=primaries=bt709:transfer=bt709:matrix=bt709",
-        ));
+        steps.push(String::from(TONEMAP_CHAIN));
     }
 
     if let Some(height) = target_height(job) {

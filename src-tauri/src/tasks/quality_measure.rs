@@ -246,6 +246,8 @@ async fn measure_one(
         job.run.chunk_s,
         cell,
         job.encoder,
+        // Encoded and compared the way the rungs will be made (T697).
+        &vmaf::Recipe::of_run(job.run),
         &ctx.cancel_token(),
     )
     .await
