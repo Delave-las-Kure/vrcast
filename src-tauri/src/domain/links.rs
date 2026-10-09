@@ -77,7 +77,7 @@ pub fn qualities_of(
             }
         })
         .collect();
-    out.sort_by(|a, b| b.bitrate_bps.cmp(&a.bitrate_bps));
+    out.sort_by_key(|q| std::cmp::Reverse(q.bitrate_bps));
     out
 }
 

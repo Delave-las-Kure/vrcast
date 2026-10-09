@@ -835,7 +835,7 @@ fn quality_links_of(state: &AppState, row: &VideoRow) -> Vec<crate::domain::link
             }
         })
         .collect();
-    out.sort_by(|a, b| b.bitrate_bps.cmp(&a.bitrate_bps));
+    out.sort_by_key(|q| std::cmp::Reverse(q.bitrate_bps));
     out.dedup_by(|a, b| a.origin == b.origin);
     out
 }
