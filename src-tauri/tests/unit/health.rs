@@ -261,3 +261,50 @@ fn a_reading_that_can_only_say_fine_says_why_it_cannot_say_more() {
          the module's own header promises that a choice is marked plainly."
     );
 }
+
+/// T711: the connection table read before and after the load, in one command, and taken
+/// apart again — the load as before, the two readings with their own times.
+#[test]
+fn the_load_and_the_connections_around_it_are_read_apart() {
+    use vrcast_studio_lib::server::health::{
+        load_with_connections_command, read_load_with_connections,
+    };
+    let command = load_with_connections_command();
+    assert_eq!(command.matches("ss -tin").count(), 2, "{command}");
+    let said = "--- vrcast connections before\n\
+1787707000.0\n\
+Recv-Q Send-Q Local Address:Port Peer Address:Port\n\
+0 0 [::ffff:172.18.0.2]:443 [::ffff:203.0.113.4]:5000\n\
+\t cubic bytes_acked:100 segs_out:10 busy:1000ms retrans:0/0\n\
+--- vrcast load\n\
+out_mbit_s=12.50\n\
+disk_read_mb_s=0.00\n\
+cpu_busy=0.020\n\
+capacity_mbit_s=1000\n\
+cache_mb=900\n\
+memory_mb=1000\n\
+address=172.18.0.2\n\
+--- vrcast connections after\n\
+1787707005.0\n\
+Recv-Q Send-Q Local Address:Port Peer Address:Port\n\
+0 0 [::ffff:172.18.0.2]:443 [::ffff:203.0.113.4]:5000\n\
+\t cubic bytes_acked:625100 segs_out:500 busy:6000ms retrans:0/0\n";
+    let (live, polls) = read_load_with_connections(said);
+    assert_eq!(live.load.out_mbit_s, 12.5);
+    assert_eq!(live.load.capacity_mbit_s, 1000.0);
+    assert_eq!(live.addresses, vec![String::from("172.18.0.2")]);
+    let (before, after) = polls.expect("the two readings were not read");
+    let links = vrcast_studio_lib::domain::stalls::live_links(&before, &after);
+    let it = links["203.0.113.4"];
+    assert!((it.mbit_s - 1.0).abs() < 1e-9, "{it:?}");
+    assert_eq!(it.busy_share, Some(1.0));
+}
+
+/// Without the readings — an older `ss`, a server that would not say — the load still stands.
+#[test]
+fn the_load_stands_without_the_connections() {
+    let said = "--- vrcast connections before\n--- vrcast load\nout_mbit_s=3.00\n--- vrcast connections after\n";
+    let (live, polls) = vrcast_studio_lib::server::health::read_load_with_connections(said);
+    assert_eq!(live.load.out_mbit_s, 3.0);
+    assert!(polls.is_none());
+}

@@ -34,6 +34,9 @@ pub struct ServerInput {
     pub video_dir: Option<String>,
     pub cdn_base: Option<String>,
     pub ipv6_mode: Option<Ipv6Mode>,
+    /// T712 — the hosting plan's speed, Mbit/s. Absent or empty — not given.
+    #[serde(default)]
+    pub tariff_mbit: Option<u32>,
 }
 
 /// How one step of the connection check went.
@@ -93,6 +96,7 @@ fn profile_from(input: ServerInput, id: String, secret_ref: String) -> ServerPro
         .unwrap_or_else(|| String::from(crate::domain::server_profile::DEFAULT_VIDEO_DIR));
     p.cdn_base = input.cdn_base;
     p.ipv6_mode = input.ipv6_mode;
+    p.tariff_mbit = input.tariff_mbit;
     p.secret_ref = secret_ref;
     p
 }

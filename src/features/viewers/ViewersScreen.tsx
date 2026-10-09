@@ -136,6 +136,21 @@ function worthRetrying(error: AppError): boolean {
   return error.code === "SSH_UNREACHABLE";
 }
 
+/**
+ * Above this share of the plan going out, the server's own link is nearly full — the same
+ * four fifths the diagnosis uses before it names the server's link (T712).
+ */
+const PLAN_NEARLY_FULL = 0.8;
+
+/** Everything going out to the viewers now, bits a second — those with a speed worked out. */
+function goingOut(viewers: Viewer[]): number {
+  return viewers.reduce((sum, v) => sum + (v.delivery_bps ?? 0), 0);
+}
+
+function loadIsHigh(viewers: Viewer[], tariffMbit: number): boolean {
+  return goingOut(viewers) > PLAN_NEARLY_FULL * tariffMbit * 1_000_000;
+}
+
 export function ViewersScreen() {
   const t = useT();
   const { lang } = useLang();
@@ -332,6 +347,20 @@ export function ViewersScreen() {
           {words.nobody}
         </p>
       )}
+
+      {viewers !== null && viewers.length > 0 && server.tariff_mbit ? (
+        // T712 — what is going out to the viewers against the plan on the server's card.
+        // Only with a plan written there: the screen does not read the network card, and
+        // without the owner's figure there is nothing honest to weigh the sum against.
+        <p
+          className={loadIsHigh(viewers, server.tariff_mbit) ? "notice notice--warning" : "hint"}
+          data-testid="viewers-load"
+          data-high={loadIsHigh(viewers, server.tariff_mbit) ? "true" : "false"}
+        >
+          {fill(words.loadTariff, { out: goingOut(viewers), tariff: server.tariff_mbit }, t, lang)}
+          {loadIsHigh(viewers, server.tariff_mbit) && <> — {words.loadHigh}</>}
+        </p>
+      ) : null}
 
       {viewers !== null && viewers.length > 0 && (
         <table

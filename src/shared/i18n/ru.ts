@@ -328,6 +328,7 @@ export const ruCore: CatalogueCore = {
     PROFILE_HOST_NOT_BARE:
       "Адрес сервера не должен содержать пробелов и косых черт — только адрес, без ссылки.",
     PROFILE_PORT_RANGE: "Порт должен быть от 1 до 65535. Обычный порт SSH — 22.",
+    PROFILE_TARIFF_RANGE: "Тариф больше {max} Мбит/с — проверьте число.",
     PROFILE_USER_EMPTY: "Укажите пользователя, под которым приложение входит на сервер.",
     PROFILE_USER_HAS_SPACES: "Имя пользователя не должно содержать пробелов.",
     PROFILE_SECRET_REF_EMPTY: "Не задана ссылка на секрет в хранилище системы.",
@@ -662,6 +663,8 @@ export const ruCore: CatalogueCore = {
     STALLS_KEEPING_UP: "Зритель успевает: {ratio|num}× реального времени, канал {mbit_s|mbit}.",
     STALLS_SERVER_LINK:
       "Упирается канал самого сервера: отдаётся {out_mbit_s|mbit} из {capacity_mbit_s|mbit} по сетевой карте.",
+    STALLS_SERVER_LINK_TARIFF:
+      "Упирается канал самого сервера: отдаётся {out_mbit_s|mbit} из {capacity_mbit_s|mbit} по тарифу.",
     STALLS_DISK:
       "Упирается диск: читается {disk_read_mb_s|num} МБ/с, получено {ratio|num}× реального времени.",
     STALLS_FILE_PEAKS:
@@ -670,6 +673,12 @@ export const ruCore: CatalogueCore = {
       "Сервер отдаёт куски быстрее нужного: {in_download_mbit_s|mbit} при нужных {average_mbit|mbit}, а по часам выходит {mbit_s|mbit}, доля {ratio|num}. Плеер не просит дальше или канал зрителя медленнее, чем видно серверу. Перезапусков: {restarts}, пропусков: {skipped}.",
     STALLS_VIEWER_LINK:
       "Не хватает канала зрителя: {ratio|num}× при {mbit_s|mbit} (в закачках {in_download_mbit_s|mbit}), а этому качеству нужно {need_mbit|mbit}. Пропусков: {skipped}, перезапусков: {restarts}.",
+    STALLS_PLAYER_LIVE:
+      "Канал ни при чём: до зрителя доходит, но плеер не забирает — {held_pct}% времени. Сейчас {live_mbit|mbit}, получено {ratio|num}× реального времени.",
+    STALLS_LINK_FINE_LIVE:
+      "Канал ни при чём: сейчас несёт {live_mbit|mbit} при нужных {need_mbit|mbit}. Отстаёт плеер — {ratio|num}× реального времени.",
+    STALLS_VIEWER_LINK_LIVE:
+      "Не хватает канала зрителя: сейчас несёт {live_mbit|mbit} при нужных {need_mbit|mbit}, {ratio|num}× реального времени. Отправлено повторно: {resent_pct|num}%.",
     STALLS_UNCLEAR: "Отстаёт: {ratio|num}× реального времени. Причину по этим данным не назвать.",
     VIDEO_ALREADY_LISTED: "Это видео уже в списке",
     RUNG_FILE_CLAIMED:
@@ -944,6 +953,7 @@ const ui = {
     stallsRestarts: "Перезапусков плеера",
     stallsWatching: "Смотрит",
     stallsNeeds: "Нужно этому качеству",
+    stallsLive: "Сейчас по соединению",
     stallsLoad: "Что делал сервер",
     stallsLoadCpu: "Процессор",
     stallsLoadDisk: "Чтение с диска",
@@ -951,6 +961,7 @@ const ui = {
     unitSeconds: "с",
     stallsLoadOut: "Отдача",
     stallsLoadCapacity: "из возможных по сетевой карте",
+    stallsLoadTariff: "из положенных по тарифу",
     stallsCapacityUnknown: "ёмкость канала не выяснена — виновным он не назначается",
 
     bitrateTitle: "Пики битрейта файла",
@@ -1047,6 +1058,8 @@ const ui = {
       stallsHint: "Данные не идут. Если надолго — просмотр оборвался.",
     },
     watchingNow: "смотрят сейчас",
+    loadTariff: "Отдаётся {out|bitrate} из {tariff|mbit} по тарифу",
+    loadHigh: "канал сервера почти занят",
     reconnecting: "Связь с сервером потеряна — переподключаюсь…",
     reconnectingTry: "Попытка {n}.",
     staleAge: "Список {age} назад — сейчас может быть другим.",
@@ -1111,6 +1124,8 @@ const ui = {
     fieldVideoDir: "Каталог с видео на сервере",
     fieldVideoDirPlaceholder: "по умолчанию",
     fieldCdn: "Адрес CDN",
+    fieldTariff: "Тариф, Мбит/с",
+    fieldTariffPlaceholder: "по сетевой карте",
     fieldCdnPlaceholder: "нет",
     checking: "Проверяем…",
     next: "Дальше",

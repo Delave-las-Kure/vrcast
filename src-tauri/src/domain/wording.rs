@@ -62,6 +62,8 @@ detail_codes! {
     ProfileHostEmpty => "PROFILE_HOST_EMPTY",
     ProfileHostNotBare => "PROFILE_HOST_NOT_BARE",
     ProfilePortRange => "PROFILE_PORT_RANGE",
+    /// `max` — the plan's speed on the server card is above any real one (T712).
+    ProfileTariffRange => "PROFILE_TARIFF_RANGE",
     ProfileUserEmpty => "PROFILE_USER_EMPTY",
     ProfileUserHasSpaces => "PROFILE_USER_HAS_SPACES",
     ProfileSecretRefEmpty => "PROFILE_SECRET_REF_EMPTY",
@@ -575,6 +577,9 @@ detail_codes! {
     StallsKeepingUp => "STALLS_KEEPING_UP",
     /// `out_mbit_s`, `capacity_mbit_s`.
     StallsServerLink => "STALLS_SERVER_LINK",
+    /// `out_mbit_s`, `capacity_mbit_s` — the capacity being the plan on the server card
+    /// (T712), not the network card.
+    StallsServerLinkTariff => "STALLS_SERVER_LINK_TARIFF",
     /// `disk_read_mb_s`, `ratio`.
     StallsDisk => "STALLS_DISK",
     /// `mbit_s`, `average_mbit`, `peak_10s_mbit`.
@@ -583,6 +588,16 @@ detail_codes! {
     /// what the viewer's rung needs, and their speed under it (T705).
     StallsViewerLink => "STALLS_VIEWER_LINK",
     StallsThePlayer => "STALLS_THE_PLAYER",
+    /// `ratio`, `held_pct`, `live_mbit`. T711, from the viewer's live connection: what was
+    /// sent reached them, and their side was full and taking nothing for `held_pct` per cent
+    /// of the time — the player, not the link.
+    StallsPlayerLive => "STALLS_PLAYER_LIVE",
+    /// `ratio`, `live_mbit`, `need_mbit`. T711: the live connection carries what the rung
+    /// needs right now — not the link.
+    StallsLinkFineLive => "STALLS_LINK_FINE_LIVE",
+    /// `ratio`, `live_mbit`, `need_mbit`, `resent_pct`. T711: the live connection had
+    /// something on its way most of the time and carried less than the rung needs.
+    StallsViewerLinkLive => "STALLS_VIEWER_LINK_LIVE",
     /// `ratio`, `mbit_s`, `need_mbit` (either may be absent). Behind real time, and nothing
     /// measured says why (T705) — said instead of blaming the viewer's link without a number.
     StallsUnclear => "STALLS_UNCLEAR",

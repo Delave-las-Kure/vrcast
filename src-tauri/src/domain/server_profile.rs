@@ -107,7 +107,20 @@ pub struct ServerProfile {
     pub host_fingerprint: Option<String>,
     pub ipv6_mode: Option<Ipv6Mode>,
     pub is_active: bool,
+    /// T712 — what the hosting plan promises going out, in Mbit/s, as the owner wrote it on
+    /// the server's card. The diagnosis and the Viewers screen weigh the load against this;
+    /// without it, against the network card's own speed, and say so. `None` — not given.
+    ///
+    /// Asked of the person rather than measured: what a plan guarantees is written in the
+    /// plan, and the network card of a virtual machine reports something else (QA-26 №12).
+    #[serde(default)]
+    pub tariff_mbit: Option<u32>,
 }
+
+/// The largest plan a server card takes, in Mbit/s (T712). A hundred gigabits: anything
+/// above is a slip of the keyboard, and a capacity that large would keep the server's own
+/// link out of every diagnosis.
+pub const MAX_TARIFF_MBIT: u32 = 100_000;
 
 /// What exactly is wrong with a profile.
 ///
@@ -160,6 +173,7 @@ impl ServerProfile {
             host_fingerprint: None,
             ipv6_mode: None,
             is_active: false,
+            tariff_mbit: None,
         }
     }
 
@@ -194,6 +208,8 @@ impl ServerProfile {
             .take()
             .map(|f| f.trim().to_owned())
             .filter(|f| !f.is_empty());
+        // Nought is the field left at nothing, not a plan of nothing at all.
+        self.tariff_mbit = self.tariff_mbit.filter(|t| *t > 0);
 
         // A key means something only with key sign-in. Keeping it with password
         // sign-in means storing a path that will one day be applied to the wrong
@@ -279,6 +295,13 @@ impl ServerProfile {
             if let Err(key) = check_cdn_base(base) {
                 problems.push(ProfileProblem::new("cdn_base", key));
             }
+        }
+
+        if self.tariff_mbit.is_some_and(|t| t > MAX_TARIFF_MBIT) {
+            problems.push(ProfileProblem::with(
+                "tariff_mbit",
+                Detail::new(DetailCode::ProfileTariffRange).with("max", MAX_TARIFF_MBIT),
+            ));
         }
 
         if problems.is_empty() {

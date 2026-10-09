@@ -12,6 +12,7 @@
 
 use vrcast_studio_lib::domain::access_log::parse_line;
 use vrcast_studio_lib::domain::stalls::{self, Cause, FileShape, Load, NotAViewer, Watcher};
+use vrcast_studio_lib::domain::wording::DetailCode;
 
 /// The addresses the fixture was built with.
 const STARVING: &str = "203.0.113.24";
@@ -149,6 +150,7 @@ fn the_server_asleep_points_at_the_viewers_link() {
         out_mbit_s: 18.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(&it, Some(&asleep), None);
     assert_eq!(verdict.cause, Cause::ViewerLink);
@@ -178,6 +180,7 @@ fn without_what_the_film_needs_the_link_is_not_blamed() {
         out_mbit_s: 18.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(it, Some(&asleep), None);
     assert_eq!(verdict.cause, Cause::Unclear);
@@ -216,6 +219,7 @@ fn a_busy_server_takes_the_blame_itself() {
         out_mbit_s: 900.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(it, Some(&flat_out), None);
     assert_eq!(
@@ -244,6 +248,7 @@ fn a_wide_link_and_a_peaky_file_point_at_the_file() {
         out_mbit_s: 18.0,
         capacity_mbit_s: 940.0,
         cache_small: false,
+        capacity_by: Default::default(),
     };
     let verdict = stalls::explain(it, Some(&asleep), Some(&peaky));
     assert_eq!(verdict.cause, Cause::TheFileItself);
@@ -314,6 +319,7 @@ fn a_viewer_whose_link_carries_it_is_not_told_their_link_is_the_problem() {
         failures: 0,
         rung: Some(String::from("v4")),
         need_mbit: None,
+        live: None,
     };
     let film = FileShape {
         average_mbit: 4.0,
@@ -366,6 +372,7 @@ fn a_viewer_whose_link_really_is_thin_is_still_told_so() {
         failures: 0,
         rung: Some(String::from("v4")),
         need_mbit: None,
+        live: None,
     };
     let film = FileShape {
         average_mbit: 4.0,
@@ -397,6 +404,7 @@ fn without_a_film_to_compare_against_nothing_is_claimed_about_the_player() {
         failures: 0,
         rung: Some(String::from("v4")),
         need_mbit: None,
+        live: None,
     };
     let verdict = stalls::explain(&watcher, None, None);
     assert_eq!(verdict.cause, Cause::Unclear);
@@ -408,4 +416,260 @@ fn without_a_film_to_compare_against_nothing_is_claimed_about_the_player() {
         ..watcher
     };
     assert_eq!(stalls::explain(&known, None, None).cause, Cause::ThePlayer);
+}
+
+// ---------- T711: the viewer's own connection tells the link from the player ----------
+
+/// Two readings of `ss -tin`, five seconds apart, in the shape the container printed them
+/// (2026-08-26): one viewer, one connection, its figures as given.
+fn polls(
+    ip: &str,
+    (acked1, busy1, held1, segs1, resent1): (u64, u64, u64, u64, u64),
+    (acked2, busy2, held2, segs2, resent2): (u64, u64, u64, u64, u64),
+) -> (
+    vrcast_studio_lib::domain::connections::Poll,
+    vrcast_studio_lib::domain::connections::Poll,
+) {
+    let one = |at: &str, acked: u64, busy: u64, held: u64, segs: u64, resent: u64| {
+        let rwnd = if held > 0 {
+            format!(" rwnd_limited:{held}ms(50.0%)")
+        } else {
+            String::new()
+        };
+        vrcast_studio_lib::domain::connections::parse_poll(&format!(
+            "{at}\nRecv-Q Send-Q Local Address:Port Peer Address:Port Process\n\
+             0      0      [::ffff:172.18.0.2]:80 [::ffff:{ip}]:43512\n\
+             \t cubic wscale:7,7 rto:204 rtt:0.5/0.25 mss:1448 cwnd:10 bytes_acked:{acked} \
+             segs_out:{segs} delivery_rate 9400000bps busy:{busy}ms{rwnd} retrans:0/{resent}\n"
+        ))
+        .expect("the reading would not parse")
+    };
+    (
+        one("1787707000.0", acked1, busy1, held1, segs1, resent1),
+        one("1787707005.0", acked2, busy2, held2, segs2, resent2),
+    )
+}
+
+fn starving_with(live: Option<stalls::LiveLink>, need: Option<f64>) -> Watcher {
+    Watcher {
+        client_ip: String::from("203.0.113.40"),
+        watching: Some(String::from("film")),
+        segments: 5,
+        bytes: 9_500_000,
+        first: time::OffsetDateTime::UNIX_EPOCH,
+        last: time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(60),
+        elapsed_s: 60.0,
+        content_ratio: Some(0.4),
+        mbit_s: Some(1.2),
+        // What the log said for the viewer held to 0.4 Mbit/s on 2026-10-09: the server
+        // finishing pieces into its buffers, not the viewer receiving them.
+        in_download_mbit_s: Some(6.16),
+        skipped: Vec::new(),
+        restarts: 0,
+        reinits: 0,
+        failures: 0,
+        rung: Some(String::from("v3")),
+        need_mbit: need,
+        live,
+    }
+}
+
+#[test]
+fn the_live_link_is_worked_out_from_what_the_viewer_confirmed_over_the_stretch() {
+    // 2.5 MB confirmed in 5 s, busy the whole time, nothing held, 4 of 2000 sent again.
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (3_500_000, 15_000, 0, 3000, 4),
+    );
+    let links = stalls::live_links(&before, &after);
+    let it = links["203.0.113.40"];
+    assert!((it.span_s - 5.0).abs() < 1e-6);
+    assert!((it.mbit_s - 4.0).abs() < 1e-6, "{it:?}");
+    assert_eq!(it.busy_share, Some(1.0));
+    assert!((it.busy_mbit_s.unwrap() - 4.0).abs() < 1e-6);
+    assert_eq!(it.held_share, Some(0.0));
+    assert!((it.resent_share.unwrap() - 0.002).abs() < 1e-9);
+}
+
+#[test]
+fn a_connection_seen_in_one_reading_only_says_nothing() {
+    let (before, mut after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (3_500_000, 15_000, 0, 3000, 0),
+    );
+    // A new connection in the second reading: its whole life is not five seconds' delivery.
+    for row in &mut after.rows {
+        row.peer_port += 1;
+    }
+    assert!(stalls::live_links(&before, &after).is_empty());
+}
+
+#[test]
+fn a_viewer_whose_side_is_full_is_the_player_whatever_the_log_says() {
+    // Busy all five seconds, their side full for 4.5 of them: what arrived was not taken.
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 8_000, 1000, 0),
+        (1_250_000, 15_000, 12_500, 1200, 0),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    let verdict = stalls::explain(&starving_with(Some(live), Some(2.0)), None, None);
+    assert_eq!(verdict.cause, Cause::ThePlayer);
+    assert_eq!(verdict.say.key, DetailCode::StallsPlayerLive);
+    assert_eq!(
+        verdict.say.params.get("held_pct").and_then(|v| v.as_u64()),
+        Some(90)
+    );
+    // Without the rung's need too: being full is an answer on its own.
+    let verdict = stalls::explain(&starving_with(Some(live), None), None, None);
+    assert_eq!(verdict.say.key, DetailCode::StallsPlayerLive);
+}
+
+#[test]
+fn a_working_connection_carrying_less_than_the_rung_needs_is_the_link() {
+    // Busy all the time, never held, 0.25 MB in 5 s = 0.4 Mbit/s against a rung needing 2 —
+    // the case the log read as 6.16 Mbit/s "inside the downloads".
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (1_250_000, 15_000, 0, 1200, 30),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    let verdict = stalls::explain(&starving_with(Some(live), Some(2.0)), None, None);
+    assert_eq!(verdict.cause, Cause::ViewerLink, "{:?}", verdict.say);
+    assert_eq!(verdict.say.key, DetailCode::StallsViewerLinkLive);
+    assert_eq!(
+        verdict.say.params.get("live_mbit").and_then(|v| v.as_f64()),
+        Some(0.4)
+    );
+    assert_eq!(
+        verdict.say.params.get("need_mbit").and_then(|v| v.as_f64()),
+        Some(2.0)
+    );
+    assert_eq!(
+        verdict
+            .say
+            .params
+            .get("resent_pct")
+            .and_then(|v| v.as_f64()),
+        Some(15.0)
+    );
+}
+
+#[test]
+fn a_working_connection_carrying_what_the_rung_needs_is_not_the_link() {
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (6_000_000, 15_000, 0, 5000, 0),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    let verdict = stalls::explain(&starving_with(Some(live), Some(2.0)), None, None);
+    assert_eq!(verdict.cause, Cause::ThePlayer);
+    assert_eq!(verdict.say.key, DetailCode::StallsLinkFineLive);
+}
+
+#[test]
+fn a_connection_mostly_idle_leaves_the_log_to_say_what_it_can() {
+    // One second busy of five: they were hardly asking just now — a full buffer, perhaps,
+    // while the log's minutes say behind. The live reading decides nothing.
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (1_100_000, 11_000, 0, 1100, 0),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    let with = stalls::explain(&starving_with(Some(live), Some(2.0)), None, None);
+    let without = stalls::explain(&starving_with(None, Some(2.0)), None, None);
+    assert_eq!(with, without);
+    assert_eq!(with.say.key, DetailCode::StallsThePlayer);
+}
+
+#[test]
+fn a_viewer_keeping_up_is_left_alone_whatever_the_connection_says() {
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (1_250_000, 15_000, 0, 1200, 0),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    let mut fine = starving_with(Some(live), Some(2.0));
+    fine.content_ratio = Some(1.3);
+    assert_eq!(
+        stalls::explain(&fine, None, None).cause,
+        Cause::NothingWrong
+    );
+}
+
+#[test]
+fn a_side_full_whenever_anything_was_sent_is_the_player_even_if_little_was() {
+    // Measured on the stand 2026-10-09: a slow reader's connection busy a fifth of the
+    // stretch, their side full for nine tenths of that. A full side stops the sending, which
+    // is why such a connection is rarely busy at all.
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (1_900_000, 11_100, 990, 1600, 0),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    assert!(live.busy_share.unwrap() < stalls::LIVE_BUSY);
+    let verdict = stalls::explain(&starving_with(Some(live), Some(2.0)), None, None);
+    assert_eq!(verdict.say.key, DetailCode::StallsPlayerLive);
+
+    // Next to nothing sent at all: nothing to go on, the log says what it can.
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (1_010_000, 10_100, 100, 1010, 0),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    let verdict = stalls::explain(&starving_with(Some(live), Some(2.0)), None, None);
+    assert_eq!(verdict.say.key, DetailCode::StallsThePlayer);
+}
+
+// ---------- T712: the load weighed against the plan on the server's card ----------
+
+#[test]
+fn the_plan_on_the_card_is_what_the_load_is_weighed_against_and_it_is_said() {
+    let s = sifted();
+    let it = s.watchers.iter().find(|w| w.client_ip == STARVING).unwrap();
+    // 90 Mbit/s going out of a gigabit card: room to spare, by the card.
+    let by_card = Load {
+        cpu_busy: 0.05,
+        disk_read_mb_s: 0.0,
+        out_mbit_s: 90.0,
+        capacity_mbit_s: 1000.0,
+        cache_small: false,
+        capacity_by: Default::default(),
+    };
+    assert_ne!(
+        stalls::explain(it, Some(&by_card), None).cause,
+        Cause::ServerLink
+    );
+    // The same 90 out of a plan of 100: the server's own link is full — and said to be the
+    // plan's, not the card's.
+    let by_plan = by_card.against(Some(100));
+    assert_eq!(by_plan.capacity_mbit_s, 100.0);
+    assert_eq!(by_plan.capacity_by, stalls::CapacityBy::Tariff);
+    let verdict = stalls::explain(it, Some(&by_plan), None);
+    assert_eq!(verdict.cause, Cause::ServerLink);
+    assert_eq!(verdict.say.key, DetailCode::StallsServerLinkTariff);
+
+    // No plan: as before, by the card, and said so.
+    let flat_out = Load {
+        out_mbit_s: 900.0,
+        ..by_card.against(None)
+    };
+    assert_eq!(flat_out.capacity_by, stalls::CapacityBy::NetworkCard);
+    assert_eq!(
+        stalls::explain(it, Some(&flat_out), None).say.key,
+        DetailCode::StallsServerLink
+    );
+    // And the shape the interface reads.
+    assert_eq!(
+        serde_json::to_value(by_plan).unwrap()["capacity_by"],
+        "tariff"
+    );
 }

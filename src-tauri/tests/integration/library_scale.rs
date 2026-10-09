@@ -92,6 +92,7 @@ fn profile_via_relay(relay_port: u16) -> ServerInput {
         video_dir: Some(String::from(VIDEO_DIR)),
         cdn_base: None,
         ipv6_mode: None,
+        tariff_mbit: None,
     }
 }
 

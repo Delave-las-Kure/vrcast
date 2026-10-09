@@ -66,6 +66,7 @@ fn app_state() -> AppState {
             cdn_base: None,
             host_fingerprint: None,
             ipv6_mode: None,
+            tariff_mbit: None,
             is_active: true,
         },
     )
@@ -498,6 +499,48 @@ fn the_tidied_places_are_exactly_the_places_written() {
     );
     assert!(listed.contains("/usr/share/keyrings/caddy-stable-archive-keyring.gpg"));
     assert!(listed.contains("/etc/caddy/Caddyfile"));
+}
+
+/// T713: Caddy is the pinned release package, checked by its sum before dpkg sees it; the
+/// repository that answers 402 is not reached for any more, and its list is taken off.
+#[test]
+fn caddy_comes_from_the_pinned_release_checked_by_its_sum() {
+    use vrcast_studio_lib::server::deploy::packages::{
+        caddy_install_script, CADDY_DEBS, CADDY_RELEASES, CADDY_VERSION,
+    };
+    let script = caddy_install_script();
+    assert!(!script.contains("cloudsmith"), "{script}");
+    assert!(
+        !script.contains("apt-get"),
+        "Caddy through apt again: {script}"
+    );
+    assert!(script.contains(CADDY_RELEASES), "{script}");
+    assert!(
+        script.contains(&format!("ge {CADDY_VERSION}")),
+        "no version floor: {script}"
+    );
+    for (arch, sum) in CADDY_DEBS {
+        assert!(
+            script.contains(&format!("{arch}) sum={sum} ;;")),
+            "{arch}: {script}"
+        );
+    }
+    // The sum is checked before the install, and a mismatch stops the script.
+    let checked = script
+        .find("sha256sum -c")
+        .expect("the sum is never checked");
+    let installed = script.find("dpkg --force").expect("nothing installs it");
+    assert!(
+        checked < installed,
+        "installed before it is checked: {script}"
+    );
+    // dpkg's conffile question is answered in advance: nobody is there to answer it.
+    assert!(script.contains("--force-confold"), "{script}");
+    // An unknown machine kind is said, not guessed at.
+    assert!(
+        script.contains("has no release package for this machine"),
+        "{script}"
+    );
 }
 
 #[tokio::test]

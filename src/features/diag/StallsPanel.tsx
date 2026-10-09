@@ -54,7 +54,9 @@ export function StallsPanel({
         {stalls.load.capacity_mbit_s > 0 ? (
           <>
             {" "}
-            {words.stallsLoadCapacity}{" "}
+            {stalls.load.capacity_by === "tariff"
+              ? words.stallsLoadTariff
+              : words.stallsLoadCapacity}{" "}
             {formatBitrate(stalls.load.capacity_mbit_s * 1_000_000, lang)}
           </>
         ) : (
@@ -113,6 +115,14 @@ export function StallsPanel({
                   <dd data-testid={`needs-${w.client_ip}`}>
                     {speed(w.need_mbit ?? null, lang, nothing)}
                   </dd>
+                  {w.live && (
+                    <>
+                      <dt>{words.stallsLive}</dt>
+                      <dd data-testid={`live-${w.client_ip}`}>
+                        {speed(w.live.busy_mbit_s ?? w.live.mbit_s, lang, nothing)}
+                      </dd>
+                    </>
+                  )}
                   <dt>{words.stallsSkipped}</dt>
                   <dd>{w.skipped.length}</dd>
                   <dt>{words.stallsRestarts}</dt>

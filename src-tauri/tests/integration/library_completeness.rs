@@ -50,6 +50,7 @@ fn profile_for(server: &TestServer) -> ServerInput {
         video_dir: Some(String::from(VIDEO_DIR)),
         cdn_base: None,
         ipv6_mode: None,
+        tariff_mbit: None,
     }
 }
 

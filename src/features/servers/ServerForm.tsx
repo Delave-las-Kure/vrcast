@@ -218,6 +218,26 @@ export function ServerForm({
             placeholder={w.fieldCdnPlaceholder}
           />
         </label>
+        {/* T712 — what the hosting plan lets the server send. Empty: the network card's own
+            speed is what the load is weighed against, and the screens say so. */}
+        <label>
+          <span>{w.fieldTariff}</span>
+          <input
+            type="number"
+            min={1}
+            max={100000}
+            inputMode="numeric"
+            value={input.tariff_mbit ?? ""}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              onFieldChange(
+                "tariff_mbit",
+                e.target.value === "" || !(n > 0) ? null : Math.round(n),
+              );
+            }}
+            placeholder={w.fieldTariffPlaceholder}
+          />
+        </label>
       </details>
 
       <div className="form__actions">

@@ -115,6 +115,7 @@ export type DetailCode =
   | "PROFILE_HOST_EMPTY"
   | "PROFILE_HOST_NOT_BARE"
   | "PROFILE_PORT_RANGE"
+  | "PROFILE_TARIFF_RANGE"
   | "PROFILE_USER_EMPTY"
   | "PROFILE_USER_HAS_SPACES"
   | "PROFILE_SECRET_REF_EMPTY"
@@ -382,10 +383,15 @@ export type DetailCode =
   | "STALLS_TOO_SHORT"
   | "STALLS_KEEPING_UP"
   | "STALLS_SERVER_LINK"
+  | "STALLS_SERVER_LINK_TARIFF"
   | "STALLS_DISK"
   | "STALLS_FILE_PEAKS"
   | "STALLS_VIEWER_LINK"
   | "STALLS_THE_PLAYER"
+  // T711 — from the viewer's own connection, read live (`ss -tin`).
+  | "STALLS_PLAYER_LIVE"
+  | "STALLS_LINK_FINE_LIVE"
+  | "STALLS_VIEWER_LINK_LIVE"
   | "STALLS_UNCLEAR"
   // Videos in work (T672).
   | "VIDEO_ALREADY_LISTED"
@@ -449,6 +455,8 @@ export interface ServerProfile {
   host_fingerprint: string | null;
   ipv6_mode: Ipv6Mode | null;
   is_active: boolean;
+  /** T712 — the hosting plan's speed going out, Mbit/s; `null` — not given (then the network card). */
+  tariff_mbit?: number | null;
 }
 
 /** The fields the interface sends when creating or changing a profile. */
@@ -464,6 +472,8 @@ export interface ServerInput {
   video_dir: string | null;
   cdn_base: string | null;
   ipv6_mode: Ipv6Mode | null;
+  /** T712 — the hosting plan's speed, Mbit/s; `null` or absent — not given. */
+  tariff_mbit?: number | null;
 }
 
 /** `skipped` — the step was never reached: it stopped earlier (FR-003). */
@@ -891,6 +901,8 @@ export interface ServerLoad {
   /** Nought means "not determined", and the server's own link is then not among the suspects. */
   capacity_mbit_s: number;
   cache_small: boolean;
+  /** T712 — what the capacity is: the plan on the server's card, or the network card's speed. */
+  capacity_by?: "network_card" | "tariff";
 }
 
 export interface Watcher {
@@ -915,6 +927,23 @@ export interface Watcher {
   rung?: string | null;
   /** T705 — what that rung of that film needs, Mbit/s, from the set on the server. */
   need_mbit?: number | null;
+  /** T711 — their own connection while the diagnosis was asked; null when none was open. */
+  live?: LiveLink | null;
+}
+
+/** T711 — a viewer's connection read twice, five seconds apart (`ss -tin`). */
+export interface LiveLink {
+  span_s: number;
+  /** What reached the viewer over the stretch, Mbit/s. */
+  mbit_s: number;
+  /** What it carried while it had something to carry, Mbit/s. */
+  busy_mbit_s: number | null;
+  /** Share of the stretch with something on its way, 0..1. */
+  busy_share: number | null;
+  /** Share of that time their side was full, 0..1. */
+  held_share: number | null;
+  /** Share of what was sent that went again, 0..1. */
+  resent_share: number | null;
 }
 
 export type StallCause =

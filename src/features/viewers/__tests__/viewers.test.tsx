@@ -531,3 +531,41 @@ describe("the tables of places", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
+
+/** T712 — what goes out to the viewers, against the plan on the server's card. */
+describe("T712 — the load against the plan", () => {
+  it("with a plan on the card, says what goes out of it, and when it is nearly full", async () => {
+    mockServersList.mockResolvedValue([{ ...server, tariff_mbit: 10 }]);
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+
+    send?.(
+      update([
+        viewer({ delivery_bps: 2_000_000 }),
+        viewer({ ip: "203.0.113.5", delivery_bps: null }),
+      ]),
+    );
+    const line = await screen.findByTestId("viewers-load");
+    expect(line).toHaveTextContent("Отдаётся 2,0 Мбит/с из 10,0 Мбит/с по тарифу");
+    expect(line).toHaveAttribute("data-high", "false");
+
+    send?.(
+      update([
+        viewer({ delivery_bps: 5_000_000 }),
+        viewer({ ip: "203.0.113.5", delivery_bps: 4_000_000 }),
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("viewers-load")).toHaveAttribute("data-high", "true"),
+    );
+    expect(screen.getByTestId("viewers-load")).toHaveTextContent("канал сервера почти занят");
+  });
+
+  it("without a plan, as before: nothing weighed against a figure the screen does not have", async () => {
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+    send?.(update([viewer()]));
+    await waitFor(() => expect(screen.getByText("203.0.113.9")).toBeInTheDocument());
+    expect(screen.queryByTestId("viewers-load")).toBeNull();
+  });
+});

@@ -32,6 +32,7 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServerProfile> {
         host_fingerprint: row.get("host_fingerprint")?,
         ipv6_mode: ipv6.as_deref().and_then(Ipv6Mode::parse),
         is_active: row.get::<_, i64>("is_active")? != 0,
+        tariff_mbit: row.get("tariff_mbit")?,
     })
 }
 
@@ -90,8 +91,8 @@ pub fn insert(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
             "INSERT INTO server_profiles
                 (id, name, host, port, username, auth_kind, secret_ref, key_path,
                  domain, video_dir, cdn_base, host_fingerprint, ipv6_mode, is_active,
-                 last_seen_state, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15)",
+                 last_seen_state, created_at, tariff_mbit)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, ?15, ?16)",
             rusqlite::params![
                 p.id,
                 p.name,
@@ -108,6 +109,7 @@ pub fn insert(db: &Db, p: &ServerProfile) -> Result<(), DbError> {
                 p.ipv6_mode.map(|m| m.as_str()),
                 i64::from(p.is_active),
                 now_rfc3339(),
+                p.tariff_mbit,
             ],
         )?;
         Ok(())
@@ -133,7 +135,7 @@ pub fn update_if_signs_in(db: &Db, p: &ServerProfile, read_as: AuthKind) -> Resu
             "UPDATE server_profiles SET
                 name = ?2, host = ?3, port = ?4, username = ?5, auth_kind = ?6,
                 key_path = ?7, domain = ?8, video_dir = ?9, cdn_base = ?10,
-                host_fingerprint = ?11, ipv6_mode = ?12
+                host_fingerprint = ?11, ipv6_mode = ?12, tariff_mbit = ?14
              WHERE id = ?1 AND auth_kind = ?13",
             rusqlite::params![
                 p.id,
@@ -149,6 +151,7 @@ pub fn update_if_signs_in(db: &Db, p: &ServerProfile, read_as: AuthKind) -> Resu
                 p.host_fingerprint,
                 p.ipv6_mode.map(|m| m.as_str()),
                 read_as.as_str(),
+                p.tariff_mbit,
             ],
         )?;
         Ok(changed > 0)
@@ -175,12 +178,12 @@ pub fn restore_if_still(
             "UPDATE server_profiles SET
                 name = ?2, host = ?3, port = ?4, username = ?5, auth_kind = ?6,
                 key_path = ?7, domain = ?8, video_dir = ?9, cdn_base = ?10,
-                host_fingerprint = ?11, ipv6_mode = ?12
+                host_fingerprint = ?11, ipv6_mode = ?12, tariff_mbit = ?24
              WHERE id = ?1
                AND name IS ?13 AND host IS ?14 AND port IS ?15 AND username IS ?16
                AND auth_kind IS ?17 AND key_path IS ?18 AND domain IS ?19
                AND video_dir IS ?20 AND cdn_base IS ?21 AND host_fingerprint IS ?22
-               AND ipv6_mode IS ?23",
+               AND ipv6_mode IS ?23 AND tariff_mbit IS ?25",
             rusqlite::params![
                 previous.id,
                 previous.name,
@@ -205,6 +208,8 @@ pub fn restore_if_still(
                 written.cdn_base,
                 written.host_fingerprint,
                 written.ipv6_mode.map(|m| m.as_str()),
+                previous.tariff_mbit,
+                written.tariff_mbit,
             ],
         )?;
         Ok(changed > 0)

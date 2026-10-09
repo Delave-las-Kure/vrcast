@@ -57,6 +57,7 @@ fn app_state() -> AppState {
             cdn_base: None,
             host_fingerprint: None,
             ipv6_mode: None,
+            tariff_mbit: None,
             is_active: true,
         },
     )

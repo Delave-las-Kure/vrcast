@@ -74,6 +74,7 @@ async fn a_run_broken_off_after_packages_on_a_bare_machine_is_stopped_through_th
             video_dir: None,
             cdn_base: None,
             ipv6_mode: None,
+            tariff_mbit: None,
         },
         ROOT_PASSWORD,
     )

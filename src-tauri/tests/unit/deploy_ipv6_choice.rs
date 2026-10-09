@@ -36,6 +36,7 @@ fn profile_with(ipv6_mode: Option<Ipv6Mode>) -> ServerProfile {
         host_fingerprint: None,
         ipv6_mode,
         is_active: false,
+        tariff_mbit: None,
     }
 }
 

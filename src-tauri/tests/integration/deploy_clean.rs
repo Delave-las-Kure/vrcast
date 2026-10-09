@@ -286,6 +286,7 @@ async fn a_server_reachable_only_by_password_can_be_planned_from_the_screen() {
             video_dir: None,
             cdn_base: None,
             ipv6_mode: None,
+            tariff_mbit: None,
         },
         ROOT_PASSWORD,
     )

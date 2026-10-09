@@ -50,6 +50,7 @@ const RELEASED: &[&str] = &[
     include_str!("../../src/store/migrations/0026_video_made_medium.sql"),
     include_str!("../../src/store/migrations/0027_video_subtitles.sql"),
     include_str!("../../src/store/migrations/0028_measured_the_old_recipe.sql"),
+    include_str!("../../src/store/migrations/0029_server_tariff.sql"),
 ];
 
 /// A directory that removes itself, so a failing test does not leave databases behind.

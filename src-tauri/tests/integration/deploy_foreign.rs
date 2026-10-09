@@ -93,6 +93,7 @@ async fn profile_for(state: &AppState, target: &DeployTarget) -> String {
             video_dir: Some(String::from("/var/lib/vrcast/videos")),
             cdn_base: None,
             ipv6_mode: None,
+            tariff_mbit: None,
         },
         ROOT_PASSWORD,
     )

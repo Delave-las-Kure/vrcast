@@ -329,6 +329,7 @@ export const en: Catalogue = {
     PROFILE_HOST_NOT_BARE:
       "The server address must not contain spaces or slashes — the address alone, not a link.",
     PROFILE_PORT_RANGE: "The port must be between 1 and 65535. The usual SSH port is 22.",
+    PROFILE_TARIFF_RANGE: "The plan is over {max} Mbit/s — check the number.",
     PROFILE_USER_EMPTY: "Enter the user the application signs in as.",
     PROFILE_USER_HAS_SPACES: "The user name must not contain spaces.",
     PROFILE_SECRET_REF_EMPTY: "No reference to a secret in the system store was set.",
@@ -677,6 +678,8 @@ export const en: Catalogue = {
     STALLS_KEEPING_UP: "The viewer keeps up: {ratio|num}× real time, link {mbit_s|mbit}.",
     STALLS_SERVER_LINK:
       "The server's own link is the limit: {out_mbit_s|mbit} going out of the network card's {capacity_mbit_s|mbit}.",
+    STALLS_SERVER_LINK_TARIFF:
+      "The server's own link is the limit: {out_mbit_s|mbit} going out of the plan's {capacity_mbit_s|mbit}.",
     STALLS_DISK:
       "The disk is the limit: {disk_read_mb_s|num} MB/s read, {ratio|num}× real time received.",
     STALLS_FILE_PEAKS:
@@ -685,6 +688,12 @@ export const en: Catalogue = {
       "The server hands pieces out faster than needed: {in_download_mbit_s|mbit} against {average_mbit|mbit}, yet by the clock it comes to {mbit_s|mbit}, ratio {ratio|num}. The player stops asking, or the viewer's link is slower than the server can see. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
       "The viewer's link is short: {ratio|num}× at {mbit_s|mbit} (in downloads {in_download_mbit_s|mbit}), and this quality needs {need_mbit|mbit}. Skipped: {skipped}, restarts: {restarts}.",
+    STALLS_PLAYER_LIVE:
+      "Not the link: it reaches the viewer, but the player is not taking it — {held_pct}% of the time. Now {live_mbit|mbit}, {ratio|num}× real time received.",
+    STALLS_LINK_FINE_LIVE:
+      "Not the link: it carries {live_mbit|mbit} now against {need_mbit|mbit} needed. The player is behind — {ratio|num}× real time.",
+    STALLS_VIEWER_LINK_LIVE:
+      "The viewer's link is short: it carries {live_mbit|mbit} now against {need_mbit|mbit} needed, {ratio|num}× real time. Sent again: {resent_pct|num}%.",
     STALLS_UNCLEAR: "Falling behind: {ratio|num}× real time. These figures do not say why.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
@@ -951,6 +960,7 @@ export const en: Catalogue = {
       stallsRestarts: "Player restarts",
       stallsWatching: "Watching",
       stallsNeeds: "This quality needs",
+      stallsLive: "Now, on the connection",
       stallsLoad: "What the server was doing",
       stallsLoadCpu: "Processor",
       stallsLoadDisk: "Read off the disk",
@@ -958,6 +968,7 @@ export const en: Catalogue = {
       unitSeconds: "s",
       stallsLoadOut: "Going out",
       stallsLoadCapacity: "of the network card's",
+      stallsLoadTariff: "of the plan's",
       stallsCapacityUnknown:
         "the link's capacity was not established — so it is never named as the culprit",
 
@@ -1053,6 +1064,8 @@ export const en: Catalogue = {
         stallsHint: "No data flowing. If it lasts, the viewing has dropped.",
       },
       watchingNow: "watching now",
+      loadTariff: "Going out: {out|bitrate} of the plan's {tariff|mbit}",
+      loadHigh: "the server's link is nearly full",
       reconnecting: "The connection to the server was lost — reconnecting…",
       reconnectingTry: "Attempt {n}.",
       staleAge: "List from {age} ago — it may have changed.",
@@ -1117,6 +1130,8 @@ export const en: Catalogue = {
       fieldVideoDir: "Video directory on the server",
       fieldVideoDirPlaceholder: "default",
       fieldCdn: "CDN address",
+      fieldTariff: "Plan, Mbit/s",
+      fieldTariffPlaceholder: "network card",
       fieldCdnPlaceholder: "none",
       checking: "Checking…",
       next: "Next",

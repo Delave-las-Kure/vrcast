@@ -120,18 +120,14 @@ echo \"admin: $(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0
 /// the retries on apt's own downloads.
 pub(super) fn packages_script() -> String {
     let names = deploy::packages::FROM_APT.join(" ");
+    let caddy = deploy::packages::caddy_install_script();
     format!(
         "set -e
 export DEBIAN_FRONTEND=noninteractive
 R='-o Acquire::Retries=10'
 apt-get $R update -qq
 apt-get $R install -y -qq {names}
-if ! command -v caddy >/dev/null; then
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
-  apt-get $R update -qq
-  apt-get $R install -y -qq caddy
-fi
+{caddy}
 echo done"
     )
 }

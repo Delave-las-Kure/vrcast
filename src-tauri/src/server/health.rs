@@ -306,7 +306,56 @@ pub fn read_load(said: &str) -> Live {
             out_mbit_s,
             capacity_mbit_s,
             cache_small,
+            capacity_by: crate::domain::stalls::CapacityBy::NetworkCard,
         },
         addresses,
     }
+}
+
+/// Where the two readings of the connection table start in what [`load_with_connections`]
+/// prints. Lines of their own, which neither `ss` nor the load readings ever write.
+const BEFORE: &str = "--- vrcast connections before";
+const AFTER: &str = "--- vrcast connections after";
+const LOAD: &str = "--- vrcast load";
+
+/// The connection table read before and after the load's pause.
+pub type Polls = (
+    crate::domain::connections::Poll,
+    crate::domain::connections::Poll,
+);
+
+/// The live readings, with the connection table read before and after them (T711).
+///
+/// The same five seconds the load is taken over: the two readings of `ss -tin` bracket the
+/// load's own pause, so the viewers' connections are seen over a stretch at no extra wait.
+pub fn load_with_connections_command() -> String {
+    let poll = crate::domain::connections::poll_command();
+    format!(
+        "echo '{BEFORE}'\n{poll}\necho '{LOAD}'\n{load}\necho '{AFTER}'\n{poll}\n",
+        load = load_command()
+    )
+}
+
+/// What [`load_with_connections_command`] printed: the load, and the two readings when both
+/// came back readable.
+pub fn read_load_with_connections(said: &str) -> (Live, Option<Polls>) {
+    let section = |from: &str, to: Option<&str>| -> String {
+        let Some((_, rest)) = said.split_once(&format!("{from}\n")) else {
+            return String::new();
+        };
+        match to.and_then(|t| rest.split_once(t)) {
+            Some((mine, _)) => mine.to_owned(),
+            None => rest.to_owned(),
+        }
+    };
+    let live = read_load(&section(LOAD, Some(AFTER)));
+    let before = crate::domain::connections::parse_poll(&section(BEFORE, Some(LOAD)));
+    let after = crate::domain::connections::parse_poll(&section(AFTER, None));
+    (live, before.zip(after))
+}
+
+/// Take the live readings and the connection table around them (T711).
+pub async fn load_with_connections(conn: &Connection) -> Result<(Live, Option<Polls>)> {
+    let said = conn.exec(&load_with_connections_command()).await?;
+    Ok(read_load_with_connections(&said.stdout))
 }
