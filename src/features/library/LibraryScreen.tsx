@@ -318,14 +318,17 @@ export function LibraryScreen() {
         {t.ui.library.serverLine} <strong>{active.name}</strong> · {active.domain}
       </p>
 
-      {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
+      {/* T702 — a server out of reach under the stale line is said by that line alone. */}
+      {error && !(view?.stale && error.code === "SSH_UNREACHABLE") && (
+        <ErrorNotice error={error} onDismiss={() => setError(null)} />
+      )}
       {/* T684 — refused because a video builds its set into the medium: the way on. */}
       {error?.details?.some((d) => d.key === "MEDIA_BUSY_VIDEO") && (
         <Link className="button-link" to="/video">
           {t.ui.library.openVideo}
         </Link>
       )}
-      {view?.stale && <StaleBanner onRetry={() => void load(true)} />}
+      {view?.stale && <StaleBanner readAt={view.read_at} onRetry={() => void load(true)} />}
       {view?.disk && <DiskBar disk={view.disk} t={t} lang={lang} />}
 
       {dialog?.kind === "create" && (

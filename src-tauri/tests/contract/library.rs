@@ -183,6 +183,7 @@ fn a_library_s_completeness_is_counted_over_every_visible_file() {
         unrecognized: vec![file_view("unclear.mp4")],
         disk: None,
         stale: false,
+        read_at: None,
     };
 
     // Two files of the medium, one quality ladder, one rung file of the set (T678), one
@@ -204,6 +205,7 @@ fn the_library_s_answer_survives_the_crossing() {
             used_by_videos_bytes: 55,
         }),
         stale: true,
+        read_at: Some(String::from("2026-10-09T10:00:00.000000000Z")),
     };
 
     let json = serde_json::to_string(&view).expect("the answer will not serialise");

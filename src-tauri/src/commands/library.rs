@@ -118,6 +118,10 @@ pub struct LibraryView {
     /// answer possible: a person cannot tell whether they lost their library or their
     /// connection.
     pub stale: bool,
+    /// T702 — when what is shown was read from the server (RFC 3339): the time a stale list
+    /// is «shown as of». `None` in a cache from before T702.
+    #[serde(default)]
+    pub read_at: Option<String>,
 }
 
 impl LibraryView {
@@ -392,6 +396,24 @@ pub mod refreshes {
 
     static RUNNING: LazyLock<Mutex<HashMap<Key, Entry>>> = LazyLock::new(Default::default);
 
+    /// T702 — a read of this server failed: the library kept for it is marked as the last
+    /// known one, so it is not handed out as current — and a screen showing it hears so at
+    /// once. Kept in the cache itself, not beside it: whatever reads the cache next, after a
+    /// restart too, says the same. The next read that succeeds puts a fresh one in its place.
+    fn mark_stale(
+        state: &AppState,
+        server_id: &str,
+    ) -> std::result::Result<(), crate::store::db::DbError> {
+        if let Some(mut cached) = library_cache::load(&state.db, server_id)? {
+            if !cached.stale {
+                cached.stale = true;
+                library_cache::save(&state.db, server_id, &cached)?;
+                state.notify_library_changed(server_id);
+            }
+        }
+        Ok(())
+    }
+
     fn key(db: &Db, server_id: &str) -> Key {
         (db as *const Db as usize, server_id.to_owned())
     }
@@ -462,7 +484,15 @@ pub mod refreshes {
                     tracing::debug!(server = %server, "a library refresh overtaken by a change was not kept")
                 }
                 Err(e) => {
-                    tracing::debug!(server = %server, error = %e, "the library refresh failed")
+                    tracing::debug!(server = %server, error = %e, "the library refresh failed");
+                    // Under the lock, as `settle`: a change forgetting the cache meanwhile
+                    // leaves nothing to mark. Only a server out of reach: a refusal (a key,
+                    // a host key) is said as itself, not as «the server is not answering».
+                    if fresh && e.code == crate::error::ErrorCode::SshUnreachable {
+                        if let Err(e) = mark_stale(&finish.state, &server) {
+                            tracing::warn!(server = %server, error = %e, "the library was not marked as the last known");
+                        }
+                    }
                 }
             }
             drop(map);
@@ -519,7 +549,15 @@ pub mod refreshes {
         server_id: &str,
         view: &LibraryView,
     ) -> std::result::Result<bool, crate::store::db::DbError> {
-        let changed = library_cache::load(&state.db, server_id)?.as_ref() != Some(view);
+        // When it was read is not a difference in the library (T702): every read has its own.
+        let undated = |v: &LibraryView| LibraryView {
+            read_at: None,
+            ..v.clone()
+        };
+        let changed = library_cache::load(&state.db, server_id)?
+            .as_ref()
+            .map(undated)
+            != Some(undated(view));
         library_cache::save(&state.db, server_id, view)?;
         if changed {
             state.notify_library_changed(server_id);
@@ -645,6 +683,7 @@ pub mod api {
                     // Nothing waits for it — it is already running on its own.
                     drop(refresh(state, &profile));
                 }
+                // T702 — `stale` as the last read left it: a failed one marks the cache.
                 return Ok(cached);
             }
         }
@@ -854,6 +893,7 @@ pub mod api {
             unrecognized,
             disk: disk_usage,
             stale: false,
+            read_at: Some(crate::store::db::now_rfc3339()),
         })
     }
 

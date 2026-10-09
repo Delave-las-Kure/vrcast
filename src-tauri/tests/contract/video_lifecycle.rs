@@ -541,6 +541,7 @@ async fn a_replace_killed_while_removing_is_kept_and_the_library_says_building()
             unrecognized: Vec::new(),
             disk: None,
             stale: false,
+            read_at: Some(String::from("2026-10-09T10:00:00.000000000Z")),
         },
     )
     .unwrap();

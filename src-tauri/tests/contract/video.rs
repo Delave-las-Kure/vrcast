@@ -852,6 +852,7 @@ async fn the_library_says_a_medium_s_set_is_building_or_stopped_not_missing() {
         unrecognized: Vec::new(),
         disk: None,
         stale: false,
+        read_at: Some(String::from("2026-10-09T10:00:00.000000000Z")),
     };
     library_cache::save(&state.db, &server, &known).unwrap();
 

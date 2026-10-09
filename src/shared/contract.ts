@@ -591,6 +591,9 @@ export interface LibraryView {
   disk: DiskUsage | null;
   /** True = this is the last known state; the server is out of reach right now. */
   stale: boolean;
+  /** T702 — when what is shown was read from the server (RFC 3339); a stale list is «shown
+   *  as of» it. Absent from an answer older than T702. */
+  read_at?: string | null;
 }
 
 /** The viewer links for a file (FR-016). */

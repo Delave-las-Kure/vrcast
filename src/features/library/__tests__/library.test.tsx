@@ -11,7 +11,7 @@
  * number formatting, which is the very thing they check.
  */
 
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { en, renderIn, ru } from "../../../test-utils";
@@ -916,6 +916,26 @@ describe("renaming", () => {
 });
 
 describe("a server out of reach", () => {
+  it("says in one line it is not answering and from when the list is, with «Retry» (T702)", async () => {
+    const at = new Date();
+    at.setHours(14, 5, 0, 0);
+    mockLibraryList.mockResolvedValue(view({ stale: true, read_at: at.toISOString() }));
+    draw();
+
+    const mark = await screen.findByTestId("stale");
+    expect(mark).toHaveTextContent("Сервер не отвечает — показано на 14:05");
+    mockLibraryList.mockClear();
+    mockLibraryList.mockRejectedValue({ code: "SSH_UNREACHABLE" });
+    fireEvent.click(within(mark).getByRole("button", { name: ru.ui.library.staleRetry }));
+    await waitFor(() => expect(mockLibraryList).toHaveBeenCalledWith("srv_1", true));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // Still out of reach: the one line says it; no second notice under it.
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows the last that was known, marked as such, rather than an empty screen", async () => {
     mockLibraryList.mockResolvedValue(view({ stale: true }));
     draw();
