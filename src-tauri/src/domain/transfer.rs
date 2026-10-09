@@ -90,13 +90,8 @@ pub struct ResumeToken {
     /// recognised" even though the person had already said where it belongs.
     #[serde(default)]
     pub media_id: Option<String>,
-    /// The speed cap the person set.
-    ///
-    /// It survives a restart too: a cap is set so that an upload does not eat the
-    /// connection, and quietly lifting it on resume would take the whole channel at a
-    /// moment nobody expects it.
-    #[serde(default)]
-    pub limit_bps: Option<u64>,
+    // `limit_bps`, the cap an upload once carried of its own, is gone (T717): a record that
+    // still holds it reads as before, and the upload is held to the shared «Send speed».
     /// The size of the source when the transfer began.
     pub source_size: u64,
     /// The source's modification time, if it could be found out.

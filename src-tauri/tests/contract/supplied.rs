@@ -59,7 +59,6 @@ const NOT_SENT_YET: &[(&str, &str, &str)] = &[
     ("MeasureRequest", "then_build", VIDEO_PIPELINE),
     ("UploadRequest", "local_path", VIDEO_PIPELINE),
     ("UploadRequest", "remote_name", VIDEO_PIPELINE),
-    ("UploadRequest", "limit_bps", VIDEO_PIPELINE),
 ];
 
 /// Wrapper parameters that may be left out, each with the reason and what closes it.

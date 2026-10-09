@@ -57,8 +57,6 @@ pub struct UploadRequest {
     pub remote_name: String,
     /// Which medium to attribute it to. Empty means it lands in "not recognised".
     pub media_id: Option<String>,
-    /// The speed limit in bytes per second. Empty means no limit.
-    pub limit_bps: Option<u64>,
     /// Consent to the consequences warned about before the start.
     #[serde(default)]
     pub confirmed: bool,
@@ -186,7 +184,6 @@ pub mod api {
                 remote_name: clean_name.clone(),
                 local_path: Some(request.local_path.clone()),
                 media_id: request.media_id.clone(),
-                limit_bps: request.limit_bps,
                 source_size: total,
                 source_modified: modified_at(&meta),
             };
@@ -248,7 +245,6 @@ pub mod api {
                 local_path,
                 remote_name: token.remote_name.clone(),
                 media_id: token.media_id.clone(),
-                limit_bps: token.limit_bps,
                 // The person agreed to the consequences when they started: asking a second
                 // time about the same file means not remembering their answer.
                 confirmed: true,
@@ -758,7 +754,6 @@ pub mod api {
             remote_temp: remote_name::staging_file(&staging, &clean_name),
             remote_final: upload::final_path(&profile.video_dir, &clean_name),
             total_bytes: total,
-            limit_bps: request.limit_bps,
         };
 
         // The resume position is written at once: should the application be killed before
@@ -769,7 +764,6 @@ pub mod api {
                 remote_name: clean_name.clone(),
                 local_path: Some(request.local_path.clone()),
                 media_id: request.media_id.clone(),
-                limit_bps: request.limit_bps,
                 source_size: size_now,
                 source_modified: modified_now,
             };

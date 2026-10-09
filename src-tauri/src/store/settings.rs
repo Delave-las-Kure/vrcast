@@ -57,9 +57,10 @@ pub struct Settings {
     /// and the fallback. Stored rather than derived so that somebody with a scratch disk can
     /// say so once instead of on every build.
     pub work_dir: Option<String>,
-    /// The cap on sending a video's rungs to the server, in **bytes** per second like every
-    /// speed in the core (T701). `None` — no cap. Chosen on the «Video» screen, one for all
-    /// the rungs being sent, and applied to a send already on its way.
+    /// The cap on sending to the server, in **bytes** per second like every speed in the core
+    /// (T701). `None` — no cap. Chosen on the «Video» screen, one for all the rungs being sent
+    /// and every upload (T717: an upload has no cap of its own any more), and applied to a
+    /// send already on its way.
     #[serde(default)]
     pub send_limit_bps: Option<u64>,
 }

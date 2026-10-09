@@ -189,10 +189,11 @@ async fn the_upload_scenario_survives_breaks_and_a_restart() {
     .expect("the application state would not assemble");
     let id = super::upload_live::add_profile(&state, &server).await;
 
-    let mut request = super::upload_live::request(&id, &local, NAME);
+    let request = super::upload_live::request(&id, &local, NAME);
     // A speed limit — so the transfer takes a tangible time and can be broken five times.
     // Without one a local container swallows gigabytes faster than one can get at them.
-    request.limit_bps = Some(60 * 1024 * 1024);
+    // The shared «Send speed» (T717), held to the end of the check.
+    let _cap = crate::send_cap::SendCap::hold(60 * 1024 * 1024);
 
     let task = upload::upload_start(&state, request)
         .await

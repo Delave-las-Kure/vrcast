@@ -90,12 +90,13 @@ impl RateLimiter {
     }
 }
 
-/// T701 — one cap on what the «Video» screen sends, shared by every rung being sent and
-/// changed while they are being sent.
+/// T701 — one cap on what is sent to the server, shared by every rung being sent and every
+/// upload (T717), and changed while they are being sent.
 ///
 /// The person picks it on the «Video» screen («no limit» / N Mbit/s) to leave the channel to
 /// friends watching, rather than pausing the preparation outright. **One for all**: two rungs
-/// sent at once share the cap, so «5 Mbit/s» is what leaves the computer, not five per rung.
+/// sent at once share the cap, so «5 Mbit/s» is what leaves the computer, not five per rung —
+/// and an upload has no cap of its own beside it (its `limit_bps` is gone, T717).
 /// **At once**: a send asks for the current cap before every block, so a change reaches the
 /// rung already on its way, not only the next one.
 #[derive(Debug, Default)]
@@ -136,6 +137,7 @@ impl SharedLimit {
     }
 }
 
-/// The cap on sending a video's rungs (T701): set from the settings when the application
-/// starts and on every `settings_set`; asked by `tasks::ladder_build` before every block.
+/// The cap on sending to the server (T701, T717): set from the settings when the application
+/// starts and on every `settings_set`; asked by `tasks::ladder_build` and `server::upload`
+/// before every block.
 pub static SENDING: std::sync::LazyLock<SharedLimit> = std::sync::LazyLock::new(Default::default);

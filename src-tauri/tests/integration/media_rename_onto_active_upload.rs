@@ -183,7 +183,13 @@ async fn attach_file_by_hand(state: &AppState, server_id: &str, media_id: &str, 
 
 /// Start a slow upload of a new file under `remote_name`; it is still in transfer when this
 /// returns (the resume token naming its target is written before `upload_start` returns).
-async fn start_slow_upload(state: &AppState, server_id: &str, remote_name: &str) -> String {
+/// Slow by the shared «Send speed» (T717), held for as long as the guard returned with it.
+async fn start_slow_upload(
+    state: &AppState,
+    server_id: &str,
+    remote_name: &str,
+) -> (String, crate::send_cap::SendCap) {
+    let cap = crate::send_cap::SendCap::hold(SLOW_BPS);
     let local = make_local_file("fresh.mp4", FILE_SIZE);
     let task = upload::upload_start(
         state,
@@ -192,7 +198,6 @@ async fn start_slow_upload(state: &AppState, server_id: &str, remote_name: &str)
             local_path: local.to_string_lossy().into_owned(),
             remote_name: remote_name.to_owned(),
             media_id: None,
-            limit_bps: Some(SLOW_BPS),
             confirmed: true,
         },
     )
@@ -207,7 +212,7 @@ async fn start_slow_upload(state: &AppState, server_id: &str, remote_name: &str)
         record.resume_token.is_some(),
         "the upload's target was not recorded, so no guard could see it"
     );
-    task
+    (task, cap)
 }
 
 async fn cancel_and_wait(state: &AppState, task_id: &str) {
@@ -237,7 +242,7 @@ async fn media_rename_onto_the_target_of_a_running_upload_is_refused() {
     attach_file_by_hand(&state, &id, &media_id, "t606_9.mp4").await;
 
     // ---- a new `t606-fresh_9.mp4` is in transfer; nothing under that final name yet ----
-    let task = start_slow_upload(&state, &id, "t606-fresh_9.mp4").await;
+    let (task, _cap) = start_slow_upload(&state, &id, "t606-fresh_9.mp4").await;
     assert!(
         server
             .exec_inside(&format!("test -e '{VIDEO_DIR}/t606-fresh_9.mp4'"))
@@ -429,7 +434,7 @@ async fn media_rename_that_misses_the_running_upload_goes_through() {
         .expect("the medium was not created");
     attach_file_by_hand(&state, &id, &media_id, "t606_9.mp4").await;
 
-    let task = start_slow_upload(&state, &id, "t606-fresh_9.mp4").await;
+    let (task, _cap) = start_slow_upload(&state, &id, "t606-fresh_9.mp4").await;
 
     // The guard is scoped to the names actually touched: a rename whose destinations do not
     // meet the upload's target goes through while the upload runs.

@@ -23,6 +23,10 @@ mod test_key;
 #[path = "support/proc_check.rs"]
 mod proc_check;
 
+/// The shared «Send speed», held for the length of a check (T717).
+#[path = "support/send_cap.rs"]
+mod send_cap;
+
 #[path = "integration/audio_sync.rs"]
 mod audio_sync;
 

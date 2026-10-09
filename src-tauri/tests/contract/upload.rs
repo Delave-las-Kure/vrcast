@@ -37,7 +37,6 @@ fn request(server_id: &str, local_path: &str) -> UploadRequest {
         local_path: String::from(local_path),
         remote_name: String::from("film_22.mp4"),
         media_id: None,
-        limit_bps: None,
         confirmed: false,
     }
 }

@@ -176,7 +176,6 @@ async fn a_successful_upload_notifies_library_changed_and_clears_the_cache() {
             local_path: local.to_string_lossy().into_owned(),
             remote_name: String::from("film_t578.mp4"),
             media_id: Some(media_id),
-            limit_bps: None,
             confirmed: true,
         },
     )
@@ -218,7 +217,6 @@ async fn an_upload_with_no_medium_chosen_does_not_notify_library_changed() {
             local_path: local.to_string_lossy().into_owned(),
             remote_name: String::from("film_t578_unfiled.mp4"),
             media_id: None,
-            limit_bps: None,
             confirmed: true,
         },
     )

@@ -26,7 +26,6 @@ fn token(name: &str) -> ResumeToken {
         remote_name: name.to_owned(),
         local_path: Some(String::from("C:/films/film.mp4")),
         media_id: None,
-        limit_bps: None,
         source_size: 1_000,
         source_modified: None,
     }

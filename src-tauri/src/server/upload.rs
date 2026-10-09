@@ -17,7 +17,7 @@
 
 use super::{join_remote, shell_quote};
 use crate::domain::progress_estimate::ProgressEstimate;
-use crate::domain::rate_limit::RateLimiter;
+use crate::domain::rate_limit::SENDING;
 use crate::domain::transfer::{decide_resume, ResumeDecision, WINDOW_BYTES};
 use crate::ssh::{Connection, SshError};
 use crate::tasks::engine::TaskContext;
@@ -26,6 +26,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// What to send, and where.
+///
+/// No speed cap of its own (T717): an upload is held to the one «Send speed» every send
+/// shares (`Settings.send_limit_bps`, [`SENDING`]).
 #[derive(Debug, Clone)]
 pub struct UploadPlan {
     pub local_path: PathBuf,
@@ -34,7 +37,6 @@ pub struct UploadPlan {
     /// The full path of the final file in the serving directory.
     pub remote_final: String,
     pub total_bytes: u64,
-    pub limit_bps: Option<u64>,
 }
 
 /// How an attempt ended.
@@ -296,7 +298,6 @@ pub async fn transfer_once(
             UploadError::Interrupted(format!("could not seek to the position on the server: {e}"))
         })?;
 
-    let mut limiter = RateLimiter::new(plan.limit_bps);
     let mut sent = offset;
     let mut buf = vec![0u8; WINDOW_BYTES as usize];
 
@@ -331,7 +332,10 @@ pub async fn transfer_once(
             break;
         }
 
-        let wait = limiter.delay_for(read as u64, Instant::now());
+        // The cap is the one every send shares, asked before every window (T717): a change
+        // of «Send speed» reaches an upload already on its way, and an upload beside a rung
+        // being sent takes its share of the same cap rather than a cap of its own.
+        let wait = SENDING.delay_for(read as u64, Instant::now());
         if !wait.is_zero() {
             // The wait keeps an eye on cancelling: otherwise, with a limit of a hundred
             // kilobytes, a cancel would wait its turn for tens of seconds.

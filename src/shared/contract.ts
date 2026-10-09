@@ -1613,8 +1613,6 @@ export interface UploadRequest {
   remote_name: string;
   /** Which medium to assign it to. `null` puts it in "not recognised". */
   media_id: string | null;
-  /** The speed cap in **bytes** per second. `null` means no cap. */
-  limit_bps: number | null;
   /** Agreement to the consequences named in the previous refusal. */
   confirmed: boolean;
 }

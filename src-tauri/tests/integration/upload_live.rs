@@ -110,7 +110,6 @@ pub(crate) fn request(server_id: &str, local: &std::path::Path, name: &str) -> U
         local_path: local.to_string_lossy().into_owned(),
         remote_name: name.to_owned(),
         media_id: None,
-        limit_bps: None,
         confirmed: true,
     }
 }
@@ -235,9 +234,9 @@ async fn a_half_downloaded_file_is_never_visible_under_its_final_name() {
     let (server, state, id) = setup().await;
     let local = make_local_file("film_22.mp4", FILE_SIZE);
 
-    let mut req = request(&id, &local, "film_22.mp4");
+    let req = request(&id, &local, "film_22.mp4");
     // The transfer is held back so the server can be looked at several times.
-    req.limit_bps = Some(2 * 1024 * 1024);
+    let _cap = crate::send_cap::SendCap::hold(2 * 1024 * 1024);
 
     let task = upload::upload_start(&state, req)
         .await
@@ -372,8 +371,7 @@ async fn too_little_room_is_reported_before_the_transfer_starts() {
 
     // A file certainly larger than any of the container's disks.
     let local = make_local_file("huge.mp4", 1024);
-    let mut req = request(&id, &local, "huge.mp4");
-    req.limit_bps = None;
+    let req = request(&id, &local, "huge.mp4");
 
     // The size is substituted: there is no point making a real terabyte file, and the check
     // looks at the file's size. So another way is taken — room for a certainly impossible
@@ -408,8 +406,9 @@ async fn a_second_upload_under_the_same_name_is_refused() {
     let (_server, state, id) = setup().await;
     let local = make_local_file("film_22.mp4", FILE_SIZE);
 
-    let mut first = request(&id, &local, "film_22.mp4");
-    first.limit_bps = Some(512 * 1024); // held back so the task does not manage to finish
+    let first = request(&id, &local, "film_22.mp4");
+    // Held back so the task does not manage to finish.
+    let _cap = crate::send_cap::SendCap::hold(512 * 1024);
     let task = upload::upload_start(&state, first)
         .await
         .expect("the first upload would not submit");
@@ -495,8 +494,9 @@ fn the_first_run_that_gets_killed() {
         .expect("the application state would not assemble");
 
         let id = attach_secret(&state);
-        let mut req = request(&id, std::path::Path::new(&file), "film_22.mp4");
-        req.limit_bps = Some(RESTART_LIMIT_BPS);
+        let req = request(&id, std::path::Path::new(&file), "film_22.mp4");
+        // A process of its own, killed rather than finished: the cap goes with it.
+        let _cap = crate::send_cap::SendCap::hold(RESTART_LIMIT_BPS);
         upload::upload_start(&state, req)
             .await
             .expect("the upload would not submit");
@@ -678,8 +678,8 @@ async fn an_upload_still_in_the_queue_survives_a_restart_without_having_started(
     let second = make_local_file("film_23.mp4", FILE_SIZE);
 
     // The first takes the transfer lane — it is meant for one task.
-    let mut req = request(&id, &first, "film_22.mp4");
-    req.limit_bps = Some(RESTART_LIMIT_BPS);
+    let req = request(&id, &first, "film_22.mp4");
+    let _cap = crate::send_cap::SendCap::hold(RESTART_LIMIT_BPS);
     let running = upload::upload_start(&state, req)
         .await
         .expect("the first upload would not submit");
@@ -1010,7 +1010,6 @@ async fn a_part_file_owed_from_an_earlier_cancellation_is_removed_by_the_next_up
             remote_name: String::from("owed.mp4"),
             local_path: None,
             media_id: None,
-            limit_bps: None,
             source_size: 1_000_000,
             source_modified: None,
         }

@@ -74,10 +74,20 @@ fn a_resume_position_survives_writing_and_reading() {
         source_size: 32_000_000_000,
         source_modified: Some(String::from("1756108800")),
         media_id: Some(String::from("m-42")),
-        limit_bps: Some(8_000_000),
     };
     let back = ResumeToken::parse(&token.to_json()).expect("the position would not read");
     assert_eq!(back, token);
+}
+
+#[test]
+fn a_position_holding_the_upload_s_old_speed_cap_still_reads() {
+    // T717: an upload had a cap of its own (`limit_bps`) until it was folded into the one
+    // shared «Send speed». A position written then still carries the field; it reads as before.
+    let old = r#"{"remote_temp":"/tmp/x.part","remote_name":"film.mp4","local_path":"F:/film.mp4",
+        "media_id":null,"limit_bps":2097152,"source_size":1000,"source_modified":null}"#;
+    let back = ResumeToken::parse(old).expect("a position with a cap stopped reading");
+    assert_eq!(back.local_path.as_deref(), Some("F:/film.mp4"));
+    assert!(!back.to_json().contains("limit_bps"));
 }
 
 #[test]
@@ -106,7 +116,6 @@ fn a_swapped_source_is_noticed_before_the_transfer() {
         source_size: 1_000,
         source_modified: Some(String::from("1756108800")),
         media_id: None,
-        limit_bps: None,
     };
 
     assert!(token.matches_source(1_000, Some("1756108800")));

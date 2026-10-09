@@ -100,7 +100,6 @@ fn request(server_id: &str, local: &std::path::Path, name: &str) -> UploadReques
         local_path: local.to_string_lossy().into_owned(),
         remote_name: name.to_owned(),
         media_id: None,
-        limit_bps: None,
         confirmed: true,
     }
 }
