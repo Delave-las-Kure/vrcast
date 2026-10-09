@@ -308,7 +308,7 @@ async fn the_plan_comes_back_with_its_rungs_sizes_time_and_room() {
     assert!(ready.audio_chosen);
 }
 
-/// T695 (the owner's decision Б2) — with more than one sound track none is taken for the
+/// T695 (the owner's decision of 2026-10-09) — with more than one sound track none is taken for the
 /// person: «Start» is refused, changing nothing, until one is chosen; the choice is kept.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn several_sound_tracks_wait_for_a_choice_before_start() {
@@ -579,6 +579,33 @@ fn a_video_waiting_for_start_is_not_paused_or_resumed_by_a_restart() {
     use vrcast_studio_lib::domain::video::{after_restart, AfterRestart};
     assert_eq!(after_restart(VideoState::Ready), AfterRestart::Leave);
     assert_eq!(after_restart(VideoState::Paused), AfterRestart::Leave);
+}
+
+/// T700 — whether the video made its medium itself is kept across a restart: only such a
+/// medium, left empty, goes when the video is removed. A video removed with a medium it did
+/// not make (and no server to reach) is simply gone, nothing else asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_video_remembers_whether_it_made_its_medium() {
+    let state = state();
+    let server = server(&state);
+    let mut made = VideoRow::new("made", &server, "C:/nowhere/a.mp4", "a", "a");
+    made.media_id = Some(String::from("m_a"));
+    made.own_medium = true;
+    made.made_medium = true;
+    made.state = VideoState::Cancelled;
+    rows::save(&state.db, &made).unwrap();
+    let mut chosen = VideoRow::new("chosen", &server, "C:/nowhere/b.mp4", "b", "b");
+    chosen.media_id = Some(String::from("m_b"));
+    chosen.own_medium = true;
+    rows::save(&state.db, &chosen).unwrap();
+
+    assert!(rows::get(&state.db, "made").unwrap().unwrap().made_medium);
+    assert!(!rows::get(&state.db, "chosen").unwrap().unwrap().made_medium);
+    // Removing either takes it off the list at once; the medium is asked about in the
+    // background, and a server that cannot be reached leaves it as it is.
+    assert!(video::video_remove(&state, "made").unwrap().is_none());
+    assert!(video::video_remove(&state, "chosen").unwrap().is_none());
+    assert!(rows::get(&state.db, "made").unwrap().is_none());
 }
 
 // ---------- «Replace» (T676) ----------

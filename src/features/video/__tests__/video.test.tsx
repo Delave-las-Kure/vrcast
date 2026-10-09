@@ -401,6 +401,8 @@ describe("adding videos", () => {
     const refused = await screen.findByTestId("refused");
     expect(refused).toHaveTextContent("notes.txt");
     expect(refused).toHaveTextContent(ru.details.VIDEO_ALREADY_LISTED);
+    // T700 — a file has no field to correct: the form's advice is not given.
+    expect(refused).not.toHaveTextContent(ru.errors.INVALID_INPUT.hint);
   });
 
   it("a plan waiting for a place among the heavy work says it is queued (T688)", async () => {
@@ -605,6 +607,33 @@ describe("the plan before Start", () => {
     ).toBeNull();
   });
 
+  it("a name already taken in the plan: no «Start», «Another name» and «Replace» at once (T700)", async () => {
+    mockVideoList.mockResolvedValue([
+      video({ plan: plan({ name_taken: true }) }),
+      video({ id: "free" }),
+    ]);
+    mockVideoReplace.mockResolvedValue(working({ media_id: "m9" }));
+    show();
+    const c = await card();
+    expect(c.getByRole("button", { name: ru.ui.video.start })).toBeDisabled();
+    expect(c.queryByRole("button", { name: ru.ui.video.editTitle })).toBeNull();
+    expect(c.getAllByText("Имя «film» занято")).toHaveLength(1);
+
+    // «Start all» leaves it be.
+    fireEvent.click(screen.getByRole("button", { name: ru.ui.video.startAll }));
+    await waitFor(() => expect(mockVideoStart).toHaveBeenCalledWith(["free"]));
+
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.otherName }));
+    expect(c.getByLabelText(ru.ui.video.title)).toHaveValue("Фильм");
+    fireEvent.click(c.getByRole("button", { name: ru.ui.common.cancel }));
+
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.replace }));
+    const ask = c.getByRole("group", { name: ru.ui.video.replace });
+    expect(mockVideoReplace).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole("button", { name: ru.ui.video.replace }));
+    await waitFor(() => expect(mockVideoReplace).toHaveBeenCalledWith("v1", false));
+  });
+
   it("starts one video, and «Start all» starts every ready one", async () => {
     mockVideoList.mockResolvedValue([video({ id: "a" }), video({ id: "b" }), working({ id: "c" })]);
     show();
@@ -744,6 +773,12 @@ describe("the stages after Start", () => {
     await waitFor(() => expect(mockVideoResume).toHaveBeenCalledWith("v1"));
   });
 
+  it("a card started and waiting behind another says «Queued», not nothing (T700)", async () => {
+    mockVideoList.mockResolvedValue([working({ stage: "planned", progress: null })]);
+    show();
+    expect((await card()).getByTestId("stage-facts")).toHaveTextContent(ru.ui.video.queued);
+  });
+
   it("says it is stopping while cancelling, and offers nothing to press", async () => {
     mockVideoList.mockResolvedValue([working({ state: "cancelling" })]);
     show();
@@ -841,12 +876,27 @@ describe("a problem", () => {
     mockVideoList.mockResolvedValue([problem("SLUG_TAKEN", ["replace", "rename"])]);
     show();
     const c = await card();
-    // «Rename» is offered as the field and its «Retry».
-    fireEvent.click(c.getByRole("button", { name: ru.ui.video.retry }));
+    // «Another name» puts the field up — not a «Retry» that a person cannot predict (T700).
+    expect(c.queryByRole("button", { name: ru.ui.video.retry })).toBeNull();
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.otherName }));
     fireEvent.change(c.getByLabelText(ru.ui.video.title), { target: { value: "Фильм 2" } });
-    fireEvent.click(c.getByRole("button", { name: ru.ui.video.retry }));
+    fireEvent.click(c.getByRole("button", { name: ru.ui.video.saveTitle }));
     await waitFor(() => expect(mockVideoSetName).toHaveBeenCalledWith("v1", "Фильм 2", null));
     await waitFor(() => expect(mockVideoRetry).toHaveBeenCalledWith("v1", false));
+  });
+
+  it("says a taken name once, not in the plan and again in the problem (T700)", async () => {
+    mockVideoList.mockResolvedValue([
+      {
+        ...problem("SLUG_TAKEN", ["replace", "rename"]),
+        stage: "planned",
+        plan: plan({ name_taken: true }),
+      },
+    ]);
+    show();
+    const c = await card();
+    expect(c.getByRole("alert")).toHaveTextContent(ru.errors.SLUG_TAKEN.message);
+    expect(c.getByTestId("plan")).not.toHaveTextContent("Имя «film» занято");
   });
 
   it("opens the rung editor here, saves the rungs to the video and carries on", async () => {

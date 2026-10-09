@@ -1121,6 +1121,7 @@ const ui = {
     replace: "Заменить",
     replaceAsk: "Старый набор «{title}» будет удалён и собран заново",
     replaceAnyway: "Всё равно заменить",
+    otherName: "Другое имя",
     stagesLabel: "Этапы",
     stages: {
       measuring: "Замер",

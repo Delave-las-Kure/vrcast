@@ -568,7 +568,7 @@ detail_codes! {
     /// (T683): the question asked before `server_remove(confirmed)`.
     ConfirmStopServerWork => "CONFIRM_STOP_SERVER_WORK",
     /// A film with more than one sound track waits for a person to choose one (T695, the
-    /// owner's decision Б2): «Start», «Retry» and «Replace» are refused until then.
+    /// owner's decision of 2026-10-09): «Start», «Retry» and «Replace» are refused until then.
     AudioNotChosen => "AUDIO_NOT_CHOSEN",
 }
 

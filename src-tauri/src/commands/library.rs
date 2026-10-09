@@ -1190,6 +1190,54 @@ pub mod api {
         Ok(media_id.to_owned())
     }
 
+    /// Take an **empty** medium out of the catalogue (T700) — the one a video made for itself
+    /// at «Start» and then was cancelled and removed before its set was filed.
+    ///
+    /// Only the catalogue entry goes; nothing on the server is removed, because there is
+    /// nothing of it there: a medium with any file, any set, any rung file of its set, or a
+    /// directory under its name is left exactly as it is (`Ok(false)`). Never for a medium a
+    /// person chose: the caller asks only about one its video made (`made_medium`).
+    pub async fn media_drop_if_empty(
+        state: &AppState,
+        server_id: &str,
+        media_id: &str,
+    ) -> Result<bool> {
+        let profile = profile_of(state, server_id)?;
+        refuse_if_a_video_builds_into(state, server_id, media_id, None)?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
+        let dropped = async {
+            let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
+            let Some(index) = manifest.media.iter().position(|m| m.id == media_id) else {
+                return Ok(false);
+            };
+            let entries = listing::list(&conn, &profile.video_dir).await?;
+            let seen =
+                set_files::adopted(&conn, &profile.video_dir, &manifest, &entries, Some(index))
+                    .await;
+            let medium = &seen.media[index];
+            let has_dir = entries.iter().any(|e| e.name == medium.slug);
+            if medium.all_paths().next().is_some() || has_dir {
+                return Ok(false);
+            }
+            let mut next = manifest.prepared_for_write();
+            next.media.remove(index);
+            manifest_io::write(&conn, &profile.video_dir, &next, manifest.generation).await?;
+            Ok::<_, AppError>(true)
+        }
+        .await;
+        conn.close().await;
+        if matches!(dropped, Ok(true)) {
+            invalidate(state, server_id);
+            tracing::info!(
+                media = media_id,
+                "an empty medium left by a removed video was taken out of the catalogue"
+            );
+        }
+        dropped
+    }
+
     /// Move a file into another medium.
     ///
     /// The file stays where it is — only which medium it belongs to changes. Renaming it to

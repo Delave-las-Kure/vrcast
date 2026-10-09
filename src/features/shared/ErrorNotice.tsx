@@ -21,10 +21,22 @@ import { renderErrorFolded } from "../../shared/i18n/render";
  * Shared by the banner below, a failed task's row and a refusal inside a dialog, so the
  * three cannot drift about what a code means or what is folded away.
  */
-export function ErrorFolded({ error, lineClassName }: { error: AppError; lineClassName: string }) {
+export function ErrorFolded({
+  error,
+  lineClassName,
+  hint: withHint = true,
+}: {
+  error: AppError;
+  lineClassName: string;
+  /** `false` where the code's general advice does not fit (T700: a refused file has no field
+   *  to correct) — the line and the particulars still say what is wrong. */
+  hint?: boolean;
+}) {
   const t = useT();
   const { lang } = useLang();
-  const { line, hint, particulars } = renderErrorFolded(error, t, lang);
+  const folded = renderErrorFolded(error, t, lang);
+  const { line, particulars } = folded;
+  const hint = withHint ? folded.hint : "";
   const more = Boolean(hint || particulars || error.cause);
 
   return (

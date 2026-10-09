@@ -1779,7 +1779,7 @@ export interface VideoView {
   /** From zero, as `SourceFile.audio_tracks[].index`. */
   audio_track: number;
   /**
-   * T695 (Б2) — whether the sound is chosen. `false` for a film with several tracks until a
+   * T695 — whether the sound is chosen. `false` for a film with several tracks until a
    * person picks one: «Start» is refused (`INVALID_INPUT` + `AUDIO_NOT_CHOSEN`) meanwhile, and
    * `audio_track` is only what the plan's sizes are reckoned with.
    */

@@ -30,12 +30,25 @@ export function canStart(v: VideoView): boolean {
 }
 
 /**
- * T695 (Б2) — a film with several sound tracks waits for a person to choose one: «Start» is
+ * T695 — a film with several sound tracks waits for a person to choose one: «Start» is
  * there but not pressable, and «Start all» leaves it be. `=== false`, not `!`: a view from a
  * core that does not send the field yet is one whose sound was chosen as before.
  */
 export function audioMissing(v: VideoView): boolean {
   return v.audio_chosen === false;
+}
+
+/**
+ * T700 — the plan already says the name is taken: «Start» would only stop on it, so it is not
+ * pressable; «Another name» and «Replace» are offered instead.
+ */
+export function nameBlocked(v: VideoView): boolean {
+  return (
+    v.plan?.name_taken === true &&
+    v.media_id === null &&
+    v.stage === "planned" &&
+    (v.state === "ready" || v.state === "planning")
+  );
 }
 
 export function canPause(v: VideoView): boolean {

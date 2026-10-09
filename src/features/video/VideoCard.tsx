@@ -33,6 +33,7 @@ import {
   canSetRungs,
   canStart,
   megabits,
+  nameBlocked,
   showsPlan,
   trackLabel,
 } from "./rules";
@@ -112,17 +113,21 @@ export function VideoCard({
     build_anyway: w.buildAnyway,
     edit_rungs: w.rungs,
     replace: w.replace,
-    rename: w.retry,
+    // T700 — what the button does: another name, not a «Retry» of the same one.
+    rename: w.otherName,
   };
 
   const planShown = showsPlan(video);
   const fileName = basename(video.source_path);
   const tracks = video.source?.audio_tracks ?? [];
   const noAudio = audioMissing(video);
+  const blocked = nameBlocked(video);
   const problemActions = video.state === "problem" ? (video.problem?.actions ?? []) : [];
-  // «Rename» puts the name field up and its own «Retry» beside it; the field is the action.
-  const renameOffered = problemActions.includes("rename") && canSetName(video);
-  const confirming = replacing !== null && problemActions.includes("replace");
+  // «Another name» puts the name field up and its own «Save» beside it; the field is the action.
+  const renameOffered = (problemActions.includes("rename") || blocked) && canSetName(video);
+  const confirming = replacing !== null && (problemActions.includes("replace") || blocked);
+  // The taken name is said once: by the problem when there is one, by the plan otherwise.
+  const nameSaid = video.state === "problem" && video.problem?.error.code === "SLUG_TAKEN";
 
   return (
     <li className={`video video--${video.state}`} data-testid={`video-${video.id}`}>
@@ -142,7 +147,7 @@ export function VideoCard({
               autoFocus
             />
             <button type="submit" disabled={busy || title.trim() === ""}>
-              {video.state === "problem" ? w.retry : w.saveTitle}
+              {w.saveTitle}
             </button>
             <button type="button" onClick={() => setNaming(false)} disabled={busy}>
               {t.ui.common.cancel}
@@ -176,12 +181,14 @@ export function VideoCard({
           {video.progress?.task_state === "queued" && ` · ${w.queued}`}
         </p>
       )}
-      {planShown && video.plan && <Plan plan={video.plan} slug={video.slug} t={t} lang={lang} />}
+      {planShown && video.plan && (
+        <Plan plan={video.plan} slug={video.slug} nameSaid={nameSaid} t={t} lang={lang} />
+      )}
 
       {planShown && tracks.length > 1 && (
         <label className="video__audio">
           <span>{w.audio}</span>
-          {/* T695 (Б2): none is taken for the person — the field asks until one is chosen. */}
+          {/* T695: none is taken for the person — the field asks until one is chosen. */}
           <select
             value={noAudio ? "" : video.audio_track}
             disabled={busy || !canSetAudio(video)}
@@ -240,7 +247,7 @@ export function VideoCard({
             <button
               type="button"
               className="button--primary"
-              disabled={busy || noAudio}
+              disabled={busy || noAudio || blocked}
               title={noAudio ? w.chooseAudio : undefined}
               onClick={() =>
                 void run(async () => {
@@ -250,6 +257,17 @@ export function VideoCard({
               }
             >
               {w.start}
+            </button>
+          )}
+          {/* T700 — the plan says the name is taken: the two ways on, at once. */}
+          {blocked && renameOffered && (
+            <button type="button" disabled={busy} onClick={() => doAction("rename")}>
+              {w.otherName}
+            </button>
+          )}
+          {blocked && (
+            <button type="button" disabled={busy} onClick={() => doAction("replace")}>
+              {w.replace}
             </button>
           )}
           {problemActions.map((a) =>
@@ -329,11 +347,14 @@ export function VideoCard({
 function Plan({
   plan,
   slug,
+  nameSaid,
   t,
   lang,
 }: {
   plan: VideoPlan;
   slug: string;
+  /** The problem already says the name is taken: not said a second time here (T700). */
+  nameSaid: boolean;
   t: Catalogue;
   lang: Lang;
 }) {
@@ -378,7 +399,7 @@ function Plan({
           {fill(w.shortLocal, { bytes: plan.local_space.short_by }, t, lang)}
         </p>
       )}
-      {plan.name_taken === true && (
+      {plan.name_taken === true && !nameSaid && (
         <p className="video__warn">{fill(w.nameTaken, { slug }, t, lang)}</p>
       )}
       {folded.length > 0 && (
@@ -416,7 +437,8 @@ function StageBar({ video, t, lang }: { video: VideoView; t: Catalogue; lang: La
   if (video.state === "cancelling") facts.push(w.stopping);
   else if (video.state === "cancelled") facts.push(w.cancelled);
   else if (video.state === "paused") facts.push(w.paused);
-  else if (p?.task_state === "queued") facts.push(w.queued);
+  // T700 — started and waiting its turn (behind the card above it): said, not left blank.
+  else if (p?.task_state === "queued" || (video.state === "working" && !p)) facts.push(w.queued);
   if (p && video.state !== "done" && video.state !== "cancelled") {
     if (p.task_state !== "queued" && known) facts.push(`${Math.round(p.progress * 100)}%`);
     if (p.speed_bps) facts.push(fill(w.speed, { bytes: p.speed_bps }, t, lang));

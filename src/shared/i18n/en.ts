@@ -1127,6 +1127,7 @@ export const en: Catalogue = {
       replace: "Replace",
       replaceAsk: "The old set “{title}” will be removed and built again",
       replaceAnyway: "Replace anyway",
+      otherName: "Another name",
       stagesLabel: "Stages",
       stages: {
         measuring: "Measure",

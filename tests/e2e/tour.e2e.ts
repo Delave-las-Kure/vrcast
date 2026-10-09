@@ -1446,10 +1446,11 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       }
       await step(
         "audio-second",
-        "У первой карточки в «Звук» выбрана вторая дорожка (rus)",
+        "У первой карточки в «Звук» выбрана вторая дорожка (rus) — заранее не выбрана ни одна (T695)",
         async () => {
           const sel = `${inCard(id1)}//label[contains(@class,'video__audio')]//select`;
-          await chooseX(sel, "option[2]");
+          // The first option is «Выберите звук» (T695): the track is picked by its value.
+          await chooseX(sel, "option[@value='1']");
           await until(
             "the second track to be taken",
             async () => (await (await s().findX(sel)).property("value")) === "1",
@@ -1616,15 +1617,25 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         },
       );
       if (id3) {
-        await step("name-taken-problem", "«Старт» у повторного — проблема с кнопками", async () => {
-          await press("Старт", inCard(id3));
-          await cardUntil(id3, "the problem", (c) => c.state === "problem", 120_000);
-        });
-        await step("name-taken-details", "У проблемы раскрыто «Подробнее»", async () => {
-          await press("Подробнее", inCard(id3), 5_000);
+        // T700: the plan already says the name is taken — «Старт» is not pressable, «Другое
+        // имя» and «Заменить» are offered at once, and the name is said once.
+        await step(
+          "name-taken-other-name",
+          "«Другое имя» у повторного (Старт недоступен) — поле названия",
+          async () => {
+            const start = `${inCard(id3)}//button[normalize-space()=${xq("Старт")}]`;
+            if (!(await has(`${start}[@disabled]`))) note("«Старт» у повторного доступен");
+            await press("Другое имя", inCard(id3));
+            await s().findX(`${inCard(id3)}//input`, 5_000);
+          },
+        );
+        await step("name-taken-replace-ask", "«Отмена», затем «Заменить» — вопрос", async () => {
+          await press("Отмена", inCard(id3));
+          await press("Заменить", inCard(id3));
           await sleep(300);
         });
-        await step("name-taken-removed", "«Убрать» у повторного", async () => {
+        await step("name-taken-removed", "«Отмена» и «Убрать» у повторного", async () => {
+          await press("Отмена", inCard(id3));
           await press("Убрать", inCard(id3));
           await until("the card to go", async () => !(await card(id3)), 30_000);
         });
