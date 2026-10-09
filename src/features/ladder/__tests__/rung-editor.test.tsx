@@ -161,7 +161,7 @@ describe("editing a rung", () => {
     renderIn(<Host initial={MEASURED} />, "en");
     await screen.findByTestId("rung-0");
     mockValidate.mockResolvedValue({
-      objections: [{ RungAboveSource: { index: 0, source_bps: 60_000_000 } }],
+      objections: [{ code: "RUNG_ABOVE_SOURCE", index: 0, source_bps: 60_000_000 }],
       not_buildable: null,
     });
     fireEvent.change(screen.getByLabelText(`${en.ui.ladder.columnBitrate} 1`), {

@@ -97,36 +97,32 @@ function reasonText(
  * they disagreed nobody could say which was the rule. There is one set, keyed by the code the
  * core sends, and this screen and the tasks screen both read it.
  */
-function objectionDetail(objection: Objection): Detail {
-  if ("RungAboveSource" in objection) {
-    return {
-      key: "OBJECTION_RUNG_ABOVE_SOURCE",
-      params: { index: objection.RungAboveSource.index + 1 },
-    };
+function objectionDetail(objection: Objection): Detail | null {
+  // T692 — read by its `code`, as the core sends it. Something this screen does not know is
+  // left out rather than read as a shape it is not: an unknown objection must not be able to
+  // take the whole window down with it.
+  const index = (objection as { index?: unknown }).index;
+  if (typeof index !== "number") return null;
+  switch (objection.code) {
+    case "RUNG_ABOVE_SOURCE":
+      return { key: "OBJECTION_RUNG_ABOVE_SOURCE", params: { index: index + 1 } };
+    case "BUFSIZE_TOO_LARGE":
+      return { key: "OBJECTION_BUFSIZE_TOO_LARGE", params: { index: index + 1 } };
+    case "LEVEL_EXCEEDED":
+      return {
+        key: "OBJECTION_LEVEL_EXCEEDED",
+        params: { index: index + 1, level: objection.level },
+      };
+    case "OUT_OF_ORDER":
+      return { key: "OBJECTION_OUT_OF_ORDER", params: { index: index + 1 } };
+    case "BAD_STEP":
+      return {
+        key: "OBJECTION_BAD_STEP",
+        params: { index: index + 1, times: Number(objection.times).toFixed(1) },
+      };
+    default:
+      return null;
   }
-  if ("BufsizeTooLarge" in objection) {
-    return {
-      key: "OBJECTION_BUFSIZE_TOO_LARGE",
-      params: { index: objection.BufsizeTooLarge.index + 1 },
-    };
-  }
-  if ("LevelExceeded" in objection) {
-    return {
-      key: "OBJECTION_LEVEL_EXCEEDED",
-      params: {
-        index: objection.LevelExceeded.index + 1,
-        level: objection.LevelExceeded.level,
-      },
-    };
-  }
-  if ("OutOfOrder" in objection) {
-    return { key: "OBJECTION_OUT_OF_ORDER", params: { index: objection.OutOfOrder.index + 1 } };
-  }
-  const step = objection.BadStep;
-  return {
-    key: "OBJECTION_BAD_STEP",
-    params: { index: step.index + 1, times: step.times.toFixed(1) },
-  };
 }
 
 export function RungEditor({
@@ -167,6 +163,13 @@ export function RungEditor({
     () => rungs.filter((rung) => !left_out?.has(rung.index)),
     [rungs, left_out],
   );
+  // T692 — what is being typed into a bitrate field, until it is a whole number again. An
+  // emptied field is not «1 Mbit/s»: it stays empty, nothing is recomputed, and leaving the
+  // field puts the rung's own number back.
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const objectionDetails = (verdict?.objections ?? [])
+    .map(objectionDetail)
+    .filter((d): d is Detail => d !== null);
 
   // Checked on every change of the rungs, including the first time they arrive. The core's
   // check touches neither a file nor a server, so this cannot fall behind the typing.
@@ -258,8 +261,20 @@ export function RungEditor({
                       type="number"
                       min={1}
                       aria-label={`${words.columnBitrate} ${index + 1}`}
-                      value={Math.round(rung.bitrate_bps / 1_000_000)}
-                      onChange={(e) => edit(index, Number(e.target.value))}
+                      value={drafts[index] ?? Math.round(rung.bitrate_bps / 1_000_000)}
+                      onChange={(e) => {
+                        const typed = e.target.value;
+                        setDrafts((was) => ({ ...was, [index]: typed }));
+                        const n = Number(typed);
+                        if (typed.trim() !== "" && Number.isFinite(n) && n >= 1) edit(index, n);
+                      }}
+                      onBlur={() =>
+                        setDrafts((was) => {
+                          const next = { ...was };
+                          delete next[index];
+                          return next;
+                        })
+                      }
                     />
                   ) : (
                     mbps(rung.bitrate_bps)
@@ -292,12 +307,12 @@ export function RungEditor({
         </tbody>
       </table>
 
-      {verdict && verdict.objections.length > 0 && (
+      {objectionDetails.length > 0 && (
         <div role="alert" aria-label={words.objections}>
           <h4>{words.objections}</h4>
           <ul>
-            {verdict.objections.map((objection, i) => (
-              <li key={i}>{renderDetail(objectionDetail(objection), t, lang)}</li>
+            {objectionDetails.map((detail, i) => (
+              <li key={i}>{renderDetail(detail, t, lang)}</li>
             ))}
           </ul>
         </div>

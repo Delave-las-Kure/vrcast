@@ -34,6 +34,7 @@ const mockVideoSetAudio = vi.fn();
 const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
 const mockLadderRecomputeRung = vi.fn();
+const mockLadderValidate = vi.fn();
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
@@ -63,7 +64,7 @@ vi.mock("../../../shared/ipc", async () => {
       videoSetAudio: (...a: unknown[]) => mockVideoSetAudio(...a),
       videoSetName: (...a: unknown[]) => mockVideoSetName(...a),
       videoSetRungs: (...a: unknown[]) => mockVideoSetRungs(...a),
-      ladderValidate: () => Promise.resolve({ objections: [], not_buildable: null }),
+      ladderValidate: (...a: unknown[]) => mockLadderValidate(...a),
       ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
@@ -250,6 +251,7 @@ beforeEach(() => {
     m.mockImplementation((id: string) => Promise.resolve(video({ id })));
   }
   mockVideoRemove.mockResolvedValue(null);
+  mockLadderValidate.mockResolvedValue({ objections: [], not_buildable: null });
   mockVideoStart.mockImplementation((ids: string[]) =>
     Promise.resolve(ids.map((id) => ({ id, error: null }))),
   );
@@ -890,6 +892,108 @@ describe("the rungs before Start", () => {
     await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledWith("v1", null));
     expect(mockVideoRetry).not.toHaveBeenCalled();
     expect(mockVideoStart).not.toHaveBeenCalled();
+  });
+});
+
+describe("the rung editor does not take the window down (T692)", () => {
+  const three = () => [rung(0, 8, 1080), rung(1, 4, 720), rung(2, 2, 480)];
+  /** The core's own wire shape: tagged by `code`, its fields beside it. */
+  const badStep = { objections: [{ code: "BAD_STEP", index: 1, times: 4 }], not_buildable: null };
+  const unmeasured = (index: number, mbps: number, height: number) =>
+    ({
+      ...rung(index, mbps, height),
+      reasons: ["edited_by_hand"],
+      quality: { state: "not_measured" },
+    }) as Rung;
+
+  async function openEditor() {
+    mockVideoList.mockResolvedValue([video({ plan: plan({ rungs: three() }) })]);
+    show();
+    fireEvent.click((await card()).getByRole("button", { name: ru.ui.video.rungs }));
+    return screen.findByRole("dialog", { name: ru.ui.video.rungs });
+  }
+
+  /** The plan the core answers with after an edit: the edited rung is to be measured. */
+  function savedAsEdited(edited: Rung) {
+    mockVideoSetRungs.mockImplementation((_id: string, sent: Rung[]) =>
+      Promise.resolve(
+        video({
+          plan: plan({
+            rungs: sent.map((r) => (r.index === edited.index ? edited : r)),
+            from: "edited",
+            needs_measuring: true,
+            measure_s: 120,
+          }),
+        }),
+      ),
+    );
+  }
+
+  it("an emptied field and a new number: no crash, the objection shown, saved to measure", async () => {
+    const edited = unmeasured(2, 3, 540);
+    mockLadderRecomputeRung.mockResolvedValue(edited);
+    savedAsEdited(edited);
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue(badStep);
+    const field = within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 3`);
+    // Emptied as Backspace leaves it: nothing is recomputed, the field stays empty.
+    fireEvent.change(field, { target: { value: "" } });
+    expect(field).toHaveValue(null);
+    expect(mockLadderRecomputeRung).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: "3" } });
+    await waitFor(() => expect(mockLadderRecomputeRung).toHaveBeenCalledTimes(1));
+    expect(mockLadderRecomputeRung.mock.calls[0][1]).toBe(3_000_000);
+    expect(await within(editor).findByRole("alert")).toHaveTextContent("2");
+    expect(within(editor).getByTestId("rung-2")).toHaveTextContent(ru.ui.ladder.notMeasured);
+
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent.map((r) => r.bitrate_bps)).toEqual([8_000_000, 4_000_000, 3_000_000]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect((await card()).getByTestId("plan")).toHaveTextContent(
+      `540p · 3 Мбит/с · ${ru.ui.video.rungToMeasure}`,
+    );
+  });
+
+  it("a value replaced in one go (select and type): no crash, saved to measure", async () => {
+    const edited = unmeasured(2, 1, 360);
+    mockLadderRecomputeRung.mockResolvedValue(edited);
+    savedAsEdited(edited);
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue(badStep);
+    fireEvent.change(within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 3`), {
+      target: { value: "1" },
+    });
+    await waitFor(() =>
+      expect(within(editor).getByTestId("rung-2")).toHaveTextContent(ru.ui.ladder.notMeasured),
+    );
+    expect(await within(editor).findByRole("alert")).toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    expect((await card()).getByTestId("plan")).toHaveTextContent(ru.ui.video.rungToMeasure);
+  });
+
+  it("a middle rung left out: no crash, the widened step objected to, two rungs saved", async () => {
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue(badStep);
+    fireEvent.click(within(editor).getAllByRole("checkbox")[1]);
+    expect(await within(editor).findByRole("alert")).toHaveTextContent(ru.ui.ladder.objections);
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent.map((r) => r.index)).toEqual([0, 2]);
+  });
+
+  it("an objection it does not know is left out rather than read wrongly", async () => {
+    const editor = await openEditor();
+    mockLadderValidate.mockResolvedValue({
+      objections: [{ code: "SOMETHING_NEW" }, { RungAboveSource: { index: 0 } }],
+      not_buildable: null,
+    });
+    fireEvent.click(within(editor).getAllByRole("checkbox")[1]);
+    await waitFor(() => expect(mockLadderValidate).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("dialog", { name: ru.ui.video.rungs })).toBeInTheDocument();
   });
 });
 

@@ -1194,13 +1194,19 @@ export interface LimitRequest {
   cap_bps: number;
 }
 
-/** What the checker says about a ladder's soundness. */
+/**
+ * What the checker says about a ladder's soundness.
+ *
+ * T692 — tagged by `code`, its fields beside it, exactly as the core sends it
+ * (`#[serde(tag = "code", rename_all = "SCREAMING_SNAKE_CASE")]`). This type once described a
+ * shape the core never sent, and the first objection an edit raised took the whole window down.
+ */
 export type Objection =
-  | { RungAboveSource: { index: number; source_bps: number } }
-  | { BufsizeTooLarge: { index: number; maxrate_bps: number } }
-  | { LevelExceeded: { index: number; level: string; limits: unknown[] } }
-  | { OutOfOrder: { index: number } }
-  | { BadStep: { index: number; times: number } };
+  | { code: "RUNG_ABOVE_SOURCE"; index: number; source_bps: number }
+  | { code: "BUFSIZE_TOO_LARGE"; index: number; maxrate_bps: number }
+  | { code: "LEVEL_EXCEEDED"; index: number; level: string; limits: unknown[] }
+  | { code: "OUT_OF_ORDER"; index: number }
+  | { code: "BAD_STEP"; index: number; times: number };
 
 /** Why a ladder must not be built yet. Separate from soundness on purpose. */
 export type NotBuildable = { code: "NO_RUNGS" } | { code: "RUNGS_NOT_MEASURED"; indexes: number[] };
