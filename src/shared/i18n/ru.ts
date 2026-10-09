@@ -1155,6 +1155,8 @@ const ui = {
     ladders: "Наборы качеств: {list}",
     laddersHeading: "Наборы качеств",
     setFilesHeading: "Файлы ступеней набора",
+    leftoverMp4: "Лишние файлы mp4 — {bytes|bytes}",
+    leftoverRemove: "Удалить",
     renameMedia: "Переименовать",
     buildSet: "Собрать набор",
     setBuilding: "Набор собирается",

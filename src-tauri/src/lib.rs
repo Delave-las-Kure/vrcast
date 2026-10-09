@@ -310,6 +310,7 @@ pub fn run() {
             commands::library::ipc::media_delete,
             commands::library::ipc::file_move,
             commands::library::ipc::file_delete,
+            commands::library::ipc::media_remove_set_files,
             commands::library::ipc::links_for,
             commands::limits::ipc::limit_preview,
             commands::limits::ipc::limit_set,

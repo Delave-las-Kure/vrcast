@@ -267,6 +267,10 @@ export const ipc = {
     call<void>("file_move", { serverId, path, toMediaId, confirmed }),
   fileDelete: (serverId: string, path: string, confirmed: boolean) =>
     call<void>("file_delete", { serverId, path, confirmed }),
+  /** T693 — remove a medium's leftover prepared rung files; the bytes freed. Only on a
+   *  person's press. */
+  mediaRemoveSetFiles: (serverId: string, mediaId: string) =>
+    call<number>("media_remove_set_files", { serverId, mediaId }),
   linksFor: (serverId: string, path: string) => call<Links>("links_for", { serverId, path }),
 
   // --- viewers ---

@@ -839,3 +839,111 @@ fn the_cutting_and_the_check_begin_at_their_own_beginning() {
         "the cutting is not reported by the rungs it has cut"
     );
 }
+
+// ---------- T693: a checked set keeps only its segments ----------
+
+const FINISHED: &str = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.000,\nseg_00000.ts\n\
+    #EXTINF:4.000,\nseg_00001.ts\n#EXT-X-ENDLIST\n";
+
+fn facts(height: u32, segs: &[f64]) -> String {
+    let mut out = format!(
+        "sub=v9\nwidth={}\nheight={height}\nfps=24.000\nlevel=40\ncodec=h264\n",
+        height * 16 / 9
+    );
+    for s in segs {
+        out.push_str(&format!("seg {s} 1000\n"));
+    }
+    out
+}
+
+fn read_both(playlist: &str, facts: &str) -> String {
+    format!(
+        "{playlist}\n{}\n{facts}",
+        vrcast_studio_lib::domain::ladder_build::CUT_FACTS_MARK
+    )
+}
+
+#[test]
+fn a_rung_cut_whole_is_known_by_its_segments_once_its_prepared_file_is_gone() {
+    use vrcast_studio_lib::domain::ladder_build::cut_is_whole;
+    // Two segments of four seconds, a film of eight: cut whole.
+    assert!(cut_is_whole(
+        &read_both(FINISHED, &facts(1080, &[4.0, 4.0])),
+        8.0,
+        1080
+    ));
+    // A playlist that is not finished — a cutting stopped halfway — is not.
+    assert!(!cut_is_whole(
+        &read_both(
+            &FINISHED.replace("#EXT-X-ENDLIST\n", ""),
+            &facts(1080, &[4.0, 4.0])
+        ),
+        8.0,
+        1080
+    ));
+    // Another height: a rung cut from something else.
+    assert!(!cut_is_whole(
+        &read_both(FINISHED, &facts(720, &[4.0, 4.0])),
+        8.0,
+        1080
+    ));
+    // Shorter than the film by more than a second and a half: cut short.
+    assert!(!cut_is_whole(
+        &read_both(FINISHED, &facts(1080, &[4.0])),
+        8.0,
+        1080
+    ));
+    // No facts at all, nothing on the server, a film of unknown length.
+    assert!(!cut_is_whole(&read_both(FINISHED, ""), 8.0, 1080));
+    assert!(!cut_is_whole("", 8.0, 1080));
+    assert!(!cut_is_whole(
+        &read_both(FINISHED, &facts(1080, &[4.0, 4.0])),
+        0.0,
+        1080
+    ));
+}
+
+#[test]
+fn only_prepared_files_the_set_made_and_nobody_claims_are_removed() {
+    use vrcast_studio_lib::domain::ladder_build::{removable_files, MadeRung};
+    let src = source(1920, 1080, 24, 30_000_000, "h264");
+    let work = two_rung_work();
+    let made: Vec<MadeRung> = work.iter().map(|w| MadeRung::of(w, &src, 0)).collect();
+    assert_eq!(
+        removable_files(&work, &made, &[]),
+        vec!["film_9.mp4", "film_4.mp4"]
+    );
+    // A rung the record does not say it made stays: not certainly ours.
+    assert_eq!(removable_files(&work, &made[..1], &[]), vec!["film_9.mp4"]);
+    // A name a medium claims meanwhile stays (T577, part b).
+    assert_eq!(
+        removable_files(&work, &made, &["film_9.mp4"]),
+        vec!["film_4.mp4"]
+    );
+    // A record of another name under the same rung is not this file.
+    let mut other = made.clone();
+    other[1].file = String::from("film_4v.mp4");
+    assert_eq!(removable_files(&work, &other, &[]), vec!["film_9.mp4"]);
+}
+
+/// The build asks a rung's segments only after the record (T693) and removes the prepared
+/// files only after the check — never before: before it they are what carrying on cuts from.
+#[test]
+fn the_prepared_files_go_only_after_the_set_is_checked() {
+    let code = include_str!("../../src/tasks/ladder_build.rs");
+    let check = code
+        .find("hls_verify::verify(job.master_url")
+        .expect("the build no longer checks the set");
+    let removal = code
+        .find("remove_prepared(job, &work, &made)")
+        .expect("the build no longer removes its prepared files");
+    let refusal = code
+        .find("return Err(BuildError::Incomplete(verdict.broken()));")
+        .expect("the build no longer refuses an incomplete set");
+    assert!(check < refusal && refusal < removal);
+    // And the cutting does not stop on a missing prepared file of a rung already cut whole.
+    let script = vrcast_studio_lib::domain::hls_package::script_text();
+    let cut_whole = script.find("grep -q ENDLIST").unwrap();
+    let no_such = script.find("no such file").unwrap();
+    assert!(cut_whole < no_such, "{script}");
+}

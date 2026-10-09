@@ -215,17 +215,21 @@ mkdir -p "$OUT"
 for spec in "$@"; do
   sub="${spec%%=*}"; file="${spec#*=}"
   src="$VIDEODIR/$file"
-  if [ ! -f "$src" ]; then
-    echo "VRCAST_HLS_FAILED $sub: no such file: $src" >&2
-    exit 1
-  fi
 
   # Already cut, and cut whole? Then leave it alone. **Recognised by what is on the server
   # rather than by a note kept here** (FR-048): a note outlives the thing it describes, and
   # a variant declared ready with half its segments missing is worse than one rebuilt.
+  #
+  # Asked before the prepared file is looked for (T693): once a set is checked its prepared
+  # files are removed, and carrying on after that must not stop on their absence.
   if [ -s "$OUT/$sub/stream.m3u8" ] && grep -q ENDLIST "$OUT/$sub/stream.m3u8" && [ -s "$OUT/$sub/.facts" ]; then
     echo "VRCAST_HLS_CUT $sub"
     continue
+  fi
+
+  if [ ! -f "$src" ]; then
+    echo "VRCAST_HLS_FAILED $sub: no such file: $src" >&2
+    exit 1
   fi
 
   rm -rf "$OUT/$sub"

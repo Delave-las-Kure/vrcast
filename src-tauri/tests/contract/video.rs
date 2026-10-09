@@ -237,7 +237,6 @@ async fn the_plan_comes_back_with_its_rungs_sizes_time_and_room() {
     assert!(plan.needs_measuring);
     assert!(plan.measure_s > 0);
     assert!(plan.server_bytes > 0 && plan.local_bytes > 0);
-    assert!(plan.server_bytes >= plan.local_bytes);
     assert!(plan.encode_s.is_some());
     assert!(!plan.encoder.is_empty());
     // The server did not answer: not a refusal, an unknown.

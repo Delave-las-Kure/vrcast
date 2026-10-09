@@ -255,6 +255,17 @@ pub mod ipc {
         api::file_delete(&state, &server_id, &path, confirmed.unwrap_or(false)).await
     }
 
+    /// T693 — remove a medium's leftover prepared rung files (`set_files`). Pressed by a
+    /// person, never on its own (T577, part b).
+    #[tauri::command]
+    pub async fn media_remove_set_files(
+        state: State<'_, AppState>,
+        server_id: String,
+        media_id: String,
+    ) -> Result<u64> {
+        api::media_remove_set_files(&state, &server_id, &media_id).await
+    }
+
     #[tauri::command]
     pub fn links_for(state: State<'_, AppState>, server_id: String, path: String) -> Result<Links> {
         api::links_for(&state, &server_id, &path)
@@ -1311,6 +1322,79 @@ pub mod api {
 
         invalidate(state, server_id);
         Ok(())
+    }
+
+    /// Remove a medium's leftover prepared rung files from the server (T693, the owner's
+    /// decision A1 of 2026-10-09); the bytes freed.
+    ///
+    /// A set built before T693 kept its prepared files (`{slug}_{N}.mp4`) beside its segments
+    /// for good; nobody is handed them, and they double what the set takes. «Library» shows
+    /// them as one line, «Extra mp4 files — N GB», with «Remove» — **pressed by a person,
+    /// never on its own** (T577, part b): the press is the consent, and nothing else asks.
+    ///
+    /// What is removed is what the library shows under the medium (`set_files::adopted`): the
+    /// files the catalogue records as the set's and those found by the set's own word —
+    /// never a file a medium has as its own. Refused, with nothing removed, while a video
+    /// builds the set (`MEDIA_BUSY`, T684) or a build or sending touches those names.
+    pub async fn media_remove_set_files(
+        state: &AppState,
+        server_id: &str,
+        media_id: &str,
+    ) -> Result<u64> {
+        let profile = profile_of(state, server_id)?;
+        refuse_if_a_video_builds_into(state, server_id, media_id, None)?;
+        let conn = gate::open(state.secrets.as_ref(), &profile, Intent::Change)
+            .await?
+            .conn;
+        let outcome = async {
+            let manifest = manifest_io::read(&conn, &profile.video_dir).await?;
+            let Some(index) = manifest.media.iter().position(|m| m.id == media_id) else {
+                return Err(no_such_media(media_id));
+            };
+            let slug = manifest.media[index].slug.clone();
+            refuse_if_a_video_builds_into(state, server_id, media_id, Some(&slug))?;
+            let entries = listing::list(&conn, &profile.video_dir).await?;
+            let seen =
+                set_files::adopted(&conn, &profile.video_dir, &manifest, &entries, Some(index))
+                    .await;
+            let files = seen.media[index].set_files.clone();
+            let mut tops = tops_of(files.iter());
+            if !tops.contains(&slug) {
+                tops.push(slug.clone());
+            }
+            if let Some(err) = refuse_if_busy(state, server_id, &tops, ErrorCode::MediaBusy)? {
+                return Err(err);
+            }
+            let freed: u64 = entries
+                .iter()
+                .filter(|e| files.contains(&e.name))
+                .map(|e| e.size_bytes)
+                .sum();
+            if !files.is_empty() {
+                remove_entries(&conn, &profile.video_dir, files.iter()).await?;
+            }
+            // The catalogue forgets them in the same act — and a recorded one already gone
+            // from the server with them.
+            let mut gone = files.clone();
+            gone.extend(manifest.media[index].set_files.iter().cloned());
+            let mut next = manifest.prepared_for_write();
+            if crate::domain::set_files::forget_removed(&mut next, &gone) {
+                manifest_io::write(&conn, &profile.video_dir, &next, manifest.generation).await?;
+            }
+            tracing::info!(
+                media = media_id,
+                files = files.len(),
+                freed,
+                "the set's leftover prepared files were removed"
+            );
+            Ok(freed)
+        }
+        .await;
+        conn.close().await;
+        if outcome.is_ok() {
+            invalidate(state, server_id);
+        }
+        outcome
     }
 
     /// The viewers' links to a file (FR-016).

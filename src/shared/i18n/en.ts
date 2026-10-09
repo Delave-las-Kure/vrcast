@@ -1161,6 +1161,8 @@ export const en: Catalogue = {
       ladders: "Quality ladders: {list}",
       laddersHeading: "Quality ladders",
       setFilesHeading: "The set's rung files",
+      leftoverMp4: "Extra mp4 files — {bytes|bytes}",
+      leftoverRemove: "Remove",
       renameMedia: "Rename",
       buildSet: "Build a set",
       setBuilding: "Set is building",

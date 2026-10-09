@@ -99,7 +99,9 @@ pub struct VideoPlan {
     pub encode_estimate: EncodeEstimate,
     /// The encoder that will do it, as FFmpeg names it.
     pub encoder: String,
-    /// What the set will take on the server, in bytes.
+    /// What the set will take on the server once checked, in bytes: the segments alone
+    /// (T693 — the prepared files are removed then). `server_space` asks for more: while the
+    /// set is built the prepared files are there too.
     pub server_bytes: u64,
     /// What one rung takes here while it is made, in bytes (one at a time).
     pub local_bytes: u64,
@@ -679,7 +681,11 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
         .unwrap_or(AUDIO_BUDGET_BPS)
         .max(AUDIO_BUDGET_BPS);
     let bitrates: Vec<u64> = rungs.iter().map(|r| r.bitrate_bps).collect();
-    let server_bytes = bytes_for_set(&bitrates, audio_bps, source.duration_s);
+    // What the set leaves on the server once checked — the segments alone (T693) — and what
+    // the build needs there while it runs: the prepared files too, until the check.
+    let server_bytes =
+        crate::domain::ladder_size::served_bytes_for_set(&bitrates, audio_bps, source.duration_s);
+    let server_peak = bytes_for_set(&bitrates, audio_bps, source.duration_s);
     let local_bytes = bytes_for_rung(
         bitrates.iter().copied().max().unwrap_or(0),
         audio_bps,
@@ -710,7 +716,7 @@ fn effective_plan(row: &VideoRow, basis: &PlanBasis, source: &SourceFile) -> Vid
         },
         encode_estimate: basis.encode_estimate,
         encoder: basis.encoder.clone(),
-        server_space: space(basis.server_disk, server_bytes),
+        server_space: space(basis.server_disk, server_peak),
         local_space: space(basis.local_disk, local_bytes),
         server_bytes,
         local_bytes,

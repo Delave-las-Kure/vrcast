@@ -269,6 +269,53 @@ pub fn parse_rung_facts(text: &str) -> (Option<f64>, Option<u32>) {
     (duration, height)
 }
 
+/// The line that separates a rung's playlist from its `.facts` in one reading of both (T693).
+pub const CUT_FACTS_MARK: &str = "VRCAST_RUNG_FACTS";
+
+/// Whether a rung's segments are on the server, cut whole (T693): its playlist is finished
+/// (`#EXT-X-ENDLIST`), its `.facts` read, the picture of the rung's height, and the segments
+/// together as long as the source (within a second and a half: a playlist's durations are
+/// rounded segment by segment).
+///
+/// `text` is the playlist, a line [`CUT_FACTS_MARK`], then the `.facts`.
+///
+/// **Why it is asked at all.** Once a set is checked its prepared files are removed (the
+/// owner's decision A1 of 2026-10-09): only the segments stay. A set carried on after that —
+/// a restart between the removal and the video's «Done», a rebuild to change one rung — must
+/// find its rungs done by their segments, or it would make every rung again. Asked only of a
+/// rung the set's own record says it made ([`made_here`]); on its own it proves nothing.
+pub fn cut_is_whole(text: &str, expected_s: f64, height: u32) -> bool {
+    let Some((playlist, facts)) = text.split_once(CUT_FACTS_MARK) else {
+        return false;
+    };
+    if !playlist.contains("#EXT-X-ENDLIST") {
+        return false;
+    }
+    let Ok(facts) = super::hls_package::read_facts(facts) else {
+        return false;
+    };
+    let total: f64 = facts.segments.iter().map(|s| s.duration_s).sum();
+    facts.height == height
+        && !facts.segments.is_empty()
+        && expected_s > 0.0
+        && (total - expected_s).abs() < 1.5
+}
+
+/// The prepared files a checked set may remove (T693, the owner's decision A1): every
+/// rung's, when the set's own record says it made it under that name and no medium claims
+/// it. In the order of `work`.
+///
+/// A file not in the record — a rung that was not made by this set, a record lost — stays:
+/// removing what is not certainly ours is the one mistake here that cannot be undone, and a
+/// file left behind is shown in «Library» as an extra mp4 to remove by hand.
+pub fn removable_files(work: &[VariantWork], made: &[MadeRung], claimed: &[&str]) -> Vec<String> {
+    work.iter()
+        .filter(|w| made.iter().any(|m| m.sub == w.sub && m.file == w.file))
+        .filter(|w| !claimed.contains(&w.file.as_str()))
+        .map(|w| w.file.clone())
+        .collect()
+}
+
 /// Which prepared file each rung is made into (T677, T681), in the order of `work`.
 ///
 /// - What the set's own record says, while that is still a rung's name of this set at this

@@ -109,3 +109,21 @@ fn the_estimate_never_comes_out_under_the_nominal_bytes() {
         }
     }
 }
+
+/// T693 — what «On the server ≈» says is the set alone: the prepared files are removed once
+/// the set is checked. The room asked for before a build is still both.
+#[test]
+fn a_checked_set_leaves_its_segments_alone_on_the_server() {
+    use vrcast_studio_lib::domain::ladder_size::served_bytes_for_set;
+    let rungs = [9_000_000u64, 4_000_000];
+    let served = served_bytes_for_set(&rungs, AUDIO_BUDGET_BPS, 3600.0);
+    let peak = bytes_for_set(&rungs, AUDIO_BUDGET_BPS, 3600.0);
+    let nominal: f64 = rungs
+        .iter()
+        .map(|b| (b + AUDIO_BUDGET_BPS) as f64 * 3600.0 / 8.0)
+        .sum();
+    assert!(served as f64 >= nominal * SEGMENTS_OVER_MP4 - 2.0);
+    assert!(served < peak);
+    assert!(peak as f64 >= nominal * 2.0);
+    assert_eq!(served_bytes_for_set(&rungs, AUDIO_BUDGET_BPS, 0.0), 0);
+}
