@@ -17,13 +17,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import type { AppError, VideoRefusal, VideoView } from "../../shared/contract";
 import { ipc, onVideoRemoved, onVideoUpdate, toAppError } from "../../shared/ipc";
 import { useT } from "../../shared/i18n";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
+import { NoServer } from "../shared/NoServer";
 import { basename } from "../shared/names";
 import { VideoCard } from "./VideoCard";
 import { VIDEO_EXTENSIONS, anyInWork, canStart, mergeListed, upsert } from "./rules";
@@ -199,11 +200,7 @@ export function VideoScreen() {
         </div>
       </div>
 
-      {!active && (
-        <p className="muted">
-          {w.noServer} <Link to="/servers">{w.goToServers}</Link>
-        </p>
-      )}
+      {!active && <NoServer />}
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 

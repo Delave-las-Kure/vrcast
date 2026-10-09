@@ -418,6 +418,24 @@ button:focus-visible {
   font-size: 13px;
 }
 
+/* T709 — options with what each costs: one per line, the cost under the name. */
+.choices .choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.choice__text {
+  display: flex;
+  flex-direction: column;
+}
+
+.choice__means {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .more summary,
 .error-more summary {
   cursor: pointer;

@@ -21,6 +21,7 @@ import { Link } from "react-router-dom";
 
 import { UpgradeDialog } from "./UpgradeDialog";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { More } from "../shared/More";
 import { useT } from "../../shared/i18n";
 import { ipc, onServerState } from "../../shared/ipc";
 import type { AppError, ServerState } from "../../shared/contract";
@@ -123,12 +124,56 @@ export function ServerStateCard({ serverId }: { serverId: string }) {
       {state.kind === "Foreign" && (
         <>
           <p>{words.foreign}</p>
-          {/* What exactly was found. Without it the refusal attaches to nothing. */}
-          {state.foreign_reason !== null && <small>{JSON.stringify(state.foreign_reason)}</small>}
+          {/* What exactly was found (FR-132), in words. It used to be the reason's JSON
+              («{"StateFileUnreadable":{"problem":"NoVersion"}}») — T709. */}
+          <ForeignWhy reason={state.foreign_reason} />
         </>
       )}
 
       {state.kind === "Unreachable" && <p>{words.unreachable}</p>}
     </div>
+  );
+}
+
+/**
+ * Why the server was taken for somebody else's, as one line, with the parser's own words (if
+ * any) under «Details». The reason arrives as the core serialises it — an externally tagged
+ * enum — and an unknown shape says the plain «not ours» rather than nothing.
+ */
+function ForeignWhy({ reason }: { reason: unknown }) {
+  const t = useT();
+  const words = t.ui.serverState;
+  if (reason === null || reason === undefined) return null;
+
+  let line: string = words.foreignUnknown;
+  let tech: string | null = null;
+  if (reason === "ConfigWithoutState") {
+    line = words.foreignConfigWithoutState;
+  } else if (typeof reason === "object") {
+    const r = reason as Record<string, unknown>;
+    const running = r.WebServerRunning as { name?: unknown } | undefined;
+    const unreadable = r.StateFileUnreadable as { problem?: unknown } | undefined;
+    if (running && typeof running.name === "string") {
+      line = words.foreignWebServer(running.name);
+    } else if (unreadable) {
+      line = words.foreignStateBroken;
+      const problem = unreadable.problem;
+      if (problem && typeof problem === "object") {
+        const detail = (problem as { Unreadable?: { detail?: unknown } }).Unreadable?.detail;
+        if (typeof detail === "string" && detail !== "") tech = detail;
+      } else if (problem === "NoVersion") {
+        tech = words.foreignNoVersion;
+      }
+    }
+  }
+  return (
+    <>
+      <p className="muted">{line}</p>
+      {tech && (
+        <More>
+          <p>{tech}</p>
+        </More>
+      )}
+    </>
   );
 }

@@ -80,6 +80,14 @@ export function DomainCheck({
       {asking && <p>{words.domainAsking}</p>}
       {error && <ErrorNotice error={error} />}
 
+      {/* T709 — a check that failed outright still leaves the way on in sight: the screen
+          used to end at the error with nothing to press. */}
+      {error && !answer && (
+        <button type="button" onClick={ask} disabled={asking}>
+          {words.domainAskAgain}
+        </button>
+      )}
+
       {answer && ok && <p>{words.domainOk}</p>}
 
       {answer && !ok && (

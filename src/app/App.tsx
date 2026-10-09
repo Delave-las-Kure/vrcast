@@ -12,6 +12,7 @@ import { LibraryScreen } from "../features/library/LibraryScreen";
 import { VideoScreen } from "../features/video/VideoScreen";
 import { ServerList } from "../features/servers/ServerList";
 import { About } from "../features/shared/About";
+import { NoServer } from "../features/shared/NoServer";
 import { DeployPage } from "../features/deploy/DeployPage";
 import { useActiveServer, useServers } from "../features/servers/store";
 import { LimitsList } from "../features/viewers/LimitsList";
@@ -147,9 +148,7 @@ function AppShell() {
           <Route path="/deploy" element={<DeployPage />} />
           <Route
             path="/limits"
-            element={
-              activeServer ? <LimitsList serverId={activeServer} /> : <p>{t.ui.viewers.noServer}</p>
-            }
+            element={activeServer ? <LimitsList serverId={activeServer} /> : <NoServer />}
           />
           <Route path="/diagnostics" element={<DiagPage />} />
           <Route path="/appearance" element={<Appearance />} />

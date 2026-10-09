@@ -742,4 +742,61 @@ describe("the server state card (T538)", () => {
     );
     expect(screen.queryByText(ru.ui.serverState.versions(9, 9))).not.toBeInTheDocument();
   });
+
+  it("says why a server is somebody else's in words, never as JSON (T709)", async () => {
+    mockServerDetect.mockResolvedValue(
+      managedState({
+        kind: "Foreign",
+        server_version: null,
+        foreign_reason: { StateFileUnreadable: { problem: "NoVersion" } },
+      }),
+    );
+    const view = renderIn(<ServerStateCard serverId="srv_1" />, "ru");
+
+    expect(await screen.findByText(ru.ui.serverState.foreignStateBroken)).toBeInTheDocument();
+    expect(view.container.textContent).not.toMatch(/[{}]|StateFileUnreadable|NoVersion/);
+  });
+
+  it("names the web server that is already running (T709)", async () => {
+    mockServerDetect.mockResolvedValue(
+      managedState({
+        kind: "Foreign",
+        server_version: null,
+        foreign_reason: { WebServerRunning: { name: "nginx" } },
+      }),
+    );
+    renderIn(<ServerStateCard serverId="srv_1" />, "en");
+    expect(
+      await screen.findByText(en.ui.serverState.foreignWebServer("nginx")),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("a section with no server (T709)", () => {
+  it("says to add a server first when there are none, and to choose one when there are", async () => {
+    const { NoServer } = await import("../../shared/NoServer");
+    useServers.setState({ profiles: [], loading: false, error: null });
+    const view = renderIn(
+      <MemoryRouter>
+        <NoServer />
+      </MemoryRouter>,
+      "ru",
+    );
+    expect(screen.getByText(ru.ui.common.noServers, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: ru.ui.common.toServers })).toBeInTheDocument();
+    view.unmount();
+
+    useServers.setState({
+      profiles: [makeProfile({ is_active: false }), makeProfile({ id: "srv_2", is_active: false })],
+      loading: false,
+      error: null,
+    });
+    renderIn(
+      <MemoryRouter>
+        <NoServer />
+      </MemoryRouter>,
+      "ru",
+    );
+    expect(screen.getByText(ru.ui.common.noActiveServer, { exact: false })).toBeInTheDocument();
+  });
 });

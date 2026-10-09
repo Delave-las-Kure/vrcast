@@ -547,7 +547,7 @@ export const en: Catalogue = {
       "A build of the set “{slug}” is already running on this server. Wait for it to finish.",
     UPLOAD_NAME_RESERVED: "That name belongs to an internal serving entry — choose another.",
     DOMAIN_ADD_RECORD:
-      "Add a {record} record for “{name}” with the value {value} at your registrar.",
+      "Point the domain “{name}” at IP {value}: add a {record} record at your registrar.",
     DOMAIN_FIX_RECORD: "The {record} record for “{name}” leads to {to} — change it to {value}.",
     DOMAIN_REMOVE_RECORD:
       "Remove the {record} record for “{name}” (leads to {to}): IPv6 will be off.",
@@ -701,6 +701,10 @@ export const en: Catalogue = {
       nothing: "—",
       language: "Language",
       theme: { light: "Light", dark: "Dark", system: "Follow the system" },
+      // T709 — a section with no server says what to do.
+      noServers: "Add a server first.",
+      noActiveServer: "Choose the server to work with.",
+      toServers: "Go to servers",
     },
 
     ladder: {
@@ -742,6 +746,12 @@ export const en: Catalogue = {
       tooNew: "The server side is newer than the app — read only.",
       updateIt: "Update the server side",
       foreign: "Someone else's setup — the app leaves it alone.",
+      // T709 — what exactly was found, in words rather than JSON.
+      foreignWebServer: (name: string) => `${name} is already running on the server.`,
+      foreignConfigWithoutState: "The web server was set up by something other than this app.",
+      foreignStateBroken: "The serving's state file on the server is damaged.",
+      foreignNoVersion: "The file /etc/vrcast/state.json has no version number.",
+      foreignUnknown: "The app did not recognise the reason.",
       unreachable: "The server did not answer. Showing the last known state.",
     },
     deploy: {
@@ -760,11 +770,12 @@ export const en: Catalogue = {
       ipv6DisableMeans: "Remove the domain's AAAA record.",
 
       domainTitle: "The domain record",
-      domainAsking: "Asking the servers that hold the zone…",
+      domainAsking: "Checking where the domain leads… up to 2 minutes.",
       domainOk: "The domain points at this server.",
       domainNotPointed: "The domain does not lead here. Add an A record at your registrar.",
       domainSpreadsSlowly: "A record takes a few minutes to spread.",
-      domainAskAgain: "Ask again",
+      domainAskAgain: "Check again",
+      planning: "Putting the list of changes together…",
 
       stepApplied: "done",
       stepToDo: "will be done",

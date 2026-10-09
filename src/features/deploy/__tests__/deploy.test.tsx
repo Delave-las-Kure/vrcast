@@ -78,7 +78,6 @@ function profile(over: Partial<ServerProfile> = {}): ServerProfile {
   };
 }
 
-
 const DOMAIN_OK: DomainAnswer = { verdict: "Ok", a: ["203.0.113.10"], aaaa: [], advice: null };
 
 const DOMAIN_WRONG: DomainAnswer = {
@@ -223,6 +222,37 @@ describe("deployment", () => {
     const asked = mockDnsCheck.mock.calls.length;
     fireEvent.click(screen.getByText(ru.ui.deploy.domainAskAgain));
     await waitFor(() => expect(mockDnsCheck.mock.calls.length).toBeGreaterThan(asked));
+  });
+
+  it("leaves «Check again» in sight when the check itself failed (T709)", async () => {
+    mockDnsCheck.mockRejectedValueOnce({ code: "SSH_UNREACHABLE" });
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+    await waitFor(() => expect(screen.getByText(ru.errors.SSH_UNREACHABLE.message)).toBeTruthy());
+
+    const asked = mockDnsCheck.mock.calls.length;
+    fireEvent.click(screen.getByText(ru.ui.deploy.domainAskAgain));
+    await waitFor(() => expect(mockDnsCheck.mock.calls.length).toBeGreaterThan(asked));
+  });
+
+  it("says plainly where to point the domain (T709)", async () => {
+    mockDnsCheck.mockResolvedValue({
+      ...DOMAIN_WRONG,
+      a: [],
+      aaaa: [],
+      advice: {
+        key: "DOMAIN_ADD_RECORD",
+        params: { record: "A", name: "clean.example.com", value: "203.0.113.5" },
+      },
+    });
+    renderIn(<DeployScreen serverId="s1" />, "ru");
+    chooseIpv6("Disable");
+    expect(
+      await screen.findByText(
+        "Направьте домен «clean.example.com» на IP 203.0.113.5: заведите у регистратора запись A.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText(ru.ui.deploy.domainAskAgain)).toBeTruthy();
   });
 
   it("asks about the domain again when the IPv6 choice changes", async () => {
@@ -517,9 +547,7 @@ describe("T626 — the profile a run switched to its own key is not put back on 
     end({ code: "DEPLOY_STEP_FAILED", details: [], cause: "step Fail2ban failed" });
 
     await waitFor(() => expect(mockServersList).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(useServers.getState().profiles[0]?.auth_kind).toBe("managed_key"),
-    );
+    await waitFor(() => expect(useServers.getState().profiles[0]?.auth_kind).toBe("managed_key"));
 
     // The choice is open again after a failure; changing it writes that field alone.
     chooseIpv6("Keep");
@@ -536,9 +564,7 @@ describe("T626 — the profile a run switched to its own key is not put back on 
     end(null);
 
     await waitFor(() => expect(screen.getByText(ru.ui.deploy.finished)).toBeInTheDocument());
-    await waitFor(() =>
-      expect(useServers.getState().profiles[0]?.auth_kind).toBe("managed_key"),
-    );
+    await waitFor(() => expect(useServers.getState().profiles[0]?.auth_kind).toBe("managed_key"));
     expect(mockServerUpdate).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { NoServer } from "../shared/NoServer";
 import { PlacesTables } from "./PlacesTables";
 import { useActiveServer, useServers } from "../servers/store";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
@@ -180,7 +181,11 @@ export function ViewersScreen() {
     return (
       <section className="screen">
         <h1>{t.ui.sections.viewers}</h1>
-        <p className="hint">{serversLoading ? t.ui.common.loading : words.noServer}</p>
+        {serversLoading ? (
+          <p className="hint">{t.ui.common.loading}</p>
+        ) : (
+          <NoServer className="hint" />
+        )}
       </section>
     );
   }

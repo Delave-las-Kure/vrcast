@@ -536,7 +536,8 @@ export const ruCore: CatalogueCore = {
       "Файл «{name}» уже заливается на этот сервер. Дождитесь конца или отмените ту задачу.",
     BUILD_ALREADY_RUNNING: "Сборка набора «{slug}» уже идёт на этот сервер. Дождитесь её конца.",
     UPLOAD_NAME_RESERVED: "Это имя занято служебной записью раздачи — выберите другое.",
-    DOMAIN_ADD_RECORD: "Заведите у регистратора запись {record} для «{name}» со значением {value}.",
+    DOMAIN_ADD_RECORD:
+      "Направьте домен «{name}» на IP {value}: заведите у регистратора запись {record}.",
     DOMAIN_FIX_RECORD: "Запись {record} для «{name}» ведёт на {to} — исправьте на {value}.",
     DOMAIN_REMOVE_RECORD:
       "Удалите запись {record} для «{name}» (ведёт на {to}): IPv6 будет отключён.",
@@ -696,6 +697,10 @@ const ui = {
     nothing: "—",
     language: "Язык",
     theme: { light: "Светлая", dark: "Тёмная", system: "Как в системе" },
+    // T709 — раздел без сервера говорит, что сделать.
+    noServers: "Сначала добавьте сервер.",
+    noActiveServer: "Выберите сервер, с которым работать.",
+    toServers: "Перейти к серверам",
   },
 
   ladder: {
@@ -740,6 +745,12 @@ const ui = {
     tooNew: "Серверная часть новее приложения — только чтение.",
     updateIt: "Обновить серверную часть",
     foreign: "Чужая раздача — приложение её не трогает.",
+    // T709 — что именно найдено, словами, а не JSON.
+    foreignWebServer: (name: string) => `На сервере уже работает ${name}.`,
+    foreignConfigWithoutState: "Веб-сервер настроен не этим приложением.",
+    foreignStateBroken: "Файл состояния раздачи на сервере испорчен.",
+    foreignNoVersion: "В файле /etc/vrcast/state.json нет номера версии.",
+    foreignUnknown: "Причину приложение не распознало.",
     unreachable: "Сервер не ответил. Показано последнее известное.",
   },
   deploy: {
@@ -758,11 +769,12 @@ const ui = {
     ipv6DisableMeans: "Запись AAAA у домена нужно удалить.",
 
     domainTitle: "Доменная запись",
-    domainAsking: "Спрашиваю у серверов зоны…",
+    domainAsking: "Проверяем, куда ведёт домен… до 2 минут.",
     domainOk: "Домен ведёт на этот сервер.",
     domainNotPointed: "Домен не ведёт на сервер. Заведите запись A у регистратора.",
     domainSpreadsSlowly: "Запись расходится несколько минут.",
-    domainAskAgain: "Спросить снова",
+    domainAskAgain: "Проверить ещё раз",
+    planning: "Составляем список изменений…",
 
     stepApplied: "сделано",
     stepToDo: "будет сделано",

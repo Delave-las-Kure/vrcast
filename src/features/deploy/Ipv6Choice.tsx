@@ -9,6 +9,10 @@
  * What each path costs is written beside the path itself rather than hidden in a tooltip:
  * somebody buying a server for the first time does not know what AAAA is, and here is where
  * they should find out.
+ *
+ * T709: each option on a line of its own, its cost under its name. They used to run inline
+ * into one another — «Оставить IPv6Нужна запись AAAA… Отключить IPv6Запись AAAA…» — and which
+ * explanation belonged to which button was a guess.
  */
 
 import { useT } from "../../shared/i18n";
@@ -28,7 +32,7 @@ export function Ipv6Choice({
   const words = t.ui.deploy;
 
   return (
-    <fieldset>
+    <fieldset className="choices">
       <legend>{words.ipv6Question}</legend>
 
       {/* Neither radio is checked while `value` is `null` — the reader has to say why the
@@ -36,7 +40,7 @@ export function Ipv6Choice({
           simply left where it started. */}
       {value === null && <p>{words.ipv6NotChosen}</p>}
 
-      <label>
+      <label className="choice">
         <input
           type="radio"
           name="ipv6"
@@ -45,11 +49,13 @@ export function Ipv6Choice({
           disabled={disabled}
           onChange={() => onChange("Keep")}
         />
-        <strong>{words.ipv6Keep}</strong>
-        <span>{words.ipv6KeepMeans}</span>
+        <span className="choice__text">
+          <strong>{words.ipv6Keep}</strong>
+          <span className="choice__means">{words.ipv6KeepMeans}</span>
+        </span>
       </label>
 
-      <label>
+      <label className="choice">
         <input
           type="radio"
           name="ipv6"
@@ -58,8 +64,10 @@ export function Ipv6Choice({
           disabled={disabled}
           onChange={() => onChange("Disable")}
         />
-        <strong>{words.ipv6Disable}</strong>
-        <span>{words.ipv6DisableMeans}</span>
+        <span className="choice__text">
+          <strong>{words.ipv6Disable}</strong>
+          <span className="choice__means">{words.ipv6DisableMeans}</span>
+        </span>
       </label>
     </fieldset>
   );

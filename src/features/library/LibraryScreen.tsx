@@ -30,6 +30,7 @@ import {
 import { fill, renderError } from "../../shared/i18n/render";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorNotice } from "../shared/ErrorNotice";
+import { NoServer } from "../shared/NoServer";
 import { CopyLink } from "./CopyLink";
 import { FileRow } from "./FileRow";
 import { StaleBanner } from "./StaleBanner";
@@ -293,10 +294,7 @@ export function LibraryScreen() {
     return (
       <div className="panel">
         <h1>{t.ui.library.heading}</h1>
-        <p className="muted">{t.ui.library.noActiveServer}</p>
-        <Link className="button-link" to="/servers">
-          {t.ui.library.goToServers}
-        </Link>
+        <NoServer />
       </div>
     );
   }

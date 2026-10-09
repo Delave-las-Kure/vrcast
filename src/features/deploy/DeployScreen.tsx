@@ -257,6 +257,8 @@ export function DeployScreen({ serverId }: { serverId: string }) {
         </>
       )}
 
+      {running === null && domainOk && !preview && !error && <p>{words.planning}</p>}
+
       {running === null && preview && (
         <>
           <h3>{words.willChange}</h3>

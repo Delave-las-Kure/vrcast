@@ -497,7 +497,7 @@ describe("adding videos", () => {
     useServers.setState({ profiles: [], loading: false });
     mockServersList.mockResolvedValue([]);
     show();
-    expect(await screen.findByText(ru.ui.video.noServer, { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText(ru.ui.common.noServers, { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: ru.ui.video.add })).toBeDisabled();
   });
 });

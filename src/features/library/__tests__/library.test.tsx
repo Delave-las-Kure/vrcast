@@ -223,8 +223,9 @@ describe("the library", () => {
     mockServersList.mockResolvedValue([]);
     draw();
 
-    expect(await screen.findByText(ru.ui.library.noActiveServer)).toBeInTheDocument();
-    expect(screen.getByText(ru.ui.library.goToServers)).toBeInTheDocument();
+    // T709: with no profiles at all the way on is to add one, not to «choose».
+    expect(await screen.findByText(ru.ui.common.noServers, { exact: false })).toBeInTheDocument();
+    expect(screen.getByText(ru.ui.common.toServers)).toBeInTheDocument();
   });
 
   it("shows a medium with how many files it has and how much they weigh", async () => {

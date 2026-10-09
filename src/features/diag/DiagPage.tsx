@@ -9,12 +9,11 @@
 
 import { DiagScreen } from "./DiagScreen";
 import { useActiveServer } from "../servers/store";
-import { useT } from "../../shared/i18n";
+import { NoServer } from "../shared/NoServer";
 
 export function DiagPage() {
-  const t = useT();
   const server = useActiveServer();
 
-  if (!server) return <p>{t.ui.viewers.noServer}</p>;
+  if (!server) return <NoServer />;
   return <DiagScreen serverId={server.id} />;
 }

@@ -1351,9 +1351,10 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           await until(
             "the domain check",
             async () =>
-              !/Спрашиваю у серверов зоны…/.test(await pageText()) &&
+              !/Спрашиваю у серверов зоны…|Проверяем, куда ведёт домен…/.test(await pageText()) &&
               ((await has("//button[normalize-space()='Согласен, разворачивать']")) ||
-                (await has("//button[normalize-space()='Спросить снова']"))),
+                (await has("//button[normalize-space()='Спросить снова']")) ||
+                (await has("//button[normalize-space()='Проверить ещё раз']"))),
             120_000,
             1000,
           );
