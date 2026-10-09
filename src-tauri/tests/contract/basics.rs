@@ -221,6 +221,22 @@ async fn app_versions_returns_the_versions() {
     assert!(v.server.is_none());
 }
 
+#[tokio::test]
+async fn app_versions_names_the_build_it_was_made_from() {
+    // Owner, 2026-10-02: two installers of one version must be told apart. These tests run
+    // inside the repository, so `build.rs` had a commit to write in.
+    let v = api::app_versions(&state(), None).await.unwrap();
+    let commit = v.commit.expect("the build has no commit written into it");
+    assert_eq!(commit.len(), 7, "{commit}");
+    assert!(commit.chars().all(|c| c.is_ascii_hexdigit()), "{commit}");
+    let date = v
+        .commit_date
+        .expect("the build has no commit date written into it");
+    let parts: Vec<&str> = date.split('-').collect();
+    assert_eq!(parts.len(), 3, "{date}");
+    assert_eq!(parts[0].len(), 4, "{date}");
+}
+
 #[test]
 fn a_new_application_s_task_list_is_empty() {
     let s = state();

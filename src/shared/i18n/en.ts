@@ -1323,6 +1323,7 @@ export const en: Catalogue = {
     about: {
       title: "About",
       tagline: "managing a streaming server: library, file preparation, uploading, viewers.",
+      build: "Build {commit} of {date}",
       licenceHeading: "Licence and source code",
       licenceBody1a: "This application is distributed under the",
       licenceName: "GNU General Public License, version 3 or later",

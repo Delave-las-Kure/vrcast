@@ -39,6 +39,7 @@ function sourceAt(version: string | null, path = ""): string {
 export function About() {
   const [version, setVersion] = useState<string | null>(null);
   const [schema, setSchema] = useState<number | null>(null);
+  const [build, setBuild] = useState<{ commit: string; date: string } | null>(null);
   const t = useT();
   const { lang } = useLang();
   const a = t.ui.about;
@@ -49,10 +50,12 @@ export function About() {
       .then((v) => {
         setVersion(v.app);
         setSchema(v.schema);
+        setBuild(v.commit && v.commit_date ? { commit: v.commit, date: v.commit_date } : null);
       })
       .catch(() => {
         setVersion(null);
         setSchema(null);
+        setBuild(null);
       });
   }, []);
 
@@ -64,6 +67,13 @@ export function About() {
         <strong>VRCast Studio</strong>
         {version ? ` ${version}` : ""} — {a.tagline}
       </p>
+      {/* Which build of this version (owner, 2026-10-02): two installers of one number differ
+          here, and this is what to read out when something went wrong. */}
+      {build && (
+        <p className="muted" data-testid="about-build">
+          {fill(a.build, { commit: build.commit, date: build.date }, t, lang)}
+        </p>
+      )}
 
       <Update />
 

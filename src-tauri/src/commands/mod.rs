@@ -333,6 +333,20 @@ pub struct Versions {
     pub server: Option<u32>,
     /// The local store's version — needed when sorting out trouble.
     pub schema: u32,
+    /// The commit this build was made from, seven characters (`build.rs`). Two installers of
+    /// the same version are told apart by it. `None` for a build made without git.
+    pub commit: Option<String>,
+    /// That commit's date, `YYYY-MM-DD`. `None` as above.
+    pub commit_date: Option<String>,
+}
+
+/// What `build.rs` wrote into this build: the commit and its date, if there was git to ask.
+pub fn build_commit() -> (Option<String>, Option<String>) {
+    let some = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+    (
+        some(env!("VRCAST_BUILD_COMMIT")),
+        some(env!("VRCAST_BUILD_DATE")),
+    )
 }
 
 /// What becomes of a task if the application is closed (FR-086).
@@ -371,10 +385,13 @@ pub mod api {
                 .ok()
                 .and_then(|s| s.server_version),
         };
+        let (commit, commit_date) = super::build_commit();
         Ok(Versions {
             app: env!("CARGO_PKG_VERSION").to_owned(),
             server,
             schema: state.db.schema_version()?,
+            commit,
+            commit_date,
         })
     }
 

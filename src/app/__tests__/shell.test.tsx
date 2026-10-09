@@ -129,7 +129,13 @@ function makeTask(over: Partial<Task> = {}): Task {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockAppVersions.mockResolvedValue({ app: "0.1.0", server: null, schema: 2 });
+  mockAppVersions.mockResolvedValue({
+    app: "0.1.0",
+    server: null,
+    schema: 2,
+    commit: null,
+    commit_date: null,
+  });
   mockSettingsGet.mockResolvedValue(SETTINGS);
   mockSettingsSet.mockImplementation(async (s) => s as Settings);
   mockTasksList.mockResolvedValue([]);

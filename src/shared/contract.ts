@@ -669,6 +669,10 @@ export interface Versions {
    */
   server: number | null;
   schema: number;
+  /** The commit this build was made from (7 characters), or null for a build without git. */
+  commit: string | null;
+  /** That commit's date, `YYYY-MM-DD`, or null as above. */
+  commit_date: string | null;
 }
 
 // ---------- deployment (phase 7) ----------

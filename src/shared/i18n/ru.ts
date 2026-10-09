@@ -1316,6 +1316,7 @@ const ui = {
   about: {
     title: "О программе",
     tagline: "управление стриминг-сервером: библиотека, подготовка файлов, заливка, зрители.",
+    build: "Сборка {commit} от {date}",
     licenceHeading: "Лицензия и исходный код",
     licenceBody1a: "Приложение распространяется на условиях",
     licenceName: "GNU General Public License версии 3 или новее",

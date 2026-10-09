@@ -34,10 +34,36 @@ const { About } = await import("../About");
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockAppVersions.mockResolvedValue({ app: "0.1.0", server: null, schema: 5 });
+  mockAppVersions.mockResolvedValue({
+    app: "0.1.0",
+    server: null,
+    schema: 5,
+    commit: "e372390",
+    commit_date: "2026-10-02",
+  });
 });
 
 describe("about the application", () => {
+  it("says which build of the version this is — the commit and its date", async () => {
+    // Owner, 2026-10-02: two installers of one version must be told apart.
+    renderIn(<About />);
+    expect(await screen.findByTestId("about-build")).toHaveTextContent("e372390");
+    expect(screen.getByTestId("about-build")).toHaveTextContent("2026-10-02");
+  });
+
+  it("says nothing about the build when the build has no commit to name", async () => {
+    mockAppVersions.mockResolvedValue({
+      app: "0.1.0",
+      server: null,
+      schema: 5,
+      commit: null,
+      commit_date: null,
+    });
+    renderIn(<About />);
+    expect(await screen.findByText("v0.1.0")).toBeInTheDocument();
+    expect(screen.queryByTestId("about-build")).toBeNull();
+  });
+
   it("names the licence", async () => {
     renderIn(<About />);
     expect(await screen.findByText(/GNU General Public License/)).toBeInTheDocument();
