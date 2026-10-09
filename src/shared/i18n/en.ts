@@ -468,6 +468,12 @@ export const en: Catalogue = {
     ON_CLOSE_MUST_RUN_AGAIN: "will have to be run again",
     ON_CLOSE_WORK_KEPT_START_AGAIN:
       "the {percent}% already done will keep, but you will have to start it again — it does not come back by itself",
+    // T710 — a film by its name, and what really becomes of it.
+    ON_CLOSE_FILM_CARRIES_ON:
+      "“{name}” carries on by itself after start-up; the rung under way starts over",
+    ON_CLOSE_FILM_QUEUED: "“{name}” is waiting its turn — it starts by itself after start-up",
+    ON_CLOSE_FILM_PAUSED:
+      "“{name}” is paused — after start-up press Continue; the rung under way starts over",
 
     // --- steps of the connection check ---
     // T708: what exactly the server said about itself ("SSH-2.0-…") is under "Details" only.
@@ -1001,7 +1007,6 @@ export const en: Catalogue = {
       placesFetch: "Download",
       placesFetching: "Downloading…",
       placesFailed: "The download did not go through — try again later.",
-      noServer: "No server selected.",
       starting: "Starting to watch…",
       nobody: "Nobody is watching at the moment.",
       notKnown: "not determined",
@@ -1106,8 +1111,6 @@ export const en: Catalogue = {
       add: "Add video",
       startAll: "Start all",
       pickFilter: "Video",
-      noServer: "No server selected.",
-      goToServers: "Go to servers",
       empty: "Nothing yet.",
       refusedDrop: "Hide refusals",
       planning: "Working out the plan…",
@@ -1172,8 +1175,6 @@ export const en: Catalogue = {
     library: {
       heading: "Library",
       reading: "Reading the library…",
-      noActiveServer: "No server selected.",
-      goToServers: "Go to servers",
       newMedia: "New medium",
       serverLine: "Server:",
       empty: "Empty so far.",
@@ -1306,6 +1307,7 @@ export const en: Catalogue = {
       resume: "Resume",
       stop: "Cancel",
       viewResult: "See it in the library",
+      openFilm: "Open “Video”",
       kinds: {
         probe: "examining the source",
         convert: "preparing the file",

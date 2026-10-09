@@ -447,12 +447,68 @@ pub mod api {
     /// The difference between the kinds of task is not cosmetic here: a transfer carries on
     /// from where it got to, while a paused preparation is held by a living process and will
     /// not survive the closing. A person must learn of that **before** it happens.
+    ///
+    /// ⚠ **T710 (QA-26 №14) — a film is spoken of as a film, not as its tasks.** The work of
+    /// «Video» (T672) runs as a film's tasks one stage after another — measuring, then the
+    /// build — and `restore_videos` raises a film that was going at start-up and carries it on
+    /// from its stage. Judged by the kind of its task alone, the same film used to be told
+    /// «you will have to start it again — it will not come back by itself», which is the
+    /// opposite of what happens; and two films measuring gave two identical, nameless lines.
+    /// So each film in work gets one line of its own, by name (`id` = the video's id,
+    /// `kind = "video"`), saying what really becomes of it:
+    ///
+    /// - going: it carries on by itself after start-up, and only the rung under way when the
+    ///   application closed begins again (`ON_CLOSE_FILM_CARRIES_ON {name}`); still waiting
+    ///   for its turn — it starts by itself (`ON_CLOSE_FILM_QUEUED {name}`). `resumes`.
+    /// - paused by the person: the pause stays a pause (`after_restart`), «Continue» carries on
+    ///   and the rung under way begins again (`ON_CLOSE_FILM_PAUSED {name}`). `restarts`.
+    ///
+    /// The film's tasks do not get lines of their own besides. Every other task — a
+    /// deployment, an upgrade, an upload of the old way — is said as before, by its kind.
     pub fn tasks_on_close(state: &AppState) -> Result<Vec<TaskOnClose>> {
+        use crate::domain::video::VideoState;
         use crate::tasks::state::TaskState;
 
+        let tasks = state.tasks.list()?;
+        let films = crate::store::videos::list(&state.db)?;
+        let film_ids: std::collections::HashSet<&str> =
+            films.iter().map(|f| f.id.as_str()).collect();
+
         let mut out = Vec::new();
-        for t in state.tasks.list()? {
+        for film in &films {
+            if !matches!(film.state, VideoState::Working | VideoState::Paused) {
+                continue;
+            }
+            let task = film
+                .task_id
+                .as_deref()
+                .and_then(|id| tasks.iter().find(|t| t.id == id));
+            let progress = task.map(|t| t.progress).unwrap_or(0.0);
+            let (outcome, key) = match film.state {
+                VideoState::Paused => ("restarts", DetailCode::OnCloseFilmPaused),
+                _ if task.is_none_or(|t| t.state == TaskState::Queued) => {
+                    ("resumes", DetailCode::OnCloseFilmQueued)
+                }
+                _ => ("resumes", DetailCode::OnCloseFilmCarriesOn),
+            };
+            out.push(TaskOnClose {
+                id: film.id.clone(),
+                kind: String::from("video"),
+                progress,
+                outcome,
+                explanation: Detail::new(key).with("name", film.title.clone()),
+            });
+        }
+
+        for t in tasks {
             if t.state.is_final() {
+                continue;
+            }
+            // A film's own task: said above, as the film.
+            if t.batch
+                .as_ref()
+                .is_some_and(|b| film_ids.contains(b.id.as_str()))
+            {
                 continue;
             }
             let percent = (t.progress * 100.0).round() as i64;

@@ -226,6 +226,9 @@ export type DetailCode =
   | "ON_CLOSE_NOT_STARTED_YET"
   | "ON_CLOSE_MUST_RUN_AGAIN"
   | "ON_CLOSE_WORK_KEPT_START_AGAIN"
+  | "ON_CLOSE_FILM_CARRIES_ON"
+  | "ON_CLOSE_FILM_QUEUED"
+  | "ON_CLOSE_FILM_PAUSED"
 
   // steps of the connection check (FR-003)
   | "STEP_NET_BANNER"

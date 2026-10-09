@@ -137,3 +137,43 @@ it("says the consequences are unknown rather than showing an empty list", async 
   expect(screen.getByTestId("leave-no")).toBeInTheDocument();
   expect(exit).not.toHaveBeenCalled();
 });
+
+it("names each film and says it carries on by itself, once per thing said (T710)", async () => {
+  const filmLine = (id: string, name: string): TaskOnClose => ({
+    id,
+    kind: "video",
+    progress: 0.3,
+    outcome: "resumes",
+    explanation: { key: "ON_CLOSE_FILM_CARRIES_ON", params: { name } },
+  });
+  const sameTwice: TaskOnClose = {
+    id: "d",
+    kind: "diagnose",
+    progress: 0,
+    outcome: "restarts",
+    explanation: { key: "ON_CLOSE_MUST_RUN_AGAIN" },
+  };
+  onClose.mockResolvedValue([
+    filmLine("v1", "Короткий 720p"),
+    filmLine("v2", "Фильм с двумя дорожками"),
+    sameTwice,
+    { ...sameTwice, id: "e" },
+  ]);
+  renderIn(<LeaveConfirm />);
+  await trayExitPressed();
+  await screen.findByTestId("leave-confirm");
+
+  expect(
+    screen.getByText(
+      fill(ru.details.ON_CLOSE_FILM_CARRIES_ON, { name: "Короткий 720p" }, ru, "ru"),
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      fill(ru.details.ON_CLOSE_FILM_CARRIES_ON, { name: "Фильм с двумя дорожками" }, ru, "ru"),
+    ),
+  ).toBeInTheDocument();
+  // The same sentence twice is said once, with how many it is about.
+  expect(screen.getAllByText(new RegExp(ru.details.ON_CLOSE_MUST_RUN_AGAIN))).toHaveLength(1);
+  expect(screen.getByText(`${ru.details.ON_CLOSE_MUST_RUN_AGAIN} (×2)`)).toBeInTheDocument();
+});

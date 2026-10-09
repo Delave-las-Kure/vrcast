@@ -12,9 +12,23 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { AppError, Task, TaskKind, TaskState } from "../../shared/contract";
+import type {
+  AppError,
+  Task,
+  TaskKind,
+  TaskState,
+  VideoState,
+  VideoView,
+} from "../../shared/contract";
 import type { TaskOnClose } from "../../shared/contract";
-import { ipc, onTaskDone, onTaskProgress, toAppError } from "../../shared/ipc";
+import {
+  ipc,
+  onTaskDone,
+  onTaskProgress,
+  onVideoRemoved,
+  onVideoUpdate,
+  toAppError,
+} from "../../shared/ipc";
 import { useLang, useT, type Catalogue, type Lang } from "../../shared/i18n";
 import { fill, renderDetail, renderStage } from "../../shared/i18n/render";
 import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
@@ -64,6 +78,96 @@ function formatEta(seconds: number | null, t: Catalogue, lang: Lang): string | n
 /** The states a task does not come back from. */
 const FINISHED = new Set(["completed", "failed", "cancelled"]);
 
+/** A film that is busy (T710): it gets a row here. Waiting for «Start», finished, stopped on
+ *  a problem — those are «Video»'s to show; nothing is running for them. */
+const FILM_IN_WORK = new Set<VideoState>(["working", "paused", "cancelling"]);
+
+/** The stage a film is at, as «Video» names it. */
+function filmStage(film: VideoView, t: Catalogue): string {
+  const stages = t.ui.video.stages as Record<string, string>;
+  return stages[film.stage] ?? t.ui.video.queued;
+}
+
+/**
+ * One film, one row (T710): its name, the stage it is at and how far — the same words as its
+ * card on «Video». Its stage's tasks are not listed besides: a person thinks of «the film», and
+ * the screen used to show it as two or three rows of kinds of work, plus every earlier run.
+ */
+function FilmRow({
+  film,
+  busy,
+  onPause,
+  onResume,
+}: {
+  film: VideoView;
+  busy: boolean;
+  onPause: () => void;
+  onResume: () => void;
+}) {
+  const t = useT();
+  const { lang } = useLang();
+  const p = film.progress;
+  const waiting = film.state === "working" && (p === null || p.task_state === "queued");
+  const stateWord =
+    film.state === "paused"
+      ? t.ui.video.paused
+      : film.state === "cancelling"
+        ? t.ui.video.stopping
+        : waiting
+          ? t.ui.video.queued
+          : null;
+  const rung =
+    p && p.rung !== null && p.rungs > 0
+      ? fill(t.ui.video.rungOf, { k: p.rung, n: p.rungs }, t, lang)
+      : null;
+  const speed = p ? formatSpeed(p.speed_bps, t, lang) : null;
+  const eta = p ? formatEta(p.eta_s, t, lang) : null;
+
+  return (
+    <li className={`task task--film task--${film.state}`} data-testid={`film-${film.id}`}>
+      <div className="task__head">
+        <span className="task__batch">{film.title}</span>
+        <span className="task__kind">{filmStage(film, t)}</span>
+        {stateWord && <span className="task__state">{stateWord}</span>}
+      </div>
+
+      {p && !waiting && film.state !== "cancelling" && (
+        <div
+          className="progress"
+          role="progressbar"
+          aria-valuenow={Math.round(p.progress * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div className="progress__fill" style={{ width: `${p.progress * 100}%` }} />
+        </div>
+      )}
+
+      {(rung || speed || eta) && (
+        <div className="task__meta">
+          {rung && <span>{rung}</span>}
+          {speed && <span>{speed}</span>}
+          {eta && <span>{eta}</span>}
+        </div>
+      )}
+
+      <div className="task__actions">
+        {film.state === "working" && (
+          <button disabled={busy} onClick={onPause}>
+            {t.ui.video.pause}
+          </button>
+        )}
+        {film.state === "paused" && (
+          <button disabled={busy} onClick={onResume}>
+            {t.ui.video.resume}
+          </button>
+        )}
+        <Link to="/video">{t.ui.tasks.openFilm}</Link>
+      </div>
+    </li>
+  );
+}
+
 /**
  * The state a row takes from a progress event (T652, QA-24A №3).
  *
@@ -82,6 +186,8 @@ function nextState(shown: TaskState, reported: TaskState): TaskState {
 
 export function TasksPanel() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  /** The films on «Video» (T710): a film in work is one row here, not its stage's tasks. */
+  const [videos, setVideos] = useState<VideoView[]>([]);
   const [onClose, setOnClose] = useState<TaskOnClose[]>([]);
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -98,6 +204,13 @@ export function TasksPanel() {
       setError(toAppError(e));
     } finally {
       setLoading(false);
+    }
+    // The films, for their rows. Not having them is not a reason to show no tasks: the rows
+    // of their tasks then fall back to being shown one by one, as before.
+    try {
+      setVideos(await ipc.videoList());
+    } catch {
+      setVideos([]);
     }
     // The consequences of closing come in a separate request: the core works them
     // out, and repeating that arithmetic here would mean disagreeing with it one day.
@@ -150,6 +263,25 @@ export function TasksPanel() {
 
     void onTaskDone(() => void reload()).then(keep);
 
+    // A film's row follows the film itself: its stage, its rung, its pause (T710).
+    onVideoUpdate((video) =>
+      setVideos((prev) => {
+        const at = prev.findIndex((v) => v.id === video.id);
+        if (at < 0) return [...prev, video];
+        if (prev[at].rev > video.rev) return prev;
+        const next = prev.slice();
+        next[at] = video;
+        return next;
+      }),
+    )
+      .then(keep)
+      .catch(() => {
+        // Outside the shell (in tests) there is nothing to listen to.
+      });
+    onVideoRemoved((id) => setVideos((prev) => prev.filter((v) => v.id !== id)))
+      .then(keep)
+      .catch(() => {});
+
     return () => {
       cancelled = true;
       unlisten.forEach((fn) => fn());
@@ -168,6 +300,20 @@ export function TasksPanel() {
     }
   };
 
+  // The films in work (T710), one row each, and the ids that make a task one of theirs. A
+  // film's task is its stage's work, and listing it apart — under the name of its kind,
+  // «quality measuring on the material», and again for every run — is what made the screen a
+  // history of old names rather than a picture of what is going on.
+  const filmIds = useMemo(() => new Set(videos.map((v) => v.id)), [videos]);
+  const films = videos.filter((v) => FILM_IN_WORK.has(v.state));
+  const ofFilm = (task: Task) => task.batch !== null && filmIds.has(task.batch.id);
+  // A finished task of a film that is no longer on «Video» is history too: the film's result
+  // is in the library, and its old stages say nothing about now.
+  const shown = tasks.filter(
+    (task) => !ofFilm(task) && !(task.batch !== null && FINISHED.has(task.state)),
+  );
+  const videoById = useMemo(() => new Map(videos.map((v) => [v.id, v])), [videos]);
+
   // Waiting tasks in the order they will run, not the order they appear in the list:
   // otherwise the queue numbers would not match what the core actually does.
   const queued = useMemo(
@@ -175,6 +321,13 @@ export function TasksPanel() {
       tasks.filter((task) => task.state === "queued").sort((a, b) => a.queue_order - b.queue_order),
     [tasks],
   );
+
+  /** How a waiting task is named in the queue: a film's by the film and its stage. */
+  const queueLabel = (task: Task): string => {
+    const film = task.batch ? videoById.get(task.batch.id) : undefined;
+    if (film) return `${film.title} · ${filmStage(film, t)}`;
+    return t.ui.tasks.kinds[task.kind as TaskKind] ?? task.kind;
+  };
 
   // What is happening right now, in two numbers.
   //
@@ -199,7 +352,9 @@ export function TasksPanel() {
    */
   const batches = [
     ...tasks
-      .filter((task) => task.batch && !FINISHED.has(task.state))
+      // A film on «Video» is a batch of one, of its own stages: «Batch: 1 video» over each
+      // film said nothing (T710). Batches of several films (T445) are headed as before.
+      .filter((task) => task.batch && !FINISHED.has(task.state) && !ofFilm(task))
       .reduce((seen, task) => {
         const at = seen.get(task.batch!.id) ?? { id: task.batch!.id, films: new Set(), left: 0 };
         at.films.add(task.batch!.label);
@@ -251,14 +406,29 @@ export function TasksPanel() {
       <QueueOrder
         queued={queued}
         busy={busy}
+        labelOf={queueLabel}
         onReorder={(ids) => void act(async () => void (await ipc.tasksReorder(ids)))}
       />
 
-      {tasks.length === 0 ? (
+      {films.length > 0 && (
+        <ul className="task-list" data-testid="films">
+          {films.map((film) => (
+            <FilmRow
+              key={film.id}
+              film={film}
+              busy={busy}
+              onPause={() => void act(async () => void (await ipc.videoPause(film.id)))}
+              onResume={() => void act(async () => void (await ipc.videoResume(film.id)))}
+            />
+          ))}
+        </ul>
+      )}
+
+      {shown.length === 0 && films.length === 0 ? (
         <p className="muted">{t.ui.tasks.empty}</p>
       ) : (
         <ul className="task-list">
-          {tasks.map((task) => (
+          {shown.map((task) => (
             <li key={task.id} className={`task task--${task.state}`}>
               <div className="task__head">
                 {/* Which film this is (T445). Thirty rows saying "measuring quality" are a

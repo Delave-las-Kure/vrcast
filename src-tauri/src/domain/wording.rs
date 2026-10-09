@@ -240,6 +240,14 @@ detail_codes! {
     /// `percent`. The work is not lost and the task will not come back by itself (T515):
     /// somebody has to start it again, and it will pick up what is already done.
     OnCloseWorkKeptStartAgain => "ON_CLOSE_WORK_KEPT_START_AGAIN",
+    /// `name` — a film in work (T710): it carries on by itself after start-up; only the rung
+    /// under way begins again.
+    OnCloseFilmCarriesOn => "ON_CLOSE_FILM_CARRIES_ON",
+    /// `name` — a film whose stage still waits for its turn: it starts by itself (T710).
+    OnCloseFilmQueued => "ON_CLOSE_FILM_QUEUED",
+    /// `name` — a film the person paused: still paused after start-up; «Continue» carries on
+    /// and the rung under way begins again (T710).
+    OnCloseFilmPaused => "ON_CLOSE_FILM_PAUSED",
 
     // --- steps of the connection check (FR-003) ---
     /// `banner` — what the server introduced itself as.

@@ -22,11 +22,12 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Task } from "../../../shared/contract";
+import type { Task, VideoView } from "../../../shared/contract";
 import { renderIn, ru } from "../../../test-utils";
 
 const cancelBatch = vi.fn<() => Promise<number>>();
 let list: Task[] = [];
+let films: VideoView[] = [];
 let progress: ((e: unknown) => void) | null = null;
 let done: ((e: unknown) => void) | null = null;
 
@@ -39,6 +40,7 @@ vi.mock("../../../shared/ipc", async () => {
     ...actual,
     ipc: stubIpc(actual.ipc as unknown as Record<string, unknown>, {
       tasksList: () => Promise.resolve(list),
+      videoList: () => Promise.resolve(films),
       tasksOnClose: () => Promise.resolve([]),
       tasksReorder: vi.fn(),
       taskPause: vi.fn(),
@@ -94,6 +96,7 @@ beforeEach(() => {
   // Every stub gets an answer, not only the ones a given test reads.
   cancelBatch.mockResolvedValue(0);
   list = [];
+  films = [];
   progress = null;
   done = null;
 });
@@ -292,7 +295,8 @@ it("offers nothing to stop where the batch is already over", async () => {
     task({ id: "b", state: "failed", batch: { id: "s1", label: "Done" } }),
   ];
   renderIn(<TasksPanel />);
-  await screen.findByText(ru.ui.tasks.states.completed);
+  // T710: a batch's finished tasks are history and are not listed at all.
+  await screen.findByText(ru.ui.tasks.empty);
   expect(screen.queryByText(ru.ui.tasks.batchStop)).toBeNull();
 });
 
@@ -337,5 +341,113 @@ describe("what a task produced, for a person to go and look at (T519(3))", () =>
     );
     await screen.findByText(ru.ui.tasks.states.completed);
     expect(screen.queryByText(ru.ui.tasks.viewResult)).toBeNull();
+  });
+});
+
+function film(over: Partial<VideoView> = {}): VideoView {
+  return {
+    id: "v1",
+    server_id: "s1",
+    source_path: "C:/films/a.mkv",
+    title: "Фильм с двумя дорожками",
+    slug: "film",
+    audio_track: 0,
+    stage: "encoding",
+    state: "working",
+    paused_by_person: false,
+    start_requested: false,
+    source: null,
+    plan: null,
+    progress: {
+      task_state: "running",
+      progress: 0.5,
+      speed_bps: null,
+      eta_s: null,
+      rung: 2,
+      rungs: 4,
+    },
+    task_id: "t-film",
+    media_id: null,
+    problem: null,
+    link: null,
+    created_at: "2026-10-09T10:00:00Z",
+    updated_at: "2026-10-09T10:00:00Z",
+    rev: 1,
+    ...over,
+  };
+}
+
+describe("one row per film (T710)", () => {
+  const draw = () =>
+    renderIn(
+      <MemoryRouter>
+        <TasksPanel />
+      </MemoryRouter>,
+    );
+
+  it("shows a film in work once, by its name and stage, not as its tasks", async () => {
+    films = [film()];
+    list = [
+      task({
+        id: "t-film",
+        kind: "build_ladder",
+        batch: { id: "v1", label: "Фильм с двумя дорожками" },
+      }),
+      // The film's earlier stage, finished: history, not news.
+      task({
+        id: "t-old",
+        kind: "measure_quality",
+        state: "completed",
+        progress: 1,
+        batch: { id: "v1", label: "Фильм с двумя дорожками" },
+      }),
+    ];
+    draw();
+    const row = await screen.findByTestId("film-v1");
+    expect(row.textContent).toContain("Фильм с двумя дорожками");
+    expect(row.textContent).toContain(ru.ui.video.stages.encoding);
+    expect(row.textContent).toContain("ступень 2 из 4");
+    // Neither of its tasks has a row of its own, and no «Batch: 1 video» heading over it.
+    expect(screen.queryByText(ru.ui.tasks.kinds.build_ladder)).toBeNull();
+    expect(screen.queryByText(ru.ui.tasks.kinds.measure_quality)).toBeNull();
+    expect(screen.queryByText(ru.ui.tasks.batchStop)).toBeNull();
+  });
+
+  it("leaves out the finished stages of films no longer on «Video»", async () => {
+    list = [
+      task({
+        id: "old-1",
+        kind: "measure_quality",
+        state: "completed",
+        progress: 1,
+        batch: { id: "gone", label: "Короткий 720p" },
+      }),
+      task({
+        id: "old-2",
+        kind: "measure_quality",
+        state: "cancelled",
+        batch: { id: "gone", label: "Короткий 720p" },
+      }),
+    ];
+    draw();
+    expect(await screen.findByText(ru.ui.tasks.empty)).toBeTruthy();
+    expect(screen.queryByText("Короткий 720p")).toBeNull();
+  });
+
+  it("names a film's waiting task in the queue by the film", async () => {
+    films = [film({ progress: { ...film().progress!, task_state: "queued" } })];
+    list = [
+      task({
+        id: "t-film",
+        kind: "measure_quality",
+        state: "queued",
+        batch: { id: "v1", label: "Фильм с двумя дорожками" },
+      }),
+    ];
+    draw();
+    expect(
+      await screen.findByText(`Фильм с двумя дорожками · ${ru.ui.video.stages.encoding}`),
+    ).toBeTruthy();
+    expect(screen.getByTestId("film-v1").textContent).toContain(ru.ui.video.queued);
   });
 });

@@ -17,11 +17,15 @@ export function QueueOrder({
   queued,
   onReorder,
   busy,
+  labelOf,
 }: {
   /** Waiting tasks, in the order they will run. */
   queued: Task[];
   onReorder: (orderedIds: string[]) => void;
   busy: boolean;
+  /** How to name a waiting task (T710): a film's by the film and its stage rather than by the
+   *  kind of work. The kind's own name otherwise. */
+  labelOf?: (task: Task) => string;
 }) {
   const t = useT();
 
@@ -44,7 +48,7 @@ export function QueueOrder({
         {queued.map((task, i) => (
           <li key={task.id} className="queue__item">
             <span className="queue__position">{i + 1}</span>
-            <span className="queue__kind">{kindLabel(task.kind)}</span>
+            <span className="queue__kind">{labelOf ? labelOf(task) : kindLabel(task.kind)}</span>
             <span className="queue__actions">
               <button
                 aria-label={t.ui.tasks.moveUp}

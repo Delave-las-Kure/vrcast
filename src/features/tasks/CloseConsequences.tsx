@@ -21,6 +21,17 @@ export function CloseConsequences({ items }: { items: TaskOnClose[] }) {
 
   const losing = items.filter((task) => task.outcome === "restarts");
 
+  // T710 — one line per thing said. Two tasks of the same kind used to give the same sentence
+  // twice, word for word, and a list that repeats itself reads as a glitch rather than as two
+  // things at stake. Said once, with how many it is about.
+  const lines: { text: string; outcome: string; n: number; key: string }[] = [];
+  for (const task of items) {
+    const text = renderDetail(task.explanation, t, lang);
+    const same = lines.find((l) => l.text === text);
+    if (same) same.n += 1;
+    else lines.push({ text, outcome: task.outcome, n: 1, key: task.id });
+  }
+
   return (
     <section
       className={`notice ${losing.length > 0 ? "notice--warning" : "notice--ok"}`}
@@ -31,9 +42,9 @@ export function CloseConsequences({ items }: { items: TaskOnClose[] }) {
           {losing.length > 0 ? t.ui.tasks.closeLosing : t.ui.tasks.closeSafe}
         </strong>
         <ul className="notice__list">
-          {items.map((task) => (
-            <li key={task.id} className={`consequence consequence--${task.outcome}`}>
-              {renderDetail(task.explanation, t, lang)}
+          {lines.map((line) => (
+            <li key={line.key} className={`consequence consequence--${line.outcome}`}>
+              {line.n > 1 ? `${line.text} (×${line.n})` : line.text}
             </li>
           ))}
         </ul>

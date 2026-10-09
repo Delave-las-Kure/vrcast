@@ -1390,6 +1390,109 @@ async fn the_exit_dialog_does_not_promise_a_build_it_will_carry_on_by_itself() {
     );
 }
 
+/// ⚠ **T710 (QA-26 №14) — a film is spoken of as a film.** Its measuring or building task is a
+/// stage of the film, and `restore_videos` carries a going film on by itself; the dialog used to
+/// judge the task by its kind and tell the person to start it again by hand — nameless, and once
+/// per task.
+#[tokio::test]
+async fn the_exit_dialog_names_each_film_and_says_it_carries_on_by_itself() {
+    use vrcast_studio_lib::commands::AppState;
+    use vrcast_studio_lib::domain::video::{VideoStage, VideoState};
+    use vrcast_studio_lib::store::secrets::InMemorySecretStore;
+    use vrcast_studio_lib::store::videos::{self, VideoRow};
+
+    let db = Arc::new(Db::open_in_memory().unwrap());
+    db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO server_profiles
+                (id, name, host, port, username, auth_kind, secret_ref, domain, video_dir,
+                 is_active, created_at)
+             VALUES ('s1', 'S', '127.0.0.1', 22, 'root', 'password', 'ref', 'x.example',
+                     '/v', 1, '2026-01-01T00:00:00Z')",
+            [],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
+    let film = |id: &str, title: &str, state: VideoState, task: Option<&str>| {
+        let mut row = VideoRow::new(id, "s1", "C:/f.mp4", title, id);
+        row.stage = VideoStage::Encoding;
+        row.state = state;
+        row.task_id = task.map(String::from);
+        videos::save(&db, &row).unwrap();
+    };
+    let task = |id: &str, film: &str, title: &str, kind: TaskKind, state: TaskState| {
+        let mut t = store::TaskRecord::new(id, kind, Some(String::from("s1")));
+        t.state = state;
+        t.progress = 0.4;
+        t.batch = Some(store::Batch {
+            id: film.to_owned(),
+            label: title.to_owned(),
+        });
+        store::upsert(&db, &t).unwrap();
+    };
+    film("v1", "Первый", VideoState::Working, Some("t1"));
+    task(
+        "t1",
+        "v1",
+        "Первый",
+        TaskKind::BuildLadder,
+        TaskState::Paused,
+    );
+    film("v2", "Второй", VideoState::Working, Some("t2"));
+    task(
+        "t2",
+        "v2",
+        "Второй",
+        TaskKind::MeasureQuality,
+        TaskState::Queued,
+    );
+    film("v3", "Третий", VideoState::Paused, Some("t3"));
+    task(
+        "t3",
+        "v3",
+        "Третий",
+        TaskKind::BuildLadder,
+        TaskState::Paused,
+    );
+    // A finished film says nothing; neither does an old task of one.
+    film("v4", "Готовый", VideoState::Done, None);
+    task(
+        "t4",
+        "v4",
+        "Готовый",
+        TaskKind::BuildLadder,
+        TaskState::Completed,
+    );
+
+    let state = AppState::with_db(db, Arc::new(InMemorySecretStore::new()))
+        .expect("the application state would not assemble");
+    let said = vrcast_studio_lib::commands::api::tasks_on_close(&state).unwrap();
+
+    assert_eq!(
+        said.len(),
+        3,
+        "one line per film in work, and nothing else: {said:?}"
+    );
+    let about = |id: &str| said.iter().find(|t| t.id == id).unwrap();
+    for (id, name, key, outcome) in [
+        ("v1", "Первый", DetailCode::OnCloseFilmCarriesOn, "resumes"),
+        ("v2", "Второй", DetailCode::OnCloseFilmQueued, "resumes"),
+        ("v3", "Третий", DetailCode::OnCloseFilmPaused, "restarts"),
+    ] {
+        let line = about(id);
+        assert_eq!(line.kind, "video");
+        assert_eq!(line.explanation.key, key, "{id}");
+        assert_eq!(line.outcome, outcome, "{id}");
+        assert_eq!(
+            line.explanation.params.get("name").and_then(|v| v.as_str()),
+            Some(name),
+            "the film is not named"
+        );
+    }
+}
+
 /// ⚠ **What the exit dialog promises, kind by kind** (T515, FR-086).
 ///
 /// It read `pause_kind` alone, and `ResumableAcrossRestart` answers "is the work still there

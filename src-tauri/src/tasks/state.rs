@@ -87,6 +87,12 @@ impl TaskKind {
     ///
     /// Exhaustive with no wildcard, for the reason `runs_an_encoder` gives: a new kind of task
     /// should not compile until somebody has answered this for it.
+    ///
+    /// ⚠ **About a task on its own, not about a film** (T710). A measurement or a build that is
+    /// a stage of a film on «Video» does come back: not as the task, but because
+    /// `restore_videos` carries the film on from its stage. `tasks_on_close` therefore speaks
+    /// of such a task as its film and does not ask this; the answers below are for the tasks
+    /// that belong to no film.
     pub fn returns_by_itself(&self) -> bool {
         match self {
             // The position is bytes on the server, written down as it goes, and start-up
