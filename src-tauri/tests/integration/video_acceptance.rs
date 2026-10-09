@@ -975,6 +975,11 @@ async fn two_videos_started_together_keep_to_the_limit_and_both_get_done() {
         .await;
     }
     let started_at = Instant::now();
+    // Each film carries more than one sound track, so the sound has to be chosen before
+    // «Start» (T695, the owner's decision B2 of 2026-10-09).
+    for id in &ids {
+        video::video_set_audio(&state, id, 0).expect("the track was refused");
+    }
     let started = video::video_start(&state, &ids);
     assert!(started.iter().all(|s| s.error.is_none()), "{started:?}");
 
