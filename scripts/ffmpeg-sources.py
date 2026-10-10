@@ -137,6 +137,9 @@ def check() -> int:
 
 def pack(out: pathlib.Path) -> int:
     """Make the two archives a release carries, each verified before it is called done."""
+    # Absolute: `git archive -o` runs inside the scratch clone, where a relative path points
+    # nowhere (the first release run stopped on exactly that, 2026-10-10).
+    out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     names = MANIFEST["source"]["release_files"]
     work = pathlib.Path(tempfile.mkdtemp(prefix="vrcast-ffmpeg-src-"))
