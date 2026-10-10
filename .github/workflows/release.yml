@@ -242,7 +242,8 @@ jobs:
             exit 1
           fi
           for kind in exe msi deb AppImage tar.gz sig; do
-            find "$bundle" -type f -name "*.$kind" -exec cp {} bundles/ ';'
+            # control.tar.gz and data.tar.gz are the deb bundler's own scraps, not artefacts.
+            find "$bundle" -type f -name "*.$kind" ! -name control.tar.gz ! -name data.tar.gz               -exec cp {} bundles/ ';'
           done
           ls -l bundles
 
@@ -350,6 +351,13 @@ jobs:
           # единственном шаге, который никем заранее не запускается.
           echo "$got" >latest-served.json
           python3 -c "import json,sys; d=json.load(open('latest-served.json',encoding='utf-8')); v=d.get('version'); w=sys.argv[1]; sys.exit('the address serves version %s, and this release is %s' % (v, w)) if v != w else print('the address serves this very release, %d platforms' % len(d.get('platforms', {})))" "$version" 
+          # And every file it points at has to download — an address that 404s is the same
+          # silence for that platform as no latest.json at all.
+          python3 -c "import json; [print(p['url']) for p in json.load(open('latest-served.json',encoding='utf-8'))['platforms'].values()]" > urls.txt
+          while read -r url; do
+            curl -fsSIL --max-time 30 -o /dev/null "$url" || { echo "latest.json points at a file that does not download: $url" >&2; exit 1; }
+            echo "downloads: $url"
+          done < urls.txt
 
       # **T719 — and the source THIRD-PARTY.md promises downloads, the same way.** Without any
       # permission, whole, from the addresses the file names: a stranger following the link is

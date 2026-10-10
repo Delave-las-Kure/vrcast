@@ -64,6 +64,17 @@ def pick(bundles: pathlib.Path, patterns: list):
     return None, "looked for %s" % ", ".join(patterns)
 
 
+def asset_name(name: str) -> str:
+    """The name GitHub gives the uploaded file, which is what the download address uses.
+
+    GitHub turns every space of an asset's name into a dot: «VRCast Studio_0.3.0_x64-setup.exe»
+    is served as «VRCast.Studio_0.3.0_x64-setup.exe». Addressed with «%20» it answers 404 —
+    which is how the first published release (v0.3.0, 2026-10-10) shipped a latest.json every
+    installed copy would have failed to download from.
+    """
+    return name.replace(" ", ".")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", required=True, help="without the leading v")
@@ -89,7 +100,7 @@ def main() -> int:
         platforms[key] = {
             "signature": signature.read_text(encoding="utf-8").strip(),
             "url": "https://github.com/%s/releases/download/%s/%s"
-            % (args.repo, urllib.parse.quote(args.tag), urllib.parse.quote(artefact.name)),
+            % (args.repo, urllib.parse.quote(args.tag), urllib.parse.quote(asset_name(artefact.name))),
         }
 
     if missing:
