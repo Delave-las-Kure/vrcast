@@ -203,12 +203,59 @@ describe("the viewers screen", () => {
       ]),
     );
 
-    await waitFor(() =>
-      expect(screen.getAllByText(ru.ui.viewers.notKnown).length).toBeGreaterThanOrEqual(2),
+    await waitFor(() => expect(screen.getByTestId("viewer-place-unknown")).toBeInTheDocument());
+    // Where from: nothing known is one dash, not two «не определено» one under the other
+    // (tour 0.3.0, F09) — and it still says «не определено» when asked (hover).
+    expect(screen.getByTestId("viewer-place-unknown")).toHaveTextContent("—");
+    expect(screen.getByTestId("viewer-place-unknown")).toHaveAttribute(
+      "title",
+      ru.ui.viewers.notKnown,
     );
+    expect(screen.getAllByText(ru.ui.viewers.notKnown)).toHaveLength(1);
     // Not knowing what is being watched is a state of its own, and it is said in words —
     // an empty cell would read as a fault in the application.
     expect(screen.getByText(ru.ui.viewers.watchingUnknown)).toBeInTheDocument();
+  });
+
+  it("names the rung as the links do, not by its directory (tour 0.3.0, F09)", async () => {
+    mockLibraryList.mockResolvedValue({
+      server_id: "s1",
+      media: [
+        {
+          id: "m1",
+          title: "Backrooms",
+          slug: "backrooms",
+          files: [],
+          ladders: [
+            {
+              ...aSet("backrooms"),
+              qualities: [
+                {
+                  width: 1920,
+                  height: 1080,
+                  bitrate_bps: 9_000_000,
+                  origin: "https://stream.example.com/videos/backrooms/v9/stream.m3u8",
+                  cdn: null,
+                },
+              ],
+            },
+          ],
+          total_bytes: 0,
+          created_at: "",
+        },
+      ],
+      unrecognized: [],
+      disk: null,
+      stale: false,
+    });
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+    send?.(update([viewer({ variant: "v9" }), viewer({ ip: "203.0.113.2", variant: "v4" })]));
+    expect(await screen.findByText("1080p · 9 Мбит/с")).toBeInTheDocument();
+    // A rung the library does not describe: its bitrate, still not the bare `v4`.
+    expect(screen.getByText("4,0 Мбит/с")).toBeInTheDocument();
+    expect(screen.queryByText("v9")).toBeNull();
+    expect(screen.queryByText("v4")).toBeNull();
   });
 
   it("shows a viewer who has just come in as watching for «0:00», not as unknown (T718)", async () => {

@@ -724,6 +724,41 @@ button:focus-visible {
   word-break: break-word;
 }
 
+/* ---------- viewers ---------- */
+
+/* Columns apart (tour 0.3.0, F09): «не определено», the film and the speed used to stand
+   almost touching. */
+.viewers {
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.viewers th,
+.viewers td {
+  padding: 8px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.viewers th {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.viewers__variant,
+.viewers__provider,
+.viewers__needs {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.viewers__problems {
+  margin: 0;
+  padding-left: 16px;
+}
+
 /* ---------- servers ---------- */
 
 .server-list {

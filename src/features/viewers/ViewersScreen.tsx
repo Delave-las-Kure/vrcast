@@ -23,6 +23,7 @@ import { ipc, onViewersUpdate } from "../../shared/ipc";
 import type { AppError, LibraryView, Viewer, ViewersUpdateEvent } from "../../shared/contract";
 import { LimitDialog } from "./LimitDialog";
 import { ViewerRow } from "./ViewerRow";
+import { megabits } from "../video/rules";
 
 /**
  * This machine's clock, ticking once a second while `running` — so the age of a list that is
@@ -58,8 +59,21 @@ function ageLine(
   return fill(words.staleAge, { age }, t, lang);
 }
 
-/** A medium, in the forms this screen needs it in. `hasSet` — it has a set of qualities. */
-type Named = { id: string; slug: string; title: string; hasSet: boolean };
+/** A medium, in the forms this screen needs it in. `hasSet` — it has a set of qualities.
+ *  `rungs` — its set's qualities by the directory a request names them by (`v9`), so a
+ *  viewer's rung reads «1080p · 9 Мбит/с» as the links do, not `v9` (tour 0.3.0). */
+type Named = {
+  id: string;
+  slug: string;
+  title: string;
+  hasSet: boolean;
+  rungs: Record<string, { height: number; bitrate_bps: number }>;
+};
+
+/** The rung directory a quality link points into: `…/film/v9/stream.m3u8` → `v9`. */
+function rungDir(link: string): string | null {
+  return /\/([^/]+)\/[^/]*$/.exec(link)?.[1] ?? null;
+}
 
 /** The set the viewer at `ip` is watching now, by the current list (T668, T704). */
 function watchingSlug(
@@ -103,6 +117,14 @@ function useMedia(serverId: string | null, attempt: number): Named[] {
             slug: m.slug,
             title: m.title,
             hasSet: (m.ladders ?? []).some((l) => l.exists_on_server),
+            rungs: Object.fromEntries(
+              (m.ladders ?? []).flatMap((l) =>
+                (l.qualities ?? []).flatMap((q) => {
+                  const dir = rungDir(q.origin);
+                  return dir ? [[dir, { height: q.height, bitrate_bps: q.bitrate_bps }]] : [];
+                }),
+              ),
+            ),
           })),
         );
       })
@@ -174,6 +196,18 @@ export function ViewersScreen() {
   const titleById = useMemo(() => Object.fromEntries(media.map((m) => [m.id, m.title])), [media]);
   // And the set a viewer is watching, by the same identifier — for the cap dialog (T668).
   const slugById = useMemo(() => Object.fromEntries(media.map((m) => [m.id, m.slug])), [media]);
+  // A viewer's rung as the links name it, «1080p · 9 Мбит/с» (tour 0.3.0).
+  const rungLabel = (viewer: Viewer): string | undefined => {
+    if (!viewer.media_id || !viewer.variant) return undefined;
+    const rung = media.find((m) => m.id === viewer.media_id)?.rungs[viewer.variant];
+    if (!rung) return undefined;
+    return fill(
+      t.ui.video.rungLine,
+      { height: rung.height, mbps: megabits(rung.bitrate_bps, lang) },
+      t,
+      lang,
+    );
+  };
 
   const [viewers, setViewers] = useState<Viewer[] | null>(null);
   // Where the watching stands (T664). Kept beside the list rather than folded into it: the
@@ -388,6 +422,7 @@ export function ViewersScreen() {
                 key={viewer.ip}
                 viewer={viewer}
                 mediaTitle={viewer.media_id ? titleById[viewer.media_id] : undefined}
+                variantLabel={rungLabel(viewer)}
                 onLimit={() => {
                   setCapped(null);
                   setCapping(viewer.ip);
