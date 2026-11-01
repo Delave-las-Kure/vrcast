@@ -229,9 +229,6 @@ jobs:
       - run: node scripts/fetch-ffmpeg.mjs
       # All non-ignored tests, not a hand-maintained subset; the complete original trace
       # audit is independent of ordinary failures. Both modes scan logs before printing.
-      - name: Diagnose the published endpoint across a Docker network cut
-        if: matrix.shard == 7
-        run: python3 scripts/ci-network-probe.py
       - name: Real OpenSSH, serving, deployment, cancellation and no secrets in trace logs
         run: |
           if [ '${{ matrix.shard }}' = trace ]; then

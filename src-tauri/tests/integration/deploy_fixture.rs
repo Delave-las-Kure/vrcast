@@ -219,6 +219,15 @@ impl DeployTarget {
         }
 
         let image = self.flavour.image();
+        let published = self
+            .network
+            .is_none()
+            .then(|| super::fixture::reserve_published_port(22))
+            .transpose()?;
+        let (held, binding) = match published {
+            Some((held, binding)) => (Some(held), Some(binding)),
+            None => (None, None),
+        };
         let mut args: Vec<&str> = vec![
             "run",
             "-d",
@@ -236,9 +245,12 @@ impl DeployTarget {
             Some(network) => {
                 args.extend_from_slice(&["--network", network, "--network-alias", &self.name])
             }
-            None => args.extend_from_slice(&["-p", "127.0.0.1::22"]),
+            None => {
+                args.extend_from_slice(&["-p", binding.as_deref().expect("host port reserved")])
+            }
         }
         args.push(image);
+        drop(held);
         let out = docker(&args).map_err(|e| format!("could not start the container: {e}"))?;
         if !out.status.success() {
             return Err(format!(

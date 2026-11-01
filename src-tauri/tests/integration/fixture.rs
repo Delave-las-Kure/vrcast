@@ -409,6 +409,68 @@ pub fn own_container() -> Option<String> {
 /// process, and two servers brought up in a row would collide over the name.
 static NETWORK_SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// Pick a free loopback port ourselves, then explicitly publish that number in Docker.
+/// Docker reallocates an anonymous `-p 127.0.0.1::22` on network reconnection (docker/cli
+/// #2909). Keeping the old endpoint in a server profile would then test a server that
+/// moved, not one whose network recovered. Hold the reservation until just before start.
+pub fn reserve_published_port(
+    container_port: u16,
+) -> Result<(std::net::TcpListener, String), String> {
+    let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .map_err(|e| format!("could not reserve a loopback port: {e}"))?;
+    let port = held.local_addr().map_err(|e| e.to_string())?.port();
+    Ok((held, format!("127.0.0.1:{port}:{container_port}")))
+}
+
+#[test]
+fn a_published_port_is_an_explicit_loopback_reservation() {
+    let (held, binding) = reserve_published_port(22).unwrap();
+    let address = held.local_addr().unwrap();
+    assert_eq!(binding, format!("127.0.0.1:{}:22", address.port()));
+    assert_ne!(address.port(), 0);
+    assert!(std::net::TcpListener::bind(address).is_err());
+    drop(held);
+    assert!(std::net::TcpListener::bind(address).is_ok());
+}
+
+#[test]
+fn a_real_network_cut_restores_the_same_published_endpoints() {
+    let server = TestServer::start().expect("the fixture did not start");
+    let before = (server.port, server.http_port);
+    let cut = docker(&[
+        "network",
+        "disconnect",
+        "-f",
+        server.network(),
+        server.container_id(),
+    ])
+    .unwrap();
+    assert!(cut.status.success());
+    let restored = docker(&[
+        "network",
+        "connect",
+        "--alias",
+        SERVER_ALIAS,
+        server.network(),
+        server.container_id(),
+    ])
+    .unwrap();
+    assert!(restored.status.success());
+    if server.joined.is_none() {
+        let after = (
+            server.discover_port("22/tcp").unwrap(),
+            server.discover_port("80/tcp").unwrap(),
+        );
+        assert_eq!(
+            after, before,
+            "network recovery moved the server to another endpoint"
+        );
+    }
+    server
+        .wait_until_ready()
+        .expect("the same endpoints must really answer again");
+}
+
 impl TestServer {
     /// Bring the container up and wait until it starts accepting connections.
     pub fn start() -> Result<Self, String> {
@@ -457,8 +519,14 @@ impl TestServer {
             }
         }
 
-        // The system picks the ports: the tests may run alongside anything at all, and
-        // taking ports known in advance will not do.
+        // The OS picks free ports, but Docker receives explicit bindings so that a real
+        // disconnect/reconnect restores exactly the endpoint the application knows.
+        let published = if joined.is_none() {
+            vec![reserve_published_port(22)?, reserve_published_port(80)?]
+        } else {
+            Vec::new()
+        };
+        let (held, bindings): (Vec<_>, Vec<_>) = published.into_iter().unzip();
         let mut args: Vec<&str> = vec![
             "run",
             "-d",
@@ -468,10 +536,11 @@ impl TestServer {
             "--network-alias",
             SERVER_ALIAS,
         ];
-        if joined.is_none() {
-            args.extend_from_slice(&["-p", "127.0.0.1::22", "-p", "127.0.0.1::80"]);
+        for binding in &bindings {
+            args.extend_from_slice(&["-p", binding]);
         }
         args.push(IMAGE);
+        drop(held);
         let out = docker(&args).map_err(|e| format!("could not start the container: {e}"))?;
         if !out.status.success() {
             // The network is removed here and not left to `Drop`: there is no value to drop
