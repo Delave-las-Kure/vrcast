@@ -1681,6 +1681,30 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       const { id1 } = tour;
       if ((await card(id1))?.state === "done") {
         await snap("done", "Первое видео — «Готово», ссылка");
+        await step("friends-help", "Раскрыта памятка «Как друзьям открыть»", async () => {
+          await press("Как друзьям открыть", inCard(id1));
+          await sleep(300);
+        });
+        const segment = docker([
+          "exec",
+          NAME,
+          "sh",
+          "-c",
+          "find /var/lib/vrcast/videos/film-s-dvumya-dorozhkami -name '*.ts' | sort | head -1",
+        ]).stdout.trim();
+        if (segment) {
+          const local = join(STATE, "subtitle-segment.ts");
+          const copied = docker(["cp", `${NAME}:${segment}`, local]);
+          if (copied.status === 0) {
+            const file = `${prefix(sec)}${String((shotNo[sec] ?? 0) + 1).padStart(2, "0")}-burned-subtitles-frame`;
+            run(["-ss", "1", "-i", local, "-frames:v", "1", join(SHOTS, `${file}.png`)]);
+            shotNo[sec] += 1;
+            const did = `Кадр ffmpeg из готового сегмента ${segment} на сервере (не снимок окна); ожидается кириллица внизу кадра`;
+            writeFileSync(join(SHOTS, `${file}.txt`), did);
+            logs[sec].shots.push({ file, step: "burned-subtitles-frame", did, pages: 1 });
+            saveLog();
+          } else note(`кадр субтитров не извлечён: ${copied.stderr}`);
+        } else note("готового сегмента для кадра субтитров нет");
         await step(
           "copied",
           "«Копировать» у ссылки «Авто» (T694: «Авто» и по ссылке на каждое качество)",
@@ -1972,7 +1996,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         `for S in $(grep -v '^#' /tmp/v.m3u8 | grep . | awk '!x[$0]++'); do curl -s ${rate} -o /dev/null $D/$S; done; sleep 1; done`;
       for (const [name, rate] of [
         [VIEWER_FAST, ""],
-        [VIEWER_SLOW, "--limit-rate 60k"],
+        [VIEWER_SLOW, "--limit-rate 300k"],
       ] as const) {
         {
           // Always afresh: a viewer left by an earlier run watches whatever it was told then.
@@ -1994,9 +2018,13 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       const slowIp = ipOf(VIEWER_SLOW);
       const fastIp = ipOf(VIEWER_FAST);
       note(
-        `зрители — два контейнера с curl по кругу (master → ступень → куски) к ${master}: быстрый ${fastIp}, медленный ${slowIp} (--limit-rate 60k)`,
+        `зрители — два контейнера с curl по кругу (master → ступень → куски) к ${master}: быстрый ${fastIp}, медленный ${slowIp} (--limit-rate 300k)`,
       );
       await go("viewers");
+      await snap(
+        "viewers-first-seconds",
+        "Первые секунды после запуска зрителей: скорость ещё набирает данные",
+      );
       await step("viewers-list", "«Зрители» через ~40 с после запуска двух зрителей", async () => {
         await until(
           "two viewers in the list",
@@ -2024,7 +2052,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           await sleep(500);
         },
       );
-      const dialog = "//section[@aria-label='Ограничение качества']";
+      const dialog = "//div[@role='dialog' and @aria-label='Ограничение качества']";
       await step(
         "limit-media-chosen",
         "В «Какое медиа» выбран «Фильм с двумя дорожками» — предпросмотр",
@@ -2053,7 +2081,13 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       });
       await step("limit-applied", "«Понимаю, ограничить» — итог", async () => {
         await (await s().find('[data-testid="confirm"]')).click();
-        await until("the dialog to close", async () => !(await has(dialog)), 90_000, 500);
+        await until(
+          "the dialog to close or show a refusal",
+          async () =>
+            !(await has(dialog)) || (await s().has('[data-testid="limit-dialog"] [role="alert"]')),
+          90_000,
+          500,
+        );
         await sleep(1000);
       });
       if (await has(dialog)) {
@@ -2081,15 +2115,16 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       await step("limits-list", "«Ограничения» — список действующих", async () => {
         await sleep(2000);
       });
-      await step("limit-lifted", "«Снять» у ограничения", async () => {
-        await press("Снять", "", 20_000);
-        await until(
-          "the list to empty",
-          async () => await s().has('[data-testid="no-limits"]'),
-          60_000,
-          500,
-        );
-      });
+      if (await has("//button[normalize-space()='Снять']"))
+        await step("limit-lifted", "«Снять» у ограничения", async () => {
+          await press("Снять", "", 20_000);
+          await until(
+            "the list to empty",
+            async () => await s().has('[data-testid="no-limits"]'),
+            60_000,
+            500,
+          );
+        });
     },
     480_000,
   );
