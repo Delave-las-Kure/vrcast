@@ -108,19 +108,27 @@ export function UpgradeDialog({
           ) : (
             <>
               <h4>{words.willChange}</h4>
-              <StepList steps={toDo} />
+              {/* The steps in plain words, each with its state (tour 0.3.0, C2-02). What each
+                  will write, and the files copied aside first, are folded below. */}
+              <StepList steps={toDo} changes={false} />
             </>
           )}
-
-          <h4>{words.willKeep}</h4>
-          {/* Named one by one. "A backup will be made" is not a promise anybody can check;
-              this list is. */}
-          <ul>
-            {plan.backing_up.map((path) => (
-              <li key={path}>{path}</li>
-            ))}
-          </ul>
           <p>{words.keepsVideosAndCatalogue}</p>
+
+          {/* Named one by one, folded (tour 0.3.0): a wall of paths in front of a person who is
+              not going to read them hid the steps. "A backup will be made" is still not a
+              promise anybody can check; this list is, one click away. */}
+          <More testId="upgrade-details">
+            {toDo.length > 0 && <StepList steps={toDo} marks={false} />}
+            <h4>{words.willKeep}</h4>
+            <ul>
+              {plan.backing_up.map((path) => (
+                <li key={path}>
+                  <code>{path}</code>
+                </li>
+              ))}
+            </ul>
+          </More>
 
           <button
             type="button"
