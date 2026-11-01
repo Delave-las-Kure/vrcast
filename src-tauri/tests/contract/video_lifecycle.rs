@@ -593,6 +593,27 @@ async fn a_replace_the_server_refuses_leaves_the_video_on_its_problem_with_repla
         .contains(&vrcast_studio_lib::domain::video::VideoAction::Replace));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_confirmed_replace_is_kept_when_the_connection_is_refused() {
+    let state = state();
+    let server = unreachable_server(&state);
+    replacing(&state, "replace-unreachable", &server, None);
+    let err = video::video_replace(&state, "replace-unreachable", false)
+        .await
+        .expect_err("the unreachable server unexpectedly answered");
+    assert_eq!(
+        err.code,
+        vrcast_studio_lib::commands::error::ErrorCode::SshUnreachable
+    );
+    let row = rows::get(&state.db, "replace-unreachable")
+        .unwrap()
+        .unwrap();
+    assert!(
+        row.replacing_json.is_some(),
+        "a transient connection failure erased the confirmed replacement"
+    );
+}
+
 // ---------- T687: a version that grows with the progress too ----------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

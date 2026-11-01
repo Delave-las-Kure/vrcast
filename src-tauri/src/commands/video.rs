@@ -2869,7 +2869,12 @@ pub mod api {
                 }
             })
         });
-        if outcome.is_err() {
+        // A connection failure is not a refusal. Keep the durable intention so the
+        // restart worker can retry it; otherwise its retry guard sees an erased note.
+        if outcome
+            .as_ref()
+            .is_err_and(|e| e.code != ErrorCode::SshUnreachable)
+        {
             let _ = change(state, id, |r| {
                 r.replacing_json = None;
                 Ok(())
