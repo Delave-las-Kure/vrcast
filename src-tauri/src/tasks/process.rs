@@ -312,7 +312,24 @@ impl ManagedProcess {
         record: Record,
         env: &[(&str, &std::ffi::OsStr)],
     ) -> Result<Self> {
+        #[cfg(not(target_os = "linux"))]
         let mut cmd = Command::new(program);
+        #[cfg(target_os = "linux")]
+        let mut cmd = {
+            // PR_SET_PDEATHSIG reaches only our direct child. SIGKILL left its live
+            // descendants writing after an application crash (T721: hosted /proc showed
+            // a sleeping grandchild, not a zombie). Install a trap BEFORE starting the
+            // program: parent death signals this supervisor, which kills its whole group.
+            // The program and arguments remain positional data, never shell source.
+            let mut supervisor = Command::new("/bin/sh");
+            supervisor.args([
+                "-c",
+                "trap 'kill -9 -$$' TERM; \"$@\" & child=$!; wait \"$child\"; exit $?",
+                "vrcast-process-group",
+                program,
+            ]);
+            supervisor
+        };
         cmd.envs(env.iter().copied());
         cmd.args(args)
             .stdin(Stdio::null())
@@ -348,24 +365,15 @@ impl ManagedProcess {
 
                     #[cfg(target_os = "linux")]
                     {
-                        // The kernel will kill the child itself when the parent dies — and
-                        // will do so even when no code of ours is running any more: the
-                        // application killed by a signal, eaten by the out-of-memory killer
-                        // or brought down by a panic. This is the only Linux equivalent of
-                        // what a job object gives on Windows.
-                        //
-                        // Two limits worth remembering:
-                        //   1. It applies only to the DIRECT child. Grandchildren are
-                        //      covered by the start-up sweep (see tasks::registry) — which
-                        //      until 2026-09-06 read a table nothing ever wrote to, so this
-                        //      line pointed a reader at a closed case that was open (T504).
-                        //      `spawn_in` writes into it now, at the end of this function.
-                        //   2. It fires when the parent THREAD dies, not the process. So
-                        //      processes must not be spawned from short-lived threads —
-                        //      see the warning on ManagedProcess::spawn.
+                        // Even after an abnormal application exit the kernel signals the
+                        // direct child, our supervisor, whose trap ends the entire group.
+                        // It fires when the parent THREAD dies, not the process: never
+                        // spawn heavy work from short-lived threads (see spawn's warning).
                         const PR_SET_PDEATHSIG: i32 = 1;
-                        const SIGKILL: i64 = 9;
-                        libc_prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
+                        const SIGTERM: i64 = 15;
+                        if libc_prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0) == -1 {
+                            return Err(std::io::Error::last_os_error());
+                        }
 
                         // The gap: the parent may have died between the spawn and the line
                         // above — in which case the signal will never come. We check and
@@ -591,6 +599,14 @@ impl ManagedProcess {
 /// nobody asked for, growing without limit.
 impl Drop for ManagedProcess {
     fn drop(&mut self) {
+        // Dropping a future must stop descendants too. The child's unreaped PID still
+        // reserves our group number, so this cannot hit a reused, unrelated group.
+        #[cfg(unix)]
+        if let Some(pid) = self.child.id() {
+            unsafe {
+                libc_killpg(pid as i32, 9);
+            }
+        }
         if let Some(pid) = self.recorded {
             match &self.record {
                 Record::Account => crate::tasks::registry::note_ended(pid),

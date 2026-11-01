@@ -110,6 +110,27 @@ async fn the_application_dying_takes_its_children_with_it() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dropping_a_managed_run_takes_the_whole_group_with_it() {
+    let (prog, args) = long_running();
+    let child = ManagedProcess::spawn(prog, &args).unwrap();
+    let pid = child.id().unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let descendants = children_of(pid);
+    assert!(
+        !descendants.is_empty(),
+        "the process tree was never started"
+    );
+    drop(child);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!alive(pid));
+    assert!(
+        descendants.iter().all(|p| !alive(*p)),
+        "descendants survived dropping the run: {descendants:?}"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn pausing_and_carrying_on_work() {
