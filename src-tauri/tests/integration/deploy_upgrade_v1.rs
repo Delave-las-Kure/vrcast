@@ -117,7 +117,9 @@ async fn an_upgrade_from_version_1_puts_the_new_caching_rules_in_force() {
             "set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get -o Acquire::Retries=5 update -qq
-apt-get -o Acquire::Retries=5 install -y -qq {names} {updates} >/dev/null
+# Version 1 used gpg to create Caddy's repository key. The CURRENT installer deliberately
+# no longer requests gnupg, but this fixture must still recreate the old server faithfully.
+apt-get -o Acquire::Retries=5 install -y -qq {names} gnupg {updates} >/dev/null
 curl -fsSL -o /tmp/caddy.deb \
   https://github.com/caddyserver/caddy/releases/download/v{OLD_CADDY}/caddy_{OLD_CADDY}_linux_amd64.deb
 dpkg -i /tmp/caddy.deb >/dev/null
@@ -172,13 +174,14 @@ echo installed",
              && chown -R caddy:caddy {VIDEO_DIR}/film"
         ))
         .expect("could not make the server a version-1 one");
-    // Caddy's apt list and key, by version 1's own two lines (T713). Both addresses still
-    // answer; it is the repository behind them that answers 402.
+    // The version-1 list/key at their real paths, but with an intentionally unreachable
+    // container-local repository. Cloudsmith's former 402 is not a stable test fixture:
+    // it may answer again later. The upgrade must remove these files BEFORE asking apt.
     target
         .exec_inside(&format!(
             "set -e
 curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --batch --yes --dearmor -o {keyring}
-curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > {list}
+printf 'deb [signed-by={keyring}] http://127.0.0.1:9/cloudsmith-v1-unreachable old main\\n' > {list}
 grep -q cloudsmith {list}
 echo listed",
             keyring = packages::KEYRING,
@@ -186,12 +189,12 @@ echo listed",
         ))
         .expect("could not put version 1's Caddy list on the stand");
     let broken = target
-        .exec_inside("apt-get update -qq 2>&1; echo \"exit=$?\"")
+        .exec_inside("apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=2 -o APT::Update::Error-Mode=any update -qq 2>&1; echo \"exit=$?\"")
         .expect("could not ask apt");
     println!("apt-get update on the version-1 stand:\n{broken}");
     assert!(
         !broken.contains("exit=0") && broken.contains("cloudsmith"),
-        "the stand does not have the owner's trouble — apt-get update does not fail on the list:\n{broken}"
+        "the version-1 fixture must make apt-get update fail on its old list:\n{broken}"
     );
     let limits_before = target
         .exec_inside("sha256sum /etc/caddy/vrcast-limits.conf | cut -d' ' -f1")
