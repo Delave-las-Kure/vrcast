@@ -1159,6 +1159,7 @@ export const en: Catalogue = {
       startsAfterPlan: "Starts once planned",
       rungLine: "{height}p · {mbps} Mbit/s",
       rungToMeasure: "to measure",
+      serverDown: "The server is not answering — new videos will wait.",
       onServer: "On the server ≈ {bytes|bytes}",
       aboutMinutes: "{what} ≈ {n} min",
       encodeTime: "Encoding",

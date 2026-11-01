@@ -35,6 +35,8 @@ const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
 const mockLadderRecomputeRung = vi.fn();
 const mockLadderValidate = vi.fn();
+/** Unset — the stub's empty answer, as before (not stale: nothing said). */
+const mockLibraryList = vi.fn((..._a: unknown[]) => Promise.resolve([] as unknown));
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
@@ -66,6 +68,7 @@ vi.mock("../../../shared/ipc", async () => {
       videoSetRungs: (...a: unknown[]) => mockVideoSetRungs(...a),
       ladderValidate: (...a: unknown[]) => mockLadderValidate(...a),
       ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
+      libraryList: (...a: unknown[]) => mockLibraryList(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
       push = handler;
@@ -241,6 +244,7 @@ beforeEach(() => {
   useServers.setState({ profiles: [profile()], loading: false, error: null });
   mockServersList.mockResolvedValue([profile()]);
   mockVideoList.mockResolvedValue([]);
+  mockLibraryList.mockResolvedValue([] as unknown);
   mockOpen.mockResolvedValue(null);
   for (const m of [
     mockVideoPause,
@@ -1151,5 +1155,48 @@ describe("both languages", () => {
     show("en");
     expect(await screen.findByRole("heading", { name: en.ui.video.heading })).toBeInTheDocument();
     expect((await card()).getByTestId("stage-facts")).toHaveTextContent("rung 2 of 3");
+  });
+});
+
+/** Tour 0.3.0 (I01): «Видео» says when the server does not answer, as «Библиотека» does. */
+describe("a server out of reach", () => {
+  const library = (stale: boolean) => ({
+    server_id: "srv_1",
+    media: [],
+    unrecognized: [],
+    disk: null,
+    stale,
+  });
+
+  it("says so in one line over the cards, and keeps the cards", async () => {
+    mockVideoList.mockResolvedValue([video({ stage: "done", state: "done" })]);
+    mockLibraryList.mockResolvedValue(library(true));
+    show();
+    expect(await screen.findByTestId("video-server-down")).toHaveTextContent(
+      "Сервер не отвечает — новые видео подождут.",
+    );
+    expect(await screen.findByTestId("video-v1")).toBeInTheDocument();
+  });
+
+  it("says nothing while the server answers", async () => {
+    mockLibraryList.mockResolvedValue(library(false));
+    show();
+    await waitFor(() => expect(mockLibraryList).toHaveBeenCalledWith("srv_1", false));
+    expect(screen.queryByTestId("video-server-down")).toBeNull();
+  });
+
+  it("says so when nothing is cached and the server cannot be reached", async () => {
+    mockLibraryList.mockRejectedValue({ code: "SSH_UNREACHABLE", details: [] });
+    show("en");
+    expect(await screen.findByTestId("video-server-down")).toHaveTextContent(
+      en.ui.video.serverDown,
+    );
+  });
+
+  it("does not take another refusal for the server being down", async () => {
+    mockLibraryList.mockRejectedValue({ code: "SSH_AUTH_FAILED", details: [] });
+    show();
+    await waitFor(() => expect(mockLibraryList).toHaveBeenCalled());
+    expect(screen.queryByTestId("video-server-down")).toBeNull();
   });
 });

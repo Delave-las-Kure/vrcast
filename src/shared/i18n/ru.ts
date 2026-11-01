@@ -1153,6 +1153,7 @@ const ui = {
     startsAfterPlan: "Стартует после плана",
     rungLine: "{height}p · {mbps} Мбит/с",
     rungToMeasure: "замерить",
+    serverDown: "Сервер не отвечает — новые видео подождут.",
     onServer: "На сервере ≈ {bytes|bytes}",
     aboutMinutes: "{what} ≈ {n} мин",
     encodeTime: "Кодирование",
