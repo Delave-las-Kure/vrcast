@@ -205,7 +205,8 @@ def run_group(selected, trace, timeout):
             try:
                 leaked = cleanup_resources(label)
             except (OSError, ValueError, subprocess.SubprocessError) as error:
-                cleanup_error = f'Resource cleanup failed: {type(error).__name__}'
+                reason = str(error) if isinstance(error, ValueError) else type(error).__name__
+                cleanup_error = f'Resource cleanup failed: {reason}'
         output.seek(0)
         log = output.read()
     key = (ROOT / "src-tauri/tests/fixtures/encrypted_ed25519.key").read_text()

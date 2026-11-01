@@ -799,9 +799,10 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        // The container is run with self-removal, but it is stopped explicitly: otherwise
-        // after a failed test it would hang about until the end of the session.
-        let _ = docker(&["kill", &self.id]);
+        // `kill` only acknowledges exit; asynchronous --rm may still be deleting a large
+        // slow-film layer when the test process ends. Own the removal request and wait
+        // for it instead of leaving a "removal in progress" object for the CI parent.
+        let _ = docker(&["rm", "-f", &self.id]);
         // Ourselves off the network first, or removing it is refused for as long as we hold
         // it: Docker will not remove a network with anything still attached.
         if let Some(id) = &self.joined {
