@@ -471,6 +471,12 @@ async function snap(step: string, did: string) {
   let pages = 0;
   let text = "";
   try {
+    // A click near the bottom scrolls the form there. Do not lose an error above the
+    // viewport; only the explicitly targeted diagnostics pictures keep their position.
+    if (!/^diag-(stalls|bitrate)/.test(step)) {
+      await s().execute("document.querySelector('.content').scrollTop = 0");
+      await sleep(100);
+    }
     writeFileSync(join(SHOTS, `${file}.png`), Buffer.from(await s().screenshot(), "base64"));
     pages = 1;
     text = await pageText();
