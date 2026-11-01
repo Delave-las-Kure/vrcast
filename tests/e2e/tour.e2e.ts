@@ -98,6 +98,7 @@ const SECTIONS: Record<string, string> = {
   C2: "Обновление настоящей раздачи версии 1 на systemd-контейнере",
   D: "«Видео»: от файла до ссылки — начало",
   D2: "«Видео»: после перезапуска приложения — до ссылки; занятое имя",
+  D3: "Редактор ступеней: настоящий ввод клавишами, пустое поле и план после правки",
   E: "Библиотека",
   F: "Зрители и ограничения качества",
   G: "Диагностика",
@@ -236,9 +237,11 @@ function writeIndex() {
   const lines: string[] = [
     "# Обход интерфейса VRCast Studio",
     "",
-    `Снимки окна (1280×800) и текст экрана рядом (.txt — document.body.innerText). Если экран ` +
+    `Снимки окна (1280×800 логических пикселей; PNG учитывает масштаб Windows) и текст экрана рядом (.txt — document.body.innerText). Если экран ` +
       `прокручивается, к снимку добавлены продолжения .p2.png, .p3.png … Обновлено: ` +
       `${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC.`,
+    "",
+    "[Итоговый визуальный отчёт, ограничения обхода и список замечаний](report.md).",
     "",
   ];
   let n = 0;
@@ -1752,7 +1755,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       const attempts: [string, string, () => Promise<void>][] = [
         [
           "rungs-cleared",
-          "Поле битрейта нижней ступени очищено (как Backspace до пустого) и введено новое число",
+          "WebDriver.clear у битрейта нижней ступени и ввод нового числа (отдельный D3 проверяет настоящий Backspace)",
           async () => {
             const inputs = await s().findAll(".video__rungs input[type=number]");
             const last = inputs[inputs.length - 1];
@@ -1954,6 +1957,74 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       }
     },
     400_000,
+  );
+
+  it.skipIf(!wanted.has("D3"))(
+    "D3 — rung editing with real key events rather than WebDriver.clear",
+    async () => {
+      beginSection("D3");
+      await ensureServer();
+      await ensureApp();
+      await setLanguage("ru");
+      await go("video");
+      const added = await invoke<Added>("video_add", {
+        serverId: await activeServerId(),
+        paths: [FILM1],
+        mediaId: null,
+      });
+      const id = added.added[0]?.id;
+      if (!id) throw new Error("no film added for the keyboard editor capture");
+      await cardUntil(id, "the plan", (c) => c.state === "ready", 60_000);
+      await step("keyboard-editor", "Открыт редактор свежего плана", async () => {
+        await press("Ступени", inCard(id));
+        await catchErrors();
+      });
+      const inputs = await s().findAll(".video__rungs input[type=number]");
+      const last = inputs[inputs.length - 1];
+      await step(
+        "keyboard-empty",
+        "Ctrl+A и Backspace — нижний битрейт действительно пустой",
+        async () => {
+          await last.click();
+          await last.type("\uE009a\uE000\uE003");
+          await sleep(500);
+          note(`значение после Backspace: ${JSON.stringify(await last.property("value"))}`);
+        },
+      );
+      await step(
+        "keyboard-two",
+        "В пустое поле введено 2 Мбит/с, окно осталось живым",
+        async () => {
+          await last.type("2");
+          await sleep(500);
+          note(`значение после ввода: ${JSON.stringify(await last.property("value"))}`);
+        },
+      );
+      await step(
+        "keyboard-left-out",
+        "Снята средняя «Собирать» после правки битрейта клавиатурой",
+        async () => {
+          const boxes = await s().findAll(".video__rungs input[type=checkbox]");
+          await boxes[Math.floor(boxes.length / 2)].click();
+        },
+      );
+      await step(
+        "keyboard-plan",
+        "Сохранён план с 9 и 2 Мбит/с: проверяем пометку «замерить»",
+        async () => {
+          await press("Сохранить", "//div[contains(@class,'video__rungs')]");
+          await cardUntil(id, "the edited plan", (c) => c.state === "ready", 30_000);
+        },
+      );
+      writeFileSync(
+        join(SHOTS, "D3-video-view.json"),
+        JSON.stringify(await invoke("video_list"), null, 2),
+      );
+      note(
+        `пометка «замерить» на плане: ${/замерить/.test((await card(id))?.text ?? "")}; ошибки страницы: ${(await caughtErrors()).join(" | ") || "нет"}`,
+      );
+    },
+    180_000,
   );
 
   it.skipIf(!wanted.has("E"))(
