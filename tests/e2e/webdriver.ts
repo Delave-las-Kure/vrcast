@@ -63,10 +63,16 @@ export class Session {
    * `application` is the built binary — not the installer and not `tauri dev`. What is
    * checked has to be what is handed out.
    */
-  static async open(port: number, application: string): Promise<Session> {
+  static async open(port: number, application: string, debuggerAddress?: string): Promise<Session> {
     const base = `http://127.0.0.1:${port}`;
+    // Microsoft documents attaching to an already-running WebView2 as the alternative to
+    // driver launch. Omit tauri:options in that mode: the intermediary would otherwise
+    // replace ms:edgeOptions and launch a second application instead of attaching.
+    const alwaysMatch = debuggerAddress
+      ? { browserName: "webview2", "ms:edgeOptions": { debuggerAddress } }
+      : { "tauri:options": { application } };
     const value = await call<{ sessionId: string }>(`${base}/session`, "POST", {
-      capabilities: { alwaysMatch: { "tauri:options": { application } } },
+      capabilities: { alwaysMatch },
     });
     return new Session(base, value.sessionId);
   }

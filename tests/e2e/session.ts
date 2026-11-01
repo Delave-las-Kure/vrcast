@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Session } from "./webdriver";
+import { startAttachedApplication, type AttachedApplication } from "./attached";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP = join(HERE, "..", "..");
@@ -95,6 +96,7 @@ export class Harness {
   private constructor(
     private readonly driver: ChildProcess,
     readonly session: Session,
+    private readonly attached?: AttachedApplication,
   ) {}
 
   /**
@@ -145,11 +147,16 @@ export class Harness {
       await new Promise((r) => setTimeout(r, 200));
     }
 
+    let attached: AttachedApplication | undefined;
     try {
-      const session = await Session.open(PORT, application);
-      return new Harness(driver, session);
+      if (process.platform === "win32" && process.env.VRCAST_WEBDRIVER_ATTACH === "1") {
+        attached = await startAttachedApplication(application, extraEnv, said, START_WITHIN_MS);
+      }
+      const session = await Session.open(PORT, application, attached?.debuggerAddress);
+      return new Harness(driver, session, attached);
     } catch (e) {
       driver.kill();
+      await attached?.stop();
       throw new Error(
         `the application would not open under the driver (${application}).\n` +
           `  ${String(e)}\n` +
@@ -169,6 +176,7 @@ export class Harness {
       await this.session.close();
     } finally {
       this.driver.kill();
+      await this.attached?.stop();
     }
   }
 }

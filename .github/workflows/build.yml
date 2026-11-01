@@ -177,6 +177,8 @@ jobs:
       # hosted machines have no Linux Docker daemon. The UI-tour task owns that harness.
       - name: Drive the window (Windows)
         if: runner.os == 'Windows'
+        env:
+          VRCAST_WEBDRIVER_ATTACH: "1"
         run: npm run test:e2e -- tests/e2e/app.e2e.ts tests/e2e/forget.e2e.ts
       - name: Drive the window (Linux)
         if: runner.os == 'Linux'
