@@ -187,19 +187,21 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
-    container:
-      image: rust:bookworm
-      options: -v /var/run/docker.sock:/var/run/docker.sock
+    # Run on the Docker HOST, not in a sibling job container: the network-cut/relay
+    # tests deliberately connect to 127.0.0.1. In a job container that is the wrong
+    # loopback, and DeployTarget's direct-container port 22 is not a published host port.
+    # Core/e2e/bundles still use rust:bookworm; these tests do not produce installers.
     env:
-      CARGO_TARGET_DIR: /__w/_cargo-integration
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../_cargo-integration
     steps:
       - uses: actions/checkout@v7
-      - name: Build libraries and the host Docker client
+      - name: Build libraries; use the runner's existing Docker daemon
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libayatana-appindicator3-1 \
-            librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils docker.io
+            librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils
+          docker version
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git rev-parse --verify HEAD
       - uses: actions/setup-node@v7
@@ -210,9 +212,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            /__w/_cargo-integration
-          key: integration-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: integration-${{ hashFiles('src-tauri/Cargo.lock') }}-
+            ${{ env.CARGO_TARGET_DIR }}
+          key: integration-host-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: integration-host-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
       - uses: actions/cache@v6
         with:
           path: src-tauri/binaries

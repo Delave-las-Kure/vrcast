@@ -330,8 +330,9 @@ fn rows_in(db: &Db) -> Vec<u32> {
 /// hide: they check the sweep faithfully and say nothing about whether anything fills the
 /// table. This one starts a real program through the one place that starts programs, and
 /// looks.
-#[test]
-fn a_program_started_the_ordinary_way_lands_in_the_account() {
+#[tokio::test]
+async fn a_program_started_the_ordinary_way_lands_in_the_account() {
+    // Tokio's piped Unix child requires an active reactor even before anyone reads it.
     // Not `ManagedProcess::spawn` / the global account (T563): that account is one table
     // shared by the whole process, and cargo runs every test of this binary as that one
     // process. A test that installed the global account and started a real program used to
