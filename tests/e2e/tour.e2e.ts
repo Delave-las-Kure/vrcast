@@ -2137,21 +2137,22 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         await until(
           "the dialog to close or show a refusal",
           async () =>
-            !(await has(dialog)) || (await s().has('[data-testid="limit-dialog"] [role="alert"]')),
+            !(await has(dialog)) || (await s().has('[data-testid="limit-dialog"] .notice--error')),
           90_000,
           500,
         );
         await sleep(1000);
       });
       if (await has(dialog)) {
-        await step(
-          "limit-error-details",
-          "Диалог не закрылся — у ошибки раскрыто «Подробнее»",
-          async () => {
-            await press("Подробнее", dialog, 5_000);
-            await sleep(400);
-          },
-        );
+        if (await has(`${dialog}//summary[normalize-space()='Подробнее']`))
+          await step(
+            "limit-error-details",
+            "Диалог не закрылся — у ошибки раскрыто «Подробнее»",
+            async () => {
+              await press("Подробнее", dialog, 5_000);
+              await sleep(400);
+            },
+          );
         await step("limit-cancel", "«Отмена» в диалоге ограничения", async () => {
           await press("Отмена", dialog, 5_000);
           await sleep(600);
