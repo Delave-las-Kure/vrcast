@@ -21,7 +21,7 @@
  * Without `VRCAST_TOUR` every section runs, in order.
  *
  *   VRCAST_E2E_TARGET_DIR  where the e2e build is (see video.e2e.ts for how to build it)
- *   VRCAST_TOUR_SHOTS      the pictures (default: a folder in the system's temporary one)
+ *   VRCAST_TOUR_OUT        the pictures (VRCAST_TOUR_SHOTS remains a supported alias)
  *   VRCAST_TOUR_STATE      the data directory, films and scratch (default: likewise)
  *
  * **A step that does not work is written down, not fatal.** It is pictured as it is, its
@@ -69,12 +69,16 @@ const CLEAN_PASSWORD = "test-container-password";
 const SSH_PORT = 47022;
 const HTTP_PORT = 47080;
 const CLEAN_SSH_PORT = 47122;
-const NAME = "vrcast-e2e-tour";
-const CLEAN_NAME = "vrcast-e2e-tour-clean";
-const VIEWER_FAST = "vrcast-e2e-tour-viewer-fast";
-const VIEWER_SLOW = "vrcast-e2e-tour-viewer-slow";
+const NAMESPACE = process.env.VRCAST_TOUR_NAMESPACE ?? "vrcast-e2e-tour";
+const NAME = NAMESPACE;
+const CLEAN_NAME = `${NAMESPACE}-clean`;
+const VIEWER_FAST = `${NAMESPACE}-viewer-fast`;
+const VIEWER_SLOW = `${NAMESPACE}-viewer-slow`;
 
-const SHOTS = process.env.VRCAST_TOUR_SHOTS ?? join(tmpdir(), "vrcast-tour-shots");
+const SHOTS =
+  process.env.VRCAST_TOUR_OUT ??
+  process.env.VRCAST_TOUR_SHOTS ??
+  join(tmpdir(), "vrcast-tour-shots");
 const STATE = process.env.VRCAST_TOUR_STATE ?? join(tmpdir(), "vrcast-tour-state");
 const DATA = join(STATE, "data");
 const FILMS = join(STATE, "films");
@@ -324,6 +328,7 @@ async function launch() {
   };
   harness = await Harness.start(nativeDriver, env, binary as string);
   await s().findFilled(".content");
+  await catchErrors();
   try {
     await s().setWindowRect(1280, 800);
   } catch (e) {
@@ -482,6 +487,9 @@ async function snap(step: string, did: string) {
     did = `${did} — СНИМОК НЕ ПОЛУЧИЛСЯ: ${message(e)}`;
   }
   writeFileSync(join(SHOTS, `${file}.txt`), `${did}\n\n---\n\n${text}`);
+  const errors = await caughtErrors();
+  if (errors.length)
+    writeFileSync(join(SHOTS, `${file}.errors.json`), JSON.stringify(errors, null, 2));
   logs[sec].shots.push({ file, step, did, pages });
   saveLog();
 }
@@ -619,17 +627,32 @@ function ensureFilms() {
     "yuv420p",
   ];
   if (!existsSync(FILM1)) {
+    const subtitles = join(FILMS, "Русские субтитры.srt");
+    writeFileSync(
+      subtitles,
+      "1\n00:00:00,000 --> 00:01:00,000\nПроверка субтитров: русский текст в кадре\n",
+      "utf8",
+    );
     // 1080p, 60 s, two audio tracks: English first, Russian SECOND — the one to choose.
     run([
       ...["-f", "lavfi", "-i"],
       "testsrc2=s=1920x1080:r=30:d=60,noise=alls=6:allf=t+u:enable='between(t,20,40)',noise=alls=18:allf=t+u:enable='gte(t,40)'",
       ...["-f", "lavfi", "-i", "sine=f=440:r=48000:d=60"],
       ...["-f", "lavfi", "-i", "sine=f=660:r=48000:d=60"],
-      ...["-map", "0:v", "-map", "1:a", "-map", "2:a"],
+      ...["-i", subtitles],
+      ...["-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:s"],
       ...x264,
       ...["-c:a", "aac", "-b:a", "160k"],
       ...["-metadata:s:a:0", "language=eng", "-metadata:s:a:0", "title=English"],
       ...["-metadata:s:a:1", "language=rus", "-metadata:s:a:1", "title=Русский"],
+      ...[
+        "-c:s",
+        "srt",
+        "-metadata:s:s:0",
+        "language=rus",
+        "-metadata:s:s:0",
+        "title=Русские субтитры",
+      ],
       // Different every time it is made: a film measured once is not measured again, and
       // the tour wants to show «Measuring».
       ...["-metadata", `comment=tour-${Date.now()}`],
@@ -1022,6 +1045,8 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           await field("Домен раздачи", "stream.example.com");
           await field("Путь к приватному ключу", KEY);
           await field("Парольная фраза ключа", "wrong-passphrase");
+          await press("Необязательное");
+          await field("Тариф, Мбит/с", "100");
         },
       );
       await step("wizard-error-port", "«Дальше» с неверным портом — ответ мастера", async () => {
@@ -1472,6 +1497,13 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         await cardUntil(id1, "the first plan", (c) => c.state === "ready", 240_000);
         await cardUntil(id2, "the second plan", (c) => c.state === "ready", 240_000);
       });
+      await snap(
+        "audio-required",
+        "Первая карточка: «Выберите звук», «Старт» недоступен до выбора дорожки",
+      );
+      note(
+        `«Старт» без звука недоступен: ${await has(`${inCard(id1)}//button[normalize-space()='Старт' and @disabled]`)}`,
+      );
       if (await s().has('[data-testid="refused"]')) {
         await step("refused-details", "У отказа битого файла раскрыто «Подробнее»", async () => {
           await press("Подробнее", "//*[@data-testid='refused']", 5_000);
@@ -1482,7 +1514,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         "audio-second",
         "У первой карточки в «Звук» выбрана вторая дорожка (rus) — заранее не выбрана ни одна (T695)",
         async () => {
-          const sel = `${inCard(id1)}//label[contains(@class,'video__audio')]//select`;
+          const sel = `${inCard(id1)}//label[contains(@class,'video__audio') and not(contains(@class,'video__subtitles'))]//select`;
           // The first option is «Выберите звук» (T695): the track is picked by its value.
           await chooseX(sel, "option[@value='1']");
           await until(
@@ -1490,6 +1522,17 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
             async () => (await (await s().findX(sel)).property("value")) === "1",
             10_000,
           );
+        },
+      );
+      await step(
+        "subtitles-selected",
+        "«Субтитры»: выбрана русская SRT-дорожка для вжигания во все качества",
+        async () => {
+          await chooseX(
+            `${inCard(id1)}//label[contains(@class,'video__subtitles')]//select`,
+            "option[@value='0']",
+          );
+          await sleep(700);
         },
       );
       let edited = "";
@@ -1581,6 +1624,10 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         }
       }
       if (!alive) note("ни одной правки ступеней сохранить не удалось — план остался исходным");
+      if (alive) {
+        await step(attempts[2][0], attempts[2][1], attempts[2][2]);
+        alive = await editorOutcome("снятие «Собирать» после правки битрейта");
+      }
       if (await s().has(".video__rungs")) {
         await step(
           "rungs-saved",
@@ -1592,10 +1639,22 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           },
         );
       }
-      await step("start-all", "«Старт всех»", async () => {
-        await press("Старт всех");
-        await sleep(1200);
+      await step("send-speed-10", "Рядом со «Старт всех» выбрано «10 Мбит/с»", async () => {
+        await chooseX("//label[contains(@class,'send-speed')]//select", "option[@value='10']");
+        await sleep(500);
       });
+      await step("send-speed-unlimited", "Скорость отправки → «Без ограничения»", async () => {
+        await chooseX("//label[contains(@class,'send-speed')]//select", "option[@value='0']");
+        await sleep(500);
+      });
+      await step(
+        "start-all",
+        "«Старт всех»: первая карточка начинает работу, вторая ждёт в очереди",
+        async () => {
+          await press("Старт всех");
+          await sleep(1200);
+        },
+      );
       await watchVideos(tour, t0 + 370_000);
     },
     400_000,
