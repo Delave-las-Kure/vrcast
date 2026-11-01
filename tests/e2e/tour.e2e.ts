@@ -2081,12 +2081,19 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       );
       await step(
         "leftover-remove",
-        "«Удалить» у лишних mp4: ожидается подтверждение, снимаем фактический результат",
+        "«Удалить» у лишних mp4: показан вопрос «Удалить лишние файлы mp4 (N)?»",
         async () => {
           await press("Удалить", "//div[contains(@class,'media__leftover')]");
-          await sleep(1500);
+          await waitText(/Удалить лишние файлы mp4 \(\d+\)\?/);
         },
       );
+      await step("leftover-remove-confirmed", "Подтверждение «Удалить» в вопросе", async () => {
+        await press(
+          "Удалить",
+          "//div[contains(@class,'media__leftover')]//div[@role='alertdialog']",
+        );
+        await sleep(1500);
+      });
       await snap(
         "leftover-result",
         "После удаления лишних mp4; проверяем, сохранились ли ссылки набора",

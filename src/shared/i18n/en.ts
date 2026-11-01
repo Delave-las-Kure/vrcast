@@ -1242,6 +1242,8 @@ export const en: Catalogue = {
       setFilesHeading: "The set's rung files",
       leftoverMp4: "Extra mp4 files — {bytes|bytes}",
       leftoverRemove: "Remove",
+      leftoverAsk: "Remove the extra mp4 files ({n})?",
+      leftoverAskKeeps: "The quality set stays as it is.",
       renameMedia: "Rename",
       buildSet: "Build a set",
       setBuilding: "Set is building",

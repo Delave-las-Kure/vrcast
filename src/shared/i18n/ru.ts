@@ -1236,6 +1236,8 @@ const ui = {
     setFilesHeading: "Файлы ступеней набора",
     leftoverMp4: "Лишние файлы mp4 — {bytes|bytes}",
     leftoverRemove: "Удалить",
+    leftoverAsk: "Удалить лишние файлы mp4 ({n})?",
+    leftoverAskKeeps: "Набор качеств не пострадает.",
     renameMedia: "Переименовать",
     buildSet: "Собрать набор",
     setBuilding: "Набор собирается",
