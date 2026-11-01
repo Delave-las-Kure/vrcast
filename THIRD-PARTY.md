@@ -378,7 +378,7 @@ $Id$
 | `crossbeam-channel` | 0.5.16 | MIT OR Apache-2.0 | [источник](https://github.com/crossbeam-rs/crossbeam) |
 | `crossbeam-epoch` | 0.9.20 | MIT OR Apache-2.0 | [источник](https://github.com/crossbeam-rs/crossbeam) |
 | `crossbeam-utils` | 0.8.22 | MIT OR Apache-2.0 | [источник](https://github.com/crossbeam-rs/crossbeam) |
-| `crypto-bigint` | 0.7.5 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/crypto-bigint) |
+| `crypto-bigint` | 0.7.10 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/crypto-bigint) |
 | `crypto-common` | 0.1.7 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/traits) |
 | `crypto-common` | 0.2.2 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/traits) |
 | `crypto-primes` | 0.7.2 | Apache-2.0 OR MIT | [источник](https://github.com/entropyxyz/crypto-primes) |
@@ -387,7 +387,7 @@ $Id$
 | `ctor` | 0.8.0 | Apache-2.0 OR MIT | [источник](https://github.com/mmastrac/rust-ctor) |
 | `ctor-proc-macro` | 0.0.7 | Apache-2.0 OR MIT | [источник](https://github.com/mmastrac/rust-ctor) |
 | `ctr` | 0.10.1 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/block-modes) |
-| `ctutils` | 0.4.2 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/utils) |
+| `ctutils` | 0.4.7 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/utils) |
 | `curve25519-dalek` | 5.0.0 | BSD-3-Clause | [источник](https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek) |
 | `curve25519-dalek-derive` | 0.1.1 | MIT/Apache-2.0 | [источник](https://github.com/dalek-cryptography/curve25519-dalek) |
 | `darling` | 0.23.0 | MIT | [источник](https://github.com/TedDriggs/darling) |
@@ -716,12 +716,12 @@ $Id$
 | `rustc_version` | 0.4.1 | MIT OR Apache-2.0 | [источник](https://github.com/djc/rustc-version-rs) |
 | `rustc-hash` | 2.1.3 | Apache-2.0 OR MIT | [источник](https://github.com/rust-lang/rustc-hash) |
 | `rustix` | 1.1.4 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [источник](https://github.com/bytecodealliance/rustix) |
-| `rustls` | 0.23.43 | Apache-2.0 OR ISC OR MIT | [источник](https://github.com/rustls/rustls) |
+| `rustls` | 0.23.46 | Apache-2.0 OR ISC OR MIT | [источник](https://github.com/rustls/rustls) |
 | `rustls-native-certs` | 0.8.4 | Apache-2.0 OR ISC OR MIT | [источник](https://github.com/rustls/rustls-native-certs) |
 | `rustls-pki-types` | 1.15.1 | MIT OR Apache-2.0 | [источник](https://github.com/rustls/pki-types) |
 | `rustls-platform-verifier` | 0.7.0 | MIT OR Apache-2.0 | [источник](https://github.com/rustls/rustls-platform-verifier) |
 | `rustls-platform-verifier-android` | 0.1.1 | MIT OR Apache-2.0 | [источник](https://github.com/rustls/rustls-platform-verifier) |
-| `rustls-webpki` | 0.103.15 | ISC | [источник](https://github.com/rustls/webpki) |
+| `rustls-webpki` | 0.103.16 | ISC | [источник](https://github.com/rustls/webpki) |
 | `rustversion` | 1.0.23 | MIT OR Apache-2.0 | [источник](https://github.com/dtolnay/rustversion) |
 | `ryu` | 1.0.23 | Apache-2.0 OR BSL-1.0 | [источник](https://github.com/dtolnay/ryu) |
 | `salsa20` | 0.11.0 | MIT OR Apache-2.0 | [источник](https://github.com/RustCrypto/stream-ciphers) |
@@ -827,7 +827,7 @@ $Id$
 | `tinystr` | 0.8.4 | Unicode-3.0 | [источник](https://github.com/unicode-org/icu4x) |
 | `tinyvec` | 1.12.0 | Zlib OR Apache-2.0 OR MIT | [источник](https://github.com/Lokathor/tinyvec) |
 | `tinyvec_macros` | 0.1.1 | MIT OR Apache-2.0 OR Zlib | [источник](https://github.com/Soveu/tinyvec_macros) |
-| `tokio` | 1.53.1 | MIT | [источник](https://github.com/tokio-rs/tokio) |
+| `tokio` | 1.54.1 | MIT | [источник](https://github.com/tokio-rs/tokio) |
 | `tokio-macros` | 2.7.2 | MIT | [источник](https://github.com/tokio-rs/tokio) |
 | `tokio-rustls` | 0.26.4 | MIT OR Apache-2.0 | [источник](https://github.com/rustls/tokio-rustls) |
 | `tokio-util` | 0.7.19 | MIT | [источник](https://github.com/tokio-rs/tokio) |
@@ -890,8 +890,8 @@ $Id$
 | `web-time` | 1.1.0 | MIT OR Apache-2.0 | [источник](https://github.com/daxpedda/web-time) |
 | `webkit2gtk` | 2.0.2 | MIT | [источник](https://github.com/tauri-apps/webkit2gtk-rs) |
 | `webkit2gtk-sys` | 2.0.2 | MIT | [источник](https://github.com/tauri-apps/webkit2gtk-rs) |
-| `webpki-root-certs` | 1.0.9 | CDLA-Permissive-2.0 | [источник](https://github.com/rustls/webpki-roots) |
-| `webpki-roots` | 1.0.9 | CDLA-Permissive-2.0 | [источник](https://github.com/rustls/webpki-roots) |
+| `webpki-root-certs` | 1.0.11 | CDLA-Permissive-2.0 | [источник](https://github.com/rustls/webpki-roots) |
+| `webpki-roots` | 1.0.11 | CDLA-Permissive-2.0 | [источник](https://github.com/rustls/webpki-roots) |
 | `webview2-com` | 0.38.2 | MIT | [источник](https://github.com/wravery/webview2-rs) |
 | `webview2-com-macros` | 0.8.1 | MIT | [источник](https://github.com/wravery/webview2-rs) |
 | `webview2-com-sys` | 0.38.2 | MIT | [источник](https://github.com/wravery/webview2-rs) |
@@ -958,7 +958,7 @@ $Id$
 | `winnow` | 1.0.4 | MIT | [источник](https://github.com/winnow-rs/winnow) |
 | `winreg` | 0.55.0 | MIT | [источник](https://github.com/gentoo90/winreg-rs) |
 | `wit-bindgen` | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [источник](https://github.com/bytecodealliance/wit-bindgen) |
-| `wnaf` | 0.14.0 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/elliptic-curves) |
+| `wnaf` | 0.14.1 | Apache-2.0 OR MIT | [источник](https://github.com/RustCrypto/elliptic-curves) |
 | `writeable` | 0.6.4 | Unicode-3.0 | [источник](https://github.com/unicode-org/icu4x) |
 | `wry` | 0.55.1 | Apache-2.0 OR MIT | [источник](https://github.com/tauri-apps/wry) |
 | `x11` | 2.21.0 | MIT | [источник](https://github.com/AltF02/x11-rs.git) |
@@ -4192,7 +4192,7 @@ DEALINGS IN THE SOFTWARE.
 
 </details>
 
-<details><summary>cmov 0.5.4, crypto-primes 0.7.2, ctutils 0.4.2, embed_plist 1.2.2, encoding_rs 0.8.35, lru-slab 0.1.2 и ещё 10</summary>
+<details><summary>cmov 0.5.4, crypto-primes 0.7.2, ctutils 0.4.7, embed_plist 1.2.2, encoding_rs 0.8.35, lru-slab 0.1.2 и ещё 10</summary>
 
 ```
 Apache License
@@ -5762,7 +5762,7 @@ limitations under the License.
 
 </details>
 
-<details><summary>crypto-bigint 0.7.5, phc 0.6.1, pkcs5 0.8.1, scrypt 0.12.0, sec1 0.8.1, spki 0.8.0 и ещё 2</summary>
+<details><summary>crypto-bigint 0.7.10, phc 0.6.1, pkcs5 0.8.1, scrypt 0.12.0, sec1 0.8.1, spki 0.8.0 и ещё 2</summary>
 
 ```
 Copyright (c) 2021-2026 The RustCrypto Project Developers
@@ -6264,7 +6264,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 </details>
 
-<details><summary>ctutils 0.4.2</summary>
+<details><summary>ctutils 0.4.7</summary>
 
 ```
 Copyright (c) 2025-2026 The RustCrypto Project Developers
@@ -10791,7 +10791,7 @@ THE SOFTWARE.
 
 </details>
 
-<details><summary>hyper-rustls 0.27.9, rustls 0.23.43, rustls-native-certs 0.8.4</summary>
+<details><summary>hyper-rustls 0.27.9, rustls 0.23.46, rustls-native-certs 0.8.4</summary>
 
 ```
 ISC License (ISC)
@@ -10813,7 +10813,7 @@ THIS SOFTWARE.
 
 </details>
 
-<details><summary>hyper-rustls 0.27.9, rustls 0.23.43, rustls-native-certs 0.8.4</summary>
+<details><summary>hyper-rustls 0.27.9, rustls 0.23.46, rustls-native-certs 0.8.4</summary>
 
 ```
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -16924,7 +16924,7 @@ SOFTWARE.
 
 </details>
 
-<details><summary>rustls-webpki 0.103.15</summary>
+<details><summary>rustls-webpki 0.103.16</summary>
 
 ```
 Except as otherwise noted, this project is licensed under the following
@@ -18872,7 +18872,7 @@ freely, subject to the following restrictions:
 
 </details>
 
-<details><summary>tokio 1.53.1, tokio-util 0.7.19</summary>
+<details><summary>tokio 1.54.1, tokio-util 0.7.19</summary>
 
 ```
 MIT License
@@ -20375,7 +20375,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 </details>
 
-<details><summary>webpki-root-certs 1.0.9, webpki-roots 1.0.9</summary>
+<details><summary>webpki-root-certs 1.0.11, webpki-roots 1.0.11</summary>
 
 ```
 # Community Data License Agreement - Permissive - Version 2.0
@@ -21050,7 +21050,7 @@ THE SOFTWARE.
 
 </details>
 
-<details><summary>wnaf 0.14.0</summary>
+<details><summary>wnaf 0.14.1</summary>
 
 ```
 Copyright (c) 2026 RustCrypto Developers
