@@ -81,6 +81,47 @@ class IntegrationRunnerTests(unittest.TestCase):
             self.assertEqual(command[-1], name)
             self.assertNotIn('b::second' if name == 'a::first' else 'a::first', command)
 
+    def test_key_preparation_does_not_depend_on_which_test_runs_first(self):
+        with patch.object(ci.Path, 'exists', return_value=False), patch.object(
+            ci.Path, 'read_text', return_value='PASSPHRASE: &str = "test-passphrase"'
+        ), patch.object(ci.Path, 'unlink'), patch.object(ci.shutil, 'copyfile'), patch.object(ci.subprocess, 'run') as run:
+            ci.prepare_test_key()
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], 'ssh-keygen')
+        self.assertIn('ed25519', command)
+        self.assertTrue(run.call_args.kwargs['check'])
+
+    def test_trace_inventory_still_runs_together(self):
+        with patch.object(ci, 'run_group') as run:
+            ci.run_checked(['a::first', 'b::second'], trace=True)
+        run.assert_called_once_with(['a::first', 'b::second'], trace=True, timeout=2400)
+
+    def test_a_failed_test_does_not_hide_the_rest_of_the_shard(self):
+        with patch.object(ci, 'run_group', side_effect=[ValueError('timed out'), None]) as run:
+            with self.assertRaisesRegex(ValueError, 'a::first'):
+                ci.run_checked(['a::first', 'b::second'], trace=False)
+        self.assertEqual(run.call_count, 2)
+
+    def test_timeout_logs_are_scanned_before_printing(self):
+        child = SimpleNamespace(pid=123, returncode=-9)
+        calls = []
+        def start(command, **kwargs):
+            kwargs['stdout'].write('test-passphrase')
+            def wait(**options):
+                if options:
+                    raise ci.subprocess.TimeoutExpired(command, options['timeout'])
+                return -9
+            child.wait = wait
+            return child
+        with patch.object(ci.subprocess, 'Popen', side_effect=start), patch.object(ci.os, 'killpg', create=True), patch.object(
+            ci.subprocess, 'run'
+        ), patch.object(ci.Path, 'read_text', side_effect=[
+            'header\ncomment\nabcdefghijklmnop\nqrstuvwxyz012345', 'PASSPHRASE: &str = "test-passphrase"'
+        ]), patch('builtins.print', side_effect=lambda *args, **_: calls.append(str(args))):
+            with self.assertRaisesRegex(ValueError, 'SECRET WAS FOUND'):
+                ci.run_group(['a::hung'], trace=False, timeout=1)
+        self.assertFalse(any('test-passphrase' in call for call in calls))
+
 
 if __name__ == "__main__":
     unittest.main()

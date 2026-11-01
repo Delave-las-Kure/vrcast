@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import tempfile
 import time
@@ -75,6 +76,30 @@ def check_secrets(log, key, passphrase):
         raise ValueError("A SECRET WAS FOUND IN THE TRACE LOG; log withheld")
 
 
+def prepare_test_key():
+    # Isolation means the first test may use password login only. The log audit must not
+    # depend on a later test happening to create its canary. Match support/test_key.rs.
+    fixtures = ROOT / 'src-tauri/tests/fixtures'
+    key = fixtures / 'encrypted_ed25519.key'
+    public = fixtures / 'docker/encrypted_ed25519.key.pub'
+    if key.exists() and public.exists():
+        return
+    source = (ROOT / 'src-tauri/tests/support/test_key.rs').read_text(encoding='utf-8')
+    phrase = re.search(r'PASSPHRASE: &str = "([^"]+)"', source)
+    if not phrase:
+        raise ValueError('Cannot find test key passphrase')
+    generated_public = key.with_suffix(key.suffix + '.pub')
+    for path in (key, public, generated_public):
+        path.unlink(missing_ok=True)
+    try:
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', phrase[1], '-f', str(key)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # Do not let subprocess's exception echo passphrase argv into the job log.
+        raise ValueError('The disposable test key could not be prepared') from None
+    shutil.copyfile(generated_public, public)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shard", type=int)
@@ -99,6 +124,7 @@ def main():
     print(f"{'Complete trace audit' if trace else f'Shard {args.shard}'}: {len(selected)} non-ignored tests selected", flush=True)
     for name in selected:
         print(f"  {name}", flush=True)
+    prepare_test_key()
     run_checked(selected, trace=trace)
 
 
