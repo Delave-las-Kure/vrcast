@@ -1099,6 +1099,40 @@ describe("the rung editor does not take the window down (T692)", () => {
     expect(sent.map((r) => r.index)).toEqual([0, 2]);
   });
 
+  it("a rung typed above its neighbour is checked and saved in its place (tour 0.3.0)", async () => {
+    const edited = unmeasured(2, 9, 1080);
+    mockLadderRecomputeRung.mockResolvedValue(edited);
+    savedAsEdited(edited);
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 3`), {
+      target: { value: "9" },
+    });
+    await waitFor(() =>
+      expect(within(editor).getByTestId("rung-2")).toHaveTextContent(ru.ui.ladder.notMeasured),
+    );
+    // Checked in the order it will be saved in — so «не по убыванию» has nothing to say.
+    await waitFor(() => {
+      const calls = mockLadderValidate.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as Rung[];
+      expect(last.map((r) => r.bitrate_bps)).toEqual([9_000_000, 8_000_000, 4_000_000]);
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent.map((r) => r.bitrate_bps)).toEqual([9_000_000, 8_000_000, 4_000_000]);
+  });
+
+  it("names an objection by the row in the table, not by its place in the checked list", async () => {
+    const editor = await openEditor();
+    // The core counts the rungs left in: rung 3 of the table is the second of two.
+    mockLadderValidate.mockResolvedValue({
+      objections: [{ code: "RUNG_ABOVE_SOURCE", index: 1, source_bps: 1 }],
+      not_buildable: null,
+    });
+    fireEvent.click(within(editor).getAllByRole("checkbox")[1]);
+    expect(await within(editor).findByRole("alert")).toHaveTextContent(/Ступень 3/);
+  });
+
   it("an objection it does not know is left out rather than read wrongly", async () => {
     const editor = await openEditor();
     mockLadderValidate.mockResolvedValue({
