@@ -58,7 +58,10 @@ fn a_task_finished_long_ago_is_removed() {
     let removed =
         store::purge_finished_before(&db, &threshold(90)).expect("the purge itself failed");
 
-    assert_eq!(removed, 1, "the old finished task was not counted as removed");
+    assert_eq!(
+        removed, 1,
+        "the old finished task was not counted as removed"
+    );
     assert!(
         !ids_in(&db).contains(&String::from("old-completed")),
         "the old finished task is still in the table after the purge"
@@ -126,13 +129,15 @@ fn calling_it_twice_is_harmless() {
     let db = db();
     finished_task_aged(&db, "old-completed", TaskState::Completed, 120);
 
-    let first =
-        store::purge_finished_before(&db, &threshold(90)).expect("the first purge failed");
+    let first = store::purge_finished_before(&db, &threshold(90)).expect("the first purge failed");
     let second =
         store::purge_finished_before(&db, &threshold(90)).expect("the second purge failed");
 
     assert_eq!(first, 1);
-    assert_eq!(second, 0, "the second purge found something the first one should have removed");
+    assert_eq!(
+        second, 0,
+        "the second purge found something the first one should have removed"
+    );
 }
 
 /// T564 — the purge has to actually run, not merely exist and pass its own tests.

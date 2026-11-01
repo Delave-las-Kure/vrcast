@@ -848,6 +848,38 @@ fn subtitles_are_really_drawn_by_the_bundled_ffmpeg() {
         String::from_utf8_lossy(&probed.stdout).into_owned(),
     )];
     if let Some(sample) = picture_sample.take() {
+        // Subtitle samples often have no sound. Give the disposable test clip a silent
+        // track rather than weakening the production rule that a film must have audio.
+        let with_sound = root.join("picture-sample-with-sound.mkv");
+        let (ok, err) = run(&[
+            "-hide_banner".into(),
+            "-v".into(),
+            "error".into(),
+            "-y".into(),
+            "-i".into(),
+            sample,
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "anullsrc=channel_layout=stereo:sample_rate=48000".into(),
+            "-map".into(),
+            "0:v:0".into(),
+            "-map".into(),
+            "1:a:0".into(),
+            "-map".into(),
+            "0:s".into(),
+            "-c:v".into(),
+            "copy".into(),
+            "-c:s".into(),
+            "copy".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-t".into(),
+            "6".into(),
+            s(&with_sound),
+        ]);
+        assert!(ok, "could not prepare the subtitle sample: {err}");
+        let sample = s(&with_sound);
         let out = std::process::Command::new(&fp)
             .args([
                 "-v",
