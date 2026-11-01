@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Exhaustive, disjoint CI shards; one thread per disposable Docker host.
 
-Run every non-ignored integration test once at trace level, then check the private log
-before printing anything from it. This replaces the former second pass over eight suites.
+Run every non-ignored integration test normally, then the original eight log-audit suites
+at trace level. Check private logs before printing them. Full trace changes the workload of
+timing-sensitive tests, so it is deliberately NOT enabled for the ordinary pass.
 No owner credentials or live-server configuration are read.
 """
 import argparse
@@ -16,6 +17,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 CARGO = ["cargo", "test", "--manifest-path", str(ROOT / "src-tauri/Cargo.toml"),
          "--features", "integration", "--test", "integration"]
+TRACE_SUITES = {"upload_live", "viewers_live", "hls_live", "limits_live", "deploy_clean", "deploy_versions", "deploy_resume", "diag_live"}
+
+
+def trace_tests(names):
+    return [name for name in names if name.split("::", 1)[0] in TRACE_SUITES]
 
 
 def test_names(listing):
@@ -60,6 +66,11 @@ def main():
     listing = subprocess.run(CARGO + ["--", "--list", "--format", "terse"],
                              check=True, stdout=subprocess.PIPE, text=True, timeout=1800)
     names = test_names(listing.stdout)
+    ignored_listing = subprocess.run(CARGO + ["--", "--list", "--ignored", "--format", "terse"],
+                                     check=True, stdout=subprocess.PIPE, text=True, timeout=1800)
+    ignored = set(re.findall(r"^(.+): test$", ignored_listing.stdout, re.MULTILINE))
+    names = [name for name in names if name not in ignored]
+    print(f"Ignored live-server/measurement tests: {len(ignored)} (not run)", flush=True)
     groups = [partition(names, i, args.shards) for i in range(args.shards)]
     # Assert the runtime inventory, not just the algorithm's unit test.
     if sorted(sum(groups, [])) != sorted(names):
@@ -68,13 +79,22 @@ def main():
     if not selected:
         raise ValueError("Empty shard: refusing to report a vacuous pass")
     print(f"Inventory: {len(names)} tests; shard sizes: {[len(g) for g in groups]}", flush=True)
-    print(f"Shard {args.shard}: {len(selected)} selected (ignored tests stay ignored)", flush=True)
+    print(f"Shard {args.shard}: {len(selected)} non-ignored tests selected", flush=True)
     for name in selected:
         print(f"  {name}", flush=True)
+    run_checked(selected, trace=False)
+    audited = trace_tests(selected)
+    if audited:
+        run_checked(audited, trace=True)
+    else:
+        print("No trace-audit tests assigned to this shard", flush=True)
+
+
+def run_checked(selected, trace):
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
         result = subprocess.run(CARGO + ["--", "--test-threads=1", "--nocapture", "--exact"] + selected,
-                                env={**os.environ, "VRCAST_LOG": "trace"}, stdout=output,
-                                stderr=subprocess.STDOUT, timeout=2700)
+                                env={**os.environ, "VRCAST_LOG": "trace" if trace else "info"},
+                                stdout=output, stderr=subprocess.STDOUT, timeout=2400)
         output.seek(0)
         log = output.read()
     key = (ROOT / "src-tauri/tests/fixtures/encrypted_ed25519.key").read_text()
@@ -86,11 +106,15 @@ def main():
     # Only after scanning: never publish an unexamined trace log as an artifact or failure tail.
     print("\n".join(log.splitlines()[-100:]), flush=True)
     if result.returncode:
+        lines = log.splitlines()
+        for i, line in enumerate(lines):
+            if "panicked at" in line:
+                print("\n".join(lines[max(0, i - 1):i + 12]), flush=True)
         raise ValueError(f"Integration process exited {result.returncode}")
     check_result(log, len(selected))
-    if len(log.splitlines()) < 50:
+    if trace and len(log.splitlines()) < 50:
         raise ValueError("Suspiciously short trace log; secret check was not exercised")
-    print(f"No secrets in {len(log.splitlines())} trace lines; every selected test accounted for")
+    print(f"No secrets in {len(log.splitlines())} log lines (trace={trace}); every selected test accounted for")
 
 
 if __name__ == "__main__":

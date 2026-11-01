@@ -10,6 +10,12 @@ spec.loader.exec_module(ci)
 
 
 class IntegrationRunnerTests(unittest.TestCase):
+    def test_the_original_eight_trace_suites_are_partitioned_without_loss(self):
+        names = [f"{module}::test_{i}" for module in ci.TRACE_SUITES | {"timing_sensitive"} for i in range(5)]
+        selected = sum([ci.trace_tests(ci.partition(names, shard, 8)) for shard in range(8)], [])
+        self.assertEqual(sorted(selected), sorted(ci.trace_tests(names)))
+        self.assertFalse(any("timing_sensitive" in name for name in selected))
+
     def test_partition_is_exhaustive_disjoint_and_stable(self):
         names = [f"module_{i}::test_{j}" for i in range(20) for j in range(15)]
         groups = [ci.partition(names, shard, 8) for shard in range(8)]

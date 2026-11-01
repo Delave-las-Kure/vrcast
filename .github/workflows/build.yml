@@ -208,8 +208,8 @@ jobs:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
       - run: node scripts/fetch-ffmpeg.mjs
-      # All non-ignored tests, not a hand-maintained subset. Each shard also checks its
-      # trace-level log for secrets, covering the eight suites the old separate check ran.
+      # All non-ignored tests, not a hand-maintained subset. The original eight log-audit
+      # suites run again at trace level, also partitioned so the repeat stays within an hour.
       - name: Real OpenSSH, serving, deployment, cancellation and no secrets in trace logs
         run: python3 scripts/ci-integration.py --shard ${{ matrix.shard }} --shards 8
       - name: No leaked containers or networks
@@ -242,7 +242,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: taiki-e/install-action@cargo-deny
-      - run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
+      - run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -261,11 +261,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Hardcoded servers (FR-004)
-        env:
-          FORBID_IP: ${{ secrets.FORBID_IP }}
-          FORBID_DOMAIN: ${{ secrets.FORBID_DOMAIN }}
-        run: bash scripts/check-no-hardcoded-server.sh
       - run: bash scripts/check-version.sh
       - run: bash scripts/check-theme.sh
       - run: bash scripts/check-motion.sh
@@ -279,3 +274,27 @@ jobs:
       # Deliberately local-only: isolation needs protected files, server reference needs
       # the skill, and carried-over formulas need convert.sh, all outside the repository.
       # Ignored live-server/measurement tests remain ignored: CI never uses owner's servers.
+
+  advisories:
+    name: Dependency security advisories
+    timeout-minutes: 15
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@cargo-deny
+      # Independent of licences: a vulnerable dependency must not hide the licence checks.
+      - run: cargo deny --manifest-path src-tauri/Cargo.toml check advisories
+
+  owner-addresses:
+    name: Owner addresses are absent (requires repository secrets)
+    timeout-minutes: 10
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      # Not silently waived on forks or repositories without these secrets: the script exits
+      # 2 and names the missing configuration. No owner files are read by any CI job.
+      - name: Hardcoded servers (FR-004)
+        env:
+          FORBID_IP: ${{ secrets.FORBID_IP }}
+          FORBID_DOMAIN: ${{ secrets.FORBID_DOMAIN }}
+        run: bash scripts/check-no-hardcoded-server.sh
