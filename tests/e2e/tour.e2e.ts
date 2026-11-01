@@ -1798,6 +1798,35 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       await go("library");
       await sleep(1500);
       await snap("library-list", "«Библиотека»: список (свёрнуто)");
+      const slug = "film-s-dvumya-dorozhkami";
+      const masterPath = `/var/lib/vrcast/videos/${slug}/master.m3u8`;
+      const master = docker(["exec", NAME, "cat", masterPath]).stdout;
+      const rungs = [...new Set([...master.matchAll(/v(\d+)\//g)].map((m) => m[1]))];
+      for (const rung of rungs)
+        docker(["cp", SINGLE, `${NAME}:/var/lib/vrcast/videos/${slug}_${rung}.mp4`]);
+      await step(
+        "leftover-mp4",
+        "На сервер добавлены mp4 только тех ступеней, которые есть в master (как T693); «Обновить»",
+        async () => {
+          await press("Обновить");
+          await waitText(/Лишние файлы mp4/);
+        },
+      );
+      await step(
+        "leftover-remove",
+        "«Удалить» у лишних mp4: ожидается подтверждение, снимаем фактический результат",
+        async () => {
+          await press("Удалить", "//div[contains(@class,'media__leftover')]");
+          await sleep(1500);
+        },
+      );
+      await snap(
+        "leftover-result",
+        "После удаления лишних mp4; проверяем, сохранились ли ссылки набора",
+      );
+      note(
+        `файлы ступеней после удаления: ${docker(["exec", NAME, "sh", "-c", `ls /var/lib/vrcast/videos/${slug}_*.mp4 2>/dev/null || true`]).stdout.trim() || "нет"}; master не изменён: ${docker(["exec", NAME, "cat", masterPath]).stdout === master}`,
+      );
       const set =
         "//section[contains(@class,'media')][.//span[contains(@class,'media__title') and contains(normalize-space(),'Фильм с двумя дорожками')]]";
       await step(
@@ -1840,6 +1869,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         await settle();
         await sleep(1000);
       });
+      await snap("empty-medium", "Созданное медиа без файлов: строка «Пусто»");
       await step(
         "assigned",
         "В «Не распознано» у single-clip.mp4 выбрано «Отнести к медиа» → «Одиночный клип»",
@@ -1965,6 +1995,29 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         await settle();
         await sleep(1500);
       });
+      await step("cdn-profile", "У тестового сервера в «Необязательное» задан CDN", async () => {
+        await go("servers");
+        await press("Изменить");
+        await press("Необязательное");
+        await field("Адрес CDN", "https://cdn.example.net");
+        await press("Сохранить");
+        await until("the edit to close", async () => !(await s().has(".wizard")), 15_000);
+      });
+      await step(
+        "cdn-library",
+        "Библиотека с CDN: ссылки и предупреждение о зрителях и ограничениях",
+        async () => {
+          await go("library");
+          await (await s().findX(`${set}/button[contains(@class,'media__head')]`)).click();
+          await sleep(500);
+        },
+      );
+      await go("servers");
+      await press("Изменить");
+      await press("Необязательное");
+      await field("Адрес CDN", "");
+      await press("Сохранить");
+      await until("the edit to close", async () => !(await s().has(".wizard")), 15_000);
     },
     480_000,
   );
