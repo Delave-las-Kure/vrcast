@@ -307,7 +307,7 @@ jobs:
           set -euo pipefail
           python3 scripts/ffmpeg-sources.py pack --out ffmpeg-sources
 
-      - name: Publish, with everything owed alongside
+      - name: Upload a draft, verify every file with the job token, then publish
         # Оболочка названа явно: `pipefail` нужен.
         shell: bash
         env:
@@ -324,7 +324,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --tag "$GITHUB_REF_NAME" \
             --notes "$notes" \
-            --token "$TOKEN" \
             "${installers[@]}" latest.json LICENSE THIRD-PARTY.md "${sources[@]}"
 
       # **Последняя проверка — та, которую делает установленная копия.**
