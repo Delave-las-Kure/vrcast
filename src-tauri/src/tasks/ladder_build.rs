@@ -97,6 +97,9 @@ pub enum BuildError {
     #[error("preparing a variant failed: {0}")]
     Prepare(String),
 
+    #[error("subtitle text could not be drawn")]
+    SubtitleFonts,
+
     #[error(transparent)]
     Ffmpeg(#[from] crate::media::ffmpeg::FfmpegError),
 
@@ -826,6 +829,7 @@ async fn prepare_and_send(
         .await
         .map_err(|e| match e {
             crate::media::convert::ConvertError::Cancelled => BuildError::Cancelled,
+            crate::media::convert::ConvertError::SubtitleFonts => BuildError::SubtitleFonts,
             other => BuildError::Prepare(other.to_string()),
         })?;
     // **What this machine really does, for the next plan's time** (T672). Only a real encode

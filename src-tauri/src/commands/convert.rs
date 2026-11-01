@@ -175,6 +175,9 @@ pub mod api {
 
         let said = convert::run(&job, ctx).await.map_err(|e| match e {
             convert::ConvertError::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+            convert::ConvertError::SubtitleFonts => {
+                AppError::new(ErrorCode::SubtitleRenderingFailed)
+            }
             other => AppError::new(ErrorCode::Internal).with_cause(other),
         })?;
 

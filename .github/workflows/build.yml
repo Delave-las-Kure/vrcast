@@ -1,39 +1,7 @@
-# T005 — building and checking on both target operating systems.
-#
-# macOS is deliberately absent: deferred by the owner's decision on 2026-08-23 (see spec.md,
-# "Out of scope"). Do not add a runner for it — the application is not built for macOS and
-# is not claimed to work there.
-#
-# The file sat in the repository ahead of time and did nothing until a remote was set.
-
+# T005 — clean GitHub-hosted Windows/Linux checks (owner's decision, 2026-11-01).
+# Linux uses the same Debian generation as release.yml, not an owner's local registry.
+# macOS remains out of scope. No job needs the owner's server or credential store.
 name: build
-
-# **Свои исполнители, а не машины GitHub** (решение владельца 2026-08-27: платить за минуты
-# не хотим, репозиторий остаётся закрытым).
-#
-# Что этим потеряно, сказано прямо: обе находки сквозной оснастки пришли от **чужой** машины —
-# гонка на машине, где приложение запускается впервые, и несовпадение драйвера с WebView2.
-# Исполнитель на машине разработчика таких находок не даёт, и выдавать его зелёный за прежний
-# нельзя.
-#
-# Что осталось: обе платформы по-настоящему (Windows — своя, Linux — WSL2 Ubuntu 22.04),
-# контейнерная интеграция через Docker, и разделение «собрано у меня» от «собрано начисто» —
-# исполнитель работает в своём каталоге, а не в рабочем дереве.
-#
-# **Проверки Linux идут в одноразовом контейнере** (`scripts/linux-check/Dockerfile`), и это не
-# удобство, а вывод из происшествия. 2026-08-27 задание сделало на своей машине то, что делает
-# на машине GitHub: поставило rustup поверх настоящего и унесло `rustup.exe`, а с ним — все
-# ссылки в `.cargo/bin`, `cargo-deny` и `tauri-driver`. Ничего не пропало навсегда, но и рисковать
-# было нечем.
-#
-# Контейнер возвращает проверкам то, на чём они и рассчитаны работать: машину, которую выбрасывают.
-# Что они там поставят, сломают или оставят — уходит вместе с ней.
-#
-# **Windows остаётся своей машиной**, и иначе быть не может: сквозная оснастка правит настоящим
-# окном, а окна в контейнере Windows нет. Взамен задания там больше ничего не ставят — цепочка
-# Rust проверяется, а не устанавливается.
-#
-# Образ собирается один раз:  docker build -t localhost:5000/vrcast-linux-check:3 scripts/linux-check
 
 on:
   push:
@@ -41,46 +9,35 @@ on:
   pull_request:
   workflow_dispatch:
 
-# **Устаревший прогон отменяется, а не досиживает.**
-#
-# Исполнитель Linux один, и задания он берёт по очереди: пока идут проверки предыдущего
-# коммита, следующий ждёт. Ответ про код, которого уже нет в ветке, при этом никому не нужен —
-# а очередь он держит наравне с нужным. Отменяется только прогон той же ветки: чужая ветка
-# отвечает на свой вопрос.
+permissions:
+  contents: read
+
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  # Вне выкачиваемого дерева и потому переживает прогоны: у своей машины это заменяет кеш.
-  #
-  # `github.workspace`, а не `runner.workspace`: в общем блоке `env` доступны только контексты
-  # `github`, `inputs`, `secrets` и `vars`, а свойства `workspace` у `runner` нет вовсе. Файл с
-  # таким выражением отвергается целиком — прогон падает без единого задания и без причины,
-  # которую видно из API. Поймано 2026-08-27, дважды подряд, и только `actionlint` назвал её.
-  CARGO_TARGET_DIR: ${{ github.workspace }}/../_cargo-target
+  # Debug symbols/incremental builds exhaust a clean hosted runner's disk; tests still run.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_INCREMENTAL: 0
 
 jobs:
   frontend:
-    name: Interface — style and tests
-    timeout-minutes: 30
-    runs-on: [self-hosted, vrcast-linux]
-    container:
-      image: localhost:5000/vrcast-linux-check:3
+    name: Interface — style, types, tests and production build
+    timeout-minutes: 20
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      # No --passWithNoTests: the whole suite vanishing (a file moved out from under the
-      # glob) has to be red rather than indistinguishable from success.
-      - run: npm run test
-      # A production build: tsc --noEmit does not catch breakage that shows only on a build.
+      - run: npm test
       - run: npm run build
 
   core:
@@ -90,656 +47,276 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # **Контейнер задаётся строкой, а не полем `image`.** Пустое поле `image` файл не
-          # принимает вовсе — прогон падает целиком, без единого задания и без внятной
-          # причины (поймано 2026-08-27). Пустая же строка на месте всего `container:`
-          # означает «без контейнера», и это единственный способ дать контейнер одной ветви
-          # матрицы и не дать другой.
-          - os: vrcast-win
+          - os: windows
+            runner: windows-latest
             container: ""
-          - os: vrcast-linux
-            container: localhost:5000/vrcast-linux-check:3
-    runs-on: [self-hosted, '${{ matrix.os }}']
+            target: C:/_cargo-target
+          - os: linux
+            runner: ubuntu-22.04
+            container: rust:bookworm
+            target: /__w/_cargo-target
+    runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
+    env:
+      CARGO_TARGET_DIR: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Системные библиотеки на месте (Linux)
-        if: matrix.os == 'vrcast-linux'
+      - uses: actions/checkout@v7
+      - name: Linux build and runtime libraries
+        if: runner.os == 'Linux'
         run: |
-          missing=""
-          for p in libwebkit2gtk-4.1-dev librsvg2-dev patchelf; do
-            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
-          done
-          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
-            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-dev"
-          # **Библиотека времени выполнения, а не только сборочная** (T403). `-dev` даёт
-          # заголовки и линковку; значок в области уведомлений грузится на **запущенной**
-          # машине через `dlopen`, и там нужен `.so.1` из другого пакета. Проверялся только
-          # сборочный — то есть сборка шла зелёной, а трея у человека не было, и приложение
-          # об этом молчало: `dlopen` вернул бы NULL, а мы бы просто не показали значок.
-          dpkg -s libayatana-appindicator3-1 >/dev/null 2>&1 \
-            || dpkg -s libappindicator3-1 >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-1"
-          if [ -n "$missing" ]; then
-            echo "На машине исполнителя не хватает:$missing" >&2
-            echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
-            exit 1
-          fi
-          echo "системные библиотеки на месте"
-
-      # **Цепочка Rust проверяется, а не ставится.**
-      #
-      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
-      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
-      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
-      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
-      # переустановкой rustup.
-      #
-      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
-      - name: Цепочка Rust на месте
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libayatana-appindicator3-1 \
+            librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils
+      - name: Rust tools
         shell: bash
         run: |
-          missing=""
-          for tool in cargo rustc; do
-            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
-          done
-          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
-          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          if [ -n "$missing" ]; then
-            echo "На машине исполнителя не хватает:$missing" >&2
-            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
-            exit 1
-          fi
-          cargo --version
-
-      # Кеша сборки здесь нет намеренно: у своей машины `~/.cargo` свой и никуда не
-      # девается, а действие кеширования вычищает его перед сохранением — то есть лезет в
-      # настоящий каталог владельца. Вместо него `CARGO_TARGET_DIR` ниже: он держит сборку
-      # между прогонами, но вне рабочего дерева, которое исполнитель перевыкачивает.
-
-      # FFmpeg is needed at BUILD time, not only when packaging: the Tauri bundler checks
-      # that the bundled programs are there and refuses to build without them. So this step
-      # stands in every job that builds the core at all — otherwise even `cargo test` fails.
-      #
-      # It is cached by the snapshot in scripts/ffmpeg.json: some three hundred and twenty megabytes
-      # are downloaded once per version and taken ready afterwards. It is also the only place
-      # where the fetching script itself is checked on both target systems.
-      - uses: actions/setup-node@v4
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD
+          rustup component add rustfmt clippy
+      - uses: actions/cache@v6
         with:
-          node-version: 20
-      - name: Cache for the bundled FFmpeg
-        uses: actions/cache@v4
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ matrix.target }}
+          key: core-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: core-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/cache@v6
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
-      - name: Put the bundled FFmpeg in place
-        run: node scripts/fetch-ffmpeg.mjs
-
-      # Both of the bundled build's abilities the application cannot work without. Checked
-      # on each system separately: a build that has them on Windows and not on Linux is a
-      # thing that has happened to other projects, and it would show up here as a person's
-      # ladder refusing to be measured.
-      - name: The bundled FFmpeg can do what is needed
+      - run: node scripts/fetch-ffmpeg.mjs
+      - name: Bundled FFmpeg features
         shell: bash
         run: bash scripts/check-ffmpeg-features.sh
-      - name: Format
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - name: Clippy, including the integration code on both platforms
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features integration -- -D warnings
+      - name: Exercise subtitles without any system fonts or font configuration (Linux)
+        if: runner.os == 'Linux'
+        # Only inside this disposable job container, never on the owner's machine.
+        run: |
+          rm -rf /usr/share/fonts /usr/local/share/fonts /etc/fonts /var/cache/fontconfig
+          test ! -e /usr/share/fonts && test ! -e /etc/fonts
+          cargo test --manifest-path src-tauri/Cargo.toml --test unit convert::subtitles_are_really_drawn_by_the_bundled_ffmpeg -- --exact --nocapture
+      # A failing contract binary must not prevent the unit/FFmpeg tests from running.
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
 
-      - name: Clippy
-        # **`--features integration` here, though the tests behind it run elsewhere.**
-        # Without it the integration suite is not compiled in this job at all, and a
-        # remark in it — or a change that stops it compiling — is found by nobody:
-        # the integration job builds it on Linux only, and clippy never sees it there.
-        # Found by the audit of 2026-09-04 (T489): locally `check-all.sh` had always
-        # passed the feature and CI never had.
-        run: >
-          cargo clippy --manifest-path src-tauri/Cargo.toml
-          --all-targets --features integration -- -D warnings
-
-      - name: Core tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-
-  # **The expensive job, and it is kept on every push deliberately** (owner's decision,
-  # 2026-08-27). It builds the application for release on both platforms, and Windows minutes
-  # bill at double — so everything that can be cached is. What is left uncached is our own
-  # crate, which has to be rebuilt to be worth checking.
-  #
-  # A rarer schedule was the alternative and was turned down: the end-to-end check is already
-  # the slowest to run, and made rare as well it finds a breakage days after the change that
-  # caused it, when nobody remembers the change.
   e2e:
-    name: End to end — the built application, driven
-    # **Предел времени, а не бесконечность.** Исполнитель здесь один и настоящий:
-    # зависшее задание держит не абстрактную очередь, а машину владельца, и держит её
-    # столько, сколько GitHub позволит по умолчанию — шесть часов. Числа взяты с запасом
-    # против самого долгого удачного прогона, чтобы предел ловил зависание, а не
-    # медленный день.
+    name: End to end — ${{ matrix.os }}
     timeout-minutes: 60
-    runs-on: [self-hosted, '${{ matrix.os }}']
     strategy:
       fail-fast: false
       matrix:
         include:
-          # **Контейнер задаётся строкой, а не полем `image`.** Пустое поле `image` файл не
-          # принимает вовсе — прогон падает целиком, без единого задания и без внятной
-          # причины (поймано 2026-08-27). Пустая же строка на месте всего `container:`
-          # означает «без контейнера», и это единственный способ дать контейнер одной ветви
-          # матрицы и не дать другой.
-          - os: vrcast-win
+          - os: windows
+            runner: windows-latest
             container: ""
-          - os: vrcast-linux
-            container: localhost:5000/vrcast-linux-check:3
+            target: C:/_cargo-e2e
+          - os: linux
+            runner: ubuntu-22.04
+            container: rust:bookworm
+            target: /__w/_cargo-e2e
+    runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
+    env:
+      CARGO_TARGET_DIR: ${{ matrix.target }}
+      # WebKit's sandbox cannot initialise as root inside the disposable job container.
+      WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: 1
     steps:
-      - uses: actions/checkout@v4
-      # **Цепочка Rust проверяется, а не ставится.**
-      #
-      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
-      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
-      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
-      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
-      # переустановкой rustup.
-      #
-      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
-      - name: Цепочка Rust на месте
-        shell: bash
-        run: |
-          missing=""
-          for tool in cargo rustc; do
-            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
-          done
-          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
-          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          if [ -n "$missing" ]; then
-            echo "На машине исполнителя не хватает:$missing" >&2
-            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
-            exit 1
-          fi
-          cargo --version
-      # Кеша сборки здесь нет намеренно: у своей машины `~/.cargo` свой и никуда не
-      # девается, а действие кеширования вычищает его перед сохранением — то есть лезет в
-      # настоящий каталог владельца. Вместо него `CARGO_TARGET_DIR` ниже: он держит сборку
-      # между прогонами, но вне рабочего дерева, которое исполнитель перевыкачивает.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      # `webkit2gtk-driver` gives WebKitWebDriver, which tauri-driver forwards to, and xvfb
-      # gives the application somewhere to open its window: a runner has no display, and
-      # without one the window never appears and the driver waits for it forever.
-      - name: Системные библиотеки и драйвер на месте (Linux)
+      - uses: actions/checkout@v7
+      - name: Linux build, runtime and window driver
         if: runner.os == 'Linux'
         run: |
-          missing=""
-          for p in libwebkit2gtk-4.1-dev librsvg2-dev patchelf webkit2gtk-driver xvfb; do
-            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
-          done
-          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
-            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-dev"
-          # **Библиотека времени выполнения, а не только сборочная** (T403). `-dev` даёт
-          # заголовки и линковку; значок в области уведомлений грузится на **запущенной**
-          # машине через `dlopen`, и там нужен `.so.1` из другого пакета. Проверялся только
-          # сборочный — то есть сборка шла зелёной, а трея у человека не было, и приложение
-          # об этом молчало: `dlopen` вернул бы NULL, а мы бы просто не показали значок.
-          dpkg -s libayatana-appindicator3-1 >/dev/null 2>&1 \
-            || dpkg -s libappindicator3-1 >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-1"
-          if [ -n "$missing" ]; then
-            echo "На машине исполнителя не хватает:$missing" >&2
-            echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
-            exit 1
-          fi
-          echo "системные библиотеки и драйвер на месте"
-
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libayatana-appindicator3-1 \
+            librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils \
+            webkit2gtk-driver xvfb xauth dbus-x11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
       - run: npm ci
-      - name: Cache for the bundled FFmpeg
-        uses: actions/cache@v4
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/tauri-driver*
+            ${{ matrix.target }}
+          key: e2e-${{ runner.os }}-driver-2.0.6-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: e2e-${{ runner.os }}-driver-2.0.6-${{ hashFiles('src-tauri/Cargo.lock') }}-
+      - uses: actions/cache@v6
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
-      - name: Put the bundled FFmpeg in place
-        run: node scripts/fetch-ffmpeg.mjs
-
-      # Compiled from source by `cargo install`, and it does not change between pushes: the
-      # version is pinned so the cache has something honest to key on. Unpinned, `--locked`
-      # still floats to whatever is newest, and the cache would miss on the day it moves —
-      # silently, looking like a slow run rather than a new version.
-      # Ставится только если его нет: на своей машине `~/.cargo/bin` никуда не девается
-      # между прогонами, и кеш здесь был бы и бесполезен, и лез бы в настоящий каталог
-      # владельца — ровно то, из-за чего отсюда убрано действие с цепочкой Rust.
-      - name: Промежуточный драйвер
+      - run: node scripts/fetch-ffmpeg.mjs
+      - name: Intermediary driver, pinned
         shell: bash
         run: |
-          if tauri-driver --help >/dev/null 2>&1; then
-            echo "tauri-driver уже на машине"
-          else
+          if ! tauri-driver --version >/dev/null 2>&1; then
             cargo install tauri-driver --version 2.0.6 --locked
           fi
-
-      # Twenty megabytes fetched by version. The key carries the runner image's label, because
-      # that is what moves the webview version — and when it moves, the driver has to move
-      # with it or refuse to attach.
-      - name: Cache for the platform WebDriver
-        if: runner.os == 'Windows'
-        uses: actions/cache@v4
-        with:
-          path: src-tauri/target/webdriver
-          key: webdriver-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-webdriver.mjs') }}
-
-      # What the harness actually drives is a WebView2, and the runner's image says nothing
-      # about whether the runtime is there. Printed rather than assumed: the first run of this
-      # job failed on Windows with "DevToolsActivePort file doesn't exist", which is what a
-      # missing or mismatched runtime looks like from the driver's side.
-      - name: What webview is on this machine (Windows)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $keys = @{
-            'WebView2 (machine, 32)' = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-            'WebView2 (machine)'     = 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-            'WebView2 (user)'        = 'HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-            'Edge'                   = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}'
-          }
-          foreach ($k in $keys.GetEnumerator()) {
-            if (Test-Path $k.Value) { "$($k.Key): $((Get-ItemProperty $k.Value).pv)" }
-            else { "$($k.Key): not registered" }
-          }
-
-      # **`--features custom-protocol` is not optional, and not what it looks like.** What
-      # takes a Tauri binary out of development mode is that feature, not the release
-      # profile: its own build script reads `dev = !custom_protocol`. Without it the window
-      # opens on the dev server's address with nothing there, the harness drives the
-      # browser's error page, and every check fails for a reason that has nothing to do with
-      # the application. Found on the harness's first run, 2026-08-27.
-      - name: Build the frontend and the application
-        run: |
-          npm run build
-          cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
-
-      - name: Drive it (Windows)
-        if: runner.os == 'Windows'
-        run: npm run test:e2e
-      # **Экран поднимается вручную, а не через `xvfb-run`.** Тот запускает Xvfb и ждёт от
-      # него сигнала готовности — и в этом образе не дожидается никогда: команда висит до
-      # упора, ничего не сказав. Сам Xvfb при этом работает, гнездо экрана появляется за
-      # секунду. Проверено 2026-08-27; ждать сигнала, которого нет, — не та задача, ради
-      # которой стоит держать посредника.
-      - name: Drive it (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
-          export DISPLAY=:99
-          # Ждём именно гнездо, а не «немного»: пауза наугад либо коротка на нагруженной
-          # машине, либо тратит время на всех остальных.
-          for _ in $(seq 1 30); do
-            [ -e /tmp/.X11-unix/X99 ] && break
-            sleep 1
-          done
-          if [ ! -e /tmp/.X11-unix/X99 ]; then
-            echo "экран так и не поднялся за 30 с" >&2
-            exit 1
-          fi
-          npm run test:e2e
-
-  integration:
-    name: Integration — a throwaway server in a container
-    # **Предел времени, а не бесконечность.** Исполнитель здесь один и настоящий:
-    # зависшее задание держит не абстрактную очередь, а машину владельца, и держит её
-    # столько, сколько GitHub позволит по умолчанию — шесть часов. Числа взяты с запасом
-    # против самого долгого удачного прогона, чтобы предел ловил зависание, а не
-    # медленный день.
-    timeout-minutes: 90
-    runs-on: [self-hosted, vrcast-linux]
-    container:
-      image: localhost:5000/vrcast-linux-check:3
-      # **Демон машины, но не её сеть.** Сокет — чтобы поднимать контейнеры на том же
-      # демоне, а не заводить демон внутри демона. А вот `--network host` отдать нельзя:
-      # исполнитель ведёт для задания-контейнера свою сеть и при попытке разделить сеть
-      # машины не создаёт контейнер вовсе, отвечая «Value cannot be null. (Parameter
-      # 'ContainerId')».
-      #
-      # Поэтому опубликованные порты достаются по имени, которое Docker Desktop заводит для
-      # машины, — см. `VRCAST_TEST_HOST` ниже и `TestServer::host`.
-      options: -v /var/run/docker.sock:/var/run/docker.sock
-    steps:
-      - uses: actions/checkout@v4
-      # **Цепочка Rust проверяется, а не ставится.**
-      #
-      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
-      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
-      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
-      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
-      # переустановкой rustup.
-      #
-      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
-      - name: Цепочка Rust на месте
+      - name: Build the real application
         shell: bash
         run: |
-          missing=""
-          for tool in cargo rustc; do
-            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
-          done
-          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
-          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          if [ -n "$missing" ]; then
-            echo "На машине исполнителя не хватает:$missing" >&2
-            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
-            exit 1
-          fi
-          cargo --version
-      # Кеша сборки здесь нет намеренно: у своей машины `~/.cargo` свой и никуда не
-      # девается, а действие кеширования вычищает его перед сохранением — то есть лезет в
-      # настоящий каталог владельца. Вместо него `CARGO_TARGET_DIR` ниже: он держит сборку
-      # между прогонами, но вне рабочего дерева, которое исполнитель перевыкачивает.
-      - name: Системные библиотеки на месте
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD
+          npm run build
+          cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
+      # These are the original non-Docker window checks. The newer video/tour checks need
+      # a Docker daemon AND an e2e-feature binary; they are NOT claimed by this job. Windows
+      # hosted machines have no Linux Docker daemon. The UI-tour task owns that harness.
+      - name: Drive the window (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:e2e -- tests/e2e/app.e2e.ts tests/e2e/forget.e2e.ts
+      - name: Drive the window (Linux)
+        if: runner.os == 'Linux'
+        run: dbus-run-session -- xvfb-run -a npm run test:e2e -- tests/e2e/app.e2e.ts tests/e2e/forget.e2e.ts
+
+  integration:
+    name: Integration — ${{ matrix.shard == 'trace' && 'complete trace audit' || format('shard {0} of 8', matrix.shard) }}
+    timeout-minutes: 60
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # A small hash subset may never initialise the trace writer/redaction canary.
+        # Keep the original eight audit suites together in an independent job.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, trace]
+    # Run on the Docker HOST, not in a sibling job container: the network-cut/relay
+    # tests deliberately connect to 127.0.0.1. In a job container that is the wrong
+    # loopback, and DeployTarget's direct-container port 22 is not a published host port.
+    # Core/e2e/bundles still use rust:bookworm; these tests do not produce installers.
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../_cargo-integration
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build libraries; use the runner's existing Docker daemon
         run: |
-          missing=""
-          for p in libwebkit2gtk-4.1-dev librsvg2-dev patchelf; do
-            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
-          done
-          dpkg -s libappindicator3-dev >/dev/null 2>&1 \
-            || dpkg -s libayatana-appindicator3-dev >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-dev"
-          # **Библиотека времени выполнения, а не только сборочная** (T403). `-dev` даёт
-          # заголовки и линковку; значок в области уведомлений грузится на **запущенной**
-          # машине через `dlopen`, и там нужен `.so.1` из другого пакета. Проверялся только
-          # сборочный — то есть сборка шла зелёной, а трея у человека не было, и приложение
-          # об этом молчало: `dlopen` вернул бы NULL, а мы бы просто не показали значок.
-          dpkg -s libayatana-appindicator3-1 >/dev/null 2>&1 \
-            || dpkg -s libappindicator3-1 >/dev/null 2>&1 \
-            || missing="$missing libayatana-appindicator3-1"
-          if [ -n "$missing" ]; then
-            echo "На машине исполнителя не хватает:$missing" >&2
-            echo "Поставить один раз:  sudo apt-get install -y$missing" >&2
-            exit 1
-          fi
-          echo "системные библиотеки на месте"
-      # FFmpeg is needed at BUILD time, not only when packaging: the Tauri bundler checks
-      # that the bundled programs are there and refuses to build without them. So this step
-      # stands in every job that builds the core at all — otherwise even `cargo test` fails.
-      #
-      # It is cached by the snapshot in scripts/ffmpeg.json: some three hundred and twenty megabytes
-      # are downloaded once per version and taken ready afterwards. It is also the only place
-      # where the fetching script itself is checked on both target systems.
-      - uses: actions/setup-node@v4
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libayatana-appindicator3-1 \
+            librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils
+          docker version
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
-      - name: Cache for the bundled FFmpeg
-        uses: actions/cache@v4
+          node-version: 24
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: integration-host-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: integration-host-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
+      - uses: actions/cache@v6
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
-      - name: Put the bundled FFmpeg in place
-        run: node scripts/fetch-ffmpeg.mjs
-
-      # **Что уже лежало здесь до нас.** Раннер свой, и сеть, утёкшая однажды, остаётся на
-      # нём навсегда: имя несёт номер сделавшего её процесса, так что под тем же именем к ней
-      # никто уже не придёт. Без этой записи сторож в конце валит **каждую** последующую
-      # сборку за чужую утечку — а сборка, красная всегда, учит не читать красное, и это
-      # ровно тот довод, который в этом же файле уже записан про мигающего сторожа.
-      #
-      # Записанное не прощается: оно печатается отдельным списком, и подметание всё так же
-      # пытается его убрать. Не сходится только приговор — задание отвечает за то, что
-      # утекло в нём.
-      - name: What was already lying about
-        shell: bash
+      - run: node scripts/fetch-ffmpeg.mjs
+      # All non-ignored tests, not a hand-maintained subset; the complete original trace
+      # audit is independent of ordinary failures. Both modes scan logs before printing.
+      - name: Real OpenSSH, serving, deployment, cancellation and no secrets in trace logs
         run: |
-          docker network ls --format '{{.Name}}' \
-            | grep -E '^vrcast-(test-net|deploy-target)-' > /tmp/vrcast-networks-before.txt || true
-          if [ -s /tmp/vrcast-networks-before.txt ]; then
-            echo "networks left by earlier runs, before this one started:"
-            cat /tmp/vrcast-networks-before.txt
+          if [ '${{ matrix.shard }}' = trace ]; then
+            python3 scripts/ci-integration.py --trace-only
+          else
+            python3 scripts/ci-integration.py --shard '${{ matrix.shard }}' --shards 8
           fi
-
-      # Running on one thread is not optional: each test brings up a container of its own,
-      # and a dozen at once only slows things down.
-      # Адрес заданию больше не называется. Фикстура сама узнаёт, что работает в контейнере,
-      # подключает его к сети стенда и ходит к серверу по имени — ни петля машины, ни
-      # `host.docker.internal` для этого не годятся: порты публикуются на петлю нарочно, а
-      # петлю одного контейнера из другого не достать. Проверено 2026-08-28.
-      - name: Tests against a real OpenSSH
-        run: >
-          cargo test --manifest-path src-tauri/Cargo.toml
-          --features integration --test integration -- --test-threads=1
-      # ⚠ **Principle IV had no guard that ran anywhere** (T489, found 2026-09-04). This
-      # script existed, had a container mode, and was named by neither `check-all.sh` nor any
-      # workflow — zero mentions in all three. It re-runs eight of the suites above with the
-      # log turned up to `trace`, where talkative libraries lay out everything they know, and
-      # searches the output for the key's own bytes and for the passphrase. At `info` the
-      # libraries stay quiet and the hunt would be idle, which is the whole point of the level.
-      #
-      # **Yes, those eight run twice.** That is the cost of asking a different question of the
-      # same work: the step above asks whether the behaviour is right, this one asks what the
-      # behaviour said out loud while being right. Measured 2026-09-04: 29,932 lines, 29 tests.
-      #
-      # It cannot pass having checked nothing — it counts the tests that ran and the lines the
-      # log holds, and says so rather than reporting a clean log it never produced.
-      #
-      # After the tests, not before: the key it hunts for is made by the first integration
-      # test that needs one, and without it the script stops with "there is no test key".
-      - name: No secrets in the log (principle IV, FR-091, SC-011)
-        run: bash scripts/check-no-secrets-in-logs.sh container
-      - name: Make sure the containers cleaned up after themselves
+      - name: No leaked containers or networks
         if: always()
-        # **Оболочка названа, а не взята по умолчанию.** В задании-контейнере по умолчанию
-        # достаётся `sh`, а `set -o pipefail` в нём не существует: шаг падал на первой же
-        # строке с «Illegal option -o pipefail», и это выглядело как оставшиеся контейнеры.
-        # Так было с самого перехода в контейнер — просто до 2026-08-28 эту ошибку закрывала
-        # неудача самих проверок.
         shell: bash
         run: |
-          set -o pipefail
-          # The image tag must match IMAGE in tests/integration/fixture.rs, and the network
-          # prefix must match NETWORK_PREFIX there.
-          #
-          # With a settling period rather than at once: `docker rm -f` returns as soon as a
-          # container is merely marked for removal, and for a second or two it is still in
-          # the listing. A check with no settling period caught that on 2026-08-25 — forty
-          # four tests passed, the guard announced "1 left" and then showed an empty list.
-          # A flickering guard is worse than none: it teaches people to re-run a build
-          # without reading it — and one day they will re-run a real leak the same way.
+          set -euo pipefail
           for _ in $(seq 1 15); do
-            # Three sources (T248). The serving container is looked for by its image; the two
-            # deployment ones by their NAME prefix instead — they are rebuilt and re-tagged
-            # more often than the serving one, and a guard keyed to a tag stops watching the
-            # moment the tag moves, silently and while still going green.
-            #
-            # **Two queries, and that is the whole point of this shape.** Written as
-            # `--filter ancestor=… --filter name=…` it read as "either", and Docker means
-            # "both": filters of different kinds are ANDed. A deployment container is named
-            # `vrcast-deploy-target-…` and built from `vrcast-test-clean`, never from
-            # `vrcast-test-sshd`, so it matched neither half of an AND and the guard could
-            # not see one at all. It never could. Three of them sat running for hours while
-            # this step printed "no containers left", and it was the network guard next door
-            # that finally said something — about the networks those containers were holding.
-            # Proved on 2026-08-28 against a machine that had all three: the old line found
-            # nothing, these two found them.
             left="$(
               {
                 docker ps -a --filter ancestor=vrcast-test-sshd:5 --format '{{.Names}} {{.Status}}'
                 docker ps -a --filter name=vrcast-deploy-target --format '{{.Names}} {{.Status}}'
+                docker network ls --format '{{.Name}}' | grep -E '^vrcast-(test-net|deploy-target)-' || true
               } | sort -u
             )"
             [ -z "$left" ] && break
             sleep 1
           done
           if [ -n "$left" ]; then
-            echo "dangling containers were left:" >&2
-            # Exactly what was counted is printed, rather than a fresh query: otherwise the
-            # message and the list disagree and neither can be made sense of — which is
-            # precisely what happened that time.
+            echo "Leaked resources on this clean machine:" >&2
             echo "$left" >&2
+            if [ -s /tmp/vrcast-leaks.log ]; then cat /tmp/vrcast-leaks.log >&2; fi
             exit 1
-          fi
-          echo "no containers left"
-
-          # The networks the fixture creates (T149) are watched for in the same way. A
-          # leaked network is not harmless: the pool of addresses they are handed out from
-          # is finite, and once it runs out no container starts at all — with a message
-          # that says nothing about this place.
-          # Оба вида: сети стенда проверок (`vrcast-test-net-…`) и сети стенда развёртывания
-          # (`vrcast-deploy-target-…-net`). Второй вид завёлся 2026-08-28 вместе с переходом
-          # на сеть контейнеров, и без него утечка там осталась бы невидимой.
-          for _ in $(seq 1 15); do
-            nets="$(docker network ls --format '{{.Name}}'               | grep -E '^vrcast-(test-net|deploy-target)-' || true)"
-            [ -z "$nets" ] && break
-            sleep 1
-          done
-          # Only the ones this run made. The older ones are printed too — they are a real
-          # fault and somebody has to clear them off the machine — but they are not this
-          # run's verdict.
-          before=/tmp/vrcast-networks-before.txt
-          [ -f "$before" ] || : > "$before"
-          fresh="$(printf '%s\n' "$nets" | grep -vxF -f "$before" || true)"
-          # What the fixture had to say. It writes to a file because cargo keeps a test's
-          # output to itself unless the test *fails* — and a leak left by a test that passed
-          # is exactly the case this guard exists for. Two red builds on 2026-08-28 named a
-          # network and nothing else, and both times the explanation had been written and
-          # thrown away. Printed whenever anything is left, old or new: on an old one it is
-          # the sweep saying why it could not clear it, which is the whole diagnosis.
-          say_what_the_tests_said() {
-            if [ -s "${TMPDIR:-/tmp}/vrcast-leaks.log" ]; then
-              echo "what the tests said about them:" >&2
-              cat "${TMPDIR:-/tmp}/vrcast-leaks.log" >&2
-            else
-              echo "the tests left no note about them." >&2
-            fi
-          }
-
-          if [ -n "$fresh" ]; then
-            echo "dangling networks were left by this run:" >&2
-            echo "$fresh" >&2
-            say_what_the_tests_said
-            exit 1
-          fi
-          if [ -n "$nets" ]; then
-            echo "networks from earlier runs are still on this machine; this run added none:" >&2
-            echo "$nets" >&2
-            echo "They do not clear themselves. The sweep tries on every deployment test." >&2
-            say_what_the_tests_said
-          else
-            echo "no networks left"
           fi
 
   licenses:
     name: Licence compatibility with GPL-3.0
-    runs-on: [self-hosted, vrcast-linux]
-    container:
-      image: localhost:5000/vrcast-linux-check:3
+    timeout-minutes: 20
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      # **Цепочка Rust проверяется, а не ставится.**
-      #
-      # Прежде здесь стояло `dtolnay/rust-toolchain@stable`, и на машине GitHub это верно: она
-      # одноразовая. На своей машине то же действие ставит rustup **поверх настоящего** — и
-      # 2026-08-27 оно снесло `rustup.exe` у владельца. Сам инструмент уцелел только потому,
-      # что ссылки в `.cargo/bin` смотрят на rustup, а цепочка лежит отдельно; чинилось
-      # переустановкой rustup.
-      #
-      # Зависимости машины — забота машины. Задание говорит, чего не хватает, и не чинит само.
-      - name: Цепочка Rust на месте
-        shell: bash
-        run: |
-          missing=""
-          for tool in cargo rustc; do
-            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
-          done
-          cargo fmt --version >/dev/null 2>&1 || missing="$missing rustfmt"
-          cargo clippy --version >/dev/null 2>&1 || missing="$missing clippy"
-          if [ -n "$missing" ]; then
-            echo "На машине исполнителя не хватает:$missing" >&2
-            echo "Поставить:  rustup toolchain install stable --component rustfmt clippy" >&2
-            exit 1
-          fi
-          cargo --version
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@cargo-deny
-      - name: Check the core dependencies' licences
-        run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
-      - uses: actions/setup-node@v4
+      - run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
-      # An ALLOW list, not a deny list. A deny list is compared by exact string match, and
-      # enumerating every spelling in it ("AGPL-3.0" against "AGPL-3.0-only") is a race with
-      # reality that cannot be won: proved in practice, the old list let "AGPL-3.0-only"
-      # through — the very thing it was created for. An allow list errs on the safe side: an
-      # unfamiliar licence fails the build, and a person looks at it.
-      - name: Check the interface dependencies' licences
+      - name: Interface dependency licences (allow list)
         run: >
           npx --yes license-checker-rseidelsohn --production --excludePrivatePackages
           --onlyAllow "MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0"
-      # The list of other people's work has to answer to the dependency tree. Assembled once
-      # and forgotten, it looks like an obligation met while not being one — which is worse
-      # than a missing file (T106, the GPL obligation).
-      # The sources are needed in full: the licence texts are taken from them rather than
-      # from a set of templates of our own — many packages hold a copyright holder's name in
-      # that file.
-      - name: Fetch the core dependencies' sources
-        run: cargo fetch --manifest-path src-tauri/Cargo.toml
-      - name: Compare the third-party list against the dependency tree
-        run: npm run check:third-party
+      - run: cargo fetch --manifest-path src-tauri/Cargo.toml
+      - run: npm run check:third-party
 
   guards:
-    name: Isolation and no hardcoded servers
-    runs-on: [self-hosted, vrcast-linux]
-    container:
-      image: localhost:5000/vrcast-linux-check:3
+    name: Repository and release guards
+    timeout-minutes: 10
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: bash scripts/check-version.sh
+      - run: bash scripts/check-theme.sh
+      - run: bash scripts/check-motion.sh
+      - run: bash scripts/check-leak-guard.sh
+      - run: bash scripts/test-latest-json.sh
+      - run: python3 -m unittest discover -s scripts -p 'test_ci_integration.py'
+      - run: python3 -m unittest discover -s scripts -p 'test_publish_release.py'
+      # The host can mount the checkout, unlike the old job-container setup.
+      - name: Workflow syntax
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -shellcheck= .github/workflows/build.yml .github/workflows/release.yml
+      # Deliberately local-only: isolation needs protected files, server reference needs
+      # the skill, and carried-over formulas need convert.sh, all outside the repository.
+      # Ignored live-server/measurement tests remain ignored: CI never uses owner's servers.
+
+  advisories:
+    name: Dependency security advisories
+    timeout-minutes: 15
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@cargo-deny
+      # Independent of licences: a vulnerable dependency must not hide the licence checks.
+      - run: cargo deny --manifest-path src-tauri/Cargo.toml check advisories
+
+  owner-addresses:
+    name: Owner addresses are absent (requires repository secrets)
+    timeout-minutes: 10
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      # Not silently waived on forks or repositories without these secrets: the script exits
+      # 2 and names the missing configuration. No owner files are read by any CI job.
       - name: Hardcoded servers (FR-004)
         env:
           FORBID_IP: ${{ secrets.FORBID_IP }}
           FORBID_DOMAIN: ${{ secrets.FORBID_DOMAIN }}
         run: bash scripts/check-no-hardcoded-server.sh
-      # T325. Здесь, а не в «Interface», потому что это охранная проверка того же рода:
-      # один цвет, поставленный впрямую на экране, который смотрели, — и тёмная тема
-      # ломается там, куда заглядывают реже всего.
-      - name: The version is in one place
-        # T341. Here for the same reason as its neighbours: two copies of one number drift
-        # apart silently, and the drift is visible only to whoever opens both files.
-        run: bash scripts/check-version.sh
-      - name: Both themes line up
-        run: bash scripts/check-theme.sh
-      - name: The movement switch reaches what it promises
-        run: bash scripts/check-motion.sh
-      # ⚠ **Three guards deliberately absent, and it is written here so the question is not
-      # re-opened every time somebody counts the scripts** (T489, 2026-09-04; the third added
-      # 2026-09-06 by an audit that found it missing from this very list — a guard written
-      # after the list was, and never entered in it, which is how a list meant to be complete
-      # stops being):
-      #
-      # - the isolation check (principle VII) needs the protected files, which live
-      #   OUTSIDE the repository; CI checks out the application alone, so every file
-      #   would read as missing and this job would be red for ever. It runs locally,
-      #   before a phase is handed over, where those files are;
-      # - the server reference check compares against the skill, which lives outside the
-      #   repository for the same reason. Its own text says it: with nothing to compare
-      #   against it exits 0 saying the comparison was NOT MADE, and a step that goes
-      #   green having compared nothing is worse than no step;
-      # - the carried-over formulas check (principle VI) compares the application's
-      #   arithmetic against `convert.sh`'s, and that script lives outside the repository
-      #   with the rest of the skills. With nothing to compare against it exits 2 — "ran,
-      #   could not look at everything" — which locally is honest and here would be a step
-      #   that never once compared anything.
-      #
-      # `check-workflows.sh` is the third and is absent for a different reason — it
-      # lints through a container, and the bind mount it needs cannot be made from
-      # inside a job container onto the machine's own daemon. Hardened instead so it
-      # cannot pass without having linted anything.
-      - name: The leak guard's own rule
-        # The four lines that decide whether a leaked Docker network makes a build red.
-        # A build that is red for somebody else's leak teaches people not to read red,
-        # which is the argument the guard itself is written on — so the rule has a test,
-        # and until now the test ran nowhere.
-        run: bash scripts/check-leak-guard.sh
-      - name: The release file assembler
-        # ⚠ **The sharpest of the three that were missing.** `latest-json.py` runs once
-        # per release, on a machine nobody is watching, and a `latest.json` short of a
-        # platform does not fail anything — it publishes, and everybody on that platform
-        # silently stops being offered updates. The test for it existed and ran nowhere.
-        run: bash scripts/test-latest-json.sh

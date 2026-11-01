@@ -20,7 +20,10 @@ use super::{Context, Result, Step, APT_GET};
 /// Public so `versions.json` can be checked against **this** list rather than a copy of it
 /// beside the check (T337). A copy goes stale the first time a package is added, and the
 /// check then passes while guarding a composition nobody deploys.
-pub const FROM_APT: [&str; 6] = ["ffmpeg", "curl", "tar", "ufw", "ca-certificates", "gnupg"];
+// Caddy is a verified release .deb, not a signed apt repository. Neither its installer nor
+// fail2ban/unattended-upgrades uses gnupg; apt's signature verification uses gpgv itself.
+// Do not remove a user's existing gnupg or raise the server version for an installer tool.
+pub const FROM_APT: [&str; 5] = ["ffmpeg", "curl", "tar", "ufw", "ca-certificates"];
 
 /// T713 — Caddy comes from its own GitHub release, at this version, checked by its sum.
 ///

@@ -270,7 +270,16 @@ impl ManagedProcess {
     /// sidesteps the whole question; the alternative is escaping by hand, which this
     /// project has already once got wrong quietly, writing the results nowhere.
     pub fn spawn_in(dir: Option<&Path>, program: &str, args: &[String]) -> Result<Self> {
-        Self::spawn_recording(dir, program, args, Record::Account)
+        Self::spawn_recording(dir, program, args, Record::Account, &[])
+    }
+
+    /// Environment for this child only; never mutate the application's global environment.
+    pub fn spawn_with_env(
+        program: &str,
+        args: &[String],
+        env: &[(&str, &std::ffi::OsStr)],
+    ) -> Result<Self> {
+        Self::spawn_recording(None, program, args, Record::Account, env)
     }
 
     /// Exactly like `spawn`, but writes the started program into `db` directly rather than
@@ -293,7 +302,7 @@ impl ManagedProcess {
         args: &[String],
         db: std::sync::Arc<crate::store::db::Db>,
     ) -> Result<Self> {
-        Self::spawn_recording(None, program, args, Record::Explicit(db))
+        Self::spawn_recording(None, program, args, Record::Explicit(db), &[])
     }
 
     fn spawn_recording(
@@ -301,8 +310,10 @@ impl ManagedProcess {
         program: &str,
         args: &[String],
         record: Record,
+        env: &[(&str, &std::ffi::OsStr)],
     ) -> Result<Self> {
         let mut cmd = Command::new(program);
+        cmd.envs(env.iter().copied());
         cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

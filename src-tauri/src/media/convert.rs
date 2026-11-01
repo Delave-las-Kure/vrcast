@@ -34,6 +34,9 @@ pub enum ConvertError {
     #[error("encoding failed: {0}")]
     Failed(String),
 
+    #[error("subtitle text could not be drawn; the unfinished output was removed")]
+    SubtitleFonts,
+
     #[error("cancelled")]
     Cancelled,
 }
@@ -69,6 +72,12 @@ fn push(args: &mut Vec<String>, value: &str) {
 /// then per-stream codec options, then output. Getting this order wrong does not
 /// fail loudly — FFmpeg silently applies an option to the wrong stream.
 pub fn build_args(job: &ConvertJob<'_>) -> Vec<String> {
+    // A pure builder: callers supply the fonts under this relative name. The encoding runner
+    // always unpacks the embedded bytes and passes its private directory explicitly below.
+    build_args_with_fonts(job, Path::new("fonts"))
+}
+
+pub fn build_args_with_fonts(job: &ConvertJob<'_>, fonts_dir: &Path) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     let a = &mut args;
 
@@ -123,7 +132,7 @@ pub fn build_args(job: &ConvertJob<'_>) -> Vec<String> {
     push(a, "-1");
 
     if graph.is_none() {
-        if let Some(filter) = video_filter(job) {
+        if let Some(filter) = video_filter(job, fonts_dir) {
             push(a, "-vf");
             push(a, &filter);
         }
@@ -184,7 +193,7 @@ pub fn hdr_input_transfer(transfer: Option<&str>) -> &'static str {
 ///
 /// Kept as one chain because FFmpeg accepts only one `-vf`; a second one silently
 /// replaces the first rather than adding to it.
-fn video_filter(job: &ConvertJob<'_>) -> Option<String> {
+fn video_filter(job: &ConvertJob<'_>, fonts_dir: &Path) -> Option<String> {
     let mut steps: Vec<String> = Vec::new();
 
     if job.plan.tonemap {
@@ -197,9 +206,10 @@ fn video_filter(job: &ConvertJob<'_>) -> Option<String> {
     if let Some(burn) = burning(job) {
         if burn.kind == SubtitleKind::Text {
             steps.push(format!(
-                "subtitles=filename={}:si={}",
+                "subtitles=filename={}:si={}:fontsdir={}",
                 filter_path(&job.source.path),
-                burn.index
+                burn.index,
+                filter_path(&fonts_dir.to_string_lossy())
             ));
         }
     }
@@ -435,7 +445,7 @@ pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<Vec<Detail>>
             // broken fails after progress has been coming for a while. Parsing FFmpeg's
             // words would tie this to their wording; the clock does not. At worst a few
             // seconds are spent twice — never hours.
-            if saw_progress || matches!(e, ConvertError::Cancelled) {
+            if saw_progress || matches!(e, ConvertError::Cancelled | ConvertError::SubtitleFonts) {
                 return Err(e);
             }
             tracing::warn!(encoder = %name, error = %e, "the hardware encoder would not start; going to the processor");
@@ -460,9 +470,21 @@ pub async fn run(job: &ConvertJob<'_>, ctx: &TaskContext) -> Result<Vec<Detail>>
 /// tells a refusal to start from a file that fell apart in the middle.
 async fn run_once(job: &ConvertJob<'_>, ctx: &TaskContext, saw_progress: &mut bool) -> Result<()> {
     let program = ffmpeg::locate("ffmpeg")?;
-    let args = build_args(job);
-
-    let mut child = ManagedProcess::spawn(&program.to_string_lossy(), &args)
+    let text_subtitles = burning(job).is_some_and(|b| b.kind == SubtitleKind::Text);
+    let fonts = text_subtitles
+        .then(super::subtitle_fonts::SubtitleFonts::prepare)
+        .transpose()
+        .map_err(|_| ConvertError::SubtitleFonts)?;
+    let args = fonts
+        .as_ref()
+        .map_or_else(|| build_args(job), |f| build_args_with_fonts(job, f.dir()));
+    let config = fonts.as_ref().map(|f| f.config_path());
+    let environment: Vec<_> = config
+        .as_ref()
+        .map(|p| ("FONTCONFIG_FILE", p.as_os_str()))
+        .into_iter()
+        .collect();
+    let mut child = ManagedProcess::spawn_with_env(&program.to_string_lossy(), &args, &environment)
         .map_err(|e| ConvertError::Spawn(e.to_string()))?;
 
     let (stdout, stderr) = child.take_output();
@@ -474,9 +496,12 @@ async fn run_once(job: &ConvertJob<'_>, ctx: &TaskContext, saw_progress: &mut bo
     let complaints = tokio::spawn(async move {
         use tokio::io::AsyncBufReadExt;
         let mut tail: Vec<String> = Vec::new();
+        let mut fonts_failed = false;
         if let Some(err) = stderr {
             let mut lines = tokio::io::BufReader::new(err).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                // This sticky flag outlives the last-20-lines diagnostic tail.
+                fonts_failed |= text_subtitles && subtitle_font_failure(&line);
                 tail.push(line);
                 // Only the last few lines matter: the reason is at the end, and
                 // keeping all of them turns a broken file into a memory problem.
@@ -485,7 +510,7 @@ async fn run_once(job: &ConvertJob<'_>, ctx: &TaskContext, saw_progress: &mut bo
                 }
             }
         }
-        tail
+        (tail, fonts_failed)
     });
 
     if let Some(out) = stdout {
@@ -542,13 +567,28 @@ async fn run_once(job: &ConvertJob<'_>, ctx: &TaskContext, saw_progress: &mut bo
         return Err(ConvertError::Cancelled);
     }
 
+    let (tail, fonts_failed) = complaints.await.map_err(|e| {
+        cleanup(job.out_path);
+        ConvertError::Failed(format!("could not read the encoder's diagnostics: {e}"))
+    })?;
+    if fonts_failed {
+        cleanup(job.out_path);
+        return Err(ConvertError::SubtitleFonts);
+    }
     if !status.success() {
         cleanup(job.out_path);
-        let tail = complaints.await.unwrap_or_default();
         return Err(ConvertError::Failed(explain(&tail, status)));
     }
 
     Ok(())
+}
+
+fn subtitle_font_failure(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    line.contains("failed to load font")
+        || line.contains("fontconfig error")
+        || line.contains("failed to find any fallback")
+        || (line.contains("glyph") && line.contains("not found"))
 }
 
 /// Freeze or release the encoder to match the task's pause state.
@@ -608,5 +648,26 @@ fn explain(tail: &[String], status: std::process::ExitStatus) -> String {
 fn cleanup(out_path: &str) {
     if Path::new(out_path).exists() {
         let _ = std::fs::remove_file(out_path);
+    }
+}
+
+#[cfg(test)]
+mod subtitle_tests {
+    use super::*;
+
+    #[test]
+    fn subtitle_font_warnings_cannot_be_a_successful_encode() {
+        for line in [
+            "[Parsed_subtitles_0] Failed to load fontconfig fonts!",
+            "Fontconfig error: Cannot load default config file",
+            "fontselect: failed to find any fallback with glyph 0x41F",
+            "Glyph 0x41F not found, selecting one more font for (Arial, 400, 0)",
+        ] {
+            assert!(subtitle_font_failure(line), "{line}");
+        }
+        assert!(!subtitle_font_failure(
+            "fontselect: (Arial, 400, 0) -> DejaVuSans, 0, DejaVuSans"
+        ));
+        assert!(!subtitle_font_failure("video:21KiB audio:35KiB"));
     }
 }

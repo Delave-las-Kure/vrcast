@@ -645,9 +645,12 @@ fn text_subtitles_are_drawn_by_libass_before_the_height_changes() {
     let vf = value_of(&args, "-vf").expect("no -vf").to_owned();
     assert_eq!(
         vf,
-        concat!(
-            r"subtitles=filename=C\\:/Films/It\\\'s\, a film \[x\].mkv:si=2,",
-            "scale=-2:720,format=yuv420p"
+        format!(
+            concat!(
+                r"subtitles=filename=C\\:/Films/It\\\'s\, a film \[x\].mkv:si=2:fontsdir={},",
+                "scale=-2:720,format=yuv420p"
+            ),
+            convert::filter_path("fonts")
         )
     );
     assert!(has_pair(&args, "-map", "0:v:0"));
@@ -767,8 +770,10 @@ fn subtitles_are_really_drawn_by_the_bundled_ffmpeg() {
         eprintln!("SKIPPED: no bundled ffprobe");
         return;
     };
+    let fonts = vrcast_studio_lib::media::subtitle_fonts::SubtitleFonts::prepare().unwrap();
     let run = |args: &[String]| {
         std::process::Command::new(&ff)
+            .env("FONTCONFIG_FILE", fonts.config_path())
             .args(args)
             .stdout(std::process::Stdio::null())
             .output()
@@ -843,6 +848,38 @@ fn subtitles_are_really_drawn_by_the_bundled_ffmpeg() {
         String::from_utf8_lossy(&probed.stdout).into_owned(),
     )];
     if let Some(sample) = picture_sample.take() {
+        // Subtitle samples often have no sound. Give the disposable test clip a silent
+        // track rather than weakening the production rule that a film must have audio.
+        let with_sound = root.join("picture-sample-with-sound.mkv");
+        let (ok, err) = run(&[
+            "-hide_banner".into(),
+            "-v".into(),
+            "error".into(),
+            "-y".into(),
+            "-i".into(),
+            sample,
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "anullsrc=channel_layout=stereo:sample_rate=48000".into(),
+            "-map".into(),
+            "0:v:0".into(),
+            "-map".into(),
+            "1:a:0".into(),
+            "-map".into(),
+            "0:s".into(),
+            "-c:v".into(),
+            "copy".into(),
+            "-c:s".into(),
+            "copy".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-t".into(),
+            "6".into(),
+            s(&with_sound),
+        ]);
+        assert!(ok, "could not prepare the subtitle sample: {err}");
+        let sample = s(&with_sound);
         let out = std::process::Command::new(&fp)
             .args([
                 "-v",
@@ -887,12 +924,15 @@ fn subtitles_are_really_drawn_by_the_bundled_ffmpeg() {
                 kind: track.kind,
             });
             let out = root.join(format!("out-{}.mp4", burn.is_some()));
-            let mut args = convert::build_args(&ConvertJob {
-                source: &source,
-                plan: &p,
-                encoder: &Encoder::Software,
-                out_path: &s(&out),
-            });
+            let mut args = convert::build_args_with_fonts(
+                &ConvertJob {
+                    source: &source,
+                    plan: &p,
+                    encoder: &Encoder::Software,
+                    out_path: &s(&out),
+                },
+                fonts.dir(),
+            );
             // Long samples: the first seconds are enough.
             let at_out = args.len() - 1;
             args.insert(at_out, "-t".into());
@@ -916,6 +956,94 @@ fn subtitles_are_really_drawn_by_the_bundled_ffmpeg() {
             frames.push(std::fs::read(&frame).unwrap());
         }
         assert_ne!(frames[0], frames[1], "{:?}: nothing was drawn", track.kind);
+        if checked == 0 {
+            // Also exercise the production runner, not just its pure argument builder.
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                use std::sync::Arc;
+                use vrcast_studio_lib::{
+                    store::db::Db,
+                    tasks::{
+                        engine::TaskEngine,
+                        state::{TaskKind, TaskState},
+                    },
+                };
+                let engine = TaskEngine::new(Arc::new(Db::open_in_memory().unwrap()));
+                let source = source.clone();
+                let production = root.join("production.mp4");
+                let output = s(&production);
+                let id = engine
+                    .submit(TaskKind::Convert, None, move |ctx| async move {
+                        let mut p = plan::plan(
+                            &source,
+                            &ConvertRequest {
+                                audio_track: 0,
+                                target_kbps: Some(((source.bitrate_bps / 1000) as u32 / 2).max(1)),
+                                height: Some(source.height.min(360)),
+                            },
+                        )
+                        .unwrap();
+                        p.subtitles = Some(plan::SubtitleBurn {
+                            index: track.index,
+                            kind: track.kind,
+                        });
+                        convert::run(
+                            &ConvertJob {
+                                source: &source,
+                                plan: &p,
+                                encoder: &Encoder::Software,
+                                out_path: &output,
+                            },
+                            &ctx,
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| {
+                            vrcast_studio_lib::error::AppError::new(
+                                vrcast_studio_lib::error::ErrorCode::Internal,
+                            )
+                            .with_cause(e)
+                        })
+                    })
+                    .await
+                    .unwrap();
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                loop {
+                    let task = engine.get(&id).unwrap().unwrap();
+                    if matches!(
+                        task.state,
+                        TaskState::Completed | TaskState::Failed | TaskState::Cancelled
+                    ) {
+                        assert_eq!(task.state, TaskState::Completed, "{:?}", task.error);
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < until,
+                        "production subtitle encode hung"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                let frame = root.join("production.png");
+                let (ok, err) = run(&[
+                    "-v".into(),
+                    "error".into(),
+                    "-y".into(),
+                    "-ss".into(),
+                    at.to_string(),
+                    "-i".into(),
+                    s(&production),
+                    "-frames:v".into(),
+                    "1".into(),
+                    s(&frame),
+                ]);
+                assert!(ok, "{err}");
+                assert_ne!(
+                    frames[0],
+                    std::fs::read(frame).unwrap(),
+                    "production runner drew no text"
+                );
+            });
+        }
         checked += 1;
     }
     eprintln!("checked {checked} kind(s) of subtitles");

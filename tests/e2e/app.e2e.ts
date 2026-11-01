@@ -52,10 +52,16 @@ describe("the built application", () => {
   it("moves to another section when its link is clicked", async () => {
     // Routing inside the webview, which is the one thing a screenshot cannot tell you about.
     const before = await (await harness.session.findFilled(".content")).text();
-    const link = await harness.session.find('a[href="#/servers"]');
+    // A clean first start already opens on Servers. Clicking its own link proves nothing.
+    const current = await harness.session.execute<string>("return window.location.hash");
+    const route = current === "#/appearance" ? "#/servers" : "#/appearance";
+    const link = await harness.session.find(`a[href="${route}"]`);
     await link.click();
-    // The same element, read again: the router replaces what is inside it.
-    const after = await (await harness.session.findFilled(".content")).text();
-    expect(after).not.toBe(before);
+    // Navigation is asynchronous: a nonempty old page is not the new page being ready.
+    await expect
+      .poll(async () => await (await harness.session.findFilled(".content")).text(), {
+        timeout: 15_000,
+      })
+      .not.toBe(before);
   }, 60_000);
 });
