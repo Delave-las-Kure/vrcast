@@ -39,6 +39,12 @@ const VIDEO_DIR: &str = "/var/lib/vrcast/videos";
 /// three chunks land on the three kinds of material; short enough that the whole way fits.
 const FILM_S: u32 = 80;
 
+/// Keep all 30 fps, the three kinds of material, full ten-second reference chunks and
+/// the real production encode/VMAF recipe. These lifecycle checks need real pixels, not
+/// a 1080p CPU benchmark: hosted runners have no usable NVENC and score every grid cell
+/// at source resolution. Encoding/cancel at 1080p remains covered separately below.
+const MEASUREMENT_SIZE: &str = "960x540";
+
 /// The second audio track — the one chosen — and what it sounds like.
 const CHOSEN_TRACK: usize = 1;
 const CHOSEN_HZ: f64 = 1000.0;
@@ -580,7 +586,7 @@ async fn a_real_film_goes_the_whole_way_with_a_real_measurement_on_the_second_au
     let server_id = add_profile(&state, &server).await;
     let film = scratch.0.join("Real Film.mkv");
     let made = Instant::now();
-    make_film(&film, "1920x1080", FILM_S);
+    make_film(&film, MEASUREMENT_SIZE, FILM_S);
     let film_bytes = std::fs::metadata(&film).unwrap().len();
     eprintln!(
         "ACCEPTANCE film: {} bytes ({:.1} Mbit/s), made in {:.1}s",
@@ -859,7 +865,7 @@ async fn killed_while_measuring_it_carries_on_measuring_without_measuring_again_
         add_profile(&state, &server).await;
     }
     let film = scratch.0.join("Killed While Measuring.mkv");
-    make_film(&film, "1920x1080", FILM_S);
+    make_film(&film, MEASUREMENT_SIZE, FILM_S);
     let mark = scratch.0.join("started");
 
     let child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -988,11 +994,11 @@ async fn two_videos_started_together_keep_to_the_limit_and_both_get_done() {
         .unwrap()
         .concurrent_heavy_tasks as usize;
 
-    // Two films: 720p, a minute each — two real measurements must fit in one test.
+    // Two films, a minute each — two real measurements must fit in one test.
     let a = scratch.0.join("First Of Two.mkv");
     let b = scratch.0.join("Second Of Two.mkv");
-    make_film(&a, "1280x720", 60);
-    make_film(&b, "1280x720", 60);
+    make_film(&a, MEASUREMENT_SIZE, 60);
+    make_film(&b, MEASUREMENT_SIZE, 60);
     let added = video::video_add(
         &state,
         &server_id,
