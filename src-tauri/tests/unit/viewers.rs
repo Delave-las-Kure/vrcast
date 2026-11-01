@@ -369,11 +369,11 @@ fn no_speed_is_shown_until_there_is_enough_to_work_one_out_from() {
 }
 
 #[test]
-fn a_narrow_link_is_marked_and_a_full_buffer_is_not() {
-    // The two look alike from the outside and are not alike at all. A player that has
-    // filled its buffer stops reading, and the delivered speed drops right off — with
-    // nothing wrong. Marking that would light the flag for healthy viewers, and a flag that
-    // cries wolf is worse than no flag.
+fn a_narrow_link_is_marked_and_so_is_a_player_holding_back_under_the_need() {
+    // T705 (tour 0.3.0): the screen showed «16 kbit/s, needs 11.1 Mbit/s — fine» for a viewer
+    // whose player was holding back its own flow (`rwnd_limited`). The state and the speed
+    // shown next to it have to agree: under the need is "falling behind", whoever is
+    // holding the flow back.
     let narrow = {
         let mut session = Session::default();
         session.note_request(&request("10.0.0.9", "/videos/demo/v1/seg0.ts", 0), &library);
@@ -387,7 +387,7 @@ fn a_narrow_link_is_marked_and_a_full_buffer_is_not() {
         "a viewer getting a twelfth of what they need was not marked: {narrow:?}"
     );
 
-    let buffered = {
+    let held_back = {
         let mut session = Session::default();
         session.note_request(&request("10.0.0.8", "/videos/demo/v1/seg0.ts", 0), &library);
         session.note_connections(&[row("10.0.0.8", 0, 0, 0, Some(0.98))], at(0));
@@ -395,8 +395,17 @@ fn a_narrow_link_is_marked_and_a_full_buffer_is_not() {
         session.active(at(11)).remove(0)
     };
     assert!(
-        !buffered.problems.contains(&Problem::SlowLink),
-        "a viewer whose player had simply stopped reading was accused of a bad link: {buffered:?}"
+        held_back.delivery_bps.unwrap() < held_back.required_bps.unwrap(),
+        "the case is a speed shown under the need: {held_back:?}"
+    );
+    assert!(
+        held_back.problems.contains(&Problem::SlowLink),
+        "a speed shown under the need was not marked as falling behind: {held_back:?}"
+    );
+    // Not reading is still not being stuck: that exemption stays.
+    assert!(
+        !held_back.problems.contains(&Problem::Stalls),
+        "{held_back:?}"
     );
 }
 
@@ -687,9 +696,9 @@ fn a_viewer_of_a_set_getting_less_than_their_rung_needs_is_marked_slow() {
 }
 
 #[test]
-fn a_viewer_of_a_set_whose_player_is_holding_back_is_not_marked_slow() {
-    // The exemption stays: a player with a full buffer stops reading, and its speed drops
-    // right off with nothing wrong at all.
+fn a_viewer_of_a_set_whose_player_is_holding_back_under_the_need_is_marked_slow() {
+    // T705 (tour 0.3.0): the state agrees with the speed shown. A player holding back its
+    // own flow at 4 Mbit/s of the 12 its rung needs is not keeping up with that rung.
     let mut session = Session::default();
     session.note_request(
         &request("10.0.0.8", "/videos/demo/v1/seg_00001.m4s", 0),
@@ -705,8 +714,8 @@ fn a_viewer_of_a_set_whose_player_is_holding_back_is_not_marked_slow() {
         "the need is known either way"
     );
     assert!(
-        !viewer.problems.contains(&Problem::SlowLink),
-        "a player holding back its own flow was accused of a bad link: {viewer:?}"
+        viewer.problems.contains(&Problem::SlowLink),
+        "a speed shown under the need was left as fine: {viewer:?}"
     );
 }
 

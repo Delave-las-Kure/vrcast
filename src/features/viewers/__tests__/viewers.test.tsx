@@ -243,6 +243,17 @@ describe("the viewers screen", () => {
     expect(ru.ui.viewers.problems.slowLink).toBe("не успевает");
   });
 
+  it("never shows «в порядке» beside a known speed under the known need (T705, tour 0.3.0)", async () => {
+    // F09: «16 кбит/с, нужно 11,1 Мбит/с — в порядке». The state agrees with the speed shown.
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+    send?.(update([viewer({ delivery_bps: 16_000, required_bps: 11_100_000, problems: [] })]));
+    await waitFor(() =>
+      expect(screen.getByText(ru.ui.viewers.problems.slowLink)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(ru.ui.viewers.fine)).toBeNull();
+  });
+
   it("marks a viewer in trouble with the reason rather than merely marking them", async () => {
     renderIn(<ViewersScreen />, "ru");
     await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());

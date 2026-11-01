@@ -53,7 +53,8 @@ const SPEED_MIN_SPAN_S: f64 = 5.0;
 const RETRANSMIT_SHARE: f64 = 0.02;
 
 /// Above this share of the busy time spent waiting for the far end's window, the flow is
-/// the player's doing rather than the link's — see [`Problem::SlowLink`].
+/// the player's doing rather than the link's — a player that is not reading is not stuck
+/// ([`Problem::Stalls`]). A slow speed is marked either way (T705).
 const RECEIVER_LIMITED: f64 = 0.5;
 
 /// How long the pulling may stand still before it counts as stuck.
@@ -524,12 +525,17 @@ impl Tracked {
             .receiver_limited_share
             .is_some_and(|share| share > RECEIVER_LIMITED);
 
-        // Slow link. The exemption is the point of it: a player with a full buffer stops
-        // reading, and the delivered speed drops right off — with nothing wrong at all.
-        // Marking that as a bad link would light the flag for healthy viewers, and a flag
-        // that cries wolf is worse than no flag.
+        // Slow link: the speed shown is under what the quality needs.
+        //
+        // ⚠ **The same figure as the one on the screen, with no exemption** (T705, tour 0.3.0).
+        // A player that was holding back its own flow (`rwnd_limited`) used to be let off, on
+        // the ground that a full buffer stops reading. The screen then showed «16 kbit/s,
+        // needs 11.1 Mbit/s — fine» side by side, and the owner's rule is plain: "fine" only
+        // when the speed is known to be enough. Over a thirty-second window a player that is
+        // keeping up takes at least what it plays, so one taking far less is not keeping up,
+        // whoever is holding it back.
         if let (Some(delivery), Some(required)) = (delivery_bps, self.facts.required_bps) {
-            if delivery < required && !receiver_limited {
+            if delivery < required {
                 problems.push(Problem::SlowLink);
             }
         }

@@ -51,7 +51,17 @@ export function ViewerRow({
   const t = useT();
   const { lang } = useLang();
   const words = t.ui.viewers;
-  const troubled = viewer.problems.length > 0;
+  // T705 (tour 0.3.0): the state agrees with the speed shown beside it. A known speed under
+  // a known need is "falling behind" even if the core's list of problems has not said so —
+  // «16 кбит/с, нужно 11,1 Мбит/с — в порядке» is a contradiction on one line.
+  const problems: ViewerProblem[] =
+    viewer.delivery_bps !== null &&
+    viewer.required_bps !== null &&
+    viewer.delivery_bps < viewer.required_bps &&
+    !viewer.problems.includes("SlowLink")
+      ? ["SlowLink", ...viewer.problems]
+      : viewer.problems;
+  const troubled = problems.length > 0;
 
   return (
     <tr className={troubled ? "viewers__row viewers__row--problem" : "viewers__row"}>
@@ -88,7 +98,7 @@ export function ViewerRow({
             not the same as nothing wrong: without the two figures it says so. */}
         {troubled ? (
           <ul className="viewers__problems">
-            {viewer.problems.map((problem) => (
+            {problems.map((problem) => (
               <li key={problem} title={reasonHint(problem, words)}>
                 {reason(problem, words)}
               </li>
