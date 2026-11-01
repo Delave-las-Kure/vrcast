@@ -10,6 +10,20 @@ spec.loader.exec_module(ci)
 
 
 class IntegrationRunnerTests(unittest.TestCase):
+    def test_trace_audit_keeps_the_whole_original_inventory_together(self):
+        names = [f"{module}::test_{i}" for module in ci.TRACE_SUITES | {"ordinary"} for i in range(5)]
+        selected, trace = ci.select_run(names, trace_only=True)
+        self.assertTrue(trace)
+        self.assertEqual(sorted(selected), sorted(ci.trace_tests(names)))
+        normal = [ci.select_run(names, shard=i, shards=8) for i in range(8)]
+        self.assertTrue(all(not is_trace for _, is_trace in normal))
+        self.assertEqual(sorted(sum([tests for tests, _ in normal], [])), sorted(names))
+        for args in [{}, {"shard": 0}, {"trace_only": True, "shard": 0, "shards": 8}]:
+            with self.assertRaises(ValueError):
+                ci.select_run(names, **args)
+        with self.assertRaises(ValueError):
+            ci.select_run(["ordinary::test"], trace_only=True)
+
     def test_the_original_eight_trace_suites_are_partitioned_without_loss(self):
         names = [f"{module}::test_{i}" for module in ci.TRACE_SUITES | {"timing_sensitive"} for i in range(5)]
         selected = sum([ci.trace_tests(ci.partition(names, shard, 8)) for shard in range(8)], [])

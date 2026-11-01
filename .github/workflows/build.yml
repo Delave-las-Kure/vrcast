@@ -180,13 +180,15 @@ jobs:
         run: dbus-run-session -- xvfb-run -a npm run test:e2e -- tests/e2e/app.e2e.ts tests/e2e/forget.e2e.ts
 
   integration:
-    name: Integration — shard ${{ matrix.shard }} of 8
+    name: Integration — ${{ matrix.shard == 'trace' && 'complete trace audit' || format('shard {0} of 8', matrix.shard) }}
     timeout-minutes: 60
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        # A small hash subset may never initialise the trace writer/redaction canary.
+        # Keep the original eight audit suites together in an independent job.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, trace]
     # Run on the Docker HOST, not in a sibling job container: the network-cut/relay
     # tests deliberately connect to 127.0.0.1. In a job container that is the wrong
     # loopback, and DeployTarget's direct-container port 22 is not a published host port.
@@ -220,10 +222,15 @@ jobs:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
       - run: node scripts/fetch-ffmpeg.mjs
-      # All non-ignored tests, not a hand-maintained subset. The original eight log-audit
-      # suites run again at trace level, also partitioned so the repeat stays within an hour.
+      # All non-ignored tests, not a hand-maintained subset; the complete original trace
+      # audit is independent of ordinary failures. Both modes scan logs before printing.
       - name: Real OpenSSH, serving, deployment, cancellation and no secrets in trace logs
-        run: python3 scripts/ci-integration.py --shard ${{ matrix.shard }} --shards 8
+        run: |
+          if [ '${{ matrix.shard }}' = trace ]; then
+            python3 scripts/ci-integration.py --trace-only
+          else
+            python3 scripts/ci-integration.py --shard '${{ matrix.shard }}' --shards 8
+          fi
       - name: No leaked containers or networks
         if: always()
         shell: bash

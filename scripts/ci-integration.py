@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Exhaustive, disjoint CI shards; one thread per disposable Docker host.
 
-Run every non-ignored integration test normally, then the original eight log-audit suites
-at trace level. Check private logs before printing them. Full trace changes the workload of
-timing-sensitive tests, so it is deliberately NOT enabled for the ordinary pass.
+Run every non-ignored integration test normally in disjoint shards. Run the original eight
+log-audit suites TOGETHER in an independent trace job: a hash subset may never initialise
+the application's trace writer or redaction canary. Check private logs before printing.
+Full trace changes timing-sensitive workloads, so it is NOT enabled for the ordinary pass.
 No owner credentials or live-server configuration are read.
 """
 import argparse
@@ -22,6 +23,20 @@ TRACE_SUITES = {"upload_live", "viewers_live", "hls_live", "limits_live", "deplo
 
 def trace_tests(names):
     return [name for name in names if name.split("::", 1)[0] in TRACE_SUITES]
+
+
+def select_run(names, shard=None, shards=None, trace_only=False):
+    if trace_only:
+        if shard is not None or shards is not None:
+            raise ValueError("The complete trace audit must not be sharded")
+        selected = trace_tests(names)
+    else:
+        if shard is None or shards is None:
+            raise ValueError("An ordinary run needs both --shard and --shards")
+        selected = partition(names, shard, shards)
+    if not selected:
+        raise ValueError("Empty selection: refusing to report a vacuous pass")
+    return selected, trace_only
 
 
 def test_names(listing):
@@ -60,8 +75,9 @@ def check_secrets(log, key, passphrase):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--shard", type=int, required=True)
-    parser.add_argument("--shards", type=int, required=True)
+    parser.add_argument("--shard", type=int)
+    parser.add_argument("--shards", type=int)
+    parser.add_argument("--trace-only", action="store_true")
     args = parser.parse_args()
     listing = subprocess.run(CARGO + ["--", "--list", "--format", "terse"],
                              check=True, stdout=subprocess.PIPE, text=True, timeout=1800)
@@ -71,23 +87,17 @@ def main():
     ignored = set(re.findall(r"^(.+): test$", ignored_listing.stdout, re.MULTILINE))
     names = [name for name in names if name not in ignored]
     print(f"Ignored live-server/measurement tests: {len(ignored)} (not run)", flush=True)
-    groups = [partition(names, i, args.shards) for i in range(args.shards)]
-    # Assert the runtime inventory, not just the algorithm's unit test.
-    if sorted(sum(groups, [])) != sorted(names):
-        raise ValueError("Shard inventory is not exhaustive and disjoint")
-    selected = partition(names, args.shard, args.shards)
-    if not selected:
-        raise ValueError("Empty shard: refusing to report a vacuous pass")
-    print(f"Inventory: {len(names)} tests; shard sizes: {[len(g) for g in groups]}", flush=True)
-    print(f"Shard {args.shard}: {len(selected)} non-ignored tests selected", flush=True)
+    selected, trace = select_run(names, args.shard, args.shards, args.trace_only)
+    if not trace:
+        groups = [partition(names, i, args.shards) for i in range(args.shards)]
+        # Assert the runtime inventory, not just the algorithm's unit test.
+        if sorted(sum(groups, [])) != sorted(names):
+            raise ValueError("Shard inventory is not exhaustive and disjoint")
+        print(f"Inventory: {len(names)} tests; shard sizes: {[len(g) for g in groups]}", flush=True)
+    print(f"{'Complete trace audit' if trace else f'Shard {args.shard}'}: {len(selected)} non-ignored tests selected", flush=True)
     for name in selected:
         print(f"  {name}", flush=True)
-    run_checked(selected, trace=False)
-    audited = trace_tests(selected)
-    if audited:
-        run_checked(audited, trace=True)
-    else:
-        print("No trace-audit tests assigned to this shard", flush=True)
+    run_checked(selected, trace=trace)
 
 
 def run_checked(selected, trace):
