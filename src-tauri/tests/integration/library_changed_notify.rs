@@ -349,11 +349,27 @@ fn ladder_build_calls_attach_and_invalidate_together_on_success() {
         // T678: the guard binds the build's outcome, since its rung files go to the catalogue.
         .find("if let Ok(built) = &outcome {")
         .expect("ladder_build's closure no longer guards attaching on outcome.is_ok()");
-    // The next closing brace at the same nesting level as the `if` would take real brace
-    // counting to find exactly; a generous slice past the guard is enough to prove both
-    // calls are textually inside it without needing a parser, the same trade the source
-    // checks in `engine.rs` already make.
-    let inside = &text[guard..(guard + 1200).min(text.len())];
+    // The guard's own block, found by counting braces from the `{` that opens it — the same
+    // kind of source check `engine.rs` makes. A fixed slice past the guard (it was 1200
+    // characters) broke the day one more argument line pushed the second call past it, while
+    // the code itself was fine.
+    let open = guard + text[guard..].find('{').expect("the guard has no block");
+    let mut depth = 0usize;
+    let mut end = text.len();
+    for (at, c) in text[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = open + at;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let inside = &text[guard..end];
 
     assert!(
         inside.contains("attach_built_set("),
