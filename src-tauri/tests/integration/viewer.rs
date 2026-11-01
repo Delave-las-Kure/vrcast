@@ -50,10 +50,13 @@ impl Viewer {
     pub fn attach(server: &TestServer) -> Result<Self, String> {
         // The same image as the server's: it already holds curl, and pulling a second one
         // in would mean waiting for a download on the first run in continuous integration.
+        let label = super::fixture::resource_label();
         let out = docker(&[
             "run",
             "-d",
             "--rm",
+            "--label",
+            &label,
             "--network",
             server.network(),
             IMAGE,

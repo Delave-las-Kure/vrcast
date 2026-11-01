@@ -108,6 +108,12 @@ fn docker(args: &[&str]) -> std::io::Result<std::process::Output> {
     Command::new("docker").args(args).output()
 }
 
+/// A CI child process's ownership token lets its parent clean up after SIGKILL without
+/// touching another test run, an application container, or somebody else's Docker work.
+pub fn resource_label() -> String {
+    std::env::var("VRCAST_TEST_RESOURCE_LABEL").unwrap_or_else(|_| "vrcast.test-fixture=1".into())
+}
+
 /// Whether there is a working Docker.
 ///
 /// Without one the integration tests do not run — but do not pretend to have passed either:
@@ -495,7 +501,8 @@ impl TestServer {
             std::process::id(),
             NETWORK_SEQ.fetch_add(1, Ordering::Relaxed)
         );
-        let out = docker(&["network", "create", &network])
+        let label = resource_label();
+        let out = docker(&["network", "create", "--label", &label, &network])
             .map_err(|e| format!("could not create the network: {e}"))?;
         if !out.status.success() {
             return Err(format!(
@@ -531,6 +538,8 @@ impl TestServer {
             "run",
             "-d",
             "--rm",
+            "--label",
+            &label,
             "--network",
             &network,
             "--network-alias",

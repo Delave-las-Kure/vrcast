@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 CARGO = ["cargo", "test", "--manifest-path", str(ROOT / "src-tauri/Cargo.toml"),
@@ -150,11 +151,36 @@ def run_checked(selected, trace):
     print(f"Every selected test accounted for: {len(selected)} passed", flush=True)
 
 
+def cleanup_resources(label):
+    """Remove only this child process's labelled resources, never a name/image sweep."""
+    if not re.fullmatch(r'vrcast\.ci-run=[a-f0-9]{32}', label):
+        raise ValueError('Refusing cleanup without an exact per-process ownership label')
+    leaked = []
+    for kind, listing, removal in [
+        ('container', ['ps', '-aq'], ['rm', '-f']),
+        ('network', ['network', 'ls', '-q'], ['network', 'rm']),
+    ]:
+        found = subprocess.run(['docker'] + listing + ['--filter', f'label={label}'],
+                               check=True, capture_output=True, text=True, timeout=30)
+        ids = found.stdout.split()
+        if ids:
+            subprocess.run(['docker'] + removal + ids, check=True, capture_output=True, timeout=30)
+            remaining = subprocess.run(['docker'] + listing + ['--filter', f'label={label}'],
+                                       check=True, capture_output=True, text=True, timeout=30)
+            if remaining.stdout.split():
+                raise ValueError(f'Owned {kind} resources survived cleanup')
+            leaked.extend(f'{kind} {identity}' for identity in ids)
+    return leaked
+
+
 def run_group(selected, trace, timeout):
     timed_out = False
+    label = f'vrcast.ci-run={uuid.uuid4().hex}'
+    leaked, cleanup_error = [], None
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
         result = subprocess.Popen(CARGO + ["--", "--test-threads=1", "--nocapture", "--exact"] + selected,
-                                  env={**os.environ, "VRCAST_LOG": "trace" if trace else "info"},
+                                  env={**os.environ, "VRCAST_LOG": "trace" if trace else "info",
+                                       "VRCAST_TEST_RESOURCE_LABEL": label},
                                   stdout=output, stderr=subprocess.STDOUT,
                                   start_new_session=os.name != "nt")
         try:
@@ -167,6 +193,13 @@ def run_group(selected, trace, timeout):
             else:
                 os.killpg(result.pid, signal.SIGKILL)
             result.wait()
+        finally:
+            # SIGKILL cannot run Rust's Drop. Reap only the child's explicit ownership
+            # label, including viewers; a healthy process leaking anything still fails.
+            try:
+                leaked = cleanup_resources(label)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                cleanup_error = f'Resource cleanup failed: {type(error).__name__}'
         output.seek(0)
         log = output.read()
     key = (ROOT / "src-tauri/tests/fixtures/encrypted_ed25519.key").read_text()
@@ -177,8 +210,12 @@ def run_group(selected, trace, timeout):
     check_secrets(log, key, phrase[1])
     # Only after scanning: never publish an unexamined trace log as an artifact or failure tail.
     print("\n".join(log.splitlines()[-100:]), flush=True)
+    if cleanup_error:
+        raise ValueError(cleanup_error)
     if timed_out:
         raise ValueError(f"Timed out after {timeout:.0f}s: {selected}; process tree stopped")
+    if leaked:
+        raise ValueError(f'The integration process leaked resources (removed): {leaked}')
     if result.returncode:
         lines = log.splitlines()
         for i, line in enumerate(lines):

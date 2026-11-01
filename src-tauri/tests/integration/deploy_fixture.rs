@@ -162,6 +162,7 @@ impl DeployTarget {
     }
 
     fn run_container(&mut self) -> Result<(), String> {
+        let label = super::fixture::resource_label();
         // Everything systemd needs, established by measurement rather than by copying an
         // incantation (T246): PID 1 is /sbin/init, the cgroup namespace is the container's
         // own, and /run is a tmpfs. What this buys and what it does not is written out in
@@ -196,7 +197,7 @@ impl DeployTarget {
                 // so an abandoned one is never met again under its own name and would sit
                 // there for good.
                 super::fixture::sweep_abandoned_networks();
-                let out = docker(&["network", "create", &network])
+                let out = docker(&["network", "create", "--label", &label, &network])
                     .map_err(|e| format!("could not create the network: {e}"))?;
                 if !out.status.success() {
                     return Err(format!(
@@ -232,6 +233,8 @@ impl DeployTarget {
             "run",
             "-d",
             "--rm",
+            "--label",
+            &label,
             "--name",
             &self.name,
             "--privileged",

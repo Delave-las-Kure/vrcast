@@ -12,6 +12,11 @@ spec.loader.exec_module(ci)
 
 
 class IntegrationRunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.cleanup = patch.object(ci, 'cleanup_resources', create=True, return_value=[])
+        self.cleaned = self.cleanup.start()
+        self.addCleanup(self.cleanup.stop)
+
     def test_trace_audit_keeps_the_whole_original_inventory_together(self):
         names = [f"{module}::test_{i}" for module in ci.TRACE_SUITES | {"ordinary"} for i in range(5)]
         selected, trace = ci.select_run(names, trace_only=True)
@@ -121,6 +126,66 @@ class IntegrationRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'SECRET WAS FOUND'):
                 ci.run_group(['a::hung'], trace=False, timeout=1)
         self.assertFalse(any('test-passphrase' in call for call in calls))
+
+    def test_a_timeout_cleans_its_own_resources_and_still_fails(self):
+        envs = []
+        child = SimpleNamespace(pid=123, returncode=-9)
+        def start(command, **kwargs):
+            envs.append(kwargs['env'])
+            def wait(**options):
+                if options:
+                    raise ci.subprocess.TimeoutExpired(command, options['timeout'])
+                return -9
+            child.wait = wait
+            return child
+        with patch.object(ci.subprocess, 'Popen', side_effect=start), patch.object(ci.os, 'killpg', create=True), patch.object(
+            ci.subprocess, 'run'
+        ), patch.object(ci.Path, 'read_text', side_effect=[
+            'header\ncomment\nabcdefghijklmnop\nqrstuvwxyz012345', 'PASSPHRASE: &str = "test-passphrase"'
+        ]):
+            with self.assertRaisesRegex(ValueError, 'Timed out'):
+                ci.run_group(['a::hung'], trace=False, timeout=1)
+        self.cleaned.assert_called_once_with(envs[0]['VRCAST_TEST_RESOURCE_LABEL'])
+        self.assertRegex(envs[0]['VRCAST_TEST_RESOURCE_LABEL'], r'^vrcast\.ci-run=[a-f0-9]{32}$')
+
+    def test_a_passing_process_cannot_hide_a_resource_leak_with_cleanup(self):
+        def start(command, **kwargs):
+            kwargs['stdout'].write('test result: ok. 1 passed; 0 failed; 0 ignored\n')
+            return SimpleNamespace(returncode=0, wait=lambda **_: 0)
+        self.cleaned.return_value = ['container abc123']
+        with patch.object(ci.subprocess, 'Popen', side_effect=start), patch.object(
+            ci.Path, 'read_text', side_effect=[
+                'header\ncomment\nabcdefghijklmnop\nqrstuvwxyz012345', 'PASSPHRASE: &str = "test-passphrase"'
+            ]
+        ):
+            with self.assertRaisesRegex(ValueError, 'leaked'):
+                ci.run_group(['a::leaky'], trace=False, timeout=1)
+
+    def test_cleanup_never_sweeps_unlabelled_or_other_runs_resources(self):
+        self.cleanup.stop()
+        label = 'vrcast.ci-run=' + 'a' * 32
+        replies = [SimpleNamespace(stdout=s) for s in ['abc123\n', '', '', 'def456\n', '', '']]
+        with patch.object(ci.subprocess, 'run', side_effect=replies) as run:
+            removed = ci.cleanup_resources(label)
+        self.assertEqual(removed, ['container abc123', 'network def456'])
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands, [
+            ['docker', 'ps', '-aq', '--filter', f'label={label}'],
+            ['docker', 'rm', '-f', 'abc123'],
+            ['docker', 'ps', '-aq', '--filter', f'label={label}'],
+            ['docker', 'network', 'ls', '-q', '--filter', f'label={label}'],
+            ['docker', 'network', 'rm', 'def456'],
+            ['docker', 'network', 'ls', '-q', '--filter', f'label={label}'],
+        ])
+        self.assertTrue(all(call.kwargs['check'] and call.kwargs['timeout'] == 30 for call in run.call_args_list))
+
+    def test_cleanup_requires_an_exact_ownership_token(self):
+        self.cleanup.stop()
+        with patch.object(ci.subprocess, 'run') as run:
+            for label in ['', 'vrcast', 'vrcast.ci-run=', 'vrcast.ci-run=*']:
+                with self.assertRaises(ValueError):
+                    ci.cleanup_resources(label)
+        run.assert_not_called()
 
 
 if __name__ == "__main__":
