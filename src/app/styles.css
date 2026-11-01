@@ -484,6 +484,25 @@ button:focus-visible {
   color: var(--text-muted);
   font-size: 12px;
   word-break: break-word;
+  margin-top: 6px;
+}
+
+.error-more__cause-label {
+  display: block;
+}
+
+/* The program's own answer, as a quotation: monospace, its own lines kept, wrapped rather than
+   scrolled sideways (tour 0.3.0). */
+.error-more__cause-text {
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
 .notice__close {

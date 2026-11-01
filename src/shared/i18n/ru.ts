@@ -713,6 +713,7 @@ const ui = {
   common: {
     dismiss: "Скрыть",
     more: "Подробнее",
+    technical: "Ответ программы:",
     cancel: "Отмена",
     close: "Закрыть",
     refresh: "Обновить",

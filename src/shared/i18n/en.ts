@@ -720,6 +720,7 @@ export const en: Catalogue = {
     common: {
       dismiss: "Dismiss",
       more: "Details",
+      technical: "Technical details:",
       cancel: "Cancel",
       close: "Close",
       refresh: "Refresh",

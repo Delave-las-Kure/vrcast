@@ -16,6 +16,22 @@ import { useLang, useT } from "../../shared/i18n";
 import { renderErrorFolded } from "../../shared/i18n/render";
 
 /**
+ * The technical answer itself — ffmpeg's, the server's, a library's — set apart from the
+ * explanation above it (tour 0.3.0, F08/D05): under its own label and in a monospace block,
+ * so English output after a Russian explanation reads as a quotation to copy, not as the end
+ * of the sentence.
+ */
+export function TechnicalCause({ text }: { text: string }) {
+  const t = useT();
+  return (
+    <div className="error-more__cause">
+      <span className="error-more__cause-label">{t.ui.common.technical}</span>
+      <pre className="error-more__cause-text">{text}</pre>
+    </div>
+  );
+}
+
+/**
  * The line and the folded rest, without a frame of its own.
  *
  * Shared by the banner below, a failed task's row and a refusal inside a dialog, so the
@@ -47,7 +63,7 @@ export function ErrorFolded({
           <summary>{t.ui.common.more}</summary>
           {hint && <p className="error-more__hint">{hint}</p>}
           {particulars && <p className="error-more__particulars">{particulars}</p>}
-          {error.cause && <p className="error-more__cause">{error.cause}</p>}
+          {error.cause && <TechnicalCause text={error.cause} />}
         </details>
       )}
     </>
