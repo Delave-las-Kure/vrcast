@@ -142,6 +142,23 @@ async fn a_real_clip() -> std::path::PathBuf {
     src
 }
 
+#[tokio::test]
+async fn an_unavailable_hardware_probe_reads_the_material_on_the_cpu_instead_of_guessing() {
+    let src = a_real_clip().await;
+    let asked = encoders::Encoder::Hardware {
+        name: "vrcast_unavailable_test_encoder".into(),
+    };
+    let result = probe_complexity::probe(&src, 12.0, &asked).await;
+    let _ = std::fs::remove_dir_all(src.parent().unwrap());
+    assert!(result.measured_bps.is_some_and(|bps| bps > 0), "{result:?}");
+    assert_eq!(result.pieces, 3);
+    assert_eq!(result.encoder, encoders::Encoder::Software);
+    assert_eq!(
+        result.notice.unwrap().key,
+        vrcast_studio_lib::domain::wording::DetailCode::NoticeProbeUncalibrated
+    );
+}
+
 /// T522, rule 1: when `LadderRequest.measured_peak_bps` is supplied, it — not the
 /// complexity probe's own few-seconds-of-trial-encodes reading — determines
 /// `plan.anchor_bps`/`anchor_mbps`, unconditionally, no closeness threshold.

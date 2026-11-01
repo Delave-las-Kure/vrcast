@@ -125,6 +125,13 @@ pub async fn probe_until(
 
     let calibrated = super::encoder_args::family_of(encoder).is_calibrated();
     if taken.is_empty() {
+        if matches!(encoder, Encoder::Hardware { .. }) {
+            // An advertised encoder with no usable device is not an unprobeable film.
+            // The 35 Mb guess puts every grid bitrate above small sources' own cap.
+            // Retry the same recipe on CPU; its reading is explicitly uncalibrated.
+            tracing::warn!("complexity hardware failed; reading the material on the processor");
+            return Box::pin(probe_until(path, duration_s, &Encoder::Software, cancel)).await;
+        }
         return Ok(nothing_probed(encoder));
     }
 

@@ -359,6 +359,11 @@ pub mod api {
         )
         .await
         .map_err(|_| AppError::new(ErrorCode::TaskCancelled))?;
+        if probe.encoder != encoder {
+            if let encoders::Encoder::Hardware { name } = &encoder {
+                notices.push(encoders::fallback_notice(name));
+            }
+        }
         notices.extend(probe.notice.clone());
 
         // The measured peak wins over the probe's own estimate whenever it has landed in

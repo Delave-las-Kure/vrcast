@@ -804,6 +804,11 @@ async fn read_the_film(
         .unwrap_or(crate::domain::ladder::FALLBACK_MBPS);
 
     let mut notices = notices;
+    if probed.encoder != encoder {
+        if let encoders::Encoder::Hardware { name } = &encoder {
+            notices.push(encoders::fallback_notice(name));
+        }
+    }
     notices.extend(probed.notice.clone());
 
     Ok((
