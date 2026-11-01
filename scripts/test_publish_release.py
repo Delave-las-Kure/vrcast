@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,6 +16,17 @@ spec.loader.exec_module(release)
 
 
 class DraftVerificationTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("VRCAST_TEST_PUBLISHED_RELEASE") == "1", "read-only GitHub API smoke test is opt-in")
+    def test_real_authenticated_asset_download_matches_the_public_asset(self):
+        token = os.environ["TOKEN"]
+        package = json.loads(Path(__file__).resolve().parent.parent.joinpath("package.json").read_text(encoding="utf-8"))
+        repo = package["repository"]["url"].removeprefix("https://github.com/")
+        current = release.call(token, "GET", f"{release.API}/repos/{repo}/releases/latest")
+        asset = next(asset for asset in current["assets"] if asset["name"] == "latest.json")
+        actual = release.download_sha256(token, repo, asset)
+        with release.urllib.request.urlopen(asset["browser_download_url"], timeout=60) as public:
+            self.assertEqual(actual, release.digest(public))
+
     def test_latest_requires_all_platforms_and_exact_uploaded_addresses(self):
         names = {"windows.exe", "linux.AppImage", "linux.deb"}
         manifest = {"version": "1.2.3", "platforms": {

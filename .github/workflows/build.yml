@@ -248,7 +248,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run check:licenses
+      - name: Interface dependency licences (allow list)
+        run: >
+          npx --yes license-checker-rseidelsohn --production --excludePrivatePackages
+          --onlyAllow "MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense;Python-2.0;BlueOak-1.0.0"
       - run: cargo fetch --manifest-path src-tauri/Cargo.toml
       - run: npm run check:third-party
 
