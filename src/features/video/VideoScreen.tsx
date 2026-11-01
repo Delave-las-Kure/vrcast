@@ -27,6 +27,7 @@ import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
 import { NoServer } from "../shared/NoServer";
 import { basename } from "../shared/names";
 import { SendSpeed } from "./SendSpeed";
+import { libraryForVideo } from "./libraryRefresh";
 import { VideoCard } from "./VideoCard";
 import {
   VIDEO_EXTENSIONS,
@@ -43,9 +44,9 @@ const RESYNC_MS = 15_000;
 
 /**
  * Whether the active server is out of reach right now (tour 0.3.0): its library as last known,
- * a refresh behind it, and the answer to that refresh as `library:changed` brings it. No
- * library cached and no server answering is out of reach too; any other refusal is not this
- * line's to report.
+ * a refresh behind it — at most once a minute ([`libraryForVideo`]) — and the answer to that
+ * refresh as `library:changed` brings it. No library cached and no server answering is out of
+ * reach too; any other refusal is not this line's to report.
  */
 function useServerDown(serverId: string | null): boolean {
   const [down, setDown] = useState(false);
@@ -61,7 +62,7 @@ function useServerDown(serverId: string | null): boolean {
         .catch((e) => {
           if (alive) setDown(toAppError(e).code === "SSH_UNREACHABLE");
         });
-    void judge(ipc.libraryList(serverId, false));
+    void judge(libraryForVideo(serverId));
     const off = onLibraryChanged((changed) => {
       if (alive && changed === serverId) void judge(ipc.libraryKnown(serverId));
     }).catch(() => () => {

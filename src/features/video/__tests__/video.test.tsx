@@ -37,6 +37,7 @@ const mockLadderRecomputeRung = vi.fn();
 const mockLadderValidate = vi.fn();
 /** Unset — the stub's empty answer, as before (not stale: nothing said). */
 const mockLibraryList = vi.fn((..._a: unknown[]) => Promise.resolve([] as unknown));
+const mockLibraryKnown = vi.fn((..._a: unknown[]) => Promise.resolve([] as unknown));
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
@@ -69,6 +70,7 @@ vi.mock("../../../shared/ipc", async () => {
       ladderValidate: (...a: unknown[]) => mockLadderValidate(...a),
       ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
       libraryList: (...a: unknown[]) => mockLibraryList(...a),
+      libraryKnown: (...a: unknown[]) => mockLibraryKnown(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
       push = handler;
@@ -87,6 +89,7 @@ vi.mock("../../../shared/ipc", async () => {
 
 const { VideoScreen } = await import("../VideoScreen");
 const { useServers } = await import("../../servers/store");
+const { forgetRefreshes, REFRESH_EVERY_MS } = await import("../libraryRefresh");
 
 function profile(): ServerProfile {
   return {
@@ -245,6 +248,8 @@ beforeEach(() => {
   mockServersList.mockResolvedValue([profile()]);
   mockVideoList.mockResolvedValue([]);
   mockLibraryList.mockResolvedValue([] as unknown);
+  mockLibraryKnown.mockResolvedValue([] as unknown);
+  forgetRefreshes();
   mockOpen.mockResolvedValue(null);
   for (const m of [
     mockVideoPause,
@@ -1198,5 +1203,44 @@ describe("a server out of reach", () => {
     show();
     await waitFor(() => expect(mockLibraryList).toHaveBeenCalled());
     expect(screen.queryByTestId("video-server-down")).toBeNull();
+  });
+});
+
+/** The owner: «Video» refreshes the library behind it at most once a minute. */
+describe("the library refresh behind «Видео»", () => {
+  const library = (stale: boolean) => ({
+    server_id: "srv_1",
+    media: [],
+    unrecognized: [],
+    disk: null,
+    stale,
+  });
+
+  it("asks the server once a minute at most, and takes the known library in between", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      mockLibraryList.mockResolvedValue(library(true));
+      mockLibraryKnown.mockResolvedValue(library(true));
+
+      const first = show();
+      await waitFor(() => expect(mockLibraryList).toHaveBeenCalledTimes(1));
+      first.unmount();
+
+      // Back to the section half a minute later: the known library, no refresh.
+      now.mockReturnValue(1_000_000 + 30_000);
+      const second = show();
+      await waitFor(() => expect(mockLibraryKnown).toHaveBeenCalledWith("srv_1"));
+      // Still said from the library as known.
+      expect(await screen.findByTestId("video-server-down")).toBeInTheDocument();
+      expect(mockLibraryList).toHaveBeenCalledTimes(1);
+      second.unmount();
+
+      // A minute after the first: refreshed again.
+      now.mockReturnValue(1_000_000 + REFRESH_EVERY_MS);
+      show();
+      await waitFor(() => expect(mockLibraryList).toHaveBeenCalledTimes(2));
+    } finally {
+      now.mockRestore();
+    }
   });
 });
