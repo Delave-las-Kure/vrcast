@@ -586,7 +586,7 @@ export const ruCore: CatalogueCore = {
       "Ступень {index}: буфер больше потолка — реальные пики его превысят, и зритель подвиснет",
     OBJECTION_LEVEL_EXCEEDED: "Ступень {index}: вариант не влезает в объявленный уровень {level}",
     OBJECTION_OUT_OF_ORDER: "Ступень {index}: ступени идут не по убыванию",
-    OBJECTION_BAD_STEP: "Ступень {index}: разрыв до соседней в {times} раза",
+    OBJECTION_BAD_STEP: "Ступень {index}: разрыв до соседней в {times|num} раза",
     CHAIN_STOPPED_BY_OBJECTION:
       "Сборка не поставлена: есть замечания к ступеням. Остальная очередь идёт.",
     NOTICE_CHECK_POINT_RUNNING: "Проверяем взятый замер — меньше минуты.",
@@ -730,7 +730,7 @@ const ui = {
     columnBuild: "Собирать",
     buildThisRung: "Собирать ступень {mbps} Мбит/с",
     rungs: "Ступени",
-    columnBitrate: "Битрейт",
+    columnBitrate: "Битрейт, Мбит/с",
     columnSize: "Кадр",
     columnQuality: "Качество",
     columnWhy: "Почему",

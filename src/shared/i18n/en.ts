@@ -598,7 +598,7 @@ export const en: Catalogue = {
     OBJECTION_LEVEL_EXCEEDED:
       "Rung {index}: the variant does not fit the level it declares, {level}",
     OBJECTION_OUT_OF_ORDER: "Rung {index}: the rungs are not in descending order",
-    OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
+    OBJECTION_BAD_STEP: "Rung {index}: {times|num} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
       "Build not queued: the rungs have objections. The rest of the queue carries on.",
     NOTICE_CHECK_POINT_RUNNING: "Checking the borrowed measurement — under a minute.",
@@ -737,7 +737,7 @@ export const en: Catalogue = {
       columnBuild: "Build",
       buildThisRung: "Build the {mbps} Mbit/s rung",
       rungs: "Rungs",
-      columnBitrate: "Bitrate",
+      columnBitrate: "Bitrate, Mbit/s",
       columnSize: "Frame",
       columnQuality: "Quality",
       columnWhy: "Why",

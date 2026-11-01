@@ -100,6 +100,21 @@ describe("what a rung is worth", () => {
     expect(screen.getByTestId("rung-1")).toHaveTextContent(en.ui.ladder.notMeasured);
   });
 
+  it("says the bitrate's unit, and its numbers in Russian as Russian (tour 0.3.0, D3-03)", async () => {
+    mockValidate.mockResolvedValue({
+      objections: [{ code: "BAD_STEP", index: 2, times: 2.5 }],
+      not_buildable: null,
+    } as LadderVerdict);
+    renderIn(
+      <Host initial={[rung(0, 9, 1080, 96.1), rung(1, 5, 1080, null), rung(2, 2, 720, null)]} />,
+      "ru",
+    );
+    expect(await screen.findByText("Битрейт, Мбит/с")).toBeInTheDocument();
+    expect(screen.getByTestId("rung-0")).toHaveTextContent("VMAF 96,10");
+    expect(screen.getByTestId("why-1").textContent).toContain("в 1,8 раза");
+    expect(await screen.findByText("Ступень 3: разрыв до соседней в 2,5 раза")).toBeInTheDocument();
+  });
+
   it("marks a borrowed measurement in the rung's own row", async () => {
     const lent = rung(1, 12, 1440, 92.0);
     lent.quality = { state: "borrowed", vmaf_x100: 9200 };
