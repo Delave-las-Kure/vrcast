@@ -459,7 +459,10 @@ fn ls_server(server: &TestServer) -> String {
 /// FFmpeg and FFprobe processes whose parent is this test process (Windows) — what a cancel
 /// must leave none of.
 fn our_encoders() -> Vec<String> {
-    let me = std::process::id();
+    encoders_below(std::process::id())
+}
+
+fn encoders_below(me: u32) -> Vec<String> {
     if cfg!(windows) {
         let out = std::process::Command::new("powershell")
             .args([
@@ -479,14 +482,67 @@ fn our_encoders() -> Vec<String> {
             .filter(|l| !l.is_empty())
             .collect()
     } else {
-        let out = std::process::Command::new("pgrep")
-            .args(["-P", &me.to_string(), "-l", "ffmpeg|ffprobe"])
-            .output()
-            .expect("pgrep did not run");
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(str::to_owned)
-            .collect()
+        // Linux owns the whole tree through a supervisor, not a direct FFmpeg child.
+        // Inspect descendants, but never count another application's encoder by name.
+        let mut found = Vec::new();
+        for pid in super::proc_check::children_of(me) {
+            if let Ok(name) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+                if (name.starts_with("ffmpeg") || name.starts_with("ffprobe"))
+                    && super::proc_check::alive(pid)
+                {
+                    found.push(format!("{pid} {}", name.trim()));
+                }
+            }
+            found.extend(encoders_below(pid));
+        }
+        found
+    }
+}
+
+#[tokio::test]
+async fn the_encoder_inventory_sees_a_supervised_run_and_its_death() {
+    use vrcast_studio_lib::tasks::process::ManagedProcess;
+    let binary = tool("ffmpeg");
+    let args: Vec<String> = [
+        "-nostdin",
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=16x16:rate=1",
+        "-f",
+        "null",
+        "-",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let process = ManagedProcess::spawn(binary.to_str().unwrap(), &args).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let before = loop {
+        let found = our_encoders();
+        if !found.is_empty() {
+            break found;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the inventory cannot see its live encoder"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    drop(process);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if before.iter().all(|row| {
+            !super::proc_check::alive(row.split_whitespace().next().unwrap().parse().unwrap())
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "encoders outlived their owner: {before:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -834,25 +890,7 @@ async fn killed_while_measuring_it_carries_on_measuring_without_measuring_again_
     };
     // The killed run's own encoders, as they are the moment before it dies: killing the test
     // process does not take them, and the next start's sweep (T504) is what has to.
-    let orphans: Vec<String> = {
-        let out = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "Get-CimInstance Win32_Process -Filter \"ParentProcessId={child_pid}\" | \
-                     Where-Object {{ $_.Name -match 'ffmpeg|ffprobe' }} | \
-                     ForEach-Object {{ \"$($_.ProcessId) $($_.Name)\" }}"
-                ),
-            ])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| l.trim().to_owned())
-            .filter(|l| !l.is_empty())
-            .collect()
-    };
+    let orphans = encoders_below(child_pid);
     let killed_at = Instant::now();
     drop(running);
     let id = std::fs::read_to_string(&mark).unwrap();
