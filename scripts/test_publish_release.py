@@ -25,7 +25,14 @@ class DraftVerificationTests(unittest.TestCase):
         asset = next(asset for asset in current["assets"] if asset["name"] == "latest.json")
         actual = release.download_sha256(token, repo, asset)
         with release.urllib.request.urlopen(asset["browser_download_url"], timeout=60) as public:
-            self.assertEqual(actual, release.digest(public))
+            contents = public.read()
+        self.assertEqual(actual, hashlib.sha256(contents).hexdigest())
+        manifest = json.loads(contents)
+        release.validate_latest(manifest, repo, current["tag_name"], {asset["name"] for asset in current["assets"]})
+        for entry in manifest["platforms"].values():
+            request = release.urllib.request.Request(entry["url"], method="HEAD")
+            with release.urllib.request.urlopen(request, timeout=60) as installer:
+                self.assertEqual(installer.status, 200)
 
     def test_latest_requires_all_platforms_and_exact_uploaded_addresses(self):
         names = {"windows.exe", "linux.AppImage", "linux.deb"}
