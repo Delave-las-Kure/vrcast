@@ -23,8 +23,8 @@
 //! 3. The pair `ladder_build`'s closure runs together on a successful build —
 //!    `attach_built_set` then this task's own `invalidate_library_parts` — exercised
 //!    directly against a real server (see the doc comment on the test itself for why not
-//!    through the full command), plus a source check that the two really do sit inside the
-//!    same `if outcome.is_ok()` in `ladder.rs`.
+//!    through the full command), plus the actual successful build command using the existing
+//!    loopback verification fixture. No source-text window stands in for behavior.
 //! 4. In every case the on-disk `library_cache` is actually forgotten — not merely the
 //!    event sent — because a screen reading through `library_list(refresh=false)` would
 //!    otherwise hand back the stale cached view despite the event having arrived.
@@ -261,12 +261,9 @@ async fn an_upload_with_no_medium_chosen_does_not_notify_library_changed() {
 /// `invalidate_library_parts` call `ladder.rs`'s closure makes right beside `attach_built_set`
 /// — and checks the event and the cache exactly as the upload check above does.
 ///
-/// `ladder_build_calls_attach_and_invalidate_together_on_success` right below is the other
-/// half: it reads `ladder.rs`'s own source to confirm the two calls this test exercises
-/// separately really do sit inside the same `if outcome.is_ok()` in the real closure, the
-/// same way `engine.rs::the_ladder_build_says_things_as_they_happen_rather_than_at_the_end`
-/// already reads `ladder_build.rs`'s source to confirm a different wiring fact this same
-/// kind of fixture wall keeps it from exercising end to end.
+/// This original pair-level check is retained. The full command is now checked below as
+/// well: `AppState::verify_origin`, added for the video pipeline, removes the fixture wall
+/// described above without changing production URL handling.
 #[tokio::test]
 async fn the_pair_ladder_build_runs_on_success_notifies_library_changed_and_clears_the_cache() {
     let (server, state, id) = setup().await;
@@ -327,42 +324,67 @@ async fn the_pair_ladder_build_runs_on_success_notifies_library_changed_and_clea
     );
 }
 
-/// The other half of the pair above: that the two calls it exercises separately really do
-/// sit inside one and the same `if outcome.is_ok()` in `ladder.rs`'s real closure, so that
-/// the previous check is not merely plausible but actually describes the wiring.
-///
-/// A source check, in the same spirit as
-/// `engine.rs::the_ladder_build_says_things_as_they_happen_rather_than_at_the_end` — reached
-/// for there, and here, for the same reason: the fixture wall documented above keeps this
-/// project's own `TestServer` from ever driving `outcome.is_ok()` to `true`, so nothing
-/// short of a real reachable domain (`stand_scenarios.rs`'s territory, and ignored by
-/// default for exactly that reason) can exercise the guard itself end to end. Reading the
-/// source is not a substitute for the behavioural check above — it is what closes the one
-/// gap that check cannot: that `attach_built_set` and `invalidate_library_parts` are truly
-/// the same "on success" as each other, not two things this test merely assumed line up.
-#[test]
-fn ladder_build_calls_attach_and_invalidate_together_on_success() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands/ladder.rs");
-    let text = std::fs::read_to_string(&path).expect("could not read ladder.rs");
+/// T721: drive the actual build command, not a 1200-character slice of its source.
+/// The existing pipeline fixture supplies a local verification origin without changing
+/// the production path. A real successful task must attach, forget the cache and notify.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ladder_build_calls_attach_and_invalidate_together_on_success() {
+    use super::video_pipeline::{make_film, origin_of, Scratch};
+    use vrcast_studio_lib::commands::ladder::{api as ladder, BuildRequest};
+    use vrcast_studio_lib::domain::ladder::{Quality, Rung};
 
-    let guard = text
-        // T678: the guard binds the build's outcome, since its rung files go to the catalogue.
-        .find("if let Ok(built) = &outcome {")
-        .expect("ladder_build's closure no longer guards attaching on outcome.is_ok()");
-    // The next closing brace at the same nesting level as the `if` would take real brace
-    // counting to find exactly; a generous slice past the guard is enough to prove both
-    // calls are textually inside it without needing a parser, the same trade the source
-    // checks in `engine.rs` already make.
-    let inside = &text[guard..(guard + 1200).min(text.len())];
-
-    assert!(
-        inside.contains("attach_built_set("),
-        "attach_built_set is no longer called inside the outcome.is_ok() guard"
+    let (server, mut state, id) = setup().await;
+    state.verify_origin = Some(origin_of(&server));
+    let scratch = Scratch::new("t721-library-notify");
+    let film = scratch.0.join("film.mp4");
+    make_film(&film, "640x360", 4);
+    let slug = "t721notify";
+    let media_id = library::media_create(&state, &id, "Notify", Some(slug))
+        .await
+        .unwrap();
+    library::library_list(&state, &id, true).await.unwrap();
+    assert!(library_cache::load(&state.db, &id).unwrap().is_some());
+    let mut rx = state.subscribe();
+    let task = ladder::ladder_build(
+        &state,
+        BuildRequest {
+            server_id: id.clone(),
+            path: film.to_string_lossy().into_owned(),
+            slug: slug.to_owned(),
+            rungs: vec![Rung {
+                index: 0,
+                bitrate_bps: 1_000_000,
+                maxrate_bps: 1_100_000,
+                bufsize_bps: 1_100_000,
+                width: 640,
+                height: 360,
+                level: String::from("3.1"),
+                reasons: Vec::new(),
+                quality: Quality::MeasuredHere { vmaf_x100: 9500 },
+            }],
+            audio_track: 0,
+            subtitle_track: None,
+            prefer_hardware: false,
+            batch: None,
+            confirmed: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        wait_done(&state, &task, Duration::from_secs(120)).await,
+        TaskState::Completed,
+        "{:?}",
+        state.tasks.get(&task)
     );
-    assert!(
-        inside.contains("invalidate_library_parts("),
-        "T578: invalidate_library_parts is no longer called inside the same \
-         outcome.is_ok() guard as attach_built_set — the event would then fire (or not) \
-         out of step with whether the build actually succeeded"
+    assert_eq!(
+        wait_for_library_changed(&mut rx, Duration::from_secs(10)).await,
+        id
     );
+    assert!(library_cache::load(&state.db, &id).unwrap().is_none());
+    let view = library::library_list(&state, &id, false).await.unwrap();
+    let medium = view.media.iter().find(|m| m.id == media_id).unwrap();
+    assert_eq!(medium.ladders.len(), 1);
+    assert_eq!(medium.ladders[0].path, format!("{slug}/master.m3u8"));
+    assert!(medium.ladders[0].exists_on_server);
 }
