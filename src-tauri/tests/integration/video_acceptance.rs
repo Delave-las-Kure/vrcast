@@ -623,6 +623,10 @@ async fn a_real_film_goes_the_whole_way_with_a_real_measurement_on_the_second_au
     assert_eq!(chosen.audio_track, CHOSEN_TRACK);
     let plan_at_start = chosen.plan.clone().unwrap();
 
+    // A loopback upload can finish before the first progress interval. Make that interval
+    // observable with the real user sending cap rather than dropping the speed/ETA checks.
+    let _send_cap = super::send_cap::SendCap::hold(1024 * 1024);
+
     let started_at = Instant::now();
     let started = video::video_start(&state, std::slice::from_ref(&id));
     assert!(started[0].error.is_none(), "{:?}", started[0].error);
