@@ -1104,7 +1104,16 @@ async fn cancelled_while_encoding_leaves_no_program_no_part_and_no_half_set() {
     let first_rung = server
         .exec_inside(&format!("stat -c '%i %s %Y' '{VIDEO_DIR}/{slug}_8.mp4'"))
         .ok();
-    let encoders_before = our_encoders();
+    // Read the encoders until one is seen: the rung the condition above caught can finish
+    // while the process list is still being read (PowerShell takes a second or two), and
+    // the press then lands between two rungs — a stop with nothing to stop, which is not
+    // what this test is about. The next rung starts within moments, so wait for it.
+    let mut encoders_before = our_encoders();
+    let seen_by = Instant::now() + Duration::from_secs(120);
+    while encoders_before.is_empty() && Instant::now() < seen_by {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        encoders_before = our_encoders();
+    }
     let pressed = Instant::now();
     let answer = video::video_cancel(&state, &id).expect("stop was refused");
     let cancelled = until(&state, &id, "cancelled", Duration::from_secs(60), |v| {
