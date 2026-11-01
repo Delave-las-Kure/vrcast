@@ -29,8 +29,8 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -60,7 +60,7 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Linux build and runtime libraries
         if: runner.os == 'Linux'
         run: |
@@ -71,7 +71,7 @@ jobs:
       - name: Rust tools
         shell: bash
         run: rustup component add rustfmt clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -79,10 +79,10 @@ jobs:
             ${{ matrix.target }}
           key: core-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
           restore-keys: core-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
@@ -117,7 +117,7 @@ jobs:
       # WebKit's sandbox cannot initialise as root inside the disposable job container.
       WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: 1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Linux build, runtime and window driver
         if: runner.os == 'Linux'
         run: |
@@ -126,12 +126,12 @@ jobs:
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libayatana-appindicator3-1 \
             librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils \
             webkit2gtk-driver xvfb xauth dbus-x11
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -140,7 +140,7 @@ jobs:
             ${{ matrix.target }}
           key: e2e-${{ runner.os }}-driver-2.0.6-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
           restore-keys: e2e-${{ runner.os }}-driver-2.0.6-${{ hashFiles('src-tauri/Cargo.lock') }}-
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
@@ -179,17 +179,17 @@ jobs:
     env:
       CARGO_TARGET_DIR: /__w/_cargo-integration
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build libraries and the host Docker client
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libayatana-appindicator3-1 \
             librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils docker.io
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -197,7 +197,7 @@ jobs:
             /__w/_cargo-integration
           key: integration-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
           restore-keys: integration-${{ hashFiles('src-tauri/Cargo.lock') }}-
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
@@ -234,10 +234,10 @@ jobs:
     timeout-minutes: 20
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@cargo-deny
       - run: cargo deny --manifest-path src-tauri/Cargo.toml check licenses advisories
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -251,8 +251,8 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Hardcoded servers (FR-004)

@@ -48,7 +48,7 @@ jobs:
     timeout-minutes: 15
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The whole history, tags included: the version check compares the tag standing on
           # HEAD with the number in Cargo.toml, and a shallow checkout has no tags to compare.
@@ -137,7 +137,7 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # What `scripts/linux-check/Dockerfile` puts in the self-hosted check image, minus what only
       # the tests need; `file` and `xdg-utils` for the AppImage bundler.
@@ -161,13 +161,13 @@ jobs:
           fi
           cargo --version
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Cache for the bundled FFmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: src-tauri/binaries
           key: ffmpeg-${{ runner.os }}-${{ hashFiles('scripts/ffmpeg.json') }}
@@ -249,7 +249,7 @@ jobs:
 
       # Sorting out which file belongs to which platform is the publishing job's work, and it
       # is done by a script that refuses rather than guesses.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bundles-${{ matrix.os }}
           path: bundles/
@@ -261,7 +261,7 @@ jobs:
     needs: bundle
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -270,7 +270,7 @@ jobs:
       - name: The tags as they are on the server
         run: git fetch --force --tags origin
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: bundles
           merge-multiple: true
