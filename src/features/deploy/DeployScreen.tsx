@@ -253,7 +253,9 @@ export function DeployScreen({ serverId }: { serverId: string }) {
       {running !== null && (
         <>
           <p>{words.running}</p>
-          <StepList steps={live ?? preview?.steps ?? []} />
+          {/* The same steps as the plan, in plain words; what each writes was folded there
+              (tour 0.3.0) and is not unfolded here. */}
+          <StepList steps={live ?? preview?.steps ?? []} changes={false} />
         </>
       )}
 
@@ -263,7 +265,14 @@ export function DeployScreen({ serverId }: { serverId: string }) {
         <>
           <h3>{words.willChange}</h3>
           <p>{words.machine(preview.memory_mb, preview.disk)}</p>
-          <StepList steps={preview.steps} />
+          {/* Steps in plain words in view; the packages, ports and files each will touch are
+              folded under «Details», as in the upgrade dialog (tour 0.3.0, the owner). */}
+          <StepList steps={preview.steps} changes={false} />
+          {preview.steps.some((s) => s.changes.length > 0) && (
+            <More testId="deploy-details">
+              <StepList steps={preview.steps.filter((s) => s.changes.length > 0)} marks={false} />
+            </More>
+          )}
           {/* T611 — somebody else's Caddyfile on a first deployment. Said before the button,
               because it decides whether the run gets past the configuration step at all. */}
           {preview.foreign_caddyfile && (

@@ -44,7 +44,8 @@ export function StepList({
   steps: PlannedStep[];
   /** What each step will do — packages, ports, files. Off where it is folded elsewhere. */
   changes?: boolean;
-  /** «будет сделано» and the like. Off for the folded list that only explains. */
+  /** «будет сделано» and the like, and a step's reason. Off for the folded list that only
+   *  says what each step will touch. */
   marks?: boolean;
 }) {
   const t = useT();
@@ -71,7 +72,7 @@ export function StepList({
             )}
             {/* The reason beside its step rather than at the end of the list: by the end of
                 the list there is nothing left to attach it to. */}
-            {detail && <small className="planned-step__detail">{detail}</small>}
+            {marks && detail && <small className="planned-step__detail">{detail}</small>}
             {/* ⚠ **What this step will actually do** (T507, FR-122). The core has always
                 worked it out — the packages by name, the ports, the files, the size of the
                 swap file — and the interface typed the field `unknown[]` and read it nowhere,
