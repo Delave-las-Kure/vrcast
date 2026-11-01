@@ -31,7 +31,7 @@
  * Skipped — said out loud — without the e2e binary, Docker or the test image, or off Windows.
  */
 
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -48,6 +48,7 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, it } from "vitest";
 
 import { Harness } from "./session";
@@ -1526,7 +1527,12 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         [join(HERE, "tour-v1-setup.sh"), "tour-v1-setup.sh"],
       ])
         checked(["cp", from, `${UPGRADE_NAME}:/root/${to}`]);
-      const prepared = checked(["exec", UPGRADE_NAME, "sh", "/root/tour-v1-setup.sh"]);
+      // apt can run beyond Vitest's worker RPC heartbeat: leave the event loop free.
+      const { stdout: prepared } = await promisify(execFile)(
+        "docker",
+        ["exec", UPGRADE_NAME, "sh", "/root/tour-v1-setup.sh"],
+        { encoding: "utf8", timeout: 180_000, maxBuffer: 8 << 20 },
+      );
       writeFileSync(join(SHOTS, "C2-setup.txt"), prepared);
       if (!prepared.includes("immutable"))
         throw new Error("version-1 serving did not answer immutable — cannot claim a real upgrade");
