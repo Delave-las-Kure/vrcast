@@ -85,7 +85,7 @@ export function ViewerRow({
         <code>{viewer.ip}</code>
       </td>
       <td className="viewers__place">
-        {/* One dash for nothing known (tour 0.3.0): two «не определено» one under the other
+        {/* One dash for nothing known (tour 0.3.0): two "not determined" one under the other
             read as two separate failures. What is known is shown, and only that. */}
         {place(viewer) === null && !viewer.asn_org ? (
           <span title={words.notKnown} data-testid="viewer-place-unknown">

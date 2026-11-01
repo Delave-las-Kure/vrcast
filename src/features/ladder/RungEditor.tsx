@@ -48,8 +48,8 @@ function twoPlaces(value: number, lang: Lang): string {
 /**
  * The rungs highest first — the order a set is built and described in (tour 0.3.0).
  *
- * A rung typed in above the one over it used to be saved where it stood, with «не по
- * убыванию» beside it. Putting it in its place is what the person meant; telling them to do
+ * A rung typed in above the one over it used to be saved where it stood, objected to as out
+ * of order. Putting it in its place is what the person meant; telling them to do
  * it by hand was a chore with one right answer. Stable: rungs of the same bitrate keep their
  * order (and are still objected to — a duplicate is a real mistake).
  */

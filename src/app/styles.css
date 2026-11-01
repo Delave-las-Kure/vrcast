@@ -726,7 +726,7 @@ button:focus-visible {
 }
 
 /* The steps of a deployment or an upgrade: the name, then its state apart from it
-   (tour 0.3.0 — «Проверить доменную записьбудет сделано»). */
+   (tour 0.3.0, C2-02: the two used to run together with no space between them). */
 .planned-steps > li {
   margin-bottom: 4px;
 }
