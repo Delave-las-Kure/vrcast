@@ -46,6 +46,7 @@ export type ErrorCode =
   | "FILE_BUSY"
   // preparing files
   | "FFMPEG_BROKEN"
+  | "SUBTITLE_RENDERING_FAILED"
   | "NO_AUDIO_TRACKS"
   | "DECODE_VALIDATION_FAILED"
   | "NO_HW_ENCODER"

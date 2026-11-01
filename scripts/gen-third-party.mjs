@@ -67,7 +67,14 @@ function licenseTexts(dir) {
 function rustPackages() {
   const raw = execFileSync(
     "cargo",
-    ["metadata", "--format-version", "1", "--all-features", "--manifest-path", join(APP, "src-tauri", "Cargo.toml")],
+    [
+      "metadata",
+      "--format-version",
+      "1",
+      "--all-features",
+      "--manifest-path",
+      join(APP, "src-tauri", "Cargo.toml"),
+    ],
     { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
   );
   const meta = JSON.parse(raw);
@@ -299,7 +306,9 @@ function serverSideSection() {
 
 function table(rows) {
   const lines = ["| Пакет | Версия | Лицензия | Источник |", "|---|---|---|---|"];
-  for (const r of rows.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))) {
+  for (const r of rows.sort(
+    (a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version),
+  )) {
     const src = r.source ? `[источник](${r.source})` : "—";
     lines.push(`| \`${r.name}\` | ${r.version} | ${r.license} | ${src} |`);
   }
@@ -316,7 +325,10 @@ function build() {
   // the reason.
   const missing = [...rust, ...node].filter((p) => !p.dir || !existsSync(p.dir));
   if (missing.length > 0) {
-    const examples = missing.slice(0, 5).map((p) => `${p.name} ${p.version}`).join(", ");
+    const examples = missing
+      .slice(0, 5)
+      .map((p) => `${p.name} ${p.version}`)
+      .join(", ");
     throw new Error(
       `the sources of ${missing.length} dependencies are not on disk (${examples}). ` +
         "The list of licences is assembled from them, and without them it would be incomplete. " +
@@ -349,6 +361,20 @@ function build() {
     "исходного кода описаны в разделе «FFmpeg» ниже.",
     "",
     ffmpegSection(),
+    "## DejaVu Sans — шрифт субтитров в каждой поставке",
+    "",
+    "DejaVu Sans 2.37 со встроенной кириллицей входит в приложение без изменений.",
+    "Он используется для вжигания текста даже на машине без установленных шрифтов.",
+    "Источник: https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37",
+    "",
+    "SHA-256 файла DejaVuSans.ttf: `7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954`.",
+    "",
+    "Полный текст лицензии из поставки автора:",
+    "",
+    "```text",
+    readFileSync(join(APP, "src-tauri/resources/fonts/LICENSE"), "utf8").trim(),
+    "```",
+    "",
     placesSection(),
     dnsSection(),
     serverSideSection(),
@@ -377,7 +403,16 @@ function build() {
     // markup, and a short fence would scatter the layout of the whole file from that point on.
     const longestRun = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
     const fence = "`".repeat(Math.max(3, longestRun + 1));
-    parts.push(`<details><summary>${heading}</summary>`, "", fence, text, fence, "", "</details>", "");
+    parts.push(
+      `<details><summary>${heading}</summary>`,
+      "",
+      fence,
+      text,
+      fence,
+      "",
+      "</details>",
+      "",
+    );
   }
 
   return parts.join("\n");

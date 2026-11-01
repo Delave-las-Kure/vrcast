@@ -25,11 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis",
-      "deb",
-      "appimage"
-    ],
+    "targets": ["nsis", "deb", "appimage"],
     "publisher": "VRCast",
     "homepage": "https://github.com/Delave-las-Kure/vrcast",
     "category": "Video",
@@ -37,10 +33,7 @@
     "copyright": "VRCast Studio, GPL-3.0-or-later",
     "shortDescription": "Управление сервером, с которого раздаются видео в VRChat",
     "longDescription": "Библиотека, подготовка файлов, заливка с продолжением после обрыва, зрители, ограничения качества, развёртывание сервера и диагностика. Работает с любым VPS: адрес, домен и пути берутся из профиля, который заводит пользователь.",
-    "externalBin": [
-      "binaries/ffmpeg",
-      "binaries/ffprobe"
-    ],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -50,7 +43,11 @@
     ],
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1 | libappindicator3-1"],
+        "depends": [
+          "libayatana-appindicator3-1 | libappindicator3-1",
+          "fontconfig",
+          "fonts-dejavu-core"
+        ],
         "postRemoveScript": "scripts/deb-postrm.sh"
       }
     },
@@ -60,10 +57,7 @@
       },
       "nsis": {
         "installMode": "currentUser",
-        "languages": [
-          "Russian",
-          "English"
-        ],
+        "languages": ["Russian", "English"],
         "displayLanguageSelector": true,
         "installerHooks": "uninstall.nsh"
       }

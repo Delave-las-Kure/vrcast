@@ -106,6 +106,7 @@ error_codes! {
 
     // --- preparing files ---
     FfmpegBroken => "FFMPEG_BROKEN",
+    SubtitleRenderingFailed => "SUBTITLE_RENDERING_FAILED",
     NoAudioTracks => "NO_AUDIO_TRACKS",
     DecodeValidationFailed => "DECODE_VALIDATION_FAILED",
     NoHwEncoder => "NO_HW_ENCODER",

@@ -93,6 +93,12 @@ jobs:
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Clippy, including the integration code on both platforms
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features integration -- -D warnings
+      - name: Exercise subtitles without any system fonts or font configuration (Linux)
+        if: runner.os == 'Linux'
+        # Only inside this disposable job container, never on the owner's machine.
+        run: |
+          rm -rf /usr/share/fonts /usr/local/share/fonts /etc/fonts /var/cache/fontconfig
+          test ! -e /usr/share/fonts && test ! -e /etc/fonts
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
   e2e:

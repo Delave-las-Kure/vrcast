@@ -868,6 +868,7 @@ fn build_error(e: crate::tasks::ladder_build::BuildError) -> AppError {
     use crate::tasks::ladder_build::BuildError as E;
     match e {
         E::Cancelled => AppError::new(ErrorCode::TaskCancelled),
+        E::SubtitleFonts => AppError::new(ErrorCode::SubtitleRenderingFailed),
         // The same refusal a second build of the same slug already gets before a task
         // exists (`running_build_for`): here the one already running was found on the
         // server rather than in this application's own list.

@@ -131,6 +131,10 @@ export const en: Catalogue = {
       message: "The video tool will not start",
       hint: "Reinstall the application.",
     },
+    SUBTITLE_RENDERING_FAILED: {
+      message: "Subtitles could not be added — preparation stopped",
+      hint: "Reinstall the application and prepare the video again.",
+    },
     NO_AUDIO_TRACKS: {
       message: "The file has no audio track at all",
       hint: "Choose another file.",
