@@ -83,7 +83,7 @@ fn the_packages_of_the_inventory_are_the_packages_installed() {
     actual.insert(String::from(updates::PACKAGE));
 
     // Не равенство: опись перечисляет то, что **составляет** серверную часть, а `curl`,
-    // `tar`, `gnupg` и `ca-certificates` — это то, чем её ставят. Обязательно другое: всё,
+    // `tar` и `ca-certificates` — это то, чем её ставят. Обязательно другое: всё,
     // что названо в описи, должно ставиться на самом деле.
     for named in &declared {
         assert!(
@@ -102,6 +102,12 @@ fn the_packages_of_the_inventory_are_the_packages_installed() {
 
 #[test]
 fn caddy_is_the_pinned_release_package_the_step_installs() {
+    // The obsolete repository tool is not part of a fresh install, and removing it does not
+    // offer an upgrade to existing version-2 servers.
+    assert!(!FROM_APT.contains(&"gnupg"));
+    assert!(!packages::caddy_install_script().contains("gpg "));
+    assert_eq!(APP_EXPECTS, 2);
+    assert_eq!(inventory()["vrcast_server_version"], 2);
     // T713: опись называет версию и суммы пакета Caddy — те же, что ставит шаг `packages`.
     // Разъедутся — и опись обещает один Caddy, а на сервер ляжет другой (или не ляжет вовсе:
     // сумма не сойдётся, и шаг упадёт).
