@@ -164,7 +164,7 @@ class IntegrationRunnerTests(unittest.TestCase):
     def test_cleanup_never_sweeps_unlabelled_or_other_runs_resources(self):
         self.cleanup.stop()
         label = 'vrcast.ci-run=' + 'a' * 32
-        replies = [SimpleNamespace(stdout=s) for s in ['abc123\n', '', '', 'def456\n', '', '']]
+        replies = [SimpleNamespace(stdout=s, returncode=0) for s in ['abc123\n', '', '', 'def456\n', '', '']]
         with patch.object(ci.subprocess, 'run', side_effect=replies) as run:
             removed = ci.cleanup_resources(label)
         self.assertEqual(removed, ['container abc123', 'network def456'])
@@ -177,7 +177,8 @@ class IntegrationRunnerTests(unittest.TestCase):
             ['docker', 'network', 'rm', 'def456'],
             ['docker', 'network', 'ls', '-q', '--filter', f'label={label}'],
         ])
-        self.assertTrue(all(call.kwargs['check'] and call.kwargs['timeout'] == 30 for call in run.call_args_list))
+        self.assertTrue(all(call.kwargs['timeout'] == 30 for call in run.call_args_list))
+        self.assertTrue(all(call.kwargs['check'] for call in run.call_args_list if '--filter' in call.args[0]))
 
     def test_cleanup_requires_an_exact_ownership_token(self):
         self.cleanup.stop()
@@ -186,6 +187,23 @@ class IntegrationRunnerTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     ci.cleanup_resources(label)
         run.assert_not_called()
+
+    def test_auto_removed_container_can_disappear_between_listing_and_removal(self):
+        self.cleanup.stop()
+        label = 'vrcast.ci-run=' + 'b' * 32
+        listed = 0
+        def run(command, **options):
+            nonlocal listed
+            if command[1:3] == ['rm', '-f']:
+                if options.get('check'):
+                    raise ci.subprocess.CalledProcessError(1, command)
+                return SimpleNamespace(returncode=1, stdout='')
+            if command[1:3] == ['ps', '-aq']:
+                listed += 1
+                return SimpleNamespace(stdout='abc123\n' if listed == 1 else '')
+            return SimpleNamespace(stdout='')
+        with patch.object(ci.subprocess, 'run', side_effect=run):
+            self.assertEqual(ci.cleanup_resources(label), [])
 
 
 if __name__ == "__main__":

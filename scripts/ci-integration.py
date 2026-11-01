@@ -164,12 +164,18 @@ def cleanup_resources(label):
                                check=True, capture_output=True, text=True, timeout=30)
         ids = found.stdout.split()
         if ids:
-            subprocess.run(['docker'] + removal + ids, check=True, capture_output=True, timeout=30)
+            # `--rm` may finish between the listing and this call. Docker then reports
+            # "not found"; the authoritative postcondition is the ownership query below.
+            removed = subprocess.run(['docker'] + removal + ids, check=False,
+                                     capture_output=True, text=True, timeout=30)
             remaining = subprocess.run(['docker'] + listing + ['--filter', f'label={label}'],
                                        check=True, capture_output=True, text=True, timeout=30)
             if remaining.stdout.split():
                 raise ValueError(f'Owned {kind} resources survived cleanup')
-            leaked.extend(f'{kind} {identity}' for identity in ids)
+            # On a partial nonzero removal, only resources Docker says WE removed are
+            # leaks. Already-vanished resources cannot be attributed to our cleanup.
+            removed_ids = ids if removed.returncode == 0 else removed.stdout.split()
+            leaked.extend(f'{kind} {identity}' for identity in ids if identity in removed_ids)
     return leaked
 
 
