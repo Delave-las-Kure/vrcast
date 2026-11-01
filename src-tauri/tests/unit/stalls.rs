@@ -141,6 +141,7 @@ fn the_server_asleep_points_at_the_viewers_link() {
     // What their rung needs, as the film's own set on the server says (T705). Without it
     // there is no number for the link to fall short of — see the test below.
     it.need_mbit = Some(1000.0);
+    it.average_mbit = Some(1000.0);
 
     // Low processor, little read from the disk, a small amount going out — and a viewer
     // hanging. This is the server saying it is not the one at fault.
@@ -319,6 +320,7 @@ fn a_viewer_whose_link_carries_it_is_not_told_their_link_is_the_problem() {
         failures: 0,
         rung: Some(String::from("v4")),
         need_mbit: None,
+        average_mbit: None,
         live: None,
     };
     let film = FileShape {
@@ -372,6 +374,7 @@ fn a_viewer_whose_link_really_is_thin_is_still_told_so() {
         failures: 0,
         rung: Some(String::from("v4")),
         need_mbit: None,
+        average_mbit: None,
         live: None,
     };
     let film = FileShape {
@@ -404,18 +407,66 @@ fn without_a_film_to_compare_against_nothing_is_claimed_about_the_player() {
         failures: 0,
         rung: Some(String::from("v4")),
         need_mbit: None,
+        average_mbit: None,
         live: None,
     };
     let verdict = stalls::explain(&watcher, None, None);
     assert_eq!(verdict.cause, Cause::Unclear);
 
-    // With the rung's own need from the server, the same viewer is placed: their downloads
-    // carry 30.35 against 4 — the player.
+    // With the rung's own figures from the server, the same viewer is placed: their downloads
+    // carry 30.35 against an average of 4 — the player.
     let known = Watcher {
-        need_mbit: Some(4.0),
+        need_mbit: Some(5.0),
+        average_mbit: Some(4.0),
         ..watcher
     };
     assert_eq!(stalls::explain(&known, None, None).cause, Cause::ThePlayer);
+}
+
+/// Tour 0.3.0 (the owner's rule): a verdict about the link is judged by the rung's average
+/// with a fifth of slack — the same rule as the Viewers screen's «falling behind».
+#[test]
+fn the_link_is_judged_by_the_average_with_a_fifth_of_slack() {
+    let with = |acked2: u64| {
+        // Busy all five seconds, never held: `acked2 - 1_000_000` bytes over 5 s.
+        let (before, after) = polls(
+            "203.0.113.40",
+            (1_000_000, 10_000, 0, 1000, 0),
+            (acked2, 15_000, 0, 1200, 0),
+        );
+        let live = stalls::live_links(&before, &after)["203.0.113.40"];
+        let mut w = starving_with(Some(live), None);
+        // The peak 11.1, the average 9 — the tour's own rung.
+        w.need_mbit = Some(11.1);
+        w.average_mbit = Some(9.0);
+        stalls::explain(&w, None, None)
+    };
+    // 9.2 Mbit/s: carries the film by its average; the peak would have blamed the link.
+    let healthy = with(1_000_000 + 5_750_000);
+    assert_eq!(
+        healthy.say.key,
+        DetailCode::StallsLinkFineLive,
+        "{healthy:?}"
+    );
+    assert_eq!(
+        healthy.say.params.get("need_mbit").and_then(|v| v.as_f64()),
+        Some(9.0),
+        "the verdict names the average it was judged by"
+    );
+    // 7.0 Mbit/s: under the 7.2 the slack allows.
+    let short = with(1_000_000 + 4_375_000);
+    assert_eq!(short.say.key, DetailCode::StallsViewerLinkLive, "{short:?}");
+
+    // Without the average, the peak alone settles nothing about the link.
+    let (before, after) = polls(
+        "203.0.113.40",
+        (1_000_000, 10_000, 0, 1000, 0),
+        (1_029_375, 15_000, 0, 1200, 0),
+    );
+    let live = stalls::live_links(&before, &after)["203.0.113.40"];
+    let mut w = starving_with(Some(live), None);
+    w.need_mbit = Some(11.1);
+    assert_ne!(stalls::explain(&w, None, None).cause, Cause::ViewerLink);
 }
 
 // ---------- T711: the viewer's own connection tells the link from the player ----------
@@ -470,6 +521,7 @@ fn starving_with(live: Option<stalls::LiveLink>, need: Option<f64>) -> Watcher {
         failures: 0,
         rung: Some(String::from("v3")),
         need_mbit: need,
+        average_mbit: need,
         live,
     }
 }

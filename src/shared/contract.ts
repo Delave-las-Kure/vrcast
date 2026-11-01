@@ -927,6 +927,9 @@ export interface Watcher {
   rung?: string | null;
   /** T705 — what that rung of that film needs, Mbit/s, from the set on the server. */
   need_mbit?: number | null;
+  /** Tour 0.3.0 — what that rung takes on average, Mbit/s: what a verdict about the link is
+   *  judged by (with the Viewers screen's `SLOW_SHARE` of slack). */
+  average_mbit?: number | null;
   /** T711 — their own connection while the diagnosis was asked; null when none was open. */
   live?: LiveLink | null;
 }

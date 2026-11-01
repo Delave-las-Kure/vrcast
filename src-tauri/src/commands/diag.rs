@@ -165,15 +165,16 @@ pub mod api {
             .collect();
         slugs.sort();
         slugs.dedup();
-        let needs =
-            crate::server::viewers::rung_needs(&opened.conn, &profile.video_dir, &slugs).await;
+        let figures =
+            crate::server::viewers::rung_figures(&opened.conn, &profile.video_dir, &slugs).await;
         opened.conn.close().await;
+        let mbit = |bps: &u64| *bps as f64 / 1_000_000.0;
         for w in &mut sifted.watchers {
             if let (Some(slug), Some(rung)) = (&w.watching, &w.rung) {
-                w.need_mbit = needs
-                    .get(slug)
-                    .and_then(|rungs| rungs.get(rung))
-                    .map(|bps| *bps as f64 / 1_000_000.0);
+                let of_film = figures.get(slug);
+                w.need_mbit = of_film.and_then(|f| f.needs.get(rung)).map(mbit);
+                // Tour 0.3.0: the average is what a verdict about the link is judged by.
+                w.average_mbit = of_film.and_then(|f| f.averages.get(rung)).map(mbit);
             }
         }
 

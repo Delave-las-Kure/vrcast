@@ -627,7 +627,7 @@ describe("T711 — the link and the player told apart on the live connection", (
     await waitFor(() => expect(screen.getByTestId("live-203.0.113.24")).toBeInTheDocument());
     expect(screen.getByTestId("live-203.0.113.24")).toHaveTextContent("400 кбит/с");
     const verdict = screen.getByTestId("verdict-203.0.113.24");
-    expect(verdict).toHaveTextContent("сейчас несёт 400 кбит/с при нужных 2,0 Мбит/с");
+    expect(verdict).toHaveTextContent("сейчас несёт 400 кбит/с при среднем у качества 2,0 Мбит/с");
     expect(verdict).toHaveTextContent("Отправлено повторно: 15%");
     expect(verdict.textContent).not.toMatch(/\{\w+/);
   });
