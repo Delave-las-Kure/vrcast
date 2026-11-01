@@ -70,7 +70,10 @@ jobs:
             librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils
       - name: Rust tools
         shell: bash
-        run: rustup component add rustfmt clippy
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD
+          rustup component add rustfmt clippy
       - uses: actions/cache@v6
         with:
           path: |
@@ -99,7 +102,9 @@ jobs:
         run: |
           rm -rf /usr/share/fonts /usr/local/share/fonts /etc/fonts /var/cache/fontconfig
           test ! -e /usr/share/fonts && test ! -e /etc/fonts
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+          cargo test --manifest-path src-tauri/Cargo.toml --test unit convert::subtitles_are_really_drawn_by_the_bundled_ffmpeg -- --exact --nocapture
+      # A failing contract binary must not prevent the unit/FFmpeg tests from running.
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
 
   e2e:
     name: End to end — ${{ matrix.os }}
@@ -158,7 +163,10 @@ jobs:
             cargo install tauri-driver --version 2.0.6 --locked
           fi
       - name: Build the real application
+        shell: bash
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD
           npm run build
           cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
       # These are the original non-Docker window checks. The newer video/tour checks need
@@ -192,6 +200,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libayatana-appindicator3-1 \
             librsvg2-dev patchelf pkg-config git python3 curl unzip xz-utils docker.io
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD
       - uses: actions/setup-node@v7
         with:
           node-version: 24

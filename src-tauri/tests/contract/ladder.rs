@@ -102,12 +102,14 @@ async fn planning_a_missing_file_says_so_rather_than_offering_a_ladder() {
 /// below needs to hold still while it changes the one thing T522 is about.
 async fn a_real_clip() -> std::path::PathBuf {
     let ff = ffmpeg::locate("ffmpeg").expect("no bundled ffmpeg");
-    let dir = std::env::temp_dir().join("vrcast-t522-fixture");
+    // Both callers run concurrently on a clean CI machine. An existing filename is not a
+    // completed fixture: FFmpeg creates it before the moov atom is written.
+    let dir = std::env::temp_dir().join(format!(
+        "vrcast-t522-fixture-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
     std::fs::create_dir_all(&dir).expect("could not make a working directory");
     let src = dir.join("source.mp4");
-    if src.is_file() {
-        return src;
-    }
     let made = std::process::Command::new(&ff)
         .args([
             "-hide_banner",

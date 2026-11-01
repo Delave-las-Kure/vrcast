@@ -150,6 +150,10 @@ jobs:
       - name: The Rust toolchain is here
         shell: bash
         run: |
+          # Root inside the Linux job container is not the checkout's file owner. Checkout's
+          # own temporary git config does not make build.rs's later Git queries trusted.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD
           missing=""
           for tool in cargo rustc; do
             command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
