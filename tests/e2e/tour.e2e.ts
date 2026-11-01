@@ -34,6 +34,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -103,6 +104,7 @@ const SECTIONS: Record<string, string> = {
   F: "Зрители и ограничения качества",
   G: "Диагностика",
   H: "Задачи, оформление, «О программе»",
+  H2: "Задачи и окно выхода именно во время кодирования",
   I: "Сервер недоступен",
   J: "Ключевые экраны на английском",
   Z: "Уборка (без снимков)",
@@ -463,6 +465,9 @@ async function chooseX(selectXpath: string, optionXpath: string) {
   const sel = await s().findX(selectXpath);
   await sel.click();
   await (await s().findX(`${selectXpath}/${optionXpath}`)).click();
+  // WebView2 can leave the native popup open after option.click(); the next button
+  // click would only dismiss it. Tab closes it using the real keyboard path.
+  await sel.type("\uE004");
 }
 
 // ---------- the pictures ----------
@@ -2551,6 +2556,69 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       const build = text.split("\n").find((l) => /^Сборка /.test(l.trim()));
       note(build ? `строка сборки: «${build.trim()}»` : "строки «Сборка …» в «О программе» нет");
       note("окно закрытия с идущей задачей снято в разделе D (снимок leave-confirm)");
+    },
+    240_000,
+  );
+
+  it.skipIf(!wanted.has("H2"))(
+    "H2 — tasks and leaving while a film really encodes",
+    async () => {
+      beginSection("H2");
+      await ensureServer();
+      await ensureApp();
+      await setLanguage("ru");
+      await go("video");
+      await snap("before-work", "Исходный экран перед отдельной съёмкой фильма в работе");
+      for (const v of await invoke<{ id: string; state: string }[]>("video_list")) {
+        if (v.state === "ready") await invoke("video_remove", { id: v.id });
+      }
+      const workingFilm = join(FILMS, `Фильм в работе ${Date.now()}.mkv`);
+      copyFileSync(FILM1, workingFilm);
+      const added = await invoke<Added>("video_add", {
+        serverId: await activeServerId(),
+        paths: [workingFilm],
+        mediaId: null,
+      });
+      const id = added.added[0]?.id;
+      if (!id) throw new Error(`no film for the active-work capture: ${JSON.stringify(added)}`);
+      await cardUntil(id, "the plan", (c) => c.state === "ready", 60_000);
+      await chooseX(
+        `${inCard(id)}//label[contains(@class,'video__audio') and not(contains(@class,'video__subtitles'))]//select`,
+        "option[@value='1']",
+      );
+      await press("Старт", inCard(id));
+      await step("encoding-live", "Ждём реального кодирования, а не ожидания очереди", async () => {
+        await cardUntil(
+          id,
+          "real encoding",
+          (c) => c.state === "working" && c.stage === "encoding",
+          90_000,
+        );
+      });
+      await go("tasks");
+      await snap(
+        "tasks-encoding",
+        "«Задачи» во время реального кодирования: счётчик, одна карточка фильма",
+      );
+      await step(
+        "leave-encoding",
+        "Диалог выхода во время кодирования, каждый фильм должен быть назван один раз",
+        async () => {
+          await invoke("plugin:event|emit", { event: "app:quit-requested", payload: null });
+          await s().find('[data-testid="leave-confirm"]');
+          await sleep(300);
+        },
+      );
+      await (await s().find('[data-testid="leave-no"]')).click();
+      await go("video");
+      await step(
+        "cancel-after-capture",
+        "После съёмки работа отменена только на тестовом стенде",
+        async () => {
+          if ((await card(id))?.state !== "done") await press("Отмена", inCard(id));
+          await sleep(500);
+        },
+      );
     },
     240_000,
   );
