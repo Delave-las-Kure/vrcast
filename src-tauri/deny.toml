@@ -84,4 +84,13 @@ ignore = [
     "RUSTSEC-2025-0081",
     "RUSTSEC-2025-0098",
     "RUSTSEC-2025-0100",
+    # zbus 5 is required by Tauri's Linux plugins and the Secret Service keyring.
+    # These standalone crates moved into zbus 6; this is unmaintained, not a security
+    # vulnerability, and a major API migration must happen in those upstream users.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0370
+    "RUSTSEC-2026-0370", # zvariant
+    # https://rustsec.org/advisories/RUSTSEC-2026-0371
+    "RUSTSEC-2026-0371", # zbus_names
+    # https://rustsec.org/advisories/RUSTSEC-2026-0372
+    "RUSTSEC-2026-0372", # zvariant_derive
 ]
