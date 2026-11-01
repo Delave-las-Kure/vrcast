@@ -393,6 +393,66 @@ fn an_hdr_point_is_brought_down_the_same_way_on_both_sides_of_the_comparison() {
     );
 }
 
+/// T721: a build knowing an encoder's name says nothing about hardware on this machine.
+/// A missing device must not turn every grid point into LADDER_NOT_MEASURED.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_measurement_survives_an_unavailable_hardware_encoder() {
+    use vrcast_studio_lib::media::{encoders::Encoder, ffmpeg, vmaf};
+    let ff = ffmpeg::locate("ffmpeg").expect("bundled FFmpeg required");
+    let dir = std::env::temp_dir().join(format!("vrcast-t721-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.mkv");
+    let made = std::process::Command::new(ff)
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=24",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+        ])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let measured = vmaf::measure_point(
+        &source,
+        320,
+        180,
+        &[0],
+        1,
+        vrcast_studio_lib::domain::measure_grid::Cell {
+            bitrate_mbps: 1,
+            height: 180,
+        },
+        &Encoder::Hardware {
+            name: String::from("h264_t721_no_such_device"),
+        },
+        &vmaf::Recipe::for_material(24, None),
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(dir);
+    let measured = measured.expect("hardware failure must fall back to the processor");
+    assert_eq!(
+        measured.fallback_from.as_deref(),
+        Some("h264_t721_no_such_device")
+    );
+    assert!(measured.whole(), "{measured:?}");
+    assert!(
+        measured.point.vmaf.is_finite() && measured.point.vmaf > 50.0,
+        "{measured:?}"
+    );
+}
+
 /// T697 — the recipe runs, with the bundled FFmpeg, on an ordinary clip and on an HDR one
 /// (ten-bit HEVC marked PQ): a point is measured and its score is a real one. Skipped where
 /// there is no bundled FFmpeg.

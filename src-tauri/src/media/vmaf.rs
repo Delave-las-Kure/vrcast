@@ -122,13 +122,15 @@ pub fn ceiling_mbps(bitrate_mbps: u64) -> u64 {
 /// which is 98% zeroes — a half-downloaded file — score 95.81 from its two surviving seconds
 /// and pass the check after a loan. The number was not wrong; it described the parts of the
 /// film that still existed. Nothing said so.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sampled {
     pub point: Point,
     /// How many chunks actually encoded and scored.
     pub chunks_used: usize,
     /// How many were asked for.
     pub chunks_asked: usize,
+    /// Hardware failed on this machine; the caller must disclose the CPU fallback.
+    pub fallback_from: Option<String>,
 }
 
 impl Sampled {
@@ -162,24 +164,45 @@ pub async fn measure_point(
 
     let mut scores: Vec<f64> = Vec::new();
     let mut weights: Vec<u64> = Vec::new();
+    let mut encoder = encoder.clone();
+    let mut fallback_from = None;
 
     for at_s in chunk_starts {
         if cancel.is_cancelled() {
             return Err(VmafError::Cancelled);
         }
 
-        let encoded = encode_chunk(
+        let mut encoded = encode_chunk(
             &ffmpeg_bin,
             &work,
             source,
             *at_s,
             chunk_s,
             cell,
-            encoder,
+            &encoder,
             (source_width, source_height),
             recipe,
         )
         .await;
+        if encoded.is_err() && !cancel.is_cancelled() {
+            if let Encoder::Hardware { name } = &encoder {
+                tracing::warn!(encoder = %name, "measurement hardware failed; trying the processor");
+                fallback_from = Some(name.clone());
+                encoder = Encoder::Software;
+                encoded = encode_chunk(
+                    &ffmpeg_bin,
+                    &work,
+                    source,
+                    *at_s,
+                    chunk_s,
+                    cell,
+                    &encoder,
+                    (source_width, source_height),
+                    recipe,
+                )
+                .await;
+            }
+        }
         match encoded {
             Ok(()) => {}
             Err(e) => {
@@ -236,6 +259,7 @@ pub async fn measure_point(
         },
         chunks_used: scores.len(),
         chunks_asked: chunk_starts.len(),
+        fallback_from,
     })
 }
 

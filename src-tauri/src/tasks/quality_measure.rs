@@ -238,7 +238,7 @@ async fn measure_one(
     cell: Cell,
     ctx: &TaskContext,
 ) -> Result<vmaf::Sampled, VmafError> {
-    vmaf::measure_point(
+    let measured = vmaf::measure_point(
         job.source,
         job.run.width,
         job.run.height,
@@ -250,7 +250,11 @@ async fn measure_one(
         &vmaf::Recipe::of_run(job.run),
         &ctx.cancel_token(),
     )
-    .await
+    .await?;
+    if let Some(name) = &measured.fallback_from {
+        ctx.add_notice(crate::media::encoders::fallback_notice(name));
+    }
+    Ok(measured)
 }
 
 /// How far along, as a share of the grid.

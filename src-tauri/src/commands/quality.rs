@@ -665,6 +665,10 @@ pub async fn held(
     .await
     .map_err(vmaf_error)?;
 
+    if let Some(name) = &measured.fallback_from {
+        ctx.add_notice(encoders::fallback_notice(name));
+    }
+
     match check_point::judge(
         donor_vmaf,
         measured.point.vmaf,
