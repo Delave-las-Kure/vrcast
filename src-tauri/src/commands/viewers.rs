@@ -112,9 +112,9 @@ struct LibraryContext {
     by_file: HashMap<String, VariantFacts>,
     /// A quality set's short name to the medium it belongs to.
     by_slug: HashMap<String, String>,
-    /// A quality set's short name to what each of its rungs needs (T666) — read off the
-    /// set's description on the server when the watching starts.
-    needs: HashMap<String, HashMap<String, u64>>,
+    /// A quality set's short name to what each of its rungs needs (T666) and takes on average
+    /// (tour 0.3.0) — read off the set's description on the server when the watching starts.
+    figures: HashMap<String, crate::domain::viewers::RungFigures>,
     places: Arc<std::sync::RwLock<crate::store::geo::Places>>,
 }
 
@@ -130,9 +130,10 @@ impl ViewerContext for LibraryContext {
                 self.by_slug.get(slug).cloned(),
                 // What a rung needs is its BANDWIDTH in the set's description (QA-24B-07:
                 // this used to be left empty, and SlowLink could never fire for a viewer of
-                // a set). A set whose description could not be read still has none — the
-                // medium's average is not what any one rung needs.
-                self.needs.get(slug),
+                // a set), and what it takes on average its AVERAGE-BANDWIDTH. A set whose
+                // description could not be read still has neither — the medium's average is
+                // not what any one rung takes.
+                self.figures.get(slug),
             ),
             Asked::Other => VariantFacts::default(),
         }
@@ -165,6 +166,8 @@ impl LibraryContext {
                         media_id: Some(media.id.clone()),
                         variant: Some(file.path.clone()),
                         required_bps: file.bitrate_bps,
+                        // A single file's bitrate is its average, picture and sound.
+                        average_bps: file.bitrate_bps,
                     },
                 );
             }
@@ -177,6 +180,8 @@ impl LibraryContext {
                         media_id: Some(media.id.clone()),
                         variant: Some(file.path.clone()),
                         required_bps: file.bitrate_bps,
+                        // A single file's bitrate is its average, picture and sound.
+                        average_bps: file.bitrate_bps,
                     },
                 );
             }
@@ -202,13 +207,14 @@ impl LibraryContext {
                 media_id: None,
                 variant: Some(file.path.clone()),
                 required_bps: file.bitrate_bps,
+                average_bps: file.bitrate_bps,
             });
         }
 
         Self {
             by_file,
             by_slug,
-            needs: HashMap::new(),
+            figures: HashMap::new(),
             places,
         }
     }
@@ -335,11 +341,13 @@ pub mod api {
         .await?
         .conn;
 
-        // What each rung of each set needs (T666), read once here, as the library itself is.
-        // A set rebuilt while the watching runs (which is asked about when anybody is
-        // watching — T571) keeps its old figures until the screen is opened again.
-        context.needs =
-            viewers::rung_needs(&conn, &profile.video_dir, &LibraryContext::set_slugs(&view)).await;
+        // What each rung of each set needs (T666) and takes on average, read once here, as
+        // the library itself is. A set rebuilt while the watching runs (which is asked about
+        // when anybody is watching — T571) keeps its old figures until the screen is opened
+        // again.
+        context.figures =
+            viewers::rung_figures(&conn, &profile.video_dir, &LibraryContext::set_slugs(&view))
+                .await;
         let context = Arc::new(context);
 
         let (tx, mut updates) = tokio::sync::mpsc::channel(64);

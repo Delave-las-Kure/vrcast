@@ -45,11 +45,16 @@ impl ViewerContext for Library {
                     .rung()
                     .and_then(|name| RUNGS.iter().find(|r| r.name == name))
                     .map(|r| r.peak_bps()),
+                average_bps: asked
+                    .rung()
+                    .and_then(|name| RUNGS.iter().find(|r| r.name == name))
+                    .map(|r| r.peak_bps()),
             },
             Some("film.mp4") => VariantFacts {
                 media_id: Some(String::from("media-film")),
                 variant: Some(String::from("film.mp4")),
                 required_bps: Some(8_000_000),
+                average_bps: Some(8_000_000),
             },
             _ => VariantFacts::default(),
         }

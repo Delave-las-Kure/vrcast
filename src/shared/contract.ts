@@ -1452,8 +1452,11 @@ export interface Viewer {
   variant: string | null;
   /** What is arriving. Null until there is enough measurement to work it out from. */
   delivery_bps: number | null;
-  /** What the variant they are getting needs. */
+  /** What the variant they are getting needs — the peak; shown beside the speed. */
   required_bps: number | null;
+  /** Tour 0.3.0 — what the variant takes on average (picture and sound). «Falling behind» is
+   *  judged against it: under `SLOW_SHARE` × this. Null when not known: nothing is judged. */
+  average_bps: number | null;
   started_at: string;
   last_seen_at: string;
   problems: ViewerProblem[];

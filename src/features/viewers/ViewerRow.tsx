@@ -16,6 +16,10 @@ import { useLang, useT, type Lang } from "../../shared/i18n";
 import { formatBitrate, formatDuration } from "../../shared/i18n/format";
 import type { Viewer, ViewerProblem } from "../../shared/contract";
 
+/** Under this share of what the quality takes on average, a viewer is falling behind — the
+ *  core's `domain::viewers::SLOW_SHARE` (the owner's rule after the 0.3.0 tour). */
+export const SLOW_SHARE = 0.8;
+
 /** How long they have been watching, from the two times the core sends. */
 function watchingFor(viewer: Viewer): number | null {
   const from = Date.parse(viewer.started_at);
@@ -67,13 +71,13 @@ export function ViewerRow({
   const t = useT();
   const { lang } = useLang();
   const words = t.ui.viewers;
-  // T705 (tour 0.3.0): the state agrees with the speed shown beside it. A known speed under
-  // a known need is "falling behind" even if the core's list of problems has not said so —
-  // «16 кбит/с, нужно 11,1 Мбит/с — в порядке» is a contradiction on one line.
+  // T705 (tour 0.3.0, the owner's rule): falling behind is a speed under `SLOW_SHARE` of what
+  // the quality takes on average — the core's own rule, held here as well so that the state
+  // can never disagree with the speed shown beside it.
   const problems: ViewerProblem[] =
     viewer.delivery_bps !== null &&
-    viewer.required_bps !== null &&
-    viewer.delivery_bps < viewer.required_bps &&
+    viewer.average_bps !== null &&
+    viewer.delivery_bps < SLOW_SHARE * viewer.average_bps &&
     !viewer.problems.includes("SlowLink")
       ? ["SlowLink", ...viewer.problems]
       : viewer.problems;
@@ -124,7 +128,7 @@ export function ViewerRow({
       <td>{formatDuration(watchingFor(viewer))}</td>
       <td>
         {/* T705 (QA-26 №12): "fine" only for what is known to be in order — both the
-            speed and what the quality needs measured, and the speed enough. Nothing found is
+            speed and what the quality takes on average known, and the speed enough. Nothing found is
             not the same as nothing wrong: without the two figures it says so. */}
         {troubled ? (
           <ul className="viewers__problems">
@@ -134,7 +138,7 @@ export function ViewerRow({
               </li>
             ))}
           </ul>
-        ) : viewer.delivery_bps === null || viewer.required_bps === null ? (
+        ) : viewer.delivery_bps === null || viewer.average_bps === null ? (
           <span className="viewers__unknown" title={words.noDataHint} data-testid="viewer-no-data">
             {words.noData}
           </span>

@@ -268,19 +268,24 @@ fn request(ip: &str, path: &str, when: i64) -> vrcast_studio_lib::domain::access
 /// A library that answers for the fixture's quality set.
 fn library(asked: &Asked) -> VariantFacts {
     match asked.library_key() {
-        Some("demo") => VariantFacts {
-            media_id: Some(String::from("media-demo")),
-            variant: asked.rung().map(str::to_owned),
-            required_bps: match asked.rung() {
+        Some("demo") => {
+            let rate = match asked.rung() {
                 Some("v1") => Some(10_000_000),
                 Some("v2") => Some(5_000_000),
                 _ => None,
-            },
-        },
+            };
+            VariantFacts {
+                media_id: Some(String::from("media-demo")),
+                variant: asked.rung().map(str::to_owned),
+                required_bps: rate,
+                average_bps: rate,
+            }
+        }
         Some(name) => VariantFacts {
             media_id: Some(format!("media-{name}")),
             variant: Some(name.to_owned()),
             required_bps: Some(8_000_000),
+            average_bps: Some(8_000_000),
         },
         None => VariantFacts::default(),
     }
@@ -646,9 +651,76 @@ fn each_rung_needs_its_own_bandwidth_from_the_description() {
 
 /// The facts a request into the set gets, the way the application's own library hands them.
 fn set_library(asked: &Asked) -> VariantFacts {
-    use vrcast_studio_lib::domain::viewers::{rung_needs, set_facts};
-    let needs = rung_needs(MASTER);
-    set_facts(asked, Some(String::from("media-demo")), Some(&needs))
+    use vrcast_studio_lib::domain::viewers::{set_facts, RungFigures};
+    let figures = RungFigures::read(MASTER);
+    set_facts(asked, Some(String::from("media-demo")), Some(&figures))
+}
+
+#[test]
+fn each_rung_takes_its_own_average_from_the_description_and_only_when_said() {
+    use vrcast_studio_lib::domain::viewers::rung_averages;
+    let averages = rung_averages(MASTER);
+    assert_eq!(averages.get("v1"), Some(&8_000_000), "{averages:?}");
+    assert_eq!(averages.get("v2"), Some(&4_000_000));
+
+    // A description without AVERAGE-BANDWIDTH: the reading stands the peak in for it, and
+    // the peak is not the average — so nothing is said, rather than the wrong figure.
+    let old = MASTER.replace(",AVERAGE-BANDWIDTH=8000000", "");
+    let averages = rung_averages(&old);
+    assert_eq!(averages.get("v1"), None, "{averages:?}");
+    assert_eq!(averages.get("v2"), Some(&4_000_000));
+    assert!(rung_averages("not a playlist").is_empty());
+}
+
+/// A viewer of rung `v9`: 9 Mbit/s on average, 11.1 at the peak (the tour's own figures),
+/// delivering `bytes` over ten seconds.
+fn on_v9(bytes: u64, average: Option<u64>) -> Viewer {
+    let facts = move |asked: &Asked| VariantFacts {
+        media_id: Some(String::from("media-demo")),
+        variant: asked.rung().map(str::to_owned),
+        required_bps: Some(11_100_000),
+        average_bps: average,
+    };
+    let mut session = Session::default();
+    session.note_request(
+        &request("10.0.0.4", "/videos/demo/v9/seg_00001.m4s", 0),
+        &facts,
+    );
+    session.note_connections(&[row("10.0.0.4", 0, 0, 0, Some(0.97))], at(0));
+    session.note_connections(&[row("10.0.0.4", bytes, 100, 0, Some(0.97))], at(10));
+    session.active(at(11)).remove(0)
+}
+
+#[test]
+fn falling_behind_is_judged_against_the_average_with_a_fifth_of_slack() {
+    // The owner's rule after the 0.3.0 tour: «falling behind» only under 0.8 × the rung's
+    // average; otherwise, with both figures known, fine.
+    let crawling = on_v9(58_750, Some(9_000_000)); // 47 kbit/s
+    assert_eq!(crawling.delivery_bps, Some(47_000));
+    assert!(
+        crawling.problems.contains(&Problem::SlowLink),
+        "{crawling:?}"
+    );
+
+    // A healthy player taking what it plays: 9.2 at an average of 9, the peak 11.1.
+    let healthy = on_v9(11_500_000, Some(9_000_000));
+    assert_eq!(healthy.delivery_bps, Some(9_200_000));
+    assert!(
+        !healthy.problems.contains(&Problem::SlowLink),
+        "a player at the film's own speed was called slow by the peak: {healthy:?}"
+    );
+
+    // 7.0 at an average of 9: under the 7.2 the slack allows.
+    let short = on_v9(8_750_000, Some(9_000_000));
+    assert_eq!(short.delivery_bps, Some(7_000_000));
+    assert!(short.problems.contains(&Problem::SlowLink), "{short:?}");
+}
+
+#[test]
+fn without_the_average_nothing_is_judged() {
+    let viewer = on_v9(58_750, None);
+    assert_eq!(viewer.average_bps, None);
+    assert!(!viewer.problems.contains(&Problem::SlowLink), "{viewer:?}");
 }
 
 #[test]

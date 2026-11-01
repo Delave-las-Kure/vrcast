@@ -126,6 +126,7 @@ function viewer(over: Partial<Viewer> = {}): Viewer {
     variant: "v2",
     delivery_bps: 5_000_000,
     required_bps: 5_000_000,
+    average_bps: 5_000_000,
     started_at: "2026-08-26T10:00:00Z",
     last_seen_at: "2026-08-26T10:03:20Z",
     problems: [],
@@ -278,7 +279,7 @@ describe("the viewers screen", () => {
     send?.(
       update([
         viewer({ ip: "203.0.113.1", delivery_bps: null }),
-        viewer({ ip: "203.0.113.2", required_bps: null }),
+        viewer({ ip: "203.0.113.2", average_bps: null }),
         viewer({ ip: "203.0.113.3" }),
         viewer({ ip: "203.0.113.4", delivery_bps: 1_000_000, problems: ["SlowLink"] }),
       ]),
@@ -290,16 +291,43 @@ describe("the viewers screen", () => {
     expect(ru.ui.viewers.problems.slowLink).toBe("не успевает");
   });
 
-  it("never shows «в порядке» beside a known speed under the known need (T705, tour 0.3.0)", async () => {
-    // F09: «16 кбит/с, нужно 11,1 Мбит/с — в порядке». The state agrees with the speed shown.
-    renderIn(<ViewersScreen />, "ru");
-    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
-    send?.(update([viewer({ delivery_bps: 16_000, required_bps: 11_100_000, problems: [] })]));
-    await waitFor(() =>
-      expect(screen.getByText(ru.ui.viewers.problems.slowLink)).toBeInTheDocument(),
-    );
-    expect(screen.queryByText(ru.ui.viewers.fine)).toBeNull();
-  });
+  it.each([
+    // The owner's rule after the tour: under 0.8 × the rung's average is «не успевает».
+    ["47 kbit/s at an average of 9", 47_000, 9_000_000, "slowLink"],
+    // A healthy player at the film's own speed: 9.2 at an average of 9, «нужно 11,1».
+    ["9.2 at an average of 9, the peak 11.1", 9_200_000, 9_000_000, "fine"],
+    ["7.0 at an average of 9", 7_000_000, 9_000_000, "slowLink"],
+    ["no average known", 47_000, null, "noData"],
+  ] as const)(
+    "judges the speed against the rung's average with a fifth of slack: %s (tour 0.3.0)",
+    async (_case, delivery, average, shown) => {
+      renderIn(<ViewersScreen />, "ru");
+      await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+      // The core's list left empty: the screen holds the same rule, not only the core.
+      send?.(
+        update([
+          viewer({
+            delivery_bps: delivery,
+            required_bps: 11_100_000,
+            average_bps: average,
+            problems: [],
+          }),
+        ]),
+      );
+      const words = ru.ui.viewers;
+      const expected =
+        shown === "slowLink"
+          ? words.problems.slowLink
+          : shown === "fine"
+            ? words.fine
+            : words.noData;
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+      for (const other of [words.problems.slowLink, words.fine, words.noData]) {
+        if (other !== expected) expect(screen.queryByText(other)).toBeNull();
+      }
+      expect(screen.getByText("нужно 11,1 Мбит/с")).toBeInTheDocument();
+    },
+  );
 
   it("marks a viewer in trouble with the reason rather than merely marking them", async () => {
     renderIn(<ViewersScreen />, "ru");
