@@ -12,8 +12,10 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 CARGO = ["cargo", "test", "--manifest-path", str(ROOT / "src-tauri/Cargo.toml"),
@@ -101,10 +103,44 @@ def main():
 
 
 def run_checked(selected, trace):
+    # The original trace audit intentionally shares a process. Ordinary tests do not:
+    # one hung test must be named, not swallow every later test and the private log.
+    if trace:
+        return run_group(selected, trace=True, timeout=2400)
+    started = time.monotonic()
+    failures = []
+    for name in selected:
+        print(f"Starting isolated integration test: {name}", flush=True)
+        try:
+            remaining = 2400 - (time.monotonic() - started)
+            if remaining <= 0:
+                raise ValueError("The shard's 2400s execution budget was exhausted")
+            run_group([name], trace=False, timeout=min(1000, remaining))
+        except (ValueError, subprocess.TimeoutExpired) as error:
+            failures.append(name)
+            print(f"FAILED {name}: {error}", flush=True)
+    if failures:
+        raise ValueError(f"Integration failures ({len(failures)}): {failures}")
+    print(f"Every selected test accounted for: {len(selected)} passed", flush=True)
+
+
+def run_group(selected, trace, timeout):
+    timed_out = False
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
-        result = subprocess.run(CARGO + ["--", "--test-threads=1", "--nocapture", "--exact"] + selected,
-                                env={**os.environ, "VRCAST_LOG": "trace" if trace else "info"},
-                                stdout=output, stderr=subprocess.STDOUT, timeout=2400)
+        result = subprocess.Popen(CARGO + ["--", "--test-threads=1", "--nocapture", "--exact"] + selected,
+                                  env={**os.environ, "VRCAST_LOG": "trace" if trace else "info"},
+                                  stdout=output, stderr=subprocess.STDOUT,
+                                  start_new_session=os.name != "nt")
+        try:
+            result.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(result.pid), "/T", "/F"], check=False,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.killpg(result.pid, signal.SIGKILL)
+            result.wait()
         output.seek(0)
         log = output.read()
     key = (ROOT / "src-tauri/tests/fixtures/encrypted_ed25519.key").read_text()
@@ -115,6 +151,8 @@ def run_checked(selected, trace):
     check_secrets(log, key, phrase[1])
     # Only after scanning: never publish an unexamined trace log as an artifact or failure tail.
     print("\n".join(log.splitlines()[-100:]), flush=True)
+    if timed_out:
+        raise ValueError(f"Timed out after {timeout:.0f}s: {selected}; process tree stopped")
     if result.returncode:
         lines = log.splitlines()
         for i, line in enumerate(lines):

@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location("ci_integration", Path(__file__).with_name("ci-integration.py"))
 assert spec is not None and spec.loader is not None
@@ -63,6 +65,21 @@ class IntegrationRunnerTests(unittest.TestCase):
     def test_secret_check_cannot_pass_without_key_material(self):
         with self.assertRaises(ValueError):
             ci.check_secrets("ordinary diagnostic output", "", "test-passphrase-1234")
+
+    def test_ordinary_tests_each_have_their_own_process_and_result(self):
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            kwargs['stdout'].write('test result: ok. 1 passed; 0 failed; 0 ignored\n')
+            return SimpleNamespace(returncode=0, wait=lambda **_: 0)
+        with patch.object(ci.subprocess, 'Popen', side_effect=run), patch.object(
+            ci.Path, 'read_text', side_effect=['header\ncomment\nabcdefghijklmnop\nqrstuvwxyz012345', 'PASSPHRASE: &str = "test-passphrase"'] * 2
+        ):
+            ci.run_checked(['a::first', 'b::second'], trace=False)
+        self.assertEqual(len(calls), 2)
+        for command, name in zip(calls, ['a::first', 'b::second']):
+            self.assertEqual(command[-1], name)
+            self.assertNotIn('b::second' if name == 'a::first' else 'a::first', command)
 
 
 if __name__ == "__main__":
