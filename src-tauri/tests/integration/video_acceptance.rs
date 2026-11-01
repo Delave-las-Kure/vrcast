@@ -1067,7 +1067,11 @@ async fn cancelled_while_encoding_leaves_no_program_no_part_and_no_half_set() {
     );
     let server_id = add_profile(&state, &server).await;
     let film = scratch.0.join("Cancelled.mkv");
-    make_film(&film, "1920x1080", FILM_S);
+    // Three times the usual length: the press has to land while the second rung is being
+    // encoded, and between catching that moment and pressing, the test reads the server
+    // (a second) and the process list (PowerShell, a second or two). At the usual length a
+    // 720p rung is done in about that time, and the press fell between two rungs.
+    make_film(&film, "1920x1080", FILM_S * 3);
     let added = video::video_add(
         &state,
         &server_id,
