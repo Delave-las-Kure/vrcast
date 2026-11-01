@@ -260,10 +260,14 @@ mod run_to_end {
             .copied()
             .filter(|p| alive(*p))
             .collect();
+        let states: Vec<String> = survivors
+            .iter()
+            .map(|p| std::fs::read_to_string(format!("/proc/{p}/stat")).unwrap_or_default())
+            .collect();
         assert!(
             survivors.is_empty(),
             "ORPHANED: {survivors:?} outlived the application that started them \
-             (children {children:?}, grandchildren {grandchildren:?})"
+             (children {children:?}, grandchildren {grandchildren:?}); /proc states: {states:?}"
         );
     }
 }
