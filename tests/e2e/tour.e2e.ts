@@ -445,6 +445,12 @@ async function has(xpath: string): Promise<boolean> {
 
 async function field(label: string, value: string) {
   const input = await s().findX(`//label[span[normalize-space()=${xq(label)}]]//input`);
+  if (value === "") {
+    // WebDriver clear alone does not notify a React controlled input on WebView2.
+    await input.click();
+    await input.type("\uE009a\uE000\uE003");
+    return;
+  }
   await input.clear();
   await input.type(value);
 }
@@ -1391,6 +1397,19 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       const canDeploy = await has(
         "//button[normalize-space()='Согласен, разворачивать' and not(@disabled)]",
       );
+      await step("deploy-recheck", "Неверный домен → «Проверить ещё раз»", async () => {
+        await press("Проверить ещё раз");
+        await settle(30_000);
+        await sleep(1000);
+      });
+      await step(
+        "deploy-ipv6-disabled",
+        "Второй вариант — «Отключить IPv6»; пояснение и DNS-подсказка",
+        async () => {
+          await (await s().find("input[name=ipv6][value=Disable]")).click();
+          await sleep(1000);
+        },
+      );
       note(
         canDeploy
           ? "кнопка «Согласен, разворачивать» доступна; развёртывание не запускалось (на контейнере не дойдёт до конца: домен clean.example.com не ведёт на него)"
@@ -1423,6 +1442,22 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         await sleep(1500);
       });
       docker(["rm", "-f", CLEAN_NAME]);
+      const savedState = join(STATE, "serving-state.json");
+      docker(["cp", `${NAME}:/etc/vrcast/state.json`, savedState]);
+      const foreignState = join(STATE, "foreign-state.json");
+      writeFileSync(foreignState, '{"vrcast_server_version":0}');
+      try {
+        docker(["cp", foreignState, `${NAME}:/etc/vrcast/state.json`]);
+        await go("library");
+        await go("servers");
+        await sleep(1000);
+        await snap(
+          "foreign-serving",
+          "Чужая раздача: тестовый state.json имеет неподдерживаемую версию 0; основной текст должен быть без JSON",
+        );
+      } finally {
+        docker(["cp", savedState, `${NAME}:/etc/vrcast/state.json`]);
+      }
     },
     480_000,
   );
@@ -2444,6 +2479,9 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       await ensureServer();
       await ensureApp();
       await setLanguage("ru");
+      await go("library");
+      await press("Обновить");
+      await settle();
       for (const v of [VIEWER_FAST, VIEWER_SLOW]) docker(["stop", "-t", "1", v]);
       const stopped = docker(["stop", "-t", "2", NAME]);
       note(
@@ -2460,9 +2498,9 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       });
       await step(
         "down-library-refresh",
-        "«Обновить» в «Библиотеке» при выключенном сервере",
+        "«Повторить» у строки о недоступном сервере в «Библиотеке»",
         async () => {
-          await press("Обновить", "", 5_000);
+          await press("Повторить", "", 5_000);
           await settle(60_000);
           await sleep(3000);
         },
@@ -2500,9 +2538,18 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
           500,
         );
       });
+      await go("viewers");
+      await sleep(3000);
       docker(["start", NAME]);
       await waitServer();
       note("сервер снова запущен (docker start)");
+      await step(
+        "up-viewers-auto",
+        "Остались на экране «Зрители»: ждём автоповтора после включения, без нажатия кнопок",
+        async () => {
+          await sleep(25_000);
+        },
+      );
       await step("up-servers", "Сервер снова включён → «Серверы»", async () => {
         await go("servers");
         await settle(60_000);
