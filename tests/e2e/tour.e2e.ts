@@ -104,7 +104,7 @@ const SECTIONS: Record<string, string> = {
   F: "Зрители и ограничения качества",
   G: "Диагностика",
   H: "Задачи, оформление, «О программе»",
-  H2: "Задачи и окно выхода именно во время кодирования",
+  H2: "Задачи и окно выхода во время настоящей обработки, не ожидания очереди",
   I: "Сервер недоступен",
   J: "Ключевые экраны на английском",
   Z: "Уборка (без снимков)",
@@ -2561,7 +2561,7 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
   );
 
   it.skipIf(!wanted.has("H2"))(
-    "H2 — tasks and leaving while a film really encodes",
+    "H2 — tasks and leaving while a film is really processing",
     async () => {
       beginSection("H2");
       await ensureServer();
@@ -2587,22 +2587,26 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
         "option[@value='1']",
       );
       await press("Старт", inCard(id));
-      await step("encoding-live", "Ждём реального кодирования, а не ожидания очереди", async () => {
-        await cardUntil(
-          id,
-          "real encoding",
-          (c) => c.state === "working" && c.stage === "encoding",
-          90_000,
-        );
-      });
-      await go("tasks");
-      await snap(
-        "tasks-encoding",
-        "«Задачи» во время реального кодирования: счётчик, одна карточка фильма",
-      );
       await step(
-        "leave-encoding",
-        "Диалог выхода во время кодирования, каждый фильм должен быть назван один раз",
+        "processing-live",
+        "Фильм действительно обрабатывается: есть процент замера или кодирования",
+        async () => {
+          await cardUntil(
+            id,
+            "real processing",
+            (c) =>
+              c.state === "working" &&
+              /^(measuring|encoding)$/.test(c.stage ?? "") &&
+              /\d+%/.test(c.text),
+            45_000,
+          );
+        },
+      );
+      await go("tasks");
+      await snap("tasks-processing", "«Задачи» во время обработки: счётчик, одна карточка фильма");
+      await step(
+        "leave-processing",
+        "Диалог выхода во время обработки, каждый фильм должен быть назван один раз",
         async () => {
           await invoke("plugin:event|emit", { event: "app:quit-requested", payload: null });
           await s().find('[data-testid="leave-confirm"]');
