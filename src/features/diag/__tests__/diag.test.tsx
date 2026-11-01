@@ -639,6 +639,27 @@ describe("T711 — the link and the player told apart on the live connection", (
     expect(screen.queryByTestId("live-203.0.113.24")).toBeNull();
   });
 
+  it.each([
+    // G03: nothing on its way at all — the viewer is not asking.
+    [{ mbit_s: 0, busy_mbit_s: null, busy_share: 0, held_share: null }, "stallsLiveIdle"],
+    // Sending, and the viewer's side full: the player is not taking it.
+    [{ mbit_s: 0, busy_mbit_s: 0, busy_share: 1, held_share: 0.9 }, "stallsLiveHeld"],
+    // Sending, the viewer's side not full, and nothing arriving.
+    [{ mbit_s: 0, busy_mbit_s: 0, busy_share: 1, held_share: 0 }, "stallsLiveStuck"],
+  ] as const)(
+    "with nothing coming through, says why rather than «—» (tour 0.3.0, G03): %j",
+    async (reading, key) => {
+      mockStalls.mockResolvedValue({
+        ...STALLS,
+        watchers: [{ ...STALLS.watchers[0], live: { span_s: 5, resent_share: null, ...reading } }],
+      });
+      renderIn(<DiagScreen serverId="s1" />, "ru");
+      const live = await screen.findByTestId("live-203.0.113.24");
+      expect(live).toHaveTextContent(ru.ui.diag[key]);
+      expect(live.textContent).not.toBe("—");
+    },
+  );
+
   it("every live verdict is said in both languages with the same figures", () => {
     for (const key of ["STALLS_PLAYER_LIVE", "STALLS_LINK_FINE_LIVE", "STALLS_VIEWER_LINK_LIVE"]) {
       const names = (s: string) => [...s.matchAll(/\{(\w+)/g)].map((m) => m[1]).sort();

@@ -30,6 +30,31 @@ function speed(value: number | null, lang: "ru" | "en", nothing: string): string
   return value === null ? nothing : formatBitrate(value * 1_000_000, lang);
 }
 
+/** The core's own thresholds for the live reading (`domain::stalls`: `LIVE_SENDING`,
+ *  `LIVE_HELD`) — below the first the connection hardly sent at all; above the second the
+ *  viewer's side was full. */
+const LIVE_SENDING = 0.1;
+const LIVE_HELD = 0.5;
+
+/**
+ * The live reading, or — when nothing came through — why, in a few words (tour 0.3.0, G03).
+ *
+ * A bare «—» beside «Сейчас по соединению» said neither "nothing" nor "not measured". Nothing
+ * arriving has three plain reasons the reading itself tells apart: nothing was asked for, the
+ * player was full and not taking it, or it was being sent and did not get through.
+ */
+function liveLine(
+  live: NonNullable<Watcher["live"]>,
+  lang: "ru" | "en",
+  words: { stallsLiveIdle: string; stallsLiveHeld: string; stallsLiveStuck: string },
+): string {
+  const value = live.busy_mbit_s ?? live.mbit_s;
+  if (value > 0) return formatBitrate(value * 1_000_000, lang);
+  if ((live.busy_share ?? 0) < LIVE_SENDING) return words.stallsLiveIdle;
+  if ((live.held_share ?? 0) > LIVE_HELD) return words.stallsLiveHeld;
+  return words.stallsLiveStuck;
+}
+
 export function StallsPanel({
   stalls,
   titles = {},
@@ -118,9 +143,7 @@ export function StallsPanel({
                   {w.live && (
                     <>
                       <dt>{words.stallsLive}</dt>
-                      <dd data-testid={`live-${w.client_ip}`}>
-                        {speed(w.live.busy_mbit_s ?? w.live.mbit_s, lang, nothing)}
-                      </dd>
+                      <dd data-testid={`live-${w.client_ip}`}>{liveLine(w.live, lang, words)}</dd>
                     </>
                   )}
                   <dt>{words.stallsSkipped}</dt>
