@@ -126,6 +126,7 @@ function viewer(over: Partial<Viewer> = {}): Viewer {
     variant: "v2",
     delivery_bps: 5_000_000,
     required_bps: 5_000_000,
+    average_bps: 5_000_000,
     started_at: "2026-08-26T10:00:00Z",
     last_seen_at: "2026-08-26T10:03:20Z",
     problems: [],
@@ -203,12 +204,59 @@ describe("the viewers screen", () => {
       ]),
     );
 
-    await waitFor(() =>
-      expect(screen.getAllByText(ru.ui.viewers.notKnown).length).toBeGreaterThanOrEqual(2),
+    await waitFor(() => expect(screen.getByTestId("viewer-place-unknown")).toBeInTheDocument());
+    // Where from: nothing known is one dash, not two «не определено» one under the other
+    // (tour 0.3.0, F09) — and it still says «не определено» when asked (hover).
+    expect(screen.getByTestId("viewer-place-unknown")).toHaveTextContent("—");
+    expect(screen.getByTestId("viewer-place-unknown")).toHaveAttribute(
+      "title",
+      ru.ui.viewers.notKnown,
     );
+    expect(screen.getAllByText(ru.ui.viewers.notKnown)).toHaveLength(1);
     // Not knowing what is being watched is a state of its own, and it is said in words —
     // an empty cell would read as a fault in the application.
     expect(screen.getByText(ru.ui.viewers.watchingUnknown)).toBeInTheDocument();
+  });
+
+  it("names the rung as the links do, not by its directory (tour 0.3.0, F09)", async () => {
+    mockLibraryList.mockResolvedValue({
+      server_id: "s1",
+      media: [
+        {
+          id: "m1",
+          title: "Backrooms",
+          slug: "backrooms",
+          files: [],
+          ladders: [
+            {
+              ...aSet("backrooms"),
+              qualities: [
+                {
+                  width: 1920,
+                  height: 1080,
+                  bitrate_bps: 9_000_000,
+                  origin: "https://stream.example.com/videos/backrooms/v9/stream.m3u8",
+                  cdn: null,
+                },
+              ],
+            },
+          ],
+          total_bytes: 0,
+          created_at: "",
+        },
+      ],
+      unrecognized: [],
+      disk: null,
+      stale: false,
+    });
+    renderIn(<ViewersScreen />, "ru");
+    await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+    send?.(update([viewer({ variant: "v9" }), viewer({ ip: "203.0.113.2", variant: "v4" })]));
+    expect(await screen.findByText("1080p · 9 Мбит/с")).toBeInTheDocument();
+    // A rung the library does not describe: its bitrate, still not the bare `v4`.
+    expect(screen.getByText("4,0 Мбит/с")).toBeInTheDocument();
+    expect(screen.queryByText("v9")).toBeNull();
+    expect(screen.queryByText("v4")).toBeNull();
   });
 
   it("shows a viewer who has just come in as watching for «0:00», not as unknown (T718)", async () => {
@@ -231,7 +279,7 @@ describe("the viewers screen", () => {
     send?.(
       update([
         viewer({ ip: "203.0.113.1", delivery_bps: null }),
-        viewer({ ip: "203.0.113.2", required_bps: null }),
+        viewer({ ip: "203.0.113.2", average_bps: null }),
         viewer({ ip: "203.0.113.3" }),
         viewer({ ip: "203.0.113.4", delivery_bps: 1_000_000, problems: ["SlowLink"] }),
       ]),
@@ -242,6 +290,44 @@ describe("the viewers screen", () => {
     expect(screen.getByText(ru.ui.viewers.problems.slowLink)).toBeInTheDocument();
     expect(ru.ui.viewers.problems.slowLink).toBe("не успевает");
   });
+
+  it.each([
+    // The owner's rule after the tour: under 0.8 × the rung's average is «не успевает».
+    ["47 kbit/s at an average of 9", 47_000, 9_000_000, "slowLink"],
+    // A healthy player at the film's own speed: 9.2 at an average of 9, «нужно 11,1».
+    ["9.2 at an average of 9, the peak 11.1", 9_200_000, 9_000_000, "fine"],
+    ["7.0 at an average of 9", 7_000_000, 9_000_000, "slowLink"],
+    ["no average known", 47_000, null, "noData"],
+  ] as const)(
+    "judges the speed against the rung's average with a fifth of slack: %s (tour 0.3.0)",
+    async (_case, delivery, average, shown) => {
+      renderIn(<ViewersScreen />, "ru");
+      await waitFor(() => expect(mockWatchStart).toHaveBeenCalled());
+      // The core's list left empty: the screen holds the same rule, not only the core.
+      send?.(
+        update([
+          viewer({
+            delivery_bps: delivery,
+            required_bps: 11_100_000,
+            average_bps: average,
+            problems: [],
+          }),
+        ]),
+      );
+      const words = ru.ui.viewers;
+      const expected =
+        shown === "slowLink"
+          ? words.problems.slowLink
+          : shown === "fine"
+            ? words.fine
+            : words.noData;
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+      for (const other of [words.problems.slowLink, words.fine, words.noData]) {
+        if (other !== expected) expect(screen.queryByText(other)).toBeNull();
+      }
+      expect(screen.getByText("нужно 11,1 Мбит/с")).toBeInTheDocument();
+    },
+  );
 
   it("marks a viewer in trouble with the reason rather than merely marking them", async () => {
     renderIn(<ViewersScreen />, "ru");

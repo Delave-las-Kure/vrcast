@@ -12,7 +12,7 @@ import type { AppError, Rung, VideoView } from "../../shared/contract";
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
 import { fill } from "../../shared/i18n/render";
-import { RungEditor } from "../ladder/RungEditor";
+import { highestFirst, RungEditor } from "../ladder/RungEditor";
 import { ErrorNotice } from "../shared/ErrorNotice";
 import { factsOf } from "./rules";
 
@@ -81,7 +81,7 @@ export function VideoRungs({
         <button
           type="button"
           className="button--primary"
-          onClick={() => void save(kept)}
+          onClick={() => void save(highestFirst(kept))}
           disabled={busy || kept.length === 0}
         >
           {w.saveRungs}

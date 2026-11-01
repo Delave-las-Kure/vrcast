@@ -273,6 +273,21 @@ pub async fn rung_needs(
     video_dir: &str,
     slugs: &[String],
 ) -> HashMap<String, HashMap<String, u64>> {
+    rung_figures(conn, video_dir, slugs)
+        .await
+        .into_iter()
+        .filter(|(_, figures)| !figures.needs.is_empty())
+        .map(|(slug, figures)| (slug, figures.needs))
+        .collect()
+}
+
+/// What each rung of each of these sets needs and takes on average (tour 0.3.0), from one
+/// reading of each description — the same best effort as [`rung_needs`].
+pub async fn rung_figures(
+    conn: &Connection,
+    video_dir: &str,
+    slugs: &[String],
+) -> HashMap<String, crate::domain::viewers::RungFigures> {
     use futures::stream::{self, StreamExt};
 
     let dir = video_dir.trim_end_matches('/');
@@ -290,8 +305,8 @@ pub async fn rung_needs(
             .ok()?
             .ok()?
             .stdout;
-            let needs = crate::domain::viewers::rung_needs(&text);
-            (!needs.is_empty()).then_some((slug, needs))
+            let figures = crate::domain::viewers::RungFigures::read(&text);
+            (!figures.is_empty()).then_some((slug, figures))
         })
         .buffer_unordered(4)
         .filter_map(|found| async move { found })

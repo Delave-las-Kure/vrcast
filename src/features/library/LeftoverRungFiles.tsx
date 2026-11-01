@@ -12,6 +12,10 @@ import { ErrorNotice } from "../shared/ErrorNotice";
  * room they take and «Remove» — **removed only on this press** (T577, part b), never by
  * themselves.
  *
+ * ⚠ **Asked first, like every other removal on this screen** (tour 0.3.0, E02–E04). A medium
+ * and a file both ask before they go; these went on one press. The question says how many
+ * and that the set is not touched — the one thing a person would be afraid of.
+ *
  * Not shown while a video builds the set (`set_work`): there they are what the build cuts
  * from, and the core would refuse anyway.
  */
@@ -29,17 +33,20 @@ export function LeftoverRungFiles({
   const t = useT();
   const { lang } = useLang();
   const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
 
   const files = (media.set_files ?? []).filter((f) => f.exists_on_server);
   if (files.length === 0 || media.set_work) return null;
   const bytes = files.reduce((sum, f) => sum + f.size_bytes, 0);
+  const l = t.ui.library;
 
   const remove = async () => {
     setBusy(true);
     setError(null);
     try {
       await ipc.mediaRemoveSetFiles(serverId, media.id);
+      setAsking(false);
       onRemoved();
     } catch (e) {
       setError(toAppError(e));
@@ -50,10 +57,36 @@ export function LeftoverRungFiles({
 
   return (
     <div className="media__leftover" data-testid={`leftover-${media.id}`}>
-      <span className="muted">{fill(t.ui.library.leftoverMp4, { bytes }, t, lang)}</span>{" "}
-      <button onClick={() => void remove()} disabled={disabled || busy}>
-        {t.ui.library.leftoverRemove}
-      </button>
+      <span className="muted">{fill(l.leftoverMp4, { bytes }, t, lang)}</span>{" "}
+      {!asking && (
+        <button onClick={() => setAsking(true)} disabled={disabled || busy}>
+          {l.leftoverRemove}
+        </button>
+      )}
+      {asking && (
+        <div
+          className="dialog"
+          role="alertdialog"
+          aria-label={fill(l.leftoverAsk, { n: files.length }, t, lang)}
+          data-testid={`leftover-ask-${media.id}`}
+        >
+          <h3>{fill(l.leftoverAsk, { n: files.length }, t, lang)}</h3>
+          <p>{l.leftoverAskKeeps}</p>
+          <div className="form__actions">
+            <button type="button" onClick={() => setAsking(false)} disabled={busy} autoFocus>
+              {l.deleteNo}
+            </button>
+            <button
+              type="button"
+              className="button--danger"
+              onClick={() => void remove()}
+              disabled={disabled || busy}
+            >
+              {busy ? l.deleting : l.deleteYes}
+            </button>
+          </div>
+        </div>
+      )}
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
     </div>
   );

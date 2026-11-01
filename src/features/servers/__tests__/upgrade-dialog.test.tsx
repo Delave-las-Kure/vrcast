@@ -138,3 +138,31 @@ describe("T611 — rolling back asks first, and says what it will not put back",
     expect(screen.queryByText(ru.ui.upgrade.rollBackKeeps)).toBeNull();
   });
 });
+
+describe("tour 0.3.0 — the upgrade plan reads as steps in plain words", () => {
+  it("keeps a step's state apart from its name, and folds the paths under «Подробнее»", async () => {
+    mockPlan.mockResolvedValue({
+      ...PLAN,
+      steps: [
+        {
+          ...step("Configs", "NotApplied"),
+          changes: [{ key: "CHANGE_WRITES_FILE", params: { path: "/etc/caddy/Caddyfile" } }],
+        },
+      ],
+    });
+    renderIn(<UpgradeDialog serverId="s1" />, "ru");
+    const [name] = await screen.findAllByText(ru.ui.deploySteps.Configs);
+    // C2-02: «Записать настройки раздачибудет сделано».
+    const line = name.closest("li")!;
+    expect(line.textContent).toBe(`${ru.ui.deploySteps.Configs} — ${ru.ui.deploy.stepToDo}`);
+
+    // Every path — what a step writes and what is copied first — is inside the fold.
+    const fold = screen.getByTestId("upgrade-details");
+    expect(fold.tagName).toBe("DETAILS");
+    expect(fold.hasAttribute("open")).toBe(false);
+    for (const path of screen.getAllByText(/\/etc\/caddy\/Caddyfile/)) {
+      expect(fold.contains(path)).toBe(true);
+    }
+    expect(within(fold).getByText(ru.ui.upgrade.willKeep)).toBeInTheDocument();
+  });
+});

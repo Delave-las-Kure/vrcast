@@ -53,7 +53,8 @@ const SPEED_MIN_SPAN_S: f64 = 5.0;
 const RETRANSMIT_SHARE: f64 = 0.02;
 
 /// Above this share of the busy time spent waiting for the far end's window, the flow is
-/// the player's doing rather than the link's — see [`Problem::SlowLink`].
+/// the player's doing rather than the link's — a player that is not reading is not stuck
+/// ([`Problem::Stalls`]). A slow speed is marked either way (T705).
 const RECEIVER_LIMITED: f64 = 0.5;
 
 /// How long the pulling may stand still before it counts as stuck.
@@ -80,10 +81,23 @@ pub struct VariantFacts {
     pub media_id: Option<String>,
     /// What to call the variant to a person: the file, or the rung.
     pub variant: Option<String>,
-    /// What the variant needs to arrive in time. Compared against the delivered speed —
-    /// this is the whole of FR-053.
+    /// What the variant needs to arrive in time — the peak a player sizes its connection by.
+    /// Shown beside the speed as what it needs.
     pub required_bps: Option<u64>,
+    /// What the variant takes **on average**, picture and sound together (`AVERAGE-BANDWIDTH`
+    /// of a rung; a single file's own bitrate). The figure «falling behind» is judged by —
+    /// see [`SLOW_SHARE`]. `None` when it is not known, and then nothing is judged.
+    pub average_bps: Option<u64>,
 }
+
+/// Below this share of the variant's **average** bitrate a viewer is falling behind (the
+/// owner's decision after the 0.3.0 tour).
+///
+/// Not the peak: a healthy player takes what it plays, which is the average, and judged by
+/// the peak it read as «falling behind» while it played without a hitch. Not the average
+/// itself either: over the thirty-second window the delivered speed wanders a little around
+/// it, and a fifth of slack keeps a healthy viewer from flickering into trouble and back.
+pub const SLOW_SHARE: f64 = 0.8;
 
 /// Where the library facts are asked for.
 pub trait VariantLookup {
@@ -110,8 +124,11 @@ pub struct Viewer {
     pub variant: Option<String>,
     /// The speed it is arriving at. `None` until there is enough to work it out from.
     pub delivery_bps: Option<u64>,
-    /// The speed it needs.
+    /// The speed it needs — the peak.
     pub required_bps: Option<u64>,
+    /// What it takes on average; «falling behind» is judged against it ([`SLOW_SHARE`]).
+    #[serde(default)]
+    pub average_bps: Option<u64>,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -351,21 +368,76 @@ pub fn rung_needs(master: &str) -> HashMap<String, u64> {
         .collect()
 }
 
+/// What each rung of a set takes **on average**, picture and sound together — the
+/// description's `AVERAGE-BANDWIDTH` (tour 0.3.0, the owner's decision): what «falling
+/// behind» is judged by.
+///
+/// Only where the description says it. The reading of a description stands in the peak for
+/// an absent average (`hls_master::parse`), which is right for sizing a list and wrong here:
+/// judged by the peak, a healthy player reads as falling behind. A rung without its average
+/// is left out, and its viewers are shown as «no data yet» rather than judged.
+pub fn rung_averages(master: &str) -> HashMap<String, u64> {
+    let Ok(variants) = super::hls_master::parse(master) else {
+        return HashMap::new();
+    };
+    // One `#EXT-X-STREAM-INF` line per variant, in the same order `parse` read them in.
+    let declared = master
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("#EXT-X-STREAM-INF:"))
+        .map(|attrs| {
+            attrs
+                .split(',')
+                .any(|a| a.trim().starts_with("AVERAGE-BANDWIDTH="))
+        });
+    variants
+        .into_iter()
+        .zip(declared)
+        .filter_map(|(v, said)| {
+            let (dir, _playlist) = v.path.trim_start_matches("./").rsplit_once('/')?;
+            (said && !dir.is_empty() && !dir.contains('/') && v.average_bandwidth > 0)
+                .then(|| (dir.to_owned(), v.average_bandwidth))
+        })
+        .collect()
+}
+
+/// Both figures of each rung of one set, read off one description.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RungFigures {
+    /// The peak, by rung — [`rung_needs`].
+    pub needs: HashMap<String, u64>,
+    /// The average, by rung, where the description says it — [`rung_averages`].
+    pub averages: HashMap<String, u64>,
+}
+
+impl RungFigures {
+    pub fn read(master: &str) -> Self {
+        Self {
+            needs: rung_needs(master),
+            averages: rung_averages(master),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.needs.is_empty() && self.averages.is_empty()
+    }
+}
+
 /// The facts for a request into a quality set: which medium, which rung, and what that
-/// rung needs (T666).
+/// rung needs (T666) and takes on average (tour 0.3.0).
 ///
 /// The description itself (`master.m3u8`) names no rung, so it carries no need: a person
 /// who has only asked what there is has not chosen anything yet.
 pub fn set_facts(
     asked: &Asked,
     media_id: Option<String>,
-    needs: Option<&HashMap<String, u64>>,
+    figures: Option<&RungFigures>,
 ) -> VariantFacts {
     let rung = asked.rung();
     VariantFacts {
         media_id,
         variant: rung.map(str::to_owned),
-        required_bps: rung.and_then(|r| needs?.get(r).copied()),
+        required_bps: rung.and_then(|r| figures?.needs.get(r).copied()),
+        average_bps: rung.and_then(|r| figures?.averages.get(r).copied()),
     }
 }
 
@@ -494,6 +566,7 @@ impl Tracked {
             variant: self.facts.variant.clone(),
             delivery_bps,
             required_bps: self.facts.required_bps,
+            average_bps: self.facts.average_bps,
             started_at: self.started_at,
             last_seen_at: self.last_seen_at,
             problems: self.problems(delivery_bps, now),
@@ -524,12 +597,17 @@ impl Tracked {
             .receiver_limited_share
             .is_some_and(|share| share > RECEIVER_LIMITED);
 
-        // Slow link. The exemption is the point of it: a player with a full buffer stops
-        // reading, and the delivered speed drops right off — with nothing wrong at all.
-        // Marking that as a bad link would light the flag for healthy viewers, and a flag
-        // that cries wolf is worse than no flag.
-        if let (Some(delivery), Some(required)) = (delivery_bps, self.facts.required_bps) {
-            if delivery < required && !receiver_limited {
+        // Slow link: the speed shown is under what the quality takes on average, by more than
+        // the slack in [`SLOW_SHARE`].
+        //
+        // ⚠ **Against the average, with no exemption** (T705, tour 0.3.0, the owner's
+        // decision). Judged by the peak, a healthy player — taking what it plays, the average
+        // — read as falling behind; and a player holding back its own flow (`rwnd_limited`)
+        // used to be let off altogether, so «16 kbit/s» stood beside «fine». Over a
+        // thirty-second window a player that keeps up takes at least the average, whoever
+        // holds the flow; one taking well under it is not keeping up.
+        if let (Some(delivery), Some(average)) = (delivery_bps, self.facts.average_bps) {
+            if (delivery as f64) < SLOW_SHARE * average as f64 {
                 problems.push(Problem::SlowLink);
             }
         }

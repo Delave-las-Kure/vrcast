@@ -253,10 +253,11 @@ async fn the_slow_viewer_is_a_short_link_and_not_a_server_in_trouble() {
         watcher.elapsed_s
     );
 
-    // What the rung needs, read off the set's own description on the server, as
-    // `diag_explain_stalls` does (T705) — without it the link is not blamed at all.
-    let needs =
-        vrcast_studio_lib::server::viewers::rung_needs(&conn, VIDEO_DIR, &[String::from("demo")])
+    // What the rung needs and takes on average, read off the set's own description on the
+    // server, as `diag_explain_stalls` does (T705, tour 0.3.0) — without it the link is not
+    // blamed at all.
+    let figures =
+        vrcast_studio_lib::server::viewers::rung_figures(&conn, VIDEO_DIR, &[String::from("demo")])
             .await;
     let mut watcher = watcher.clone();
     assert_eq!(
@@ -264,13 +265,13 @@ async fn the_slow_viewer_is_a_short_link_and_not_a_server_in_trouble() {
         Some("v3"),
         "the rung was not read off the log"
     );
-    watcher.need_mbit = needs
-        .get("demo")
-        .and_then(|rungs| rungs.get("v3"))
-        .map(|bps| *bps as f64 / 1_000_000.0);
+    let rung = figures.get("demo");
+    let mbit = |bps: &u64| *bps as f64 / 1_000_000.0;
+    watcher.need_mbit = rung.and_then(|f| f.needs.get("v3")).map(mbit);
+    watcher.average_mbit = rung.and_then(|f| f.averages.get("v3")).map(mbit);
     assert!(
-        watcher.need_mbit.is_some(),
-        "the rung's need was not read off the set on the server: {needs:?}"
+        watcher.average_mbit.is_some(),
+        "the rung's average was not read off the set on the server: {figures:?}"
     );
 
     let verdict = stalls::explain(&watcher, Some(&live.load), None);
@@ -294,8 +295,8 @@ async fn the_slow_viewer_is_a_short_link_and_not_a_server_in_trouble() {
         .and_then(|v| v.as_f64());
     assert_eq!(
         need,
-        watcher.need_mbit.map(|n| (n * 100.0).round() / 100.0),
-        "the conclusion does not carry the number the rung needs: {:?}",
+        watcher.average_mbit.map(|n| (n * 100.0).round() / 100.0),
+        "the conclusion does not carry the rung's average it was judged by: {:?}",
         verdict.say
     );
 
@@ -410,14 +411,17 @@ async fn the_live_connection_tells_a_short_link_from_a_player_not_taking() {
     let log = server.access_log().expect("the access log would not read");
     let requests: Vec<_> = log.lines().filter_map(|l| parse_line(l).ok()).collect();
     let sifted = stalls::sift(&requests, &live.addresses);
-    let needs =
-        vrcast_studio_lib::server::viewers::rung_needs(&conn, VIDEO_DIR, &[String::from("demo")])
+    let figures =
+        vrcast_studio_lib::server::viewers::rung_figures(&conn, VIDEO_DIR, &[String::from("demo")])
             .await;
-    println!("needs: {needs:?}");
+    println!("figures: {figures:?}");
     assert!(
-        needs.get("demo").is_some_and(|r| r.contains_key("v3")),
-        "the rung's need was not read off the set on the server: {needs:?}"
+        figures
+            .get("demo")
+            .is_some_and(|f| f.averages.contains_key("v3")),
+        "the rung's average was not read off the set on the server: {figures:?}"
     );
+    let mbit = |bps: &u64| *bps as f64 / 1_000_000.0;
 
     let verdict_for = |ip: &str| {
         let mut w = sifted
@@ -426,10 +430,9 @@ async fn the_live_connection_tells_a_short_link_from_a_player_not_taking() {
             .find(|w| w.client_ip == ip)
             .unwrap_or_else(|| panic!("{ip} is not in the report: {:?}", sifted.set_aside))
             .clone();
-        w.need_mbit = needs
-            .get("demo")
-            .and_then(|rungs| rungs.get("v3"))
-            .map(|bps| *bps as f64 / 1_000_000.0);
+        let rung = figures.get("demo");
+        w.need_mbit = rung.and_then(|f| f.needs.get("v3")).map(mbit);
+        w.average_mbit = rung.and_then(|f| f.averages.get("v3")).map(mbit);
         w.live = links.get(ip).copied();
         assert!(w.starving(), "{ip} is keeping up: {w:?}");
         assert!(w.live.is_some(), "{ip}'s connection was not read live");

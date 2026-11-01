@@ -27,7 +27,7 @@ import type {
 import { ipc, toAppError } from "../../shared/ipc";
 import { useLang, useT } from "../../shared/i18n";
 import { renderDetail } from "../../shared/i18n/render";
-import { ErrorNotice } from "../shared/ErrorNotice";
+import { ErrorNotice, TechnicalCause } from "../shared/ErrorNotice";
 import { ServerForm } from "./ServerForm";
 import { useServers } from "./store";
 
@@ -346,7 +346,7 @@ function StepDetail({ detail }: { detail: Detail }) {
       {tech !== undefined && tech !== "" && (
         <details className="error-more step__more">
           <summary>{t.ui.common.more}</summary>
-          <p className="error-more__cause">{String(tech)}</p>
+          <TechnicalCause text={String(tech)} />
         </details>
       )}
     </>

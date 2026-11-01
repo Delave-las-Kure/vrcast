@@ -602,7 +602,7 @@ export const en: Catalogue = {
     OBJECTION_LEVEL_EXCEEDED:
       "Rung {index}: the variant does not fit the level it declares, {level}",
     OBJECTION_OUT_OF_ORDER: "Rung {index}: the rungs are not in descending order",
-    OBJECTION_BAD_STEP: "Rung {index}: {times} times the one below",
+    OBJECTION_BAD_STEP: "Rung {index}: {times|num} times the one below",
     CHAIN_STOPPED_BY_OBJECTION:
       "Build not queued: the rungs have objections. The rest of the queue carries on.",
     NOTICE_CHECK_POINT_RUNNING: "Checking the borrowed measurement — under a minute.",
@@ -689,15 +689,15 @@ export const en: Catalogue = {
     STALLS_FILE_PEAKS:
       "The file's peaks: link {mbit_s|mbit}, average {average_mbit|mbit}, 10 s peak {peak_10s_mbit|mbit}.",
     STALLS_THE_PLAYER:
-      "The server hands pieces out faster than needed: {in_download_mbit_s|mbit} against {average_mbit|mbit}, yet by the clock it comes to {mbit_s|mbit}, ratio {ratio|num}. The player stops asking, or the viewer's link is slower than the server can see. Restarts: {restarts}, skipped: {skipped}.",
+      "The server hands pieces out faster than needed: {in_download_mbit_s|mbit} against {average_mbit|mbit} on average, yet by the clock it comes to {mbit_s|mbit}, ratio {ratio|num}. The player stops asking, or the viewer's link is slower than the server can see. Restarts: {restarts}, skipped: {skipped}.",
     STALLS_VIEWER_LINK:
-      "The viewer's link is short: {ratio|num}× at {mbit_s|mbit} (in downloads {in_download_mbit_s|mbit}), and this quality needs {need_mbit|mbit}. Skipped: {skipped}, restarts: {restarts}.",
+      "The viewer's link is short: {ratio|num}× at {mbit_s|mbit} (in downloads {in_download_mbit_s|mbit}), and this quality takes {need_mbit|mbit} on average. Skipped: {skipped}, restarts: {restarts}.",
     STALLS_PLAYER_LIVE:
       "Not the link: it reaches the viewer, but the player is not taking it — {held_pct}% of the time. Now {live_mbit|mbit}, {ratio|num}× real time received.",
     STALLS_LINK_FINE_LIVE:
-      "Not the link: it carries {live_mbit|mbit} now against {need_mbit|mbit} needed. The player is behind — {ratio|num}× real time.",
+      "Not the link: it carries {live_mbit|mbit} now against {need_mbit|mbit} on average. The player is behind — {ratio|num}× real time.",
     STALLS_VIEWER_LINK_LIVE:
-      "The viewer's link is short: it carries {live_mbit|mbit} now against {need_mbit|mbit} needed, {ratio|num}× real time. Sent again: {resent_pct|num}%.",
+      "The viewer's link is short: it carries {live_mbit|mbit} now against {need_mbit|mbit} on average, {ratio|num}× real time. Sent again: {resent_pct|num}%.",
     STALLS_UNCLEAR: "Falling behind: {ratio|num}× real time. These figures do not say why.",
     // --- videos in work (T672) ---
     VIDEO_ALREADY_LISTED: "This video is already on the list",
@@ -724,6 +724,7 @@ export const en: Catalogue = {
     common: {
       dismiss: "Dismiss",
       more: "Details",
+      technical: "Technical details:",
       cancel: "Cancel",
       close: "Close",
       refresh: "Refresh",
@@ -741,7 +742,7 @@ export const en: Catalogue = {
       columnBuild: "Build",
       buildThisRung: "Build the {mbps} Mbit/s rung",
       rungs: "Rungs",
-      columnBitrate: "Bitrate",
+      columnBitrate: "Bitrate, Mbit/s",
       columnSize: "Frame",
       columnQuality: "Quality",
       columnWhy: "Why",
@@ -965,6 +966,9 @@ export const en: Catalogue = {
       stallsWatching: "Watching",
       stallsNeeds: "This quality needs",
       stallsLive: "Now, on the connection",
+      stallsLiveIdle: "the viewer is not downloading anything now",
+      stallsLiveHeld: "the player is not taking what is sent",
+      stallsLiveStuck: "being sent, not getting through",
       stallsLoad: "What the server was doing",
       stallsLoadCpu: "Processor",
       stallsLoadDisk: "Read off the disk",
@@ -1162,6 +1166,7 @@ export const en: Catalogue = {
       startsAfterPlan: "Starts once planned",
       rungLine: "{height}p · {mbps} Mbit/s",
       rungToMeasure: "to measure",
+      serverDown: "The server is not answering — new videos will wait.",
       onServer: "On the server ≈ {bytes|bytes}",
       aboutMinutes: "{what} ≈ {n} min",
       encodeTime: "Encoding",
@@ -1246,6 +1251,8 @@ export const en: Catalogue = {
       setFilesHeading: "The set's rung files",
       leftoverMp4: "Extra mp4 files — {bytes|bytes}",
       leftoverRemove: "Remove",
+      leftoverAsk: "Remove the extra mp4 files ({n})?",
+      leftoverAskKeeps: "The quality set stays as it is.",
       renameMedia: "Rename",
       buildSet: "Build a set",
       setBuilding: "Set is building",

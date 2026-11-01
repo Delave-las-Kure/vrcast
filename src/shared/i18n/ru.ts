@@ -590,7 +590,7 @@ export const ruCore: CatalogueCore = {
       "Ступень {index}: буфер больше потолка — реальные пики его превысят, и зритель подвиснет",
     OBJECTION_LEVEL_EXCEEDED: "Ступень {index}: вариант не влезает в объявленный уровень {level}",
     OBJECTION_OUT_OF_ORDER: "Ступень {index}: ступени идут не по убыванию",
-    OBJECTION_BAD_STEP: "Ступень {index}: разрыв до соседней в {times} раза",
+    OBJECTION_BAD_STEP: "Ступень {index}: разрыв до соседней в {times|num} раза",
     CHAIN_STOPPED_BY_OBJECTION:
       "Сборка не поставлена: есть замечания к ступеням. Остальная очередь идёт.",
     NOTICE_CHECK_POINT_RUNNING: "Проверяем взятый замер — меньше минуты.",
@@ -674,15 +674,15 @@ export const ruCore: CatalogueCore = {
     STALLS_FILE_PEAKS:
       "Вешают пики файла: канал {mbit_s|mbit}, средний {average_mbit|mbit}, пик 10 с — {peak_10s_mbit|mbit}.",
     STALLS_THE_PLAYER:
-      "Сервер отдаёт куски быстрее нужного: {in_download_mbit_s|mbit} при нужных {average_mbit|mbit}, а по часам выходит {mbit_s|mbit}, доля {ratio|num}. Плеер не просит дальше или канал зрителя медленнее, чем видно серверу. Перезапусков: {restarts}, пропусков: {skipped}.",
+      "Сервер отдаёт куски быстрее нужного: {in_download_mbit_s|mbit} при среднем у качества {average_mbit|mbit}, а по часам выходит {mbit_s|mbit}, доля {ratio|num}. Плеер не просит дальше или канал зрителя медленнее, чем видно серверу. Перезапусков: {restarts}, пропусков: {skipped}.",
     STALLS_VIEWER_LINK:
-      "Не хватает канала зрителя: {ratio|num}× при {mbit_s|mbit} (в закачках {in_download_mbit_s|mbit}), а этому качеству нужно {need_mbit|mbit}. Пропусков: {skipped}, перезапусков: {restarts}.",
+      "Не хватает канала зрителя: {ratio|num}× при {mbit_s|mbit} (в закачках {in_download_mbit_s|mbit}), а этому качеству в среднем нужно {need_mbit|mbit}. Пропусков: {skipped}, перезапусков: {restarts}.",
     STALLS_PLAYER_LIVE:
       "Канал ни при чём: до зрителя доходит, но плеер не забирает — {held_pct}% времени. Сейчас {live_mbit|mbit}, получено {ratio|num}× реального времени.",
     STALLS_LINK_FINE_LIVE:
-      "Канал ни при чём: сейчас несёт {live_mbit|mbit} при нужных {need_mbit|mbit}. Отстаёт плеер — {ratio|num}× реального времени.",
+      "Канал ни при чём: сейчас несёт {live_mbit|mbit} при среднем у качества {need_mbit|mbit}. Отстаёт плеер — {ratio|num}× реального времени.",
     STALLS_VIEWER_LINK_LIVE:
-      "Не хватает канала зрителя: сейчас несёт {live_mbit|mbit} при нужных {need_mbit|mbit}, {ratio|num}× реального времени. Отправлено повторно: {resent_pct|num}%.",
+      "Не хватает канала зрителя: сейчас несёт {live_mbit|mbit} при среднем у качества {need_mbit|mbit}, {ratio|num}× реального времени. Отправлено повторно: {resent_pct|num}%.",
     STALLS_UNCLEAR: "Отстаёт: {ratio|num}× реального времени. Причину по этим данным не назвать.",
     VIDEO_ALREADY_LISTED: "Это видео уже в списке",
     RUNG_FILE_CLAIMED:
@@ -717,6 +717,7 @@ const ui = {
   common: {
     dismiss: "Скрыть",
     more: "Подробнее",
+    technical: "Ответ программы:",
     cancel: "Отмена",
     close: "Закрыть",
     refresh: "Обновить",
@@ -734,7 +735,7 @@ const ui = {
     columnBuild: "Собирать",
     buildThisRung: "Собирать ступень {mbps} Мбит/с",
     rungs: "Ступени",
-    columnBitrate: "Битрейт",
+    columnBitrate: "Битрейт, Мбит/с",
     columnSize: "Кадр",
     columnQuality: "Качество",
     columnWhy: "Почему",
@@ -958,6 +959,9 @@ const ui = {
     stallsWatching: "Смотрит",
     stallsNeeds: "Нужно этому качеству",
     stallsLive: "Сейчас по соединению",
+    stallsLiveIdle: "зритель сейчас ничего не качает",
+    stallsLiveHeld: "проигрыватель не забирает присланное",
+    stallsLiveStuck: "отправляется, но не доходит",
     stallsLoad: "Что делал сервер",
     stallsLoadCpu: "Процессор",
     stallsLoadDisk: "Чтение с диска",
@@ -1156,6 +1160,7 @@ const ui = {
     startsAfterPlan: "Стартует после плана",
     rungLine: "{height}p · {mbps} Мбит/с",
     rungToMeasure: "замерить",
+    serverDown: "Сервер не отвечает — новые видео подождут.",
     onServer: "На сервере ≈ {bytes|bytes}",
     aboutMinutes: "{what} ≈ {n} мин",
     encodeTime: "Кодирование",
@@ -1240,6 +1245,8 @@ const ui = {
     setFilesHeading: "Файлы ступеней набора",
     leftoverMp4: "Лишние файлы mp4 — {bytes|bytes}",
     leftoverRemove: "Удалить",
+    leftoverAsk: "Удалить лишние файлы mp4 ({n})?",
+    leftoverAskKeeps: "Набор качеств не пострадает.",
     renameMedia: "Переименовать",
     buildSet: "Собрать набор",
     setBuilding: "Набор собирается",

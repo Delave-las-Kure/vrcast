@@ -35,6 +35,9 @@ const mockVideoSetName = vi.fn();
 const mockVideoSetRungs = vi.fn();
 const mockLadderRecomputeRung = vi.fn();
 const mockLadderValidate = vi.fn();
+/** Unset — the stub's empty answer, as before (not stale: nothing said). */
+const mockLibraryList = vi.fn((..._a: unknown[]) => Promise.resolve([] as unknown));
+const mockLibraryKnown = vi.fn((..._a: unknown[]) => Promise.resolve([] as unknown));
 const mockServersList = vi.fn<() => Promise<ServerProfile[]>>();
 const mockOpen = vi.fn<(options?: unknown) => Promise<string[] | string | null>>();
 
@@ -66,6 +69,8 @@ vi.mock("../../../shared/ipc", async () => {
       videoSetRungs: (...a: unknown[]) => mockVideoSetRungs(...a),
       ladderValidate: (...a: unknown[]) => mockLadderValidate(...a),
       ladderRecomputeRung: (...a: unknown[]) => mockLadderRecomputeRung(...a),
+      libraryList: (...a: unknown[]) => mockLibraryList(...a),
+      libraryKnown: (...a: unknown[]) => mockLibraryKnown(...a),
     }),
     onVideoUpdate: async (handler: (v: VideoView) => void) => {
       push = handler;
@@ -84,6 +89,7 @@ vi.mock("../../../shared/ipc", async () => {
 
 const { VideoScreen } = await import("../VideoScreen");
 const { useServers } = await import("../../servers/store");
+const { forgetRefreshes, REFRESH_EVERY_MS } = await import("../libraryRefresh");
 
 function profile(): ServerProfile {
   return {
@@ -241,6 +247,9 @@ beforeEach(() => {
   useServers.setState({ profiles: [profile()], loading: false, error: null });
   mockServersList.mockResolvedValue([profile()]);
   mockVideoList.mockResolvedValue([]);
+  mockLibraryList.mockResolvedValue([] as unknown);
+  mockLibraryKnown.mockResolvedValue([] as unknown);
+  forgetRefreshes();
   mockOpen.mockResolvedValue(null);
   for (const m of [
     mockVideoPause,
@@ -1099,6 +1108,40 @@ describe("the rung editor does not take the window down (T692)", () => {
     expect(sent.map((r) => r.index)).toEqual([0, 2]);
   });
 
+  it("a rung typed above its neighbour is checked and saved in its place (tour 0.3.0)", async () => {
+    const edited = unmeasured(2, 9, 1080);
+    mockLadderRecomputeRung.mockResolvedValue(edited);
+    savedAsEdited(edited);
+    const editor = await openEditor();
+    fireEvent.change(within(editor).getByLabelText(`${ru.ui.ladder.columnBitrate} 3`), {
+      target: { value: "9" },
+    });
+    await waitFor(() =>
+      expect(within(editor).getByTestId("rung-2")).toHaveTextContent(ru.ui.ladder.notMeasured),
+    );
+    // Checked in the order it will be saved in — so «не по убыванию» has nothing to say.
+    await waitFor(() => {
+      const calls = mockLadderValidate.mock.calls;
+      const last = calls[calls.length - 1]?.[0] as Rung[];
+      expect(last.map((r) => r.bitrate_bps)).toEqual([9_000_000, 8_000_000, 4_000_000]);
+    });
+    fireEvent.click(within(editor).getByRole("button", { name: ru.ui.video.saveRungs }));
+    await waitFor(() => expect(mockVideoSetRungs).toHaveBeenCalledTimes(1));
+    const [, sent] = mockVideoSetRungs.mock.calls[0] as [string, Rung[]];
+    expect(sent.map((r) => r.bitrate_bps)).toEqual([9_000_000, 8_000_000, 4_000_000]);
+  });
+
+  it("names an objection by the row in the table, not by its place in the checked list", async () => {
+    const editor = await openEditor();
+    // The core counts the rungs left in: rung 3 of the table is the second of two.
+    mockLadderValidate.mockResolvedValue({
+      objections: [{ code: "RUNG_ABOVE_SOURCE", index: 1, source_bps: 1 }],
+      not_buildable: null,
+    });
+    fireEvent.click(within(editor).getAllByRole("checkbox")[1]);
+    expect(await within(editor).findByRole("alert")).toHaveTextContent(/Ступень 3/);
+  });
+
   it("an objection it does not know is left out rather than read wrongly", async () => {
     const editor = await openEditor();
     mockLadderValidate.mockResolvedValue({
@@ -1117,5 +1160,87 @@ describe("both languages", () => {
     show("en");
     expect(await screen.findByRole("heading", { name: en.ui.video.heading })).toBeInTheDocument();
     expect((await card()).getByTestId("stage-facts")).toHaveTextContent("rung 2 of 3");
+  });
+});
+
+/** Tour 0.3.0 (I01): «Видео» says when the server does not answer, as «Библиотека» does. */
+describe("a server out of reach", () => {
+  const library = (stale: boolean) => ({
+    server_id: "srv_1",
+    media: [],
+    unrecognized: [],
+    disk: null,
+    stale,
+  });
+
+  it("says so in one line over the cards, and keeps the cards", async () => {
+    mockVideoList.mockResolvedValue([video({ stage: "done", state: "done" })]);
+    mockLibraryList.mockResolvedValue(library(true));
+    show();
+    expect(await screen.findByTestId("video-server-down")).toHaveTextContent(
+      "Сервер не отвечает — новые видео подождут.",
+    );
+    expect(await screen.findByTestId("video-v1")).toBeInTheDocument();
+  });
+
+  it("says nothing while the server answers", async () => {
+    mockLibraryList.mockResolvedValue(library(false));
+    show();
+    await waitFor(() => expect(mockLibraryList).toHaveBeenCalledWith("srv_1", false));
+    expect(screen.queryByTestId("video-server-down")).toBeNull();
+  });
+
+  it("says so when nothing is cached and the server cannot be reached", async () => {
+    mockLibraryList.mockRejectedValue({ code: "SSH_UNREACHABLE", details: [] });
+    show("en");
+    expect(await screen.findByTestId("video-server-down")).toHaveTextContent(
+      en.ui.video.serverDown,
+    );
+  });
+
+  it("does not take another refusal for the server being down", async () => {
+    mockLibraryList.mockRejectedValue({ code: "SSH_AUTH_FAILED", details: [] });
+    show();
+    await waitFor(() => expect(mockLibraryList).toHaveBeenCalled());
+    expect(screen.queryByTestId("video-server-down")).toBeNull();
+  });
+});
+
+/** The owner: «Video» refreshes the library behind it at most once a minute. */
+describe("the library refresh behind «Видео»", () => {
+  const library = (stale: boolean) => ({
+    server_id: "srv_1",
+    media: [],
+    unrecognized: [],
+    disk: null,
+    stale,
+  });
+
+  it("asks the server once a minute at most, and takes the known library in between", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      mockLibraryList.mockResolvedValue(library(true));
+      mockLibraryKnown.mockResolvedValue(library(true));
+
+      const first = show();
+      await waitFor(() => expect(mockLibraryList).toHaveBeenCalledTimes(1));
+      first.unmount();
+
+      // Back to the section half a minute later: the known library, no refresh.
+      now.mockReturnValue(1_000_000 + 30_000);
+      const second = show();
+      await waitFor(() => expect(mockLibraryKnown).toHaveBeenCalledWith("srv_1"));
+      // Still said from the library as known.
+      expect(await screen.findByTestId("video-server-down")).toBeInTheDocument();
+      expect(mockLibraryList).toHaveBeenCalledTimes(1);
+      second.unmount();
+
+      // A minute after the first: refreshed again.
+      now.mockReturnValue(1_000_000 + REFRESH_EVERY_MS);
+      show();
+      await waitFor(() => expect(mockLibraryList).toHaveBeenCalledTimes(2));
+    } finally {
+      now.mockRestore();
+    }
   });
 });

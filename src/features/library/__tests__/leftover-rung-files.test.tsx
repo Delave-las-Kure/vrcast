@@ -70,8 +70,24 @@ describe("leftover mp4 files of a set (T693)", () => {
     expect(mockRemove).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByText(ru.ui.library.leftoverRemove));
+    // Asked first (tour 0.3.0, E02–E04): nothing is removed on the first press.
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask.textContent).toContain("Удалить лишние файлы mp4 (2)?");
+    expect(ask.textContent).toContain(ru.ui.library.leftoverAskKeeps);
+    expect(mockRemove).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText(ru.ui.library.deleteYes));
     await waitFor(() => expect(onRemoved).toHaveBeenCalled());
     expect(mockRemove).toHaveBeenCalledWith("srv_1", "m1");
+  });
+
+  it("keeps the files when the question is answered «Не удалять»", async () => {
+    renderIn(<LeftoverRungFiles serverId="srv_1" media={media()} onRemoved={() => {}} />);
+    fireEvent.click(screen.getByText(ru.ui.library.leftoverRemove));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteNo));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByText(ru.ui.library.leftoverRemove)).toBeInTheDocument();
+    expect(mockRemove).not.toHaveBeenCalled();
   });
 
   it("counts only the files still on the server, and says it in English too", () => {
@@ -109,6 +125,7 @@ describe("leftover mp4 files of a set (T693)", () => {
     const onRemoved = vi.fn();
     renderIn(<LeftoverRungFiles serverId="srv_1" media={media()} onRemoved={onRemoved} />);
     fireEvent.click(screen.getByText(ru.ui.library.leftoverRemove));
+    fireEvent.click(await screen.findByText(ru.ui.library.deleteYes));
     await screen.findByRole("alert");
     expect(onRemoved).not.toHaveBeenCalled();
   });

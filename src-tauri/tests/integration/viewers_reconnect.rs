@@ -37,6 +37,7 @@ impl ViewerContext for Library {
                 media_id: Some(String::from("media-film")),
                 variant: Some(String::from("film.mp4")),
                 required_bps: None,
+                average_bps: None,
             },
             _ => VariantFacts::default(),
         }

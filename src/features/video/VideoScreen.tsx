@@ -19,14 +19,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSearchParams } from "react-router-dom";
 
-import type { AppError, VideoRefusal, VideoView } from "../../shared/contract";
-import { ipc, onVideoRemoved, onVideoUpdate, toAppError } from "../../shared/ipc";
+import type { AppError, LibraryView, VideoRefusal, VideoView } from "../../shared/contract";
+import { ipc, onLibraryChanged, onVideoRemoved, onVideoUpdate, toAppError } from "../../shared/ipc";
 import { useT } from "../../shared/i18n";
 import { useActiveServer, useServers } from "../servers/store";
 import { ErrorFolded, ErrorNotice } from "../shared/ErrorNotice";
 import { NoServer } from "../shared/NoServer";
 import { basename } from "../shared/names";
 import { SendSpeed } from "./SendSpeed";
+import { libraryForVideo } from "./libraryRefresh";
 import { VideoCard } from "./VideoCard";
 import {
   VIDEO_EXTENSIONS,
@@ -40,6 +41,40 @@ import {
 
 /** How often the list is asked again while something is in work (T687). */
 const RESYNC_MS = 15_000;
+
+/**
+ * Whether the active server is out of reach right now (tour 0.3.0): its library as last known,
+ * a refresh behind it — at most once a minute ([`libraryForVideo`]) — and the answer to that
+ * refresh as `library:changed` brings it. No library cached and no server answering is out of
+ * reach too; any other refusal is not this line's to report.
+ */
+function useServerDown(serverId: string | null): boolean {
+  const [down, setDown] = useState(false);
+  useEffect(() => {
+    setDown(false);
+    if (!serverId) return;
+    let alive = true;
+    const judge = (read: Promise<LibraryView>) =>
+      read
+        .then((view) => {
+          if (alive) setDown(view?.stale === true);
+        })
+        .catch((e) => {
+          if (alive) setDown(toAppError(e).code === "SSH_UNREACHABLE");
+        });
+    void judge(libraryForVideo(serverId));
+    const off = onLibraryChanged((changed) => {
+      if (alive && changed === serverId) void judge(ipc.libraryKnown(serverId));
+    }).catch(() => () => {
+      // Outside the shell (in tests) there is nothing to listen to.
+    });
+    return () => {
+      alive = false;
+      void off.then((fn) => fn());
+    };
+  }, [serverId]);
+  return down;
+}
 
 export function VideoScreen() {
   const t = useT();
@@ -62,6 +97,13 @@ export function VideoScreen() {
   useEffect(() => {
     void reloadServers();
   }, [reloadServers]);
+
+  // ⚠ **Whether the server answers** (tour 0.3.0, I01). «Library» and «Viewers» say so when it
+  // does not; this screen went on as if all were well. Read the way «Library» reads it — the
+  // last known list with a refresh behind it, and `stale` once the refresh could not reach the
+  // server — so nothing is said unless the server really is out of reach. The cards and links
+  // stay: what was made is still made.
+  const serverDown = useServerDown(active?.id ?? null);
 
   /** A view of a video from an event or an answer: kept if it is newer than what is shown. */
   const take = useCallback((v: VideoView) => {
@@ -213,6 +255,12 @@ export function VideoScreen() {
       </div>
 
       {!active && <NoServer />}
+
+      {serverDown && (
+        <p className="notice notice--warning" role="status" data-testid="video-server-down">
+          {w.serverDown}
+        </p>
+      )}
 
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 

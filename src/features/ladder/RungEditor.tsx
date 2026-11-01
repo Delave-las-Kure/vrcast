@@ -20,7 +20,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useLang, useT } from "../../shared/i18n";
+import { useLang, useT, type Lang } from "../../shared/i18n";
+import { formatNumber } from "../../shared/i18n/format";
 import { renderDetail } from "../../shared/i18n/render";
 import { ipc } from "../../shared/ipc";
 import type {
@@ -33,9 +34,30 @@ import type {
   SourceFacts,
 } from "../../shared/contract";
 
-/** Megabits, as everything in this project is counted. */
+/** Megabits, as everything in this project is counted. The unit is in the column's heading. */
 function mbps(bps: number): string {
-  return `${Math.round(bps / 1_000_000)} Mbit/s`;
+  return String(Math.round(bps / 1_000_000));
+}
+
+/** To the hundredth, in the separator of the language: 96.1 → «96,10» / "96.10". */
+function twoPlaces(value: number, lang: Lang): string {
+  const s = value.toFixed(2);
+  return lang === "ru" ? s.replace(".", ",") : s;
+}
+
+/**
+ * The rungs highest first — the order a set is built and described in (tour 0.3.0).
+ *
+ * A rung typed in above the one over it used to be saved where it stood, objected to as out
+ * of order. Putting it in its place is what the person meant; telling them to do
+ * it by hand was a chore with one right answer. Stable: rungs of the same bitrate keep their
+ * order (and are still objected to — a duplicate is a real mistake).
+ */
+export function highestFirst(rungs: readonly Rung[]): Rung[] {
+  return rungs
+    .map((rung, at) => ({ rung, at }))
+    .sort((a, b) => b.rung.bitrate_bps - a.rung.bitrate_bps || a.at - b.at)
+    .map(({ rung }) => rung);
 }
 
 /**
@@ -51,6 +73,7 @@ function mbps(bps: number): string {
 function qualityText(
   quality: Quality,
   words: { notMeasured: string; vmafIs: string; vmafBorrowed: string },
+  lang: Lang = "en",
 ): { text: string; measured: boolean; borrowed: boolean } {
   if (quality.state === "not_measured") {
     return { text: words.notMeasured, measured: false, borrowed: false };
@@ -58,7 +81,9 @@ function qualityText(
   const borrowed = quality.state === "borrowed";
   const wording = borrowed ? words.vmafBorrowed : words.vmafIs;
   return {
-    text: wording.replace("{value}", (quality.vmaf_x100 / 100).toFixed(2)),
+    // In the separator of the language (tour 0.3.0): «93,45», not «93.45», in Russian. Two
+    // places always — VMAF is read to the hundredth.
+    text: wording.replace("{value}", twoPlaces(quality.vmaf_x100 / 100, lang)),
     measured: true,
     borrowed,
   };
@@ -78,13 +103,17 @@ function reasonText(
   rung: Rung,
   above: Rung | undefined,
   words: Record<RungReason, string>,
+  lang: Lang = "en",
 ): string {
   const times = above ? above.bitrate_bps / Math.max(1, rung.bitrate_bps) : 1;
-  return words[reason]
-    .replace("{mbps}", String(Math.round(rung.bitrate_bps / 1_000_000)))
-    .replace("{height}", String(rung.height))
-    .replace("{width}", String(rung.width))
-    .replace("{times}", times.toFixed(1));
+  return (
+    words[reason]
+      .replace("{mbps}", String(Math.round(rung.bitrate_bps / 1_000_000)))
+      .replace("{height}", String(rung.height))
+      .replace("{width}", String(rung.width))
+      // «в 1,8 раза», not «в 1.8 раза» (tour 0.3.0, D3-03): the shared number format.
+      .replace("{times}", formatNumber(times, lang, 1))
+  );
 }
 
 /**
@@ -97,12 +126,18 @@ function reasonText(
  * they disagreed nobody could say which was the rule. There is one set, keyed by the code the
  * core sends, and this screen and the tasks screen both read it.
  */
-function objectionDetail(objection: Objection): Detail | null {
+function objectionDetail(
+  objection: Objection,
+  row: (position: number) => number = (position) => position,
+): Detail | null {
   // T692 — read by its `code`, as the core sends it. Something this screen does not know is
   // left out rather than read as a shape it is not: an unknown objection must not be able to
   // take the whole window down with it.
-  const index = (objection as { index?: unknown }).index;
-  if (typeof index !== "number") return null;
+  const position = (objection as { index?: unknown }).index;
+  if (typeof position !== "number") return null;
+  // The core counts in the list it was given — the rungs left in, highest first. A person
+  // counts the rows of the table they are looking at (tour 0.3.0).
+  const index = row(position);
   switch (objection.code) {
     case "RUNG_ABOVE_SOURCE":
       return { key: "OBJECTION_RUNG_ABOVE_SOURCE", params: { index: index + 1 } };
@@ -118,7 +153,8 @@ function objectionDetail(objection: Objection): Detail | null {
     case "BAD_STEP":
       return {
         key: "OBJECTION_BAD_STEP",
-        params: { index: index + 1, times: Number(objection.times).toFixed(1) },
+        // A number, to one place; the wording formats it in the language's separator.
+        params: { index: index + 1, times: Number(Number(objection.times).toFixed(1)) },
       };
     default:
       return null;
@@ -156,11 +192,13 @@ export function RungEditor({
     rungsRef.current = rungs;
   }, [rungs]);
 
-  // What will actually be built. The check has to be about these and not about the whole
-  // list: leaving a rung out is what widens a gap, and a check that looked at the rungs
-  // nobody asked for would stay quiet about it.
+  // What will actually be built, in the order it will be saved in: highest first (tour 0.3.0).
+  // The check has to be about these and not about the whole list: leaving a rung out is what
+  // widens a gap, and a check that looked at the rungs nobody asked for would stay quiet about
+  // it. And a rung typed in above its neighbour is put in its place on «Save» rather than
+  // objected to — so it is checked in that place.
   const building = useMemo(
-    () => rungs.filter((rung) => !left_out?.has(rung.index)),
+    () => highestFirst(rungs.filter((rung) => !left_out?.has(rung.index))),
     [rungs, left_out],
   );
   // T692 — what is being typed into a bitrate field, until it is a whole number again. An
@@ -168,7 +206,12 @@ export function RungEditor({
   // field puts the rung's own number back.
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const objectionDetails = (verdict?.objections ?? [])
-    .map(objectionDetail)
+    .map((objection) =>
+      objectionDetail(objection, (position) => {
+        const row = rungs.findIndex((rung) => rung.index === building[position]?.index);
+        return row < 0 ? position : row;
+      }),
+    )
     .filter((d): d is Detail => d !== null);
 
   // Checked on every change of the rungs, including the first time they arrive. The core's
@@ -234,7 +277,7 @@ export function RungEditor({
         </thead>
         <tbody>
           {rungs.map((rung, index) => {
-            const quality = qualityText(rung.quality, words);
+            const quality = qualityText(rung.quality, words, lang);
             const out = left_out?.has(rung.index) ?? false;
             return (
               <tr
@@ -296,7 +339,7 @@ export function RungEditor({
                   <ul>
                     {rung.reasons.map((reason) => (
                       <li key={reason}>
-                        {reasonText(reason, rung, rungs[index - 1], words.reasons)}
+                        {reasonText(reason, rung, rungs[index - 1], words.reasons, lang)}
                       </li>
                     ))}
                   </ul>

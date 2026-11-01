@@ -453,4 +453,26 @@ describe("one row per film (T710)", () => {
     ).toBeTruthy();
     expect(screen.getByTestId("film-v1").textContent).toContain(ru.ui.video.queued);
   });
+
+  it("counts the films in line and says «В очереди» once on each (tour 0.3.0, D17)", async () => {
+    // «Start all»: two films in line, no task of theirs exists yet.
+    films = [
+      film({ stage: "planned", progress: null, task_id: null }),
+      film({ id: "v2", title: "Короткий 720p", stage: "planned", progress: null, task_id: null }),
+    ];
+    list = [];
+    draw();
+    const row = await screen.findByTestId("film-v1");
+    expect(screen.getByTestId("task-counts").textContent).toBe("Выполняется: 0. В очереди: 2.");
+    expect(row.textContent!.split(ru.ui.video.queued)).toHaveLength(2);
+    expect(screen.getByTestId("film-v2").textContent!.split(ru.ui.video.queued)).toHaveLength(2);
+  });
+
+  it("counts a film at work once, not once more for its task", async () => {
+    films = [film()];
+    list = [task({ id: "t-film", state: "running", batch: { id: "v1", label: "Фильм" } })];
+    draw();
+    await screen.findByTestId("film-v1");
+    expect(screen.getByTestId("task-counts").textContent).toBe("Выполняется: 1. В очереди: 0.");
+  });
 });

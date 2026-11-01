@@ -743,9 +743,9 @@ async fn scenario_4_both_kinds_of_viewer_are_seen_and_a_slow_one_is_named() {
     // ⚠ **The link is thinned, not the reader** — and the first version of this got that
     // wrong. Pulling with `curl --limit-rate` throttles whoever is reading, not the network:
     // TCP hands the whole file over at once and then waits, `bytes_acked` stops growing, and
-    // `ss` reports `rwnd_limited: 97%`. That is a player with a full buffer, which the core
-    // deliberately does **not** flag (`RECEIVER_LIMITED`) — marking it would light the flag
-    // for every healthy viewer there is. The check failed because the application was right.
+    // `ss` reports `rwnd_limited: 97%`. That is the reader holding the flow back, not a thin
+    // line, and this scenario is about the line. (Since T705 a speed under the need is
+    // marked either way — the state has to agree with the speed shown next to it.)
     //
     // So the serving's own outgoing link is narrowed below what the variant needs, which is
     // what a thin link actually is. It is put back below whatever happens.

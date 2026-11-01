@@ -484,6 +484,25 @@ button:focus-visible {
   color: var(--text-muted);
   font-size: 12px;
   word-break: break-word;
+  margin-top: 6px;
+}
+
+.error-more__cause-label {
+  display: block;
+}
+
+/* The program's own answer, as a quotation: monospace, its own lines kept, wrapped rather than
+   scrolled sideways (tour 0.3.0). */
+.error-more__cause-text {
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }
 
 .notice__close {
@@ -704,6 +723,59 @@ button:focus-visible {
   font-size: 12px;
   color: var(--text-muted);
   word-break: break-word;
+}
+
+/* The steps of a deployment or an upgrade: the name, then its state apart from it
+   (tour 0.3.0, C2-02: the two used to run together with no space between them). */
+.planned-steps > li {
+  margin-bottom: 4px;
+}
+
+.planned-step__sep,
+.planned-step__mark {
+  color: var(--text-muted);
+}
+
+.planned-step__detail {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+/* ---------- viewers ---------- */
+
+/* Columns apart (tour 0.3.0, F09): «не определено», the film and the speed used to stand
+   almost touching. */
+.viewers {
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.viewers th,
+.viewers td {
+  padding: 8px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.viewers th {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.viewers__variant,
+.viewers__provider,
+.viewers__needs {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.viewers__problems {
+  margin: 0;
+  padding-left: 16px;
 }
 
 /* ---------- servers ---------- */

@@ -412,11 +412,15 @@ describe("what a step says it will do", () => {
     renderIn(<DeployScreen serverId="s1" />, "ru");
     chooseIpv6("Disable");
 
-    await screen.findByText(ru.ui.deploySteps.Packages);
-    expect(
-      await screen.findByText(/ffmpeg, caddy/),
-      "the plan says which step will run and not what it will do",
-    ).toBeInTheDocument();
+    await screen.findAllByText(ru.ui.deploySteps.Packages);
+    const named = await screen.findByText(/ffmpeg, caddy/);
+    expect(named, "the plan says which step will run and not what it will do").toBeInTheDocument();
+    // Tour 0.3.0 (the owner): what each step touches is folded under «Подробнее», the steps
+    // themselves stay in view.
+    const fold = screen.getByTestId("deploy-details");
+    expect(fold.tagName).toBe("DETAILS");
+    expect(fold.hasAttribute("open")).toBe(false);
+    expect(fold.contains(named)).toBe(true);
   });
 
   it("says nothing at all for a step that changes nothing", async () => {

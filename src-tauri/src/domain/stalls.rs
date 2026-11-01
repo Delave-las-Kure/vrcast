@@ -104,6 +104,13 @@ pub struct Watcher {
     /// with no number for what the link would have had to carry (QA-26 №12).
     #[serde(default)]
     pub need_mbit: Option<f64>,
+    /// What that rung of that film takes **on average**, in Mbit/s — its AVERAGE-BANDWIDTH
+    /// (tour 0.3.0). The figure a verdict about the viewer's link is judged by, with the same
+    /// slack as the Viewers screen ([`crate::domain::viewers::SLOW_SHARE`]): judged by the
+    /// peak, a link that carries the film was called too thin. `None` when not known — and
+    /// then no verdict about the link stands on it.
+    #[serde(default)]
+    pub average_mbit: Option<f64>,
     /// What their own connection said while the diagnosis was asked (T711) — `None` when they
     /// had none open in both readings, or the server could not be asked.
     #[serde(default)]
@@ -487,6 +494,7 @@ fn assemble(client_ip: &str, mine: &[&Request]) -> Watcher {
             .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
             .map(|(rung, _)| rung),
         need_mbit: None,
+        average_mbit: None,
         live: None,
     }
 }
@@ -622,17 +630,23 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
         }
     }
 
-    // What this viewer's film needs: the rung they are on, read off that film's own set on
-    // the server (T705); failing that, the measured file of that same film. Without either
-    // there is no number for what their link would have to carry, and no verdict about the
-    // link or the player can stand.
-    let need = watcher.need_mbit.or(file.map(|f| f.average_mbit));
+    // What this viewer's film takes on average: the rung they are on, read off that film's own
+    // set on the server (T705); failing that, the measured file of that same film. Without
+    // either there is no number for what their link would have to carry, and no verdict about
+    // the link or the player can stand.
+    //
+    // ⚠ **The average with a fifth of slack, as on the Viewers screen** (tour 0.3.0, the
+    // owner's rule). Judged by the peak a link that carries the film was called too thin, and
+    // the two screens disagreed about the same viewer. `need` is the figure said in the
+    // verdict; `enough` is what the link has to carry.
+    let need = watcher.average_mbit.or(file.map(|f| f.average_mbit));
+    let enough = need.map(|n| n * crate::domain::viewers::SLOW_SHARE);
 
     // T711 — the link, seen on the viewer's own connection: it had something on its way most
     // of the stretch and their side was not the one holding it, so what it carried while
-    // busy is what their link carries. Against what the rung needs, that settles the
+    // busy is what their link carries. Against what the rung takes, that settles the
     // question the log could only put as "the player, or a link slower than we can see".
-    if let (Some(live), Some(need)) = (live, need) {
+    if let (Some(live), Some(need), Some(enough)) = (live, need, enough) {
         if let Some(carried) = live.busy_mbit_s {
             let say = |code| {
                 Detail::new(code)
@@ -640,7 +654,7 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
                     .with("live_mbit", round2(carried))
                     .with("need_mbit", round2(need))
             };
-            return if carried >= need {
+            return if carried >= enough {
                 Verdict {
                     cause: Cause::ThePlayer,
                     say: say(DetailCode::StallsLinkFineLive),
@@ -665,11 +679,14 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
     // to argue with their provider. There was no cause for this at all, and the catch-all
     // took it.
     //
-    // **The comparison is the film's own figure, not a threshold of ours.** If what arrives
-    // while anything is arriving would keep up with the film, the shortfall is in the gaps —
-    // a player that has stopped, a decoder that cannot keep pace, somebody who pressed pause.
-    if let (Some(need), Some(in_download)) = (need, watcher.in_download_mbit_s) {
-        if in_download >= need {
+    // **The comparison is the film's own average** (with the owner's fifth of slack, tour
+    // 0.3.0). If what arrives while anything is arriving would keep up with the film, the
+    // shortfall is in the gaps — a player that has stopped, a decoder that cannot keep pace,
+    // somebody who pressed pause.
+    if let (Some(need), Some(enough), Some(in_download)) =
+        (need, enough, watcher.in_download_mbit_s)
+    {
+        if in_download >= enough {
             return Verdict {
                 cause: Cause::ThePlayer,
                 say: Detail::new(DetailCode::StallsThePlayer)
@@ -688,7 +705,7 @@ pub fn explain(watcher: &Watcher, load: Option<&Load>, file: Option<&FileShape>)
     // was not enough — a viewer with a speed of 0 measured over two requests among them. Now
     // it takes what the film needs, and their speed measured under it.
     let speed = watcher.in_download_mbit_s.or(watcher.mbit_s);
-    let (Some(need), Some(true)) = (need, speed.map(|s| need.is_some_and(|n| s < n))) else {
+    let (Some(need), Some(true)) = (need, speed.map(|s| enough.is_some_and(|e| s < e))) else {
         return Verdict {
             cause: Cause::Unclear,
             say: Detail::new(DetailCode::StallsUnclear)

@@ -928,6 +928,9 @@ export interface Watcher {
   rung?: string | null;
   /** T705 — what that rung of that film needs, Mbit/s, from the set on the server. */
   need_mbit?: number | null;
+  /** Tour 0.3.0 — what that rung takes on average, Mbit/s: what a verdict about the link is
+   *  judged by (with the Viewers screen's `SLOW_SHARE` of slack). */
+  average_mbit?: number | null;
   /** T711 — their own connection while the diagnosis was asked; null when none was open. */
   live?: LiveLink | null;
 }
@@ -1453,8 +1456,11 @@ export interface Viewer {
   variant: string | null;
   /** What is arriving. Null until there is enough measurement to work it out from. */
   delivery_bps: number | null;
-  /** What the variant they are getting needs. */
+  /** What the variant they are getting needs — the peak; shown beside the speed. */
   required_bps: number | null;
+  /** Tour 0.3.0 — what the variant takes on average (picture and sound). «Falling behind» is
+   *  judged against it: under `SLOW_SHARE` × this. Null when not known: nothing is judged. */
+  average_bps: number | null;
   started_at: string;
   last_seen_at: string;
   problems: ViewerProblem[];

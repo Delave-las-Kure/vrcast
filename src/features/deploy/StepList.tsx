@@ -36,23 +36,43 @@ function detailOf(status: DeployStepStatus): string | null {
   return null;
 }
 
-export function StepList({ steps }: { steps: PlannedStep[] }) {
+export function StepList({
+  steps,
+  changes = true,
+  marks = true,
+}: {
+  steps: PlannedStep[];
+  /** What each step will do — packages, ports, files. Off where it is folded elsewhere. */
+  changes?: boolean;
+  /** «будет сделано» and the like, and a step's reason. Off for the folded list that only
+   *  says what each step will touch. */
+  marks?: boolean;
+}) {
   const t = useT();
   const { lang } = useLang();
   const words = t.ui.deploy as unknown as Record<string, string>;
   const names = t.ui.deploySteps as unknown as Record<string, string>;
 
   return (
-    <ol>
+    <ol className="planned-steps">
       {steps.map((step) => {
         const detail = detailOf(step.status);
         return (
           <li key={step.id}>
-            <span>{names[step.id] ?? step.id}</span>
-            <span>{mark(step.status, words)}</span>
+            <span className="planned-step__name">{names[step.id] ?? step.id}</span>
+            {/* Apart from the name, and in so many words (tour 0.3.0, C2-02/C2-04): the two
+                used to run together — «Проверить доменную записьбудет сделано». */}
+            {marks && (
+              <>
+                <span className="planned-step__sep" aria-hidden="true">
+                  {" — "}
+                </span>
+                <span className="planned-step__mark">{mark(step.status, words)}</span>
+              </>
+            )}
             {/* The reason beside its step rather than at the end of the list: by the end of
                 the list there is nothing left to attach it to. */}
-            {detail && <small>{detail}</small>}
+            {marks && detail && <small className="planned-step__detail">{detail}</small>}
             {/* ⚠ **What this step will actually do** (T507, FR-122). The core has always
                 worked it out — the packages by name, the ports, the files, the size of the
                 swap file — and the interface typed the field `unknown[]` and read it nowhere,
@@ -61,7 +81,7 @@ export function StepList({ steps }: { steps: PlannedStep[] }) {
                 Only where there is something to say: a step that only looks says so, and a
                 step whose changes are empty (keeping IPv6, or swap that is not needed) says
                 nothing rather than showing an empty list. */}
-            {step.changes.length > 0 && (
+            {changes && step.changes.length > 0 && (
               <ul className="step__changes">
                 {step.changes.map((change, i) => (
                   <li key={i}>{renderDetail(change, t, lang)}</li>

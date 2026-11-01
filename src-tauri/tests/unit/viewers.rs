@@ -268,19 +268,24 @@ fn request(ip: &str, path: &str, when: i64) -> vrcast_studio_lib::domain::access
 /// A library that answers for the fixture's quality set.
 fn library(asked: &Asked) -> VariantFacts {
     match asked.library_key() {
-        Some("demo") => VariantFacts {
-            media_id: Some(String::from("media-demo")),
-            variant: asked.rung().map(str::to_owned),
-            required_bps: match asked.rung() {
+        Some("demo") => {
+            let rate = match asked.rung() {
                 Some("v1") => Some(10_000_000),
                 Some("v2") => Some(5_000_000),
                 _ => None,
-            },
-        },
+            };
+            VariantFacts {
+                media_id: Some(String::from("media-demo")),
+                variant: asked.rung().map(str::to_owned),
+                required_bps: rate,
+                average_bps: rate,
+            }
+        }
         Some(name) => VariantFacts {
             media_id: Some(format!("media-{name}")),
             variant: Some(name.to_owned()),
             required_bps: Some(8_000_000),
+            average_bps: Some(8_000_000),
         },
         None => VariantFacts::default(),
     }
@@ -369,11 +374,11 @@ fn no_speed_is_shown_until_there_is_enough_to_work_one_out_from() {
 }
 
 #[test]
-fn a_narrow_link_is_marked_and_a_full_buffer_is_not() {
-    // The two look alike from the outside and are not alike at all. A player that has
-    // filled its buffer stops reading, and the delivered speed drops right off — with
-    // nothing wrong. Marking that would light the flag for healthy viewers, and a flag that
-    // cries wolf is worse than no flag.
+fn a_narrow_link_is_marked_and_so_is_a_player_holding_back_under_the_need() {
+    // T705 (tour 0.3.0): the screen showed «16 kbit/s, needs 11.1 Mbit/s — fine» for a viewer
+    // whose player was holding back its own flow (`rwnd_limited`). The state and the speed
+    // shown next to it have to agree: under the need is "falling behind", whoever is
+    // holding the flow back.
     let narrow = {
         let mut session = Session::default();
         session.note_request(&request("10.0.0.9", "/videos/demo/v1/seg0.ts", 0), &library);
@@ -387,7 +392,7 @@ fn a_narrow_link_is_marked_and_a_full_buffer_is_not() {
         "a viewer getting a twelfth of what they need was not marked: {narrow:?}"
     );
 
-    let buffered = {
+    let held_back = {
         let mut session = Session::default();
         session.note_request(&request("10.0.0.8", "/videos/demo/v1/seg0.ts", 0), &library);
         session.note_connections(&[row("10.0.0.8", 0, 0, 0, Some(0.98))], at(0));
@@ -395,8 +400,17 @@ fn a_narrow_link_is_marked_and_a_full_buffer_is_not() {
         session.active(at(11)).remove(0)
     };
     assert!(
-        !buffered.problems.contains(&Problem::SlowLink),
-        "a viewer whose player had simply stopped reading was accused of a bad link: {buffered:?}"
+        held_back.delivery_bps.unwrap() < held_back.required_bps.unwrap(),
+        "the case is a speed shown under the need: {held_back:?}"
+    );
+    assert!(
+        held_back.problems.contains(&Problem::SlowLink),
+        "a speed shown under the need was not marked as falling behind: {held_back:?}"
+    );
+    // Not reading is still not being stuck: that exemption stays.
+    assert!(
+        !held_back.problems.contains(&Problem::Stalls),
+        "{held_back:?}"
     );
 }
 
@@ -637,9 +651,76 @@ fn each_rung_needs_its_own_bandwidth_from_the_description() {
 
 /// The facts a request into the set gets, the way the application's own library hands them.
 fn set_library(asked: &Asked) -> VariantFacts {
-    use vrcast_studio_lib::domain::viewers::{rung_needs, set_facts};
-    let needs = rung_needs(MASTER);
-    set_facts(asked, Some(String::from("media-demo")), Some(&needs))
+    use vrcast_studio_lib::domain::viewers::{set_facts, RungFigures};
+    let figures = RungFigures::read(MASTER);
+    set_facts(asked, Some(String::from("media-demo")), Some(&figures))
+}
+
+#[test]
+fn each_rung_takes_its_own_average_from_the_description_and_only_when_said() {
+    use vrcast_studio_lib::domain::viewers::rung_averages;
+    let averages = rung_averages(MASTER);
+    assert_eq!(averages.get("v1"), Some(&8_000_000), "{averages:?}");
+    assert_eq!(averages.get("v2"), Some(&4_000_000));
+
+    // A description without AVERAGE-BANDWIDTH: the reading stands the peak in for it, and
+    // the peak is not the average — so nothing is said, rather than the wrong figure.
+    let old = MASTER.replace(",AVERAGE-BANDWIDTH=8000000", "");
+    let averages = rung_averages(&old);
+    assert_eq!(averages.get("v1"), None, "{averages:?}");
+    assert_eq!(averages.get("v2"), Some(&4_000_000));
+    assert!(rung_averages("not a playlist").is_empty());
+}
+
+/// A viewer of rung `v9`: 9 Mbit/s on average, 11.1 at the peak (the tour's own figures),
+/// delivering `bytes` over ten seconds.
+fn on_v9(bytes: u64, average: Option<u64>) -> Viewer {
+    let facts = move |asked: &Asked| VariantFacts {
+        media_id: Some(String::from("media-demo")),
+        variant: asked.rung().map(str::to_owned),
+        required_bps: Some(11_100_000),
+        average_bps: average,
+    };
+    let mut session = Session::default();
+    session.note_request(
+        &request("10.0.0.4", "/videos/demo/v9/seg_00001.m4s", 0),
+        &facts,
+    );
+    session.note_connections(&[row("10.0.0.4", 0, 0, 0, Some(0.97))], at(0));
+    session.note_connections(&[row("10.0.0.4", bytes, 100, 0, Some(0.97))], at(10));
+    session.active(at(11)).remove(0)
+}
+
+#[test]
+fn falling_behind_is_judged_against_the_average_with_a_fifth_of_slack() {
+    // The owner's rule after the 0.3.0 tour: «falling behind» only under 0.8 × the rung's
+    // average; otherwise, with both figures known, fine.
+    let crawling = on_v9(58_750, Some(9_000_000)); // 47 kbit/s
+    assert_eq!(crawling.delivery_bps, Some(47_000));
+    assert!(
+        crawling.problems.contains(&Problem::SlowLink),
+        "{crawling:?}"
+    );
+
+    // A healthy player taking what it plays: 9.2 at an average of 9, the peak 11.1.
+    let healthy = on_v9(11_500_000, Some(9_000_000));
+    assert_eq!(healthy.delivery_bps, Some(9_200_000));
+    assert!(
+        !healthy.problems.contains(&Problem::SlowLink),
+        "a player at the film's own speed was called slow by the peak: {healthy:?}"
+    );
+
+    // 7.0 at an average of 9: under the 7.2 the slack allows.
+    let short = on_v9(8_750_000, Some(9_000_000));
+    assert_eq!(short.delivery_bps, Some(7_000_000));
+    assert!(short.problems.contains(&Problem::SlowLink), "{short:?}");
+}
+
+#[test]
+fn without_the_average_nothing_is_judged() {
+    let viewer = on_v9(58_750, None);
+    assert_eq!(viewer.average_bps, None);
+    assert!(!viewer.problems.contains(&Problem::SlowLink), "{viewer:?}");
 }
 
 #[test]
@@ -687,9 +768,9 @@ fn a_viewer_of_a_set_getting_less_than_their_rung_needs_is_marked_slow() {
 }
 
 #[test]
-fn a_viewer_of_a_set_whose_player_is_holding_back_is_not_marked_slow() {
-    // The exemption stays: a player with a full buffer stops reading, and its speed drops
-    // right off with nothing wrong at all.
+fn a_viewer_of_a_set_whose_player_is_holding_back_under_the_need_is_marked_slow() {
+    // T705 (tour 0.3.0): the state agrees with the speed shown. A player holding back its
+    // own flow at 4 Mbit/s of the 12 its rung needs is not keeping up with that rung.
     let mut session = Session::default();
     session.note_request(
         &request("10.0.0.8", "/videos/demo/v1/seg_00001.m4s", 0),
@@ -705,8 +786,8 @@ fn a_viewer_of_a_set_whose_player_is_holding_back_is_not_marked_slow() {
         "the need is known either way"
     );
     assert!(
-        !viewer.problems.contains(&Problem::SlowLink),
-        "a player holding back its own flow was accused of a bad link: {viewer:?}"
+        viewer.problems.contains(&Problem::SlowLink),
+        "a speed shown under the need was left as fine: {viewer:?}"
     );
 }
 
