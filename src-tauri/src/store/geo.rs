@@ -158,8 +158,8 @@ pub fn previous_month(year: i32, month: u8) -> (i32, u8) {
     }
 }
 
-fn url(kind: &str, month: &str) -> String {
-    format!("{BASE}/dbip-{kind}-lite-{month}.mmdb.gz")
+fn url(base: &str, kind: &str, month: &str) -> String {
+    format!("{base}/dbip-{kind}-lite-{month}.mmdb.gz")
 }
 
 /// Whether the tables need fetching.
@@ -176,6 +176,9 @@ pub fn needs_fetching(dir: &Path, now_month: &str) -> bool {
 /// a table that will not download, leaves the application working and every viewer "not
 /// determined". Refusing to start over it would be absurd.
 pub async fn fetch(dir: &Path, year: i32, month: u8) -> Result<String, String> {
+    // Prepare once, before any await. Forget may remove this directory while a download
+    // waits; falling back to another month must not recreate data already reported gone.
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
     let months = [month_name(year, month), {
         let (y, m) = previous_month(year, month);
         month_name(y, m)
@@ -200,9 +203,12 @@ pub async fn fetch(dir: &Path, year: i32, month: u8) -> Result<String, String> {
 }
 
 async fn fetch_month(dir: &Path, month: &str) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
+    fetch_month_at(dir, month, BASE).await
+}
+
+async fn fetch_month_at(dir: &Path, month: &str, base: &str) -> Result<(), String> {
     for (kind, name) in [("city", CITY), ("asn", ASN)] {
-        let bytes = download(&url(kind, month)).await?;
+        let bytes = download(&url(base, kind, month)).await?;
         let unpacked = gunzip(&bytes)?;
         // Written beside and then moved into place: a fetch cut off halfway would otherwise
         // leave half a table where a whole one is expected, and it would open and answer
@@ -269,4 +275,34 @@ fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, String> {
         .read_to_end(&mut out)
         .map_err(|e| format!("the table would not unpack: {e}"))?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_month_retry_does_not_recreate_a_directory_removed_by_forgetting() {
+        // A local endpoint that never answers keeps the monthly fetch at its first await.
+        // The directory is already absent, exactly as when Forget wins during month one.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let dir =
+            std::env::temp_dir().join(format!("vrcast-forgotten-geo-{}", uuid::Uuid::new_v4()));
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            fetch_month_at(&dir, "2026-11", &base),
+        )
+        .await;
+        let recreated = dir.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            outcome.is_err(),
+            "the owned silent endpoint unexpectedly answered"
+        );
+        assert!(
+            !recreated,
+            "the background month's retry resurrected the forgotten directory"
+        );
+    }
 }
