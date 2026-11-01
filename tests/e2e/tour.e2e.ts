@@ -72,6 +72,7 @@ const CLEAN_SSH_PORT = 47122;
 const NAMESPACE = process.env.VRCAST_TOUR_NAMESPACE ?? "vrcast-e2e-tour";
 const NAME = NAMESPACE;
 const CLEAN_NAME = `${NAMESPACE}-clean`;
+const UPGRADE_NAME = `${NAMESPACE}-upgrade`;
 const VIEWER_FAST = `${NAMESPACE}-viewer-fast`;
 const VIEWER_SLOW = `${NAMESPACE}-viewer-slow`;
 
@@ -93,6 +94,7 @@ const SECTIONS: Record<string, string> = {
   A: "Первый запуск, каждый раздел пустым",
   B: "Мастер добавления сервера",
   C: "Карточка сервера: состояние, обновление, развёртывание",
+  C2: "Обновление настоящей раздачи версии 1 на systemd-контейнере",
   D: "«Видео»: от файла до ссылки — начало",
   D2: "«Видео»: после перезапуска приложения — до ссылки; занятое имя",
   E: "Библиотека",
@@ -598,7 +600,8 @@ function serverIp(): string {
 }
 
 function removeContainers() {
-  for (const n of [VIEWER_FAST, VIEWER_SLOW, CLEAN_NAME, NAME]) docker(["rm", "-f", n]);
+  for (const n of [VIEWER_FAST, VIEWER_SLOW, CLEAN_NAME, UPGRADE_NAME, NAME])
+    docker(["rm", "-f", n]);
 }
 
 // ---------- the films ----------
@@ -1422,6 +1425,147 @@ describe.skipIf(why.length > 0)("a tour of the interface, with pictures", () => 
       docker(["rm", "-f", CLEAN_NAME]);
     },
     480_000,
+  );
+
+  it.skipIf(!wanted.has("C2"))(
+    "C2 — a real version-1 serving, the upgrade and its outcome",
+    async () => {
+      beginSection("C2");
+      const checked = (args: string[]) => {
+        const r = spawnSync("docker", args, { encoding: "utf8", timeout: 180_000 });
+        if (r.status !== 0)
+          throw new Error(`docker ${args[0]}: ${r.stderr?.slice(-1200)} ${r.error ?? ""}`);
+        return r.stdout;
+      };
+      // The same systemd fixture and the same v1 files/packages as deploy_upgrade_v1.
+      // No synthetic IPC answers or changing the version number of a different serving.
+      docker(["rm", "-f", UPGRADE_NAME]);
+      checked([
+        "run",
+        "-d",
+        "--name",
+        UPGRADE_NAME,
+        "--privileged",
+        "--cgroupns=private",
+        "--tmpfs",
+        "/run",
+        "--tmpfs",
+        "/run/lock",
+        "-p",
+        "127.0.0.1:47222:22",
+        CLEAN_IMAGE,
+      ]);
+      const domain = "vrcast-upgrade.localhost";
+      const ref = readFileSync(
+        join(APP, "src-tauri/resources/server/history/Caddyfile.v1"),
+        "utf8",
+      ).replaceAll("{$SERVER_DOMAIN}", domain);
+      const config = join(STATE, "Caddyfile.v1");
+      const state = join(STATE, "upgrade-state.json");
+      writeFileSync(config, ref);
+      writeFileSync(
+        state,
+        JSON.stringify(
+          {
+            vrcast_server_version: 1,
+            deployed_at: "2026-08-27T00:00:00Z",
+            deployed_by_app: "0.1.0",
+            steps_applied: ["user-dirs", "configs", "services", "unattended-upgrades"],
+            video_dir: "/var/lib/vrcast/videos",
+            domain,
+          },
+          null,
+          2,
+        ),
+      );
+      for (const [from, to] of [
+        [config, "tour-Caddyfile.v1"],
+        [state, "tour-state.json"],
+        [`${KEY}.pub`, "tour-authorized-keys"],
+        [join(HERE, "tour-v1-setup.sh"), "tour-v1-setup.sh"],
+      ])
+        checked(["cp", from, `${UPGRADE_NAME}:/root/${to}`]);
+      const prepared = checked(["exec", UPGRADE_NAME, "sh", "/root/tour-v1-setup.sh"]);
+      writeFileSync(join(SHOTS, "C2-setup.txt"), prepared);
+      if (!prepared.includes("immutable"))
+        throw new Error("version-1 serving did not answer immutable — cannot claim a real upgrade");
+      await ensureApp();
+      await setLanguage("ru");
+      await go("servers");
+      for (const p of await invoke<{ id: string; name: string }[]>("servers_list"))
+        if (p.name === "Версия 1") await invoke("server_remove", { id: p.id, confirmed: true });
+      await go("library");
+      await go("servers");
+      await press("Добавить сервер");
+      await field("Название", "Версия 1");
+      await field("Адрес", "127.0.0.1");
+      await field("Порт", "47222");
+      await field("Домен раздачи", domain);
+      await field("Путь к приватному ключу", KEY);
+      await field("Парольная фраза ключа", PASSPHRASE);
+      await press("Дальше");
+      await press("Отпечаток верный", "", 30_000);
+      await press("Готово", "//section[contains(@class,'wizard__stage')]", 60_000);
+      await settle();
+      const scope =
+        "//li[contains(@class,'server')][.//span[@class='server__name' and normalize-space()='Версия 1']]";
+      await snap(
+        "version-1-card",
+        "Реальная версия 1: старый Caddy 2.11.4, эталонный Caddyfile.v1, работающая раздача с immutable, старый apt-источник",
+      );
+      await step("upgrade-plan", "«Обновить серверную часть» — план и подтверждение", async () => {
+        await press("Обновить серверную часть", scope);
+        await press("Подробнее", "//section[@aria-label='Обновление серверной части']", 1000).catch(
+          () => {},
+        );
+        await s().findX(
+          "//button[normalize-space()='Согласен, обновлять' and not(@disabled)]",
+          45_000,
+        );
+      });
+      await step(
+        "upgrade-confirmed",
+        "Нажато «Согласен, обновлять» на тестовом systemd-контейнере",
+        async () => {
+          await press("Согласен, обновлять");
+          await sleep(800);
+        },
+      );
+      await step(
+        "upgrade-result",
+        "Обновление завершилось либо показало ошибку — фактический итог",
+        async () => {
+          await until(
+            "upgrade outcome",
+            async () =>
+              !(await has("//button[normalize-space()='Согласен, обновлять']")) ||
+              (await s().has(".notice--error")),
+            120_000,
+            500,
+          );
+          await sleep(700);
+        },
+      );
+      const after = checked([
+        "exec",
+        UPGRADE_NAME,
+        "sh",
+        "-c",
+        "cat /etc/vrcast/state.json; curl -sk -D - --max-time 10 --resolve vrcast-upgrade.localhost:443:127.0.0.1 https://vrcast-upgrade.localhost/videos/film/seg_00001.ts",
+      ]);
+      writeFileSync(join(SHOTS, "C2-server-after.txt"), after);
+      note(
+        `после обновления раздача отвечает no-cache: ${after.includes("no-cache")}; immutable: ${after.includes("immutable")}`,
+      );
+      await go("servers");
+      await snap("upgrade-card-after", "Карточка после обновления (либо после ошибки)");
+      const p = (await invoke<{ id: string; name: string }[]>("servers_list")).find(
+        (p) => p.name === "Версия 1",
+      );
+      if (p) await invoke("server_remove", { id: p.id, confirmed: true });
+      docker(["rm", "-f", UPGRADE_NAME]);
+    },
+    390_000,
   );
 
   it.skipIf(!wanted.has("D"))(
