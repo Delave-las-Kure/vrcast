@@ -84,8 +84,23 @@ const FILM_IN_WORK = new Set<VideoState>(["working", "paused", "cancelling"]);
 
 /** The stage a film is at, as «Video» names it. */
 function filmStage(film: VideoView, t: Catalogue): string {
+  return filmStageWord(film, t) ?? t.ui.video.queued;
+}
+
+/** The stage's own word, or nothing for a stage «Video» has no word for (`planned`). */
+function filmStageWord(film: VideoView, t: Catalogue): string | null {
   const stages = t.ui.video.stages as Record<string, string>;
-  return stages[film.stage] ?? t.ui.video.queued;
+  return stages[film.stage] ?? null;
+}
+
+/**
+ * Whether a film in work is waiting for its turn rather than being worked on (tour 0.3.0):
+ * «Start all» puts films in a line before any of their work exists, and the counter above
+ * the list has to count them as waiting, not as nothing.
+ */
+function filmWaiting(film: VideoView): boolean {
+  const p = film.progress;
+  return film.state === "working" && (p === null || p.task_state === "queued");
 }
 
 /**
@@ -107,7 +122,7 @@ function FilmRow({
   const t = useT();
   const { lang } = useLang();
   const p = film.progress;
-  const waiting = film.state === "working" && (p === null || p.task_state === "queued");
+  const waiting = filmWaiting(film);
   const stateWord =
     film.state === "paused"
       ? t.ui.video.paused
@@ -116,6 +131,11 @@ function FilmRow({
         : waiting
           ? t.ui.video.queued
           : null;
+  // One word for one state (tour 0.3.0): a film still at `planned` has no stage word, and
+  // falling back to «В очереди» beside the state's own «В очереди» said it twice.
+  const stage = filmStageWord(film, t);
+  const main = stage ?? stateWord ?? t.ui.video.queued;
+  const aside = stage !== null && stateWord !== null && stateWord !== stage ? stateWord : null;
   const rung =
     p && p.rung !== null && p.rungs > 0
       ? fill(t.ui.video.rungOf, { k: p.rung, n: p.rungs }, t, lang)
@@ -127,8 +147,8 @@ function FilmRow({
     <li className={`task task--film task--${film.state}`} data-testid={`film-${film.id}`}>
       <div className="task__head">
         <span className="task__batch">{film.title}</span>
-        <span className="task__kind">{filmStage(film, t)}</span>
-        {stateWord && <span className="task__state">{stateWord}</span>}
+        <span className="task__kind">{main}</span>
+        {aside && <span className="task__state">{aside}</span>}
       </div>
 
       {p && !waiting && film.state !== "cancelling" && (
@@ -334,9 +354,18 @@ export function TasksPanel() {
   // A paused task is counted as running rather than waiting: it is holding a place on the
   // machine and its half-made file, and calling it "waiting" would say the opposite of what
   // it is. Cancelled and finished ones are counted as neither.
-  const running = tasks.filter(
-    (task) => task.state === "running" || task.state === "paused",
-  ).length;
+  //
+  // ⚠ **The films are counted as the films shown** (tour 0.3.0). A film's tasks are not its
+  // rows here, and a film that «Start all» has put in line has no task yet at all — the
+  // counter read «Выполняется: 0. В очереди: 0» over two films marked «В очереди». So a
+  // film in work counts once, as itself, and its tasks are not counted besides.
+  const filmsWaiting = films.filter(filmWaiting).length;
+  const running =
+    tasks.filter((task) => !ofFilm(task) && (task.state === "running" || task.state === "paused"))
+      .length +
+    (films.length - filmsWaiting);
+  const queuedCount =
+    tasks.filter((task) => !ofFilm(task) && task.state === "queued").length + filmsWaiting;
 
   /**
    * The batches with something still to stop.
@@ -371,7 +400,7 @@ export function TasksPanel() {
     <div className="panel">
       <h1>{t.ui.tasks.heading}</h1>
       <p className="muted" data-testid="task-counts">
-        {fill(t.ui.tasks.counts, { running, queued: queued.length }, t, lang)}
+        {fill(t.ui.tasks.counts, { running, queued: queuedCount }, t, lang)}
       </p>
       {error && <ErrorNotice error={error} onDismiss={() => setError(null)} />}
 
